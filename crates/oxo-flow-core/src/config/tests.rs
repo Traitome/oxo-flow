@@ -5013,3 +5013,520 @@ fn unbound_values_namespace_keeps_rule_unchanged() {
         vec!["reads/{values.assembler}/in.fq"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sample metadata table + {meta.<column>} namespace (issue #227 item 2)
+// ---------------------------------------------------------------------------
+
+/// Write a `metadata_file` (samples.tsv) plus the given sample groups and
+/// rules into a tempdir; returns the tempdir and the workflow path.
+fn metadata_workflow(
+    metadata_tsv: &str,
+    sample_groups: &str,
+    rules: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("samples.tsv"), metadata_tsv).unwrap();
+    let workflow_path = dir.path().join("meta.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        format!(
+            r#"
+        [workflow]
+        name = "meta"
+        metadata_file = "samples.tsv"
+
+        {sample_groups}
+        {rules}
+        "#
+        ),
+    )
+    .unwrap();
+    (dir, workflow_path)
+}
+
+#[test]
+fn metadata_file_loads_tsv_rows_into_config() {
+    // `[workflow] metadata_file` loads a per-sample table: the first column
+    // is the sample id (matching `{sample}` values), the remaining columns
+    // are arbitrary keys addressed as `{meta.<column>}`.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tendedness\tadapters\nS1\tSE\tAGATCGGAAG\nS2\tPE\t\n",
+        r#"
+        [[sample_groups]]
+        name = "control"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "trim"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["trimmed/{sample}.fq"]
+        shell = "cutadapt -a {meta.adapters}"
+        "#,
+    );
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let s1 = config.metadata.get("S1").expect("S1 row");
+    assert_eq!(s1.get("endedness").map(String::as_str), Some("SE"));
+    assert_eq!(s1.get("adapters").map(String::as_str), Some("AGATCGGAAG"));
+    let s2 = config.metadata.get("S2").expect("S2 row");
+    assert_eq!(s2.get("endedness").map(String::as_str), Some("PE"));
+    assert_eq!(s2.get("adapters"), Some(&String::new()));
+}
+
+#[test]
+fn metadata_file_accepts_csv_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("samples.csv"),
+        "sample,endedness\nS1,SE\nS2,PE\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("csv.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "meta-csv"
+        metadata_file = "samples.csv"
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    assert_eq!(config.metadata["S1"]["endedness"], "SE");
+
+    std::fs::write(
+        dir.path().join("samples.json"),
+        r#"[{"sample": "S1", "endedness": "SE"}, {"sample": "S2", "endedness": "PE"}]"#,
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("json.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "meta-json"
+        metadata_file = "samples.json"
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    assert_eq!(config.metadata["S2"]["endedness"], "PE");
+}
+
+#[test]
+fn metadata_file_missing_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("missing.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "meta"
+        metadata_file = "nope.tsv"
+        "#,
+    )
+    .unwrap();
+    let err = WorkflowConfig::from_file(&workflow_path).unwrap_err();
+    assert!(err.to_string().contains("nope.tsv"));
+}
+
+#[test]
+fn meta_namespace_expands_in_shells_per_sample() {
+    // rnaseq-star-style per-unit lookup: a metadata column feeds a shell
+    // flag, resolved per instance from the instance's `{sample}` binding.
+    // A column that exists but is empty on a row renders ""; a column no
+    // row defines renders "" too.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tadapters\textra\nS1\tAGATCGGAAG\t--clip-r1 5\nS2\tCTGTCTCTTA\t\n",
+        r#"
+        [[sample_groups]]
+        name = "control"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "trim"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["trimmed/{sample}.fq"]
+        shell = "cutadapt -a {meta.adapters} {meta.extra}"
+
+        [[rules]]
+        name = "qc"
+        input = ["trimmed/{sample}.fq"]
+        output = ["qc/{sample}.txt"]
+        shell = "check {meta.unknown_column}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_S1")
+        .expect("S1 instance");
+    assert_eq!(
+        s1.shell.as_deref(),
+        Some("cutadapt -a AGATCGGAAG --clip-r1 5")
+    );
+    let s2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_S2")
+        .expect("S2 instance");
+    // Empty cell on the row renders empty.
+    assert_eq!(s2.shell.as_deref(), Some("cutadapt -a CTGTCTCTTA "));
+
+    // Column that no row defines renders empty on every instance.
+    for name in ["qc_control_S1", "qc_control_S2"] {
+        let rule = config.rules.iter().find(|r| r.name == name).expect(name);
+        assert_eq!(rule.shell.as_deref(), Some("check "));
+    }
+}
+
+#[test]
+fn meta_namespace_resolves_input_paths_and_dag_edges() {
+    // A rule-level `input` entry can be `{meta.<column>}` — the path is a
+    // plan-time literal after expansion, so exact-match DAG edge inference
+    // connects it to the producer.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tbam_path\nS1\taligned/S1.bam\nS2\taligned/S2.bam\n",
+        r#"
+        [[sample_groups]]
+        name = "control"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "map"
+        output = ["aligned/{sample}.bam"]
+        shell = "echo hi > {output[0]}"
+
+        [[rules]]
+        name = "call"
+        input = ["{meta.bam_path}"]
+        output = ["calls/{sample}.vcf"]
+        shell = "bcftools call {input[0]} -o {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let call_s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "call_control_S1")
+        .expect("call S1 instance");
+    assert_eq!(call_s1.input.to_vec(), vec!["aligned/S1.bam"]);
+    let call_s2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "call_control_S2")
+        .expect("call S2 instance");
+    assert_eq!(call_s2.input.to_vec(), vec!["aligned/S2.bam"]);
+
+    let dag = crate::dag::WorkflowDag::from_rules(&config.rules).unwrap();
+    assert_eq!(
+        dag.dependencies("call_control_S1").unwrap(),
+        vec!["map_control_S1"]
+    );
+    assert_eq!(
+        dag.dependencies("call_control_S2").unwrap(),
+        vec!["map_control_S2"]
+    );
+}
+
+#[test]
+fn meta_namespace_in_when_renders_per_instance() {
+    // methylseq-style endedness gate: the per-sample column is substituted
+    // into `when` so `'SE' == 'SE'`-style predicates evaluate per instance;
+    // a sample with no metadata row renders empty (gate closed).
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tendedness\nSE1\tSE\nPE1\tPE\n",
+        r#"
+        [[sample_groups]]
+        name = "control"
+        samples = ["SE1", "PE1", "X1"]
+        "#,
+        r#"
+        [[rules]]
+        name = "trim"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["trimmed/{sample}.fq"]
+        when = "config.single_end_mode || {meta.endedness} == 'SE'"
+        shell = "cp {input[0]} {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let se1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_SE1")
+        .expect("SE1 instance");
+    assert_eq!(
+        se1.when.as_deref(),
+        Some("config.single_end_mode || 'SE' == 'SE'")
+    );
+    let pe1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_PE1")
+        .expect("PE1 instance");
+    assert_eq!(
+        pe1.when.as_deref(),
+        Some("config.single_end_mode || 'PE' == 'SE'")
+    );
+    // No row for X1: the placeholder renders empty → the gate is closed.
+    let x1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "trim_control_X1")
+        .expect("X1 instance");
+    assert_eq!(
+        x1.when.as_deref(),
+        Some("config.single_end_mode || '' == 'SE'")
+    );
+}
+
+#[test]
+fn meta_namespace_lookup_falls_back_to_pair_id() {
+    // Pair workflows: metadata rows keyed by pair_id (or experiment) still
+    // resolve — the instance's sample-like bindings are tried in order.
+    let (_dir, workflow_path) = metadata_workflow(
+        "pair_id\tstudy\nP1\tcase\nP2\tcontrol\n",
+        "",
+        r#"
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+        control = "N1"
+
+        [[pairs]]
+        pair_id = "P2"
+        experiment = "T2"
+        control = "N2"
+
+        [[rules]]
+        name = "cmp"
+        input = ["reads/{pair_id}/in.txt"]
+        output = ["cmp/{pair_id}.txt"]
+        shell = "echo {meta.study} {pair_id}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let p1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cmp_P1")
+        .expect("P1 instance");
+    assert_eq!(p1.shell.as_deref(), Some("echo case P1"));
+    let p2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cmp_P2")
+        .expect("P2 instance");
+    assert_eq!(p2.shell.as_deref(), Some("echo control P2"));
+}
+
+#[test]
+fn input_groups_group_by_meta_fans_out_one_instance_per_value() {
+    // chipseq multi-antibody (issue #227 item 4): group files by a metadata
+    // column value instead of a pattern wildcard. 3 samples × 2 antibody
+    // values → 2 instances; `{input}` is the group's files space-joined
+    // (sorted), `{input_group.sample}` the sample names, and the group key
+    // binds under the COLUMN name (`{antibody}`). Rows with an empty column
+    // value are skipped.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("results/mapping")).unwrap();
+    for sample in ["S1", "S2", "S3", "S4"] {
+        std::fs::write(
+            dir.path().join(format!("results/mapping/{sample}.bam")),
+            "bam",
+        )
+        .unwrap();
+    }
+    let (_dir, workflow_path) = {
+        std::fs::write(
+            dir.path().join("samples.tsv"),
+            "sample\tantibody\nS1\tH3K27ac\nS2\tH3K27ac\nS3\tInput\nS4\t\n",
+        )
+        .unwrap();
+        let workflow_path = dir.path().join("chipseq.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "chipseq"
+            metadata_file = "samples.tsv"
+
+            [[rules]]
+            name = "peaks"
+            input_groups = [
+                { pattern = "results/mapping/{sample}.bam", group_by = "meta.antibody" }
+            ]
+            output = ["peaks/{antibody}.bed"]
+            shell = "macs2 callpeak -t {input} -n {antibody} --outdir peaks && echo {input_group.sample}"
+            "#,
+        )
+        .unwrap();
+        (dir, workflow_path)
+    };
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let h3 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "peaks_H3K27ac")
+        .expect("H3K27ac instance");
+    assert_eq!(
+        h3.input.to_vec(),
+        vec![
+            "results/mapping/S1.bam".to_string(),
+            "results/mapping/S2.bam".to_string(),
+        ]
+    );
+    // `{input}` stays literal at expansion (execution-time rendering); the
+    // group key binds under the COLUMN name (`{antibody}`) and
+    // `{input_group.sample}` is the group's space-joined sample names.
+    assert_eq!(
+        h3.shell.as_deref(),
+        Some("macs2 callpeak -t {input} -n H3K27ac --outdir peaks && echo S1 S2")
+    );
+    let input = config
+        .rules
+        .iter()
+        .find(|r| r.name == "peaks_Input")
+        .expect("Input instance");
+    assert_eq!(input.input.to_vec(), vec!["results/mapping/S3.bam"]);
+    assert_eq!(
+        input.shell.as_deref(),
+        Some("macs2 callpeak -t {input} -n Input --outdir peaks && echo S3")
+    );
+    // The empty-antibody row (S4) and its bam are skipped entirely.
+    assert!(!config.rules.iter().any(|r| r.name == "peaks_S4"));
+    assert!(!config.rules.iter().any(|r| {
+        r.input
+            .to_vec()
+            .contains(&"results/mapping/S4.bam".to_string())
+    }));
+}
+
+#[test]
+fn input_groups_group_by_meta_rejects_sample_in_outputs() {
+    // Metadata-grouped instances have no single {sample} binding — the
+    // group key (column name) is the only binding. Outputs referencing a
+    // pattern wildcard are a plan-time validation error.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("results/mapping")).unwrap();
+    std::fs::write(dir.path().join("results/mapping/S1.bam"), "bam").unwrap();
+    std::fs::write(
+        dir.path().join("samples.tsv"),
+        "sample\tantibody\nS1\tH3K27ac\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("chipseq.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "chipseq"
+        metadata_file = "samples.tsv"
+
+        [[rules]]
+        name = "peaks"
+        input_groups = [
+            { pattern = "results/mapping/{sample}.bam", group_by = "meta.antibody" }
+        ]
+        output = ["peaks/{sample}.bed"]
+        shell = "echo {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("{sample}"),
+        "error should name the forbidden wildcard: {err}"
+    );
+}
+
+#[test]
+fn input_groups_group_by_meta_rejects_keep() {
+    // `keep` selects pattern wildcards to bind into the instance map —
+    // meaningless when the group key comes from metadata, where the spec
+    // says the instance map binds only the column name.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("results/mapping")).unwrap();
+    std::fs::write(dir.path().join("results/mapping/S1.bam"), "bam").unwrap();
+    std::fs::write(
+        dir.path().join("samples.tsv"),
+        "sample\tantibody\nS1\tH3K27ac\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("chipseq.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "chipseq"
+        metadata_file = "samples.tsv"
+
+        [[rules]]
+        name = "peaks"
+        input_groups = [
+            { pattern = "results/mapping/{sample}.bam", group_by = "meta.antibody", keep = "sample" }
+        ]
+        output = ["peaks/{antibody}.bed"]
+        shell = "echo {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("keep"),
+        "error should mention keep: {err}"
+    );
+}
+
+#[test]
+fn input_groups_group_by_meta_unknown_column_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("results/mapping")).unwrap();
+    std::fs::write(dir.path().join("results/mapping/S1.bam"), "bam").unwrap();
+    std::fs::write(
+        dir.path().join("samples.tsv"),
+        "sample\tantibody\nS1\tH3K27ac\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("chipseq.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "chipseq"
+        metadata_file = "samples.tsv"
+
+        [[rules]]
+        name = "peaks"
+        input_groups = [
+            { pattern = "results/mapping/{sample}.bam", group_by = "meta.notacolumn" }
+        ]
+        output = ["peaks/{antibody}.bed"]
+        shell = "echo {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("notacolumn"),
+        "error should name the unknown column: {err}"
+    );
+}

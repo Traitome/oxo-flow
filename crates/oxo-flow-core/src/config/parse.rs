@@ -125,6 +125,19 @@ impl WorkflowConfig {
             tracing::info!("Loaded {} sample groups from {}", count, groups_file);
         }
 
+        // Load the per-sample metadata table from external file if
+        // specified (issue #227 item 2): the `{meta.<column>}` lookup
+        // vocabulary, keyed by sample id.
+        if let Some(ref metadata_file) = config.workflow.metadata_file {
+            let meta_path = parent.join(metadata_file);
+            let rows = SampleMetadata::load_from_file(&meta_path)?;
+            let count = rows.len();
+            for row in rows {
+                config.metadata.insert(row.sample, row.values);
+            }
+            tracing::info!("Loaded {} metadata rows from {}", count, metadata_file);
+        }
+
         // Auto-discover samples from filesystem pattern
         if let Some(ref sample_pattern) = config.workflow.sample_pattern {
             // Expand config variables in the pattern (e.g. {config.data_dir}/.../{sample}_R1.fq.gz)

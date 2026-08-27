@@ -26,6 +26,13 @@ use std::sync::LazyLock;
 pub(crate) static VALUES_NS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{values\.(\w+)\}").expect("valid values-namespace regex"));
 
+/// Matches the namespaced `{meta.<column>}` wildcard form — the per-sample
+/// metadata vocabulary (issue #227 item 2). Like `{values.name}`, the
+/// engine's placeholder regex (`\w+` only) cannot match dotted names, so
+/// this namespace is detected and substituted textually.
+pub(crate) static META_NS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{meta\.(\w+)\}").expect("valid meta-namespace regex"));
+
 /// Matches a `wildcard.<key>` reference inside a `when` expression (the
 /// per-instance pair/group binding vocabulary, including metadata keys).
 pub(crate) static WHEN_WILDCARD_REF_RE: LazyLock<Regex> =
@@ -228,6 +235,36 @@ pub struct WorkflowMeta {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pairs_pattern: Option<String>,
+
+    /// Path to an external per-sample metadata table (a samplesheet).
+    ///
+    /// Supports TSV, CSV, and JSON formats, like `pairs_file` /
+    /// `sample_groups_file`. The first column holds the sample id (matching
+    /// the `{sample}` wildcard values; pair workflows may also key rows by
+    /// `pair_id` / experiment); every other column is an arbitrary key
+    /// addressed as `{meta.<column>}` in rule shells, inputs, outputs,
+    /// `when` expressions, scripts, and hooks. Rows do NOT define the
+    /// sample set — samples come from the normal sources (sample groups,
+    /// pairs, `sample_pattern`); the table is a per-sample lookup.
+    ///
+    /// # File format
+    ///
+    /// **TSV/CSV** (tab or comma separated):
+    /// ```text
+    /// sample    endedness    adapters
+    /// SE1    SE    AGATCGGAAG
+    /// PE1    PE    CTGTCTCTTA
+    /// ```
+    ///
+    /// **JSON** (array of objects; the `sample` key is the id):
+    /// ```json
+    /// [
+    ///   {"sample": "SE1", "endedness": "SE", "adapters": "AGATCGGAAG"}
+    /// ]
+    /// ```
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_file: Option<String>,
 
     /// Wildcard pattern for auto-discovering samples from the filesystem.
     ///
@@ -1319,6 +1356,167 @@ impl SampleGroup {
     }
 }
 
+/// One row of the per-sample metadata table (`[workflow] metadata_file`).
+///
+/// The row's id must match the sample wildcard values (or a pair id /
+/// experiment name in pair workflows); every other column is an arbitrary
+/// key addressed as `{meta.<column>}`. The table is a LOOKUP — rows do not
+/// define the sample set.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SampleMetadata {
+    /// Sample id (first column of the table).
+    pub sample: String,
+
+    /// Arbitrary column → value pairs.
+    pub values: HashMap<String, String>,
+}
+
+impl SampleMetadata {
+    /// Load the metadata table from a TSV, CSV, or JSON file.
+    ///
+    /// # File format
+    ///
+    /// **TSV/CSV** (first column = sample id, header required):
+    /// ```text
+    /// sample    endedness    adapters
+    /// SE1    SE    AGATCGGAAG
+    /// PE1    PE    CTGTCTCTTA
+    /// ```
+    ///
+    /// **JSON** (array of objects; the `sample` key is the id):
+    /// ```json
+    /// [
+    ///   {"sample": "SE1", "endedness": "SE", "adapters": "AGATCGGAAG"}
+    /// ]
+    /// ```
+    pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
+        let metadata = std::fs::metadata(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read metadata for metadata_file: {}", e),
+        })?;
+
+        // 50MB limit to prevent OOM on accidental binary file input
+        if metadata.len() > 50 * 1024 * 1024 {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!(
+                    "metadata file is too large ({} bytes). Maximum allowed size is 50MB.",
+                    metadata.len()
+                ),
+            });
+        }
+
+        let content = std::fs::read_to_string(path).map_err(|e| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message: format!("failed to read metadata_file: {}", e),
+        })?;
+
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        match extension {
+            "json" => Self::parse_json(&content, path),
+            "csv" => Self::parse_csv(&content, path),
+            "tsv" | "txt" | "" => Self::parse_tsv(&content, path),
+            _ => Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("unsupported metadata file format: {}", extension),
+            }),
+        }
+    }
+
+    fn parse_json(content: &str, path: &Path) -> Result<Vec<Self>> {
+        let rows: Vec<toml::Value> =
+            serde_json::from_str(content).map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("invalid JSON metadata file: {}", e),
+            })?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let toml::Value::Table(table) = row else {
+                return Err(OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: "metadata JSON rows must be objects".to_string(),
+                });
+            };
+            let sample = table
+                .get("sample")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if sample.is_empty() {
+                return Err(OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: "metadata JSON rows must have a non-empty 'sample' key".to_string(),
+                });
+            }
+            let values = table
+                .into_iter()
+                .filter(|(k, _)| k != "sample")
+                .map(|(k, v)| {
+                    let v = match v {
+                        toml::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (k, v)
+                })
+                .collect();
+            out.push(Self { sample, values });
+        }
+        Ok(out)
+    }
+
+    fn parse_csv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, ',', path)
+    }
+
+    fn parse_tsv(content: &str, path: &Path) -> Result<Vec<Self>> {
+        Self::parse_delimited(content, '\t', path)
+    }
+
+    fn parse_delimited(content: &str, delimiter: char, path: &Path) -> Result<Vec<Self>> {
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter as u8)
+            .has_headers(true)
+            .trim(csv::Trim::All)
+            .comment(Some(b'#'))
+            .from_reader(content.as_bytes());
+
+        let headers = reader
+            .headers()
+            .map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("metadata file is empty or has invalid headers: {}", e),
+            })?
+            .clone();
+        if headers.is_empty() {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "metadata file has no columns".to_string(),
+            });
+        }
+
+        let mut out = Vec::new();
+        for (row_idx, result) in reader.records().enumerate() {
+            let record = result.map_err(|e| OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: format!("error parsing row {}: {}", row_idx + 2, e),
+            })?;
+            let sample = record.get(0).unwrap_or("").to_string();
+            if sample.is_empty() {
+                continue;
+            }
+            let values = headers
+                .iter()
+                .enumerate()
+                .skip(1)
+                .map(|(i, header)| (header.to_string(), record.get(i).unwrap_or("").to_string()))
+                .collect();
+            out.push(Self { sample, values });
+        }
+        Ok(out)
+    }
+}
+
 /// Resource group configuration for limiting shared resources like API rate
 /// limits or database connections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1478,6 +1676,17 @@ pub struct WorkflowConfig {
     #[serde(default, rename = "sample_groups")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sample_groups: Vec<SampleGroup>,
+
+    /// Per-sample metadata table (issue #227 item 2): sample id → column →
+    /// value, loaded from `[workflow] metadata_file` at plan time. Rules
+    /// address columns as `{meta.<column>}`, resolved per instance from
+    /// the instance's sample-like binding (`{sample}`, or `{pair_id}` /
+    /// experiment / control in pair workflows). A missing row or column
+    /// renders as an empty string. Never set by user TOML — the table only
+    /// comes from `metadata_file`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, HashMap<String, String>>,
 
     /// Named value lists for arbitrary parameter wildcards (`[[values]]`).
     ///

@@ -2693,12 +2693,15 @@ fn render_shell_command_inner(
             );
         }
     }
-    if expanded.contains("{config.") || expanded.contains("{input") || expanded.contains("{output")
+    if expanded.contains("{config.")
+        || expanded.contains("{meta.")
+        || expanded.contains("{input")
+        || expanded.contains("{output")
     {
         tracing::warn!(
             rule = %rule.name,
             command = %expanded,
-            "unresolved config/input/output placeholder remained in the rendered command"
+            "unresolved config/meta/input/output placeholder remained in the rendered command"
         );
     }
     expanded

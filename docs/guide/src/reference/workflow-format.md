@@ -184,6 +184,7 @@ author = "Your Name"
 | `format_version` | String | No | — | Format specification version for compatibility |
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
 | `sample_groups_file` | String | No | — | External TSV/JSON file defining sample groups |
+| `metadata_file` | String | No | — | External TSV/CSV/JSON file of per-sample metadata columns, addressed as `{meta.<column>}` (see [Sample Metadata](#sample-metadata-metadata_file)) |
 | `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
 | `on_complete` | String | No | — | Shell command run once after the whole workflow completes successfully (no failed rules). Rendered with `{config.*}` and the counters `{succeeded}`/`{failed}`/`{skipped}` plus `{workdir}`; runs in the workflow root with the workflow `shell_prelude`. Best-effort: a failing hook warns, never changes the run status. |
@@ -1030,11 +1031,14 @@ shell = "cat {input} > {output}"
 - `pattern` — path glob with `{wildcard}` placeholders, relative to the
   workflow file's directory (the same root `sample_pattern` scans).
 - `group_by` — the wildcard that names each group. One instance is
-  created per discovered group value.
+  created per discovered group value. May also be a metadata column,
+  `group_by = "meta.<column>"` — see below.
 - `keep` — optional restriction: which *other* pattern wildcards are
   bound to the group's **first** (sorted) file and become available as
   `{wildcard}` placeholders in `output`/`shell`. Omitted = all other
-  wildcards. A string or an array of strings is accepted.
+  wildcards. A string or an array of strings is accepted. Not allowed
+  with `group_by = "meta.<column>"` (metadata-grouped instances bind only
+  the column name).
 - `{input}` — all matched files of the group, space-joined in stable
   sorted order (files sort by path; the first sorted file supplies the
   `keep` bindings, so results never depend on readdir order).
@@ -1074,6 +1078,42 @@ input_groups = [
 output = ["qc/multiqc_{sample}.html"]
 shell = "multiqc {input} -o qc -n {output}"
 ```
+
+#### Grouping by metadata column
+
+`group_by = "meta.<column>"` groups the matched files by a
+[`metadata_file`](#sample-metadata-metadata_file) column value instead of
+a pattern wildcard — the chipseq multi-antibody pattern, where the BAMs of
+several samples carry the same antibody and one peak-calling instance per
+antibody is wanted:
+
+```toml
+[workflow]
+metadata_file = "samples.tsv"   # sample  antibody
+#                                S1       H3K27ac
+#                                S2       H3K27ac
+#                                S3       Input
+
+[[rules]]
+name = "peaks"
+input_groups = [
+    { pattern = "results/mapping/{sample}.bam", group_by = "meta.antibody" }
+]
+output = ["peaks/{antibody}.bed"]
+shell = "macs2 callpeak -t {input} -n {antibody} --outdir peaks && echo {input_group.sample}"
+```
+
+- One instance per distinct column value: `peaks_H3K27ac` receives
+  `results/mapping/S1.bam results/mapping/S2.bam` and
+  `peaks_Input` receives `results/mapping/S3.bam`.
+- The group key binds under the **column name** (`{antibody}`), not
+  `{sample}` — a metadata-grouped instance has no single sample. Files
+  whose row has an empty column value are skipped.
+- Outputs must not reference pattern wildcards (`{sample}` in an output
+  is a plan-time error); the per-group sample names stay available as
+  `{input_group.sample}`.
+- `keep` is rejected with `group_by = "meta.<column>"` — the column name
+  is the instance's only binding.
 
 ### Retry Configuration
 
@@ -1697,6 +1737,82 @@ These injected values are **comma-joined strings** (e.g. `"S001,S002"`):
   [Expand Inputs](#expand-inputs).
 - In shell templates, `{config.samples_list}` renders as the comma-joined
   text, e.g. `for s in $(echo {config.samples_list} | tr ',' ' ')`.
+
+### Sample Metadata (`metadata_file`)
+
+Per-sample metadata is loaded at plan time from an external TSV/CSV/JSON
+table and addressed as `{meta.<column>}` in any rule's `input`, `output`,
+`shell`, `log`, `script`, hooks, and `when`. This is the
+[`metadata`](#sample_groups-multi-sample-cohorts-wc-02) group/pair-key
+mechanism generalized to an arbitrary per-sample column vocabulary — the
+methylseq `when = "config.single_end_mode || {meta.endedness} == 'SE'"`
+pattern, chipseq antibody fan-out (see
+[Input Groups](#input-groups-input_groups)), and rnaseq-style per-sample
+parameter lookups:
+
+```toml
+[workflow]
+name = "methylseq"
+metadata_file = "metadata/samples.tsv"  # or .csv, .json
+```
+
+**TSV/CSV format** — the first column is the sample id (must match the
+values your `{sample}` wildcards resolve to); every other header becomes a
+column:
+
+```text
+sample    endedness    adapters
+SE1       SE           AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+```
+
+**JSON format** — a list of objects; the `sample` key identifies the row
+(all other keys become columns):
+
+```json
+[
+  {"sample": "SE1", "endedness": "SE", "adapters": "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"},
+  {"sample": "PE1", "endedness": "PE", "adapters": "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"}
+]
+```
+
+**Semantics:**
+
+- The table is a **lookup only** — it does not define the sample set. Use
+  `sample_groups` / `sample_groups_file` / `sample_pattern` for that.
+- At expansion, each rule instance resolves its metadata row from its
+  `{sample}` binding, falling back to `{pair_id}`, then `{experiment}`,
+  then `{control}` (first binding that has a row wins).
+- A missing row or column renders **empty** in shells/inputs/outputs, with
+  a plan-time **warning** for a column that no row defines (the same
+  stance as `{values.name}`).
+- In `when`, metadata values are baked as quoted literals in comparisons
+  (`{meta.endedness} == 'SE'` → `'SE' == 'SE'`) and `true`/`false` in
+  truthiness positions; a missing row or column renders `''` / `false` —
+  the gate is closed, so samples without the data evaluate false instead
+  of running.
+- A `{meta.<column>}` reference in a rule that never fans out (no
+  sample-like binding) is an error at execution time (residual
+  placeholder).
+
+```toml
+[[rules]]
+name   = "trim"
+input  = ["raw/{sample}_R1.fastq.gz"]
+output = ["trimmed/{sample}.fq"]
+when   = "config.single_end_mode || {meta.endedness} == 'SE'"
+shell  = "cutadapt -a {meta.adapters} {input[0]} -o {output[0]}"
+```
+
+Metadata paths can also feed inputs directly (DAG edges still infer by
+exact path match, since the paths are plan-time literals):
+
+```toml
+[[rules]]
+name  = "mapping_qc"
+input = ["{meta.bam_path}"]
+shell = "samtools stats {input[0]} > {output[0]}"
+```
 
 ### Partial Pair Tolerance & Tumor-Only Mode
 
