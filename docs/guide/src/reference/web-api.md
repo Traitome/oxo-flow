@@ -252,6 +252,9 @@ POST   /api/pipelines/search       # Search by name, tags, content
 ## Execution & Runs
 
 ### Create Run
+
+> **PostgreSQL deployments**: every `/api/runs*` endpoint returns `503 {"code": "RUNS_REQUIRE_SQLITE", "message", "detail", "suggestion"}` — run execution requires a SQLite-backed server. Library/AI/auth domains remain available.
+
 ```
 POST /api/runs
 Content-Type: application/json

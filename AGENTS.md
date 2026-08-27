@@ -61,6 +61,7 @@ The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 - **Intent-driven authoring**: `POST /api/workflows/generate` maps natural language to pipelines
 - **SSE streaming**: `GET /api/events` provides real-time execution events
 - **Pagination**: `GET /api/runs` uses cursor pagination `{items, next_cursor, total}`; most other list endpoints return bare capped arrays (≤ 100); the storage layer exposes an offset-style `Paginated<T> {items, page, per_page, total_items, total_pages}` internally. There is deliberately no single uniform envelope — document per endpoint (see web-api.md)
+- **Backend capability boundary (issue #207)**: run execution and its lifecycle bookkeeping are SQLite-only. PostgreSQL-backed team servers serve library/AI/auth; every `/api/runs*` request answers `503 {code:"RUNS_REQUIRE_SQLITE"}` via a router-layer gate (`require_sqlite_for_runs` in server.rs)
 
 ## 🖥️ Frontend SPA
 The frontend is a React/TypeScript SPA built with Vite, located in `frontend/`:
