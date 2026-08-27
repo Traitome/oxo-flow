@@ -103,6 +103,28 @@ pub async fn create_run(
     authenticated: Option<Extension<CurrentUser>>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<CreateRunResponse> {
+    // PostgreSQL deployments have no SQLite pool backing run bookkeeping
+    // (issue #207 phase 1): fail with a structured boundary instead of
+    // letting spawn/background tasks degrade mysteriously mid-run.
+    if crate::infra::db::sqlite::try_pool().is_err() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                code: "RUNS_REQUIRE_SQLITE".into(),
+                message: "Workflow run execution is not available on this deployment."
+                    .into(),
+                detail: Some(
+                    "Run lifecycle bookkeeping uses the embedded SQLite store;                      PostgreSQL servers serve library/AI/auth features only."
+                        .into(),
+                ),
+                suggestion: Some(
+                    "Execute via `oxo-flow run` from the CLI, or use a personal-mode                      server backed by SQLite."
+                        .into(),
+                ),
+            }),
+        ));
+    }
+
     let user = current_user::resolve(authenticated.as_ref());
     let toml = req
         .get("toml_content")
