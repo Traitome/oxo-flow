@@ -120,6 +120,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
 | `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
+| `OXO_FLOW_RUNS_RATE_LIMIT` | No | `5` | Run-creation allowance per identity per minute on POST /api/runs (#213); `0` disables the dedicated limiter |
 
 ### AI Provider Examples
 
