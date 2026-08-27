@@ -283,6 +283,7 @@ oxo-flow serve
 # → Open http://127.0.0.1:3000 in your browser
 
 # Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
+#   (note: workflow run EXECUTION requires the SQLite backend; PG servers serve library/AI/auth — POST /api/runs returns 503)
 oxo-flow serve --mode team --db postgres://...
 
 # Mode 3: HPC submit panel — Web UI for cluster job submission

@@ -150,6 +150,10 @@ async fn main() -> Result<()> {
         {
             tracing::info!("Initializing PostgreSQL backend");
             oxo_flow_web::infra::db::postgres::init_pool(&database_url).await;
+            tracing::warn!(
+                "Capability boundary: workflow RUN EXECUTION is SQLite-only — \
+                 POST /api/runs will respond 503 RUNS_REQUIRE_SQLITE"
+            );
         }
         #[cfg(not(feature = "postgres"))]
         {
