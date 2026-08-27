@@ -2104,31 +2104,15 @@ async fn meta_when_gate_runs_se_and_skips_pe_instances() {
     assert_eq!(record.status, JobStatus::Success);
     assert!(dir.path().join("trimmed/SE1.fq").exists());
 
-    let pe1 = config
-        .rules
-        .iter()
-        .find(|r| r.name == "trim_control_PE1")
-        .expect("PE1 instance");
-    let record = executor
-        .execute_rule_with_config(pe1, &wildcard_values, &typed_config)
-        .await
-        .unwrap();
-    assert_eq!(record.status, JobStatus::Skipped);
-    assert_eq!(
-        record.skip_reason.as_deref(),
-        Some("condition evaluated to false")
+    // PE1 and X1 are pruned at PLAN time (gate false / missing row), so
+    // the expansion matches the runtime verdict exactly — the executor
+    // never sees phantom instances. The kept instance's baked `when` is
+    // still re-checked at execution time (SE1 ran above).
+    assert!(
+        config
+            .rules
+            .iter()
+            .all(|r| r.name != "trim_control_PE1" && r.name != "trim_control_X1"),
+        "gated instances must not survive planning"
     );
-    assert!(!dir.path().join("trimmed/PE1.fq").exists());
-
-    let x1 = config
-        .rules
-        .iter()
-        .find(|r| r.name == "trim_control_X1")
-        .expect("X1 instance");
-    let record = executor
-        .execute_rule_with_config(x1, &wildcard_values, &typed_config)
-        .await
-        .unwrap();
-    assert_eq!(record.status, JobStatus::Skipped);
-    assert!(!dir.path().join("trimmed/X1.fq").exists());
 }

@@ -5231,6 +5231,75 @@ fn metadata_file_missing_errors() {
 }
 
 #[test]
+fn plan_time_when_meta_only_gate_filters_instances() {
+    // A `when` referencing ONLY `{meta.<col>}` must be decided at plan
+    // time. The raw token would otherwise hit the evaluator's default-true
+    // fallback and phantom instances survive planning (rnaseq-star's
+    // `{meta.sra} != ''` gate). Empty and missing values close the gate;
+    // a non-empty value opens it — plan-time instance set must equal the
+    // runtime verdict.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\trun_qc\nS1\tyes\nS2\t\n",
+        r#"
+        [[sample_groups]]
+        name = "grp"
+        samples = ["S1", "S2", "S3"]
+        "#,
+        r#"
+        [[rules]]
+        name = "qc"
+        input = ["raw/{sample}.fq"]
+        output = ["qc/{sample}.txt"]
+        shell = "touch {output[0]}"
+        when = "{meta.run_qc} != ''"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let names: Vec<_> = config
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect::<Vec<_>>();
+    // S2 has an empty run_qc value and S3 has no row — both gates close.
+    assert_eq!(names, vec!["qc_grp_S1"]);
+}
+
+#[test]
+fn plan_time_when_mixed_wildcard_and_meta_gate_bakes_both() {
+    // A `when` mixing `wildcard.<key>` and `{meta.<col>}` must bake BOTH
+    // namespaces before plan-time evaluation: the wildcard binding comes
+    // from group metadata, the {meta.} value from the metadata_file row.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\trun_qc\nS1\tyes\nS2\t\n",
+        r#"
+        [[sample_groups]]
+        name = "grp"
+        samples = ["S1", "S2"]
+        metadata = { input_type = "fastq" }
+        "#,
+        r#"
+        [[rules]]
+        name = "qc"
+        input = ["raw/{sample}.fq"]
+        output = ["qc/{sample}.txt"]
+        shell = "touch {output[0]}"
+        when = "wildcard.input_type == 'fastq' && {meta.run_qc} != ''"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let names: Vec<_> = config
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["qc_grp_S1"]);
+}
+
+#[test]
 fn meta_namespace_expands_in_shells_per_sample() {
     // rnaseq-star-style per-unit lookup: a metadata column feeds a shell
     // flag, resolved per instance from the instance's `{sample}` binding.
@@ -5369,24 +5438,15 @@ fn meta_namespace_in_when_renders_per_instance() {
         se1.when.as_deref(),
         Some("config.single_end_mode || 'SE' == 'SE'")
     );
-    let pe1 = config
-        .rules
-        .iter()
-        .find(|r| r.name == "trim_control_PE1")
-        .expect("PE1 instance");
-    assert_eq!(
-        pe1.when.as_deref(),
-        Some("config.single_end_mode || 'PE' == 'SE'")
-    );
-    // No row for X1: the placeholder renders empty → the gate is closed.
-    let x1 = config
-        .rules
-        .iter()
-        .find(|r| r.name == "trim_control_X1")
-        .expect("X1 instance");
-    assert_eq!(
-        x1.when.as_deref(),
-        Some("config.single_end_mode || '' == 'SE'")
+    // PE1 and X1 are pruned at PLAN time (the baked gate evaluates false),
+    // so the plan-time instance set matches the runtime verdict — no
+    // phantom instances in dry-run/validate output.
+    assert!(
+        config
+            .rules
+            .iter()
+            .all(|r| r.name != "trim_control_PE1" && r.name != "trim_control_X1"),
+        "gated instances must not survive planning"
     );
 }
 
