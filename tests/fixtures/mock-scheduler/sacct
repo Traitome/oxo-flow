@@ -1,5 +1,11 @@
 #!/bin/bash
-# Mock sacct — answers `sacct -j <id> --format=JobID,State,ExitCode,Elapsed,MaxRSS`.
+# Mock sacct — answers
+# `sacct -j <id> --format=JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU`.
+#
+# Real sacct reports a job as SEVERAL rows: the allocation, then `.batch` and
+# one per step. MaxRSS and TotalCPU are only populated on the step rows, so
+# the shim emits both rows — a parser that reads the allocation row alone
+# sees no memory, exactly as it would against a real cluster.
 set -eu
 dir="${MOCK_SCHEDULER_DIR:?MOCK_SCHEDULER_DIR not set}"
 id=""
@@ -12,5 +18,9 @@ done
 [ -d "$dir/jobs/$id" ] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
 state=$(cat "$dir/jobs/$id/state")
 code=$(cat "$dir/jobs/$id/exit_code" 2>/dev/null || echo "")
-echo "JobID|State|ExitCode|Elapsed|MaxRSS"
-echo "$id|$state|$code|00:00:05|1234K"
+elapsed="${MOCK_SACCT_ELAPSED:-00:00:05}"
+maxrss="${MOCK_SACCT_MAXRSS:-1234K}"
+totalcpu="${MOCK_SACCT_TOTALCPU:-00:00:04}"
+echo "JobID|State|ExitCode|Elapsed|MaxRSS|TotalCPU"
+echo "$id|$state|$code|$elapsed||"
+echo "$id.batch|$state|$code|$elapsed|$maxrss|$totalcpu"

@@ -18,7 +18,7 @@ pub mod cluster;
 pub mod driver;
 
 /// Scheduler-agnostic job state, mapped from each backend's native codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendJobStatus {
     /// Queued, waiting to start.
     Pending,
@@ -31,7 +31,45 @@ pub enum BackendJobStatus {
     /// Cancelled by the driver or a user.
     Cancelled,
     /// Status could not be determined.
+    #[default]
     Unknown,
+}
+
+/// What a scheduler's accounting store knows about a job that has left the
+/// live queue: the terminal state, plus whatever the store measured.
+///
+/// Everything but `status` is optional on purpose. Accounting is a per-site
+/// deployment choice — a SLURM cluster without `slurmdbd` answers `sacct`
+/// with nothing, and PBS/SGE/LSF each expose a different subset — so a
+/// backend reports what it can prove and leaves the rest `None` rather than
+/// inventing a number that would land in a checkpoint as fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TerminalRecord {
+    /// Terminal state, mapped from the store's native vocabulary.
+    pub status: BackendJobStatus,
+    /// Process exit code. A job killed by a signal reports the shell's
+    /// `128 + signum` rather than the exit component, which is `0` for a
+    /// signalled job and would otherwise read as success.
+    pub exit_code: Option<i32>,
+    /// Wall-clock seconds the job spent RUNNING, excluding queue wait.
+    /// Separating the two is the whole point of reading accounting: the
+    /// driver only ever observes submit-to-settle, which on a busy queue is
+    /// mostly waiting.
+    pub elapsed_secs: Option<u64>,
+    /// Peak resident set size over every step of the job, in MB.
+    pub max_rss_mb: Option<u64>,
+    /// Total CPU seconds consumed across all cores.
+    pub cpu_seconds: Option<u64>,
+}
+
+impl TerminalRecord {
+    /// A record from a store that reports state and nothing else.
+    pub fn status_only(status: BackendJobStatus) -> Self {
+        Self {
+            status,
+            ..Self::default()
+        }
+    }
 }
 
 /// Maps a static plan onto a scheduler API.
@@ -75,11 +113,11 @@ pub trait ExecutorBackend: Send + Sync {
     /// Fetch job logs / accounting output (raw text).
     async fn logs(&self, job_id: &str) -> Result<String>;
 
-    /// Terminal status of a job that has left the live queue, read from the
+    /// Terminal record for a job that has left the live queue, read from the
     /// scheduler's accounting store. `None` means "no terminal record" —
     /// the driver keeps the job in flight. Backends without an accounting
     /// store keep the default and rely on their poller.
-    async fn terminal_status(&self, _job_id: &str) -> Option<BackendJobStatus> {
+    async fn terminal_status(&self, _job_id: &str) -> Option<TerminalRecord> {
         None
     }
 

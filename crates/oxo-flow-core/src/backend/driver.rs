@@ -6,7 +6,7 @@
 //! [`JobRecord`]s — the same record type the local executor produces, so
 //! checkpoint semantics are identical.
 
-use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule};
+use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule, TerminalRecord};
 use crate::error::{OxoFlowError, Result};
 use crate::executor::{JobRecord, JobStatus};
 use chrono::{DateTime, Utc};
@@ -607,12 +607,14 @@ impl BackendDriver {
                     .collect();
                 probes.sort();
                 probes.dedup();
+                let mut accounting: HashMap<String, TerminalRecord> = HashMap::new();
                 for probe in probes {
-                    if let Some(st) = self.backend.terminal_status(&probe).await
-                        && st != BackendJobStatus::Unknown
+                    if let Some(rec) = self.backend.terminal_status(&probe).await
+                        && rec.status != BackendJobStatus::Unknown
                     {
                         if direct {
-                            statuses.insert(probe, st);
+                            statuses.insert(probe.clone(), rec.status);
+                            accounting.insert(probe, rec);
                         } else {
                             // Base verdict expands to every element of the
                             // array (per-element accounting fidelity stays
@@ -620,7 +622,8 @@ impl BackendDriver {
                             for (id, f) in &inflight {
                                 let target = f.array_base.as_deref().unwrap_or(id);
                                 if target == probe {
-                                    statuses.insert(id.clone(), st);
+                                    statuses.insert(id.clone(), rec.status);
+                                    accounting.insert(id.clone(), rec);
                                 }
                             }
                         }
@@ -636,8 +639,45 @@ impl BackendDriver {
                     })
                     .collect();
                 settled_this_round = settled.len();
+                // Jobs the live poller settled have no accounting yet: the
+                // poller reports the state, the store reports what the job
+                // cost. One lookup per job as it finishes, not per poll.
+                for (job_id, f, _) in &settled {
+                    if accounting.contains_key(job_id) {
+                        continue;
+                    }
+                    // On backends whose accounting store never knew the
+                    // element ids, the array base is the only key that
+                    // resolves.
+                    let probe = if direct {
+                        job_id.as_str()
+                    } else {
+                        f.array_base.as_deref().unwrap_or(job_id)
+                    };
+                    if let Some(rec) = self.backend.terminal_status(probe).await {
+                        accounting.insert(job_id.clone(), rec);
+                    }
+                }
+                // When the driver NOTICED the job was terminal, which is not
+                // when the job ended: a poll interval, plus the accounting
+                // grace period for jobs that vanished from the live queue,
+                // can sit in between. One instant for the whole batch keeps
+                // `started_at`, `finished_at`, and `queue_wait_secs`
+                // consistent with each other instead of drifting apart by
+                // however long the writes took.
+                let observed_at = Utc::now();
                 for (job_id, f, status) in settled {
                     inflight.remove(&job_id);
+                    let acct = accounting.get(&job_id).copied();
+                    // The driver only ever sees submit-to-settle. When the
+                    // store reports how long the job RAN, the start time is
+                    // recomputed from it so `benchmarks.wall_time_secs`
+                    // stops silently including queue wait.
+                    let started_at = acct
+                        .and_then(|a| a.elapsed_secs)
+                        .and_then(|s| i64::try_from(s).ok())
+                        .and_then(|s| observed_at.checked_sub_signed(chrono::Duration::seconds(s)))
+                        .unwrap_or(f.submitted_at);
                     let record = match status {
                         BackendJobStatus::Completed => {
                             // Checkpoint re-entry (P3): new instances merge
@@ -682,18 +722,20 @@ impl BackendDriver {
                                     }
                                 }
                             }
-                            write_status(
+                            write_status_full(
                                 &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                 &job_id,
                                 &plan.rules[&f.rule].shell_cmd,
                                 "COMPLETED",
+                                Some((f.submitted_at, observed_at)),
+                                acct,
                             )?;
                             JobRecord {
                                 rule: f.rule.clone(),
                                 status: JobStatus::Success,
-                                started_at: Some(f.submitted_at),
-                                finished_at: Some(Utc::now()),
-                                exit_code: Some(0),
+                                started_at: Some(started_at),
+                                finished_at: Some(observed_at),
+                                exit_code: Some(acct.and_then(|a| a.exit_code).unwrap_or(0)),
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
@@ -703,23 +745,28 @@ impl BackendDriver {
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
-                                max_rss_mb: None,
-                                cpu_seconds: None,
+                                max_rss_mb: acct.and_then(|a| a.max_rss_mb),
+                                cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                             }
                         }
                         BackendJobStatus::Failed => {
-                            write_status(
+                            write_status_full(
                                 &opts.run_dir.join("jobs").join(sanitize(&f.rule)),
                                 &job_id,
                                 "",
                                 "FAILED",
+                                Some((f.submitted_at, observed_at)),
+                                acct,
                             )?;
                             JobRecord {
                                 rule: f.rule.clone(),
                                 status: JobStatus::Failed,
-                                started_at: Some(f.submitted_at),
-                                finished_at: Some(Utc::now()),
-                                exit_code: Some(1),
+                                started_at: Some(started_at),
+                                finished_at: Some(observed_at),
+                                // Without accounting the code is unknown, not
+                                // 1: reporting a rule that exited 7 as 1 is a
+                                // wrong answer where none was available.
+                                exit_code: acct.and_then(|a| a.exit_code),
                                 stdout: None,
                                 stderr: None,
                                 command: Some(crate::executor::process::mask_sensitive(
@@ -729,16 +776,16 @@ impl BackendDriver {
                                 retries: 0,
                                 timeout: None,
                                 skip_reason: None,
-                                max_rss_mb: None,
-                                cpu_seconds: None,
+                                max_rss_mb: acct.and_then(|a| a.max_rss_mb),
+                                cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
                             rule: f.rule.clone(),
                             status: JobStatus::Cancelled,
-                            started_at: Some(f.submitted_at),
-                            finished_at: Some(Utc::now()),
-                            exit_code: None,
+                            started_at: Some(started_at),
+                            finished_at: Some(observed_at),
+                            exit_code: acct.and_then(|a| a.exit_code),
                             stdout: None,
                             stderr: None,
                             command: Some(crate::executor::process::mask_sensitive(
@@ -748,8 +795,8 @@ impl BackendDriver {
                             retries: 0,
                             timeout: None,
                             skip_reason: Some("cancelled".into()),
-                            max_rss_mb: None,
-                            cpu_seconds: None,
+                            max_rss_mb: acct.and_then(|a| a.max_rss_mb),
+                            cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
                         },
                         _ => unreachable!("non-terminal states filtered above"),
                     };
@@ -838,23 +885,82 @@ fn record_t(status: &JobStatus) -> &'static str {
     }
 }
 
+/// Append one event to `events.jsonl`.
+///
+/// Every line carries an RFC 3339 `ts`. Ordering alone cannot answer the
+/// questions the log exists for — how long a job waited in the queue, where
+/// a run's wall-clock actually went, what was in flight when the driver
+/// died — and the timestamp has to be written at emit time because nothing
+/// downstream can reconstruct it afterwards.
 fn emit(events: &mut std::fs::File, t: &str, rule: &str, job: Option<&str>, reason: Option<&str>) {
+    let ts = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let line = match (job, reason) {
         (Some(j), Some(r)) => {
-            format!(r#"{{"t":"{t}","rule":{rule:?},"job":{j:?},"reason":{r:?}}}"#)
+            format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"job":{j:?},"reason":{r:?}}}"#)
         }
-        (Some(j), None) => format!(r#"{{"t":"{t}","rule":{rule:?},"job":{j:?}}}"#),
-        (None, Some(r)) => format!(r#"{{"t":"{t}","rule":{rule:?},"reason":{r:?}}}"#),
-        (None, None) => format!(r#"{{"t":"{t}","rule":{rule:?}}}"#),
+        (Some(j), None) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"job":{j:?}}}"#),
+        (None, Some(r)) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"reason":{r:?}}}"#),
+        (None, None) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?}}}"#),
     };
     let _ = writeln!(events, "{line}");
 }
 
 fn write_status(job_dir: &Path, job_id: &str, command: &str, state: &str) -> Result<()> {
+    write_status_full(job_dir, job_id, command, state, None, None)
+}
+
+/// Write `jobs/<instance>/status.json`.
+///
+/// Terminal writes carry the accounting record plus the submit and
+/// observation timestamps, so the file answers on its own what the job cost.
+/// `queue_wait_secs` is derived here rather than left to the reader: it is
+/// submit-to-observed minus the scheduler's `Elapsed`, and that subtraction
+/// is the only way to separate time spent waiting from time spent running —
+/// the driver never sees the moment a job starts. It is an upper bound: the
+/// poll interval and the accounting grace period both land inside it.
+fn write_status_full(
+    job_dir: &Path,
+    job_id: &str,
+    command: &str,
+    state: &str,
+    times: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    acct: Option<TerminalRecord>,
+) -> Result<()> {
     std::fs::create_dir_all(job_dir).map_err(|e| OxoFlowError::Config {
         message: format!("cannot create {}: {e}", job_dir.display()),
     })?;
-    let body = format!(r#"{{"state":{state:?},"job_id":{job_id:?},"command":{command:?}}}"#);
+    let mut fields = vec![
+        format!(r#""state":{state:?}"#),
+        format!(r#""job_id":{job_id:?}"#),
+        format!(r#""command":{command:?}"#),
+    ];
+    if let Some((submitted, observed)) = times {
+        let fmt = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        fields.push(format!(r#""submitted_at":"{}""#, fmt(submitted)));
+        fields.push(format!(r#""finished_at":"{}""#, fmt(observed)));
+        if let Some(elapsed) = acct.and_then(|a| a.elapsed_secs) {
+            let wait = (observed - submitted)
+                .num_seconds()
+                .saturating_sub(elapsed as i64)
+                .max(0);
+            fields.push(format!(r#""queue_wait_secs":{wait}"#));
+        }
+    }
+    if let Some(a) = acct {
+        if let Some(code) = a.exit_code {
+            fields.push(format!(r#""exit_code":{code}"#));
+        }
+        if let Some(secs) = a.elapsed_secs {
+            fields.push(format!(r#""elapsed_secs":{secs}"#));
+        }
+        if let Some(mb) = a.max_rss_mb {
+            fields.push(format!(r#""max_rss_mb":{mb}"#));
+        }
+        if let Some(secs) = a.cpu_seconds {
+            fields.push(format!(r#""cpu_seconds":{secs}"#));
+        }
+    }
+    let body = format!("{{{}}}", fields.join(","));
     std::fs::write(job_dir.join("status.json"), body).map_err(|e| OxoFlowError::Config {
         message: format!("cannot write status.json: {e}"),
     })

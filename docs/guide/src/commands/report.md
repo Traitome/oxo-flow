@@ -355,12 +355,17 @@ a hard error — silently dropping a column would fake a complete table.
 
 ### Benchmarks CPU column
 
-The **Benchmarks** table's CPU column shows **sampled** CPU seconds: the
-executor's sampler reads each rule process's CPU time (all its threads) at
-200 ms ticks — child processes are not accumulated. `-` means the sampler
-never observed the process: very short rules, cluster executors, or legacy
-checkpoints written before sampling existed. Peak memory is sampled the
-same way.
+On **local** runs the **Benchmarks** table's CPU column shows **sampled**
+CPU seconds: the executor's sampler reads each rule process's CPU time (all
+its threads) at 200 ms ticks — child processes are not accumulated. Peak
+memory is sampled the same way.
+
+On **cluster** runs both columns come from the scheduler's accounting store
+instead, read once as each job settles, and cover every step of the job.
+
+`-` means neither source reported a number: very short local rules the
+sampler never observed, LSF, a cluster job whose accounting row never
+appeared, or legacy checkpoints written before sampling existed.
 
 ### Domain auto-detection
 

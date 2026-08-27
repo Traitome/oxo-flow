@@ -368,10 +368,55 @@ Each run leaves a directory you can navigate with ordinary tools:
 ```console
 .oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest
   events.jsonl                        # append-only submit/complete/fail log
+  index.json                          # array index → instance name
   jobs/<rule>/job.sh                  # the exact script submitted
   jobs/<rule>/job.id                  # scheduler job id
   jobs/<rule>/status.json
 ```
+
+Every `events.jsonl` line carries an RFC 3339 `ts`, so the log reconstructs
+a timeline rather than just an ordering:
+
+```json
+{"ts":"2026-08-17T14:30:05.114Z","t":"SUBMITTED","rule":"align_S1","job":"4812345"}
+{"ts":"2026-08-17T15:02:44.907Z","t":"COMPLETED","rule":"align_S1","job":"4812345"}
+```
+
+### What a finished job records
+
+When a job leaves the queue, oxo-flow reads the scheduler's accounting store
+(`sacct`, `qstat -x -f`, `qacct`, `bacct`) and writes what it found into
+`status.json`:
+
+```json
+{
+  "state": "COMPLETED",
+  "job_id": "4812345",
+  "command": "bwa mem ref.fa data/S1.fq > aln/S1.bam",
+  "submitted_at": "2026-08-17T14:30:05.114Z",
+  "finished_at": "2026-08-17T15:02:44.907Z",
+  "queue_wait_secs": 65,
+  "exit_code": 0,
+  "elapsed_secs": 1894,
+  "max_rss_mb": 24680,
+  "cpu_seconds": 14203
+}
+```
+
+`queue_wait_secs` is submit-to-finish minus the scheduler's own elapsed
+time — the driver never observes the moment a job starts, so the split
+between waiting and working is only available by subtraction. The same
+`elapsed_secs` is what `benchmarks.wall_time_secs` records in the
+checkpoint, which therefore measures runtime rather than runtime plus queue
+wait, and `max_rss_mb` / `cpu_seconds` populate the same benchmark fields a
+local run fills from its own sampler.
+
+How much of this appears depends on the site. Accounting is a deployment
+choice: a SLURM cluster without `slurmdbd` answers `sacct` with nothing, and
+LSF's `bacct` columns vary too much between versions to parse blind, so LSF
+records state only. Fields the store did not report are omitted rather than
+guessed — including `exit_code`, which stays absent for a failed job whose
+real code could not be read, instead of defaulting to `1`.
 
 Outputs, the working directory, and logs are assumed to live on storage
 shared between the submitting host and the compute nodes.

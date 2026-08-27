@@ -134,17 +134,21 @@ pub struct BenchmarkRecord {
     pub rule: String,
     /// Wall-clock time in seconds.
     pub wall_time_secs: f64,
-    /// Sampled peak RSS in megabytes (issue #67 §4; `None` for cluster
-    /// executors and legacy checkpoints).
+    /// Peak RSS in megabytes (issue #67 §4) — sampled by the local
+    /// executor, read from the scheduler's accounting store on the cluster
+    /// path. `None` for legacy checkpoints and whenever the source did not
+    /// report it.
     pub max_memory_mb: Option<u64>,
     /// The rule's declared memory limit in megabytes (`effective_memory()`
     /// resolved at execution time) — the "limit" side of bottleneck
     /// detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit_mb: Option<u64>,
-    /// Sampled CPU time of the rule's process in seconds (all its
-    /// threads; child processes are not accumulated; issue #83 P1-13;
-    /// `None` for cluster executors and legacy checkpoints).
+    /// CPU time in seconds — sampled from the rule's own process by the
+    /// local executor (all its threads; child processes are not
+    /// accumulated; issue #83 P1-13), reported by the accounting store on
+    /// the cluster path, where it DOES span every step of the job. `None`
+    /// for legacy checkpoints and whenever the source did not report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
     /// Number of retry attempts before success (0 = first attempt succeeded).
