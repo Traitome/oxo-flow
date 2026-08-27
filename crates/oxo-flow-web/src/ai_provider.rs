@@ -66,7 +66,10 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
         if let Some((provider_kind, api_url, model, api_key)) = row
             && provider_kind != "disabled"
         {
-            let key = api_key.unwrap_or_default();
+            // Rows are written through infra::crypto::seal (issue #205), so
+            // the stored value may be a `v1:` ciphertext — decrypt here too,
+            // never hand the encoded form to a provider.
+            let key = crate::infra::crypto::open(&api_key.unwrap_or_default());
             // A per-user row without a key is not a usable configuration.
             // Fall back to the shared runtime so the user gets the global
             // provider (or Noop if none is configured) instead of a provider

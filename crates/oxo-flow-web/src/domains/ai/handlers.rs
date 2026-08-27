@@ -475,7 +475,7 @@ pub async fn restore_ai_config_from_db() {
     {
         let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
             &provider,
-            Some(api_key),
+            Some(crate::infra::crypto::open(&api_key)),
             Some(api_url),
             Some(model),
         );
@@ -615,6 +615,9 @@ pub async fn update_server_ai_config(
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    // Issue #205: encrypt third-party credentials at rest when a master
+    // key is configured; plaintext passthrough keeps legacy behavior.
+    let stored_api_key = crate::infra::crypto::seal(api_key);
 
     // Upsert server config (user_id IS NULL)
     sqlx::query(
@@ -624,7 +627,7 @@ pub async fn update_server_ai_config(
     .bind(provider)
     .bind(api_url)
     .bind(model)
-    .bind(api_key)
+    .bind(&stored_api_key)
     .bind(chrono::Utc::now().to_rfc3339())
     .bind(chrono::Utc::now().to_rfc3339())
     .execute(pool)
@@ -697,6 +700,9 @@ pub async fn update_user_ai_config(
     let api_url = req.get("api_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let api_key = req.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    // Issue #205: encrypt third-party credentials at rest when a master
+    // key is configured; plaintext passthrough keeps legacy behavior.
+    let stored_api_key = crate::infra::crypto::seal(api_key);
     let search_enabled = req
         .get("search_enabled")
         .and_then(|v| v.as_bool())
@@ -724,7 +730,7 @@ pub async fn update_user_ai_config(
     .bind(provider)
     .bind(api_url)
     .bind(model)
-    .bind(api_key)
+    .bind(&stored_api_key)
     .bind(search_enabled as i64)
     .bind(monitor_enabled as i64)
     .bind(auto_retry_enabled as i64)
