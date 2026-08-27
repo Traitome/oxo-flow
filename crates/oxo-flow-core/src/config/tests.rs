@@ -3388,6 +3388,44 @@ fn pair_when_gates_fan_out_per_config_toggle() {
 }
 
 #[test]
+fn pair_when_unknown_config_keys_reports_typos() {
+    // A pair `when` referencing a config key absent from [config]
+    // evaluates false — at pair scope that silently drops the pair's
+    // whole rule set, so the plan-time typo guard must surface the
+    // offending key (warn, never error — the #199 unbound→false stance).
+    use crate::config::pair_when_unknown_config_keys;
+    let mut config: std::collections::HashMap<String, toml::Value> =
+        std::collections::HashMap::new();
+    config.insert("extended".to_string(), toml::Value::Boolean(false));
+
+    assert_eq!(
+        pair_when_unknown_config_keys("config.extened", &config),
+        vec!["extened"]
+    );
+    assert_eq!(
+        pair_when_unknown_config_keys("config.extended", &config),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        pair_when_unknown_config_keys("true", &config),
+        Vec::<&str>::new()
+    );
+    // Comparison form, nesting, negation — all reference positions count.
+    assert_eq!(
+        pair_when_unknown_config_keys(
+            "(config.extended && !config.missing) || config.other == \"yes\"",
+            &config
+        ),
+        vec!["missing", "other"]
+    );
+    // One warning per key, in order of first appearance.
+    assert_eq!(
+        pair_when_unknown_config_keys("config.typo || config.typo", &config),
+        vec!["typo"]
+    );
+}
+
+#[test]
 fn from_file_feeds_pair_members_into_samples_list() {
     // [[pairs]] members are samples too: a pairs-only workflow renders
     // {config.samples_list} as a literal before this (live: pair-driven

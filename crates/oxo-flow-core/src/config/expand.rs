@@ -214,6 +214,22 @@ impl WorkflowConfig {
         // instances. The static [[pairs]] table can therefore carry
         // profile-switched sample sets — a toggle in `config` decides
         // which pairs fan out.
+        //
+        // Plan-time typo guard: a `config.<key>` reference absent from
+        // [config] evaluates false (unbound→false, #199) — at pair scope
+        // that silently drops the pair's whole rule set, so warn once per
+        // pair+key, matching the {meta.<column>} typo-warning style.
+        for pair in &self.pairs {
+            if let Some(when) = pair.when.as_deref() {
+                for key in crate::config::pair_when_unknown_config_keys(when, &self.config) {
+                    tracing::warn!(
+                        pair_id = %pair.pair_id,
+                        key,
+                        "pair `when` references 'config.{key}' but [config] defines no such key — the condition evaluates false and the pair fans out no rules"
+                    );
+                }
+            }
+        }
         let config_values: HashMap<String, toml::Value> = self
             .config
             .iter()
@@ -1707,6 +1723,16 @@ impl WorkflowConfig {
                 }
             }
             if !any {
+                continue;
+            }
+            // Round-trip guard against phantom combos, mirroring the
+            // disk-scan walkers: with a repeated wildcard the anonymous
+            // regex groups may capture a value different from the named
+            // one, so a combo that re-expands to a path other than the
+            // matched output can only come from such a mismatch.
+            if crate::wildcard::expand_pattern(&pattern, &combo)
+                .is_ok_and(|expanded| expanded.as_str() != output.as_str())
+            {
                 continue;
             }
             candidates.push((output.clone(), combo));

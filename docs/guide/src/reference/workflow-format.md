@@ -1523,10 +1523,33 @@ control    = "CTRL_02"
 | `control` | String | **Yes** | Matched control sample name (alias: `normal`) |
 | `experiment_type` | String | No | Optional cohort label (alias: `tumor_type`) |
 | `metadata` | Table | No | Arbitrary key-value pairs (each key becomes a wildcard) |
+| `when` | String | No | Pair-level gate evaluated at plan time: while it evaluates `false`, the pair declares **no** rule instances. Uses the same condition vocabulary as rule `when` (`config.<key>` truthiness/comparisons, `&&`/`\|\|`/`!`, parentheses, `file_exists(...)`). A `config.<key>` reference with no matching `[config]` key evaluates `false` (the unbound→false stance) — a plan-time warning flags the referenced key so a typo does not silently drop the pair's whole rule set |
 
 Any rule that references `{experiment}`, `{control}`, or `{pair_id}` in its `input`, `output`, or `shell` fields is **automatically expanded** into one concrete rule instance per pair.  Rules that do not reference any pair wildcard are kept as-is.
 
 **Expanded rule naming:** `{rule_name}_{pair_id}` (e.g., `mutect2_CASE_001`).
+
+### Pair-level gating with `when`
+
+One static `[[pairs]]` table can carry profile-switched sample sets — a
+toggle in `[config]` decides which pairs fan out:
+
+```toml
+[config]
+extended = false   # flip via --profile or CLI override
+
+[[pairs]]
+pair_id = "EXTRA_001"
+experiment = "EXP_02"
+control = "CTRL_02"
+when = "config.extended"
+```
+
+While `extended` is `false`, `EXTRA_001` fans out no rules; flipping it and
+re-running restores the pair's instances (re-expansion from the preserved
+templates, the checkpoint re-entry pattern). Unknown keys evaluate `false`,
+so a misspelled key (`when = "config.extened"`) gates the pair out with a
+plan-time warning naming the offending key.
 
 ### Loading pairs from external file
 
