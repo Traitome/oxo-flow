@@ -110,6 +110,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_AI_API_KEY` | No | — | Generic API key fallback |
 | `OXO_FLOW_AI_API_URL` | No | (provider default) | Custom API endpoint URL |
 | `OXO_FLOW_AI_MODEL` | No | (provider default) | Model name override |
+| `OXO_FLOW_MASTER_KEY` | No | — | AES-256-GCM seed encrypting AI provider keys at rest (`v1:`-prefixed rows in the local DB). Unset = plaintext legacy mode |
 | `ANTHROPIC_AUTH_TOKEN` | No | — | Claude/Anthropic API key (overrides OXO_FLOW_AI_API_KEY) |
 | `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Anthropic-compatible API base URL |
 | `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Claude model name |

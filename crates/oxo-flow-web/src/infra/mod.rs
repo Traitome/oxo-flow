@@ -1,3 +1,4 @@
+pub mod crypto;
 pub mod db;
 pub mod hpc;
 pub mod license;

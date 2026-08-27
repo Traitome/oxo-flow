@@ -65,6 +65,7 @@ fs2 = "0.4"
 
 # Crypto
 sha2 = "0.10"
+aes-gcm = "0.10"
 sha1 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
