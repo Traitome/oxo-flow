@@ -337,6 +337,36 @@ async fn pull_bundle(
 /// Format: `gh:owner/repo@tag`
 ///
 /// Resolves the GitHub release by tag, then downloads the first `.tar.zst` asset.
+/// Default upper bound for bundle downloads (1 GiB).
+///
+/// Bundles are buffered before their checksums are verified, so an
+/// unbounded read lets a hostile URL exhaust disk/memory first. Override
+/// via `OXO_FLOW_PULL_MAX_BYTES`.
+const DEFAULT_MAX_PULL_BYTES: u64 = 1 << 30;
+
+/// Stream `response` into memory with a hard size cap.
+async fn download_bounded(mut response: reqwest::Response, what: &str) -> Result<Vec<u8>> {
+    let max = std::env::var("OXO_FLOW_PULL_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_PULL_BYTES);
+    let mut data: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .with_context(|| format!("failed to read {what}"))?
+    {
+        if data.len() as u64 + chunk.len() as u64 > max {
+            anyhow::bail!(
+                "{what} exceeds the {max}-byte download limit \
+                 (raise it with OXO_FLOW_PULL_MAX_BYTES)"
+            );
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(data)
+}
+
 async fn pull_github_release(url: &str) -> Result<Vec<u8>> {
     let spec = url.trim_start_matches("gh:");
     let (repo, tag) = spec
@@ -376,17 +406,18 @@ async fn pull_github_release(url: &str) -> Result<Vec<u8>> {
     let asset_name = asset["name"].as_str().unwrap_or("bundle.tar.zst");
 
     eprintln!("  Downloading {}...", asset_name);
-    let data = client
-        .get(download_url)
-        .header("User-Agent", "oxo-flow")
-        .send()
-        .await
-        .context("failed to download release asset")?
-        .bytes()
-        .await
-        .context("failed to read release asset")?;
+    let data = download_bounded(
+        client
+            .get(download_url)
+            .header("User-Agent", "oxo-flow")
+            .send()
+            .await
+            .context("failed to download release asset")?,
+        "release asset",
+    )
+    .await?;
 
-    Ok(data.to_vec())
+    Ok(data)
 }
 
 /// Download a bundle from an HTTP(S) URL.
@@ -402,11 +433,7 @@ async fn pull_http(url: &str) -> Result<Vec<u8>> {
         anyhow::bail!("HTTP {} downloading bundle", response.status());
     }
 
-    let data = response
-        .bytes()
-        .await
-        .context("failed to read bundle data")?;
-    Ok(data.to_vec())
+    download_bounded(response, "bundle").await
 }
 
 #[cfg(test)]
