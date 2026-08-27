@@ -173,7 +173,14 @@ pub async fn audit_middleware(
     // Awaited, not fire-and-forget: an audit trail that can silently lose
     // rows is not an audit trail. One indexed INSERT per mutation is cheap
     // and the response is already computed.
-    if let Err(e) = crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await {
+    // PostgreSQL deployments never initialize the legacy audit store. A
+    // missing audit backend must degrade explicitly, not panic the request
+    // path — the structured log event below remains the machine trail.
+    if crate::db::try_pool().is_none() {
+        tracing::warn!("audit store unavailable (PostgreSQL backend?): {action} not audited");
+    } else if let Err(e) =
+        crate::db::insert_audit_row(&user, &action, &path, result, &metadata).await
+    {
         tracing::error!("audit insert failed for {action}: {e}");
     }
     // Structured event stream for machine consumers (issue #81).

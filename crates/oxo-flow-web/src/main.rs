@@ -150,9 +150,14 @@ async fn main() -> Result<()> {
         {
             tracing::info!("Initializing PostgreSQL backend");
             oxo_flow_web::infra::db::postgres::init_pool(&database_url).await;
+            // Issue #207 acceptance: an explicit capability matrix at startup,
+            // so operators see the served/gated split before the first 503.
             tracing::warn!(
-                "Capability boundary: workflow RUN EXECUTION is SQLite-only — \
-                 POST /api/runs will respond 503 RUNS_REQUIRE_SQLITE"
+                "PostgreSQL deployment capability matrix:\n  \
+                 available: pipeline library · templates · auth · AI · observability\n  \
+                 degraded: audit trail (SQLite-only, logged-not-persisted)\n  \
+                 gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
+                 (run execution is SQLite-only)"
             );
         }
         #[cfg(not(feature = "postgres"))]
