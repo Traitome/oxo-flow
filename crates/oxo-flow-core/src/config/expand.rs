@@ -1,0 +1,1179 @@
+//! Wildcard expansion engine. (issue #206 extraction).
+//! Workflow configuration and `.oxoflow` file parsing.
+// Accesses deprecated `Rule::threads` / `Rule::memory` shorthand fields to
+// apply defaults and expand rules.  Will be removed once the shorthand
+// fields are retired.
+#![allow(deprecated)]
+//!
+//! The `.oxoflow` format is TOML-based with workflow metadata, configuration
+//! variables, default settings, and a list of rules.
+
+use super::*;
+use crate::error::{OxoFlowError, Result};
+use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
+use std::collections::HashMap;
+
+/// Matches the namespaced `{values.name}` wildcard form.
+///
+/// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
+/// this namespace is detected and substituted textually — see
+impl WorkflowConfig {
+    /// Expand rules that contain pair or group wildcards into concrete instances.
+    ///
+    /// Scans each rule for wildcard placeholders:
+    /// - Rules containing `{experiment}`, `{control}`, or `{pair_id}` are
+    ///   expanded once per entry in `self.pairs`.
+    /// - Backward-compatible aliases `{tumor}` and `{normal}` are also
+    ///   recognized.
+    /// - Rules containing `{group}` or `{sample}` are expanded once per
+    ///   (group, sample) combination in `self.sample_groups`.
+    /// - Rules without any of these wildcards are kept unchanged.
+    ///
+    /// The expanded rule names follow the pattern `{original_name}_{suffix}`,
+    /// where the suffix is the `pair_id` for pair rules or `{group}_{sample}`
+    /// for group rules.
+    ///
+    /// After calling this method, `self.rules` contains only concrete rules
+    /// (no pair/group wildcards) and the DAG can be built normally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if duplicate rule names would be produced (e.g., two
+    /// pairs with the same `pair_id`), or if a pair/group is defined but no
+    /// rules reference its wildcards (this is not an error—those pairs are
+    /// simply ignored).
+    /// Build the `wildcard.<key>` evaluation context for one expansion combo.
+    ///
+    /// Optional pair wildcards (`experiment_type`, `tumor_type`) are filled
+    /// with empty strings so `wildcard.experiment_type != ''` predicates see
+    /// a definite value (missing keys otherwise evaluate false). Metadata
+    /// keys flow in through the combo itself.
+    fn expansion_when_context(combo: &crate::wildcard::WildcardValues) -> HashMap<String, String> {
+        let mut ctx: HashMap<String, String> =
+            combo.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for key in [
+            "pair_id",
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "experiment_type",
+            "tumor_type",
+            "group",
+            "sample",
+        ] {
+            ctx.entry(key.to_string()).or_default();
+        }
+        ctx
+    }
+
+    /// Resolve a kept instance's `when` wildcard references to that
+    /// instance's own bindings, so the execution-time re-check re-evaluates
+    /// the same per-instance verdict without a wildcard context.
+    ///
+    /// - `wildcard.<key>` as a comparison operand → the bound value as a
+    ///   quoted literal (the evaluator compares literals properly).
+    /// - a bare `wildcard.<key>` (truthiness position) → the literal
+    ///   `true`/`false` for the bound value.
+    /// - keys absent from the combo are left untouched: they were
+    ///   non-decisive for a kept instance, and the strict unbound→false
+    ///   semantics at execution mirror the expansion-time verdict.
+    ///
+    /// Without this, the strict missing-key semantics added to the `when`
+    /// evaluator would veto every fan-out instance at execution time (no
+    /// pair/group context exists there) — the live snparcher incident was
+    /// the reverse failure: an unbound key evaluated TRUE at expansion.
+    pub(crate) fn bake_wildcard_when(
+        when: &str,
+        combo: &crate::wildcard::WildcardValues,
+    ) -> String {
+        // Longest-first so `>=` wins over `>`, `==`/`!=` are not confused
+        // with `=`/`!` (which are not comparison operators here).
+        const OPS: &[&str] = &[">=", "<=", "==", "!=", ">", "<"];
+
+        let mut result = String::with_capacity(when.len());
+        let mut cursor = 0usize;
+        for cap in WHEN_WILDCARD_REF_RE.captures_iter(when) {
+            let m = cap.get(0).expect("full match");
+            let key = cap.get(1).expect("key group").as_str();
+            let (start, end) = (m.start(), m.end());
+            result.push_str(&when[cursor..start]);
+
+            // Non-space context around the token decides its position.
+            let after = when[end..]
+                .find(|c: char| !c.is_whitespace())
+                .map(|i| &when[end + i..])
+                .unwrap_or_default();
+            let before = when[..start].trim_end();
+
+            match combo.get(key) {
+                // Comparison operand → quoted literal of the bound value.
+                Some(value)
+                    if OPS
+                        .iter()
+                        .any(|op| after.starts_with(op) || before.ends_with(op)) =>
+                {
+                    let rendered = crate::executor::process::render_wildcard_value(value);
+                    if rendered.contains('\'') {
+                        result.push_str(&format!("\"{rendered}\""));
+                    } else {
+                        result.push_str(&format!("'{rendered}'"));
+                    }
+                }
+                // Bare truthiness position → literal true/false.
+                Some(value) => {
+                    let truthy = !value.is_empty() && value != "false" && value != "0";
+                    result.push_str(if truthy { "true" } else { "false" });
+                }
+                // Unbound: leave the token for the strict execution-time
+                // evaluator (false — same verdict as expansion).
+                None => result.push_str(&when[start..end]),
+            }
+            cursor = end;
+        }
+        result.push_str(&when[cursor..]);
+        result
+    }
+
+    pub fn expand_wildcards(&mut self) -> Result<()> {
+        // Preserve the unexpanded templates on first expansion — checkpoint
+        // re-entry (issue #78 P3) re-expands from them with merged values.
+        if self.rule_templates.is_empty() {
+            self.rule_templates = self.rules.clone();
+        }
+        use crate::wildcard::{
+            expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
+            wildcard_combinations_from_groups, wildcard_combinations_from_pairs,
+        };
+        use regex::Regex;
+
+        let pair_combos = wildcard_combinations_from_pairs(&self.pairs);
+        let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
+
+        // Rebuild expansion provenance from scratch — this method may run on a
+        // config that was expanded before.
+        self.expansion_samples.clear();
+        self.expansion_values.clear();
+        self.expansion_pairs.clear();
+
+        // Validate [[values]] tables: non-empty names/values, unique names,
+        // and no collisions with built-in wildcards (a rule referencing
+        // `{sample}` must not be ambiguous between group and value fan-out).
+        let mut seen_value_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        const RESERVED_VALUE_NAMES: &[&str] = &[
+            "sample",
+            "group",
+            "pair_id",
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "experiment_type",
+            "tumor_type",
+            // Executor placeholders — a value table named `input` (etc.)
+            // would replace the placeholder in every rule's shell.
+            "input",
+            "output",
+            "log",
+            "threads",
+            "memory",
+        ];
+        for table in &self.values {
+            if table.name.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: "[[values]] table must have a non-empty name".to_string(),
+                    rule: None,
+                    suggestion: None,
+                });
+            }
+            if table.values.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: format!("[[values]] table '{}' has no values", table.name),
+                    rule: None,
+                    suggestion: Some("add at least one value, or remove the table".to_string()),
+                });
+            }
+            if RESERVED_VALUE_NAMES.contains(&table.name.as_str()) {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "[[values]] name '{}' collides with a built-in wildcard",
+                        table.name
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "rename the table (e.g. use a tool-specific parameter name)".to_string(),
+                    ),
+                });
+            }
+            if !seen_value_names.insert(table.name.clone()) {
+                return Err(OxoFlowError::Validation {
+                    message: format!("duplicate [[values]] table '{}'", table.name),
+                    rule: None,
+                    suggestion: Some("merge the tables or rename one of them".to_string()),
+                });
+            }
+        }
+
+        // Pre-compile constraints for performance
+        let mut compiled_constraints = HashMap::new();
+        for (name, pattern) in &self.wildcard_constraints {
+            let re = Regex::new(pattern).map_err(|e| OxoFlowError::Wildcard {
+                rule: String::new(),
+                message: format!(
+                    "invalid regex constraint '{}' for wildcard '{}': {}",
+                    pattern, name, e
+                ),
+            })?;
+            compiled_constraints.insert(name.clone(), re);
+        }
+
+        // Wildcards that trigger pair expansion.
+        // Include backward-compatible aliases `{tumor}`/`{normal}`.
+        let mut pair_wildcards = vec![
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "pair_id",
+            "experiment_type",
+            "tumor_type",
+        ];
+        // Also include any metadata keys from defined pairs
+        for pair in &self.pairs {
+            for key in pair.metadata.keys() {
+                pair_wildcards.push(key.as_str());
+            }
+        }
+
+        // Wildcards that trigger group expansion
+        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
+
+        let mut expanded_rules: Vec<Rule> = Vec::new();
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Track original → expanded name mapping for depends_on resolution
+        let mut name_map: HashMap<String, Vec<String>> = HashMap::new();
+
+        for rule in &self.rules {
+            // Collect all text fields that might contain wildcards. The fan-out
+            // TRIGGER set is input/output/shell only — script and the hooks
+            // substitute per instance when the rule fans out, but never start
+            // a fan-out themselves (cloning on a hook-only wildcard would
+            // duplicate the whole rule execution, and `${name}` bash
+            // spellings inside script would false-trigger). `when` joins the
+            // trigger set: a rule whose pair/group scope is expressed only in
+            // `when` (snakemake-style per-sample DAG morphing, e.g.
+            // `when = "wildcard.control != ''"`) still fans out per combo.
+            let mut all_text: Vec<&str> = rule.input.iter().map(String::as_str).collect();
+            all_text.extend(rule.output.iter().map(String::as_str));
+            if let Some(ref shell) = rule.shell {
+                all_text.push(shell);
+            }
+            if let Some(ref when) = rule.when {
+                all_text.push(when);
+            }
+
+            let uses_pair_wildcard = !pair_combos.is_empty()
+                && all_text.iter().any(|t| {
+                    pair_wildcards
+                        .iter()
+                        .any(|w| t.contains(&format!("{{{w}}}")))
+                });
+
+            let uses_group_wildcard = !group_combos.is_empty()
+                && all_text.iter().any(|t| {
+                    GROUP_WILDCARDS
+                        .iter()
+                        .any(|w| t.contains(&format!("{{{w}}}")))
+                });
+
+            // `[[values]]` fan-out: tables whose names appear in the rule —
+            // in inputs/outputs/shells and in `expand_inputs` patterns —
+            // become an additional Cartesian dimension, orthogonal to pairs
+            // and groups. `{values.name}` is the namespaced sibling of the
+            // bare `{name}` form.
+            let expand_texts: Vec<&str> = all_text
+                .iter()
+                .copied()
+                .chain(rule.expand_inputs.iter().map(|e| e.pattern.as_str()))
+                .collect();
+            let mut active_value_tables: Vec<&ValueGroup> = Vec::new();
+            for table in &self.values {
+                let referenced = expand_texts.iter().any(|t| {
+                    t.contains(&format!("{{{}}}", table.name))
+                        || t.contains(&format!("{{values.{}}}", table.name))
+                });
+                if referenced {
+                    active_value_tables.push(table);
+                }
+            }
+            let uses_value_wildcard = !active_value_tables.is_empty();
+
+            // Unbound `{values.name}` namespace references have no fan-out
+            // source: warn (never error — same stance as unbound `{sample}`)
+            // so the author notices before runtime. Bare `{name}` is
+            // indistinguishable from engine placeholders (`{input}`,
+            // `{threads}`) and stays silent.
+            let mut warned_value_ns: Vec<String> = Vec::new();
+            for text in &expand_texts {
+                for cap in VALUES_NS_RE.captures_iter(text) {
+                    let name = cap[1].to_string();
+                    let has_table = self.values.iter().any(|v| v.name == name);
+                    if !has_table && !warned_value_ns.contains(&name) {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            "rule references '{{values.{name}}}' but no [[values]] table named '{name}' exists; the placeholder will be left unexpanded"
+                        );
+                        warned_value_ns.push(name);
+                    }
+                }
+            }
+
+            // Cartesian product of the active tables, deterministic: the
+            // last referenced table varies fastest, mirroring declaration
+            // order. Rules using no value table get a single empty combo —
+            // the identity element, so the pair/group branches below run
+            // exactly as before.
+            let mut value_combos: Vec<crate::wildcard::WildcardValues> =
+                vec![crate::wildcard::WildcardValues::new()];
+            for table in &active_value_tables {
+                let mut next = Vec::with_capacity(value_combos.len() * table.values.len());
+                for combo in &value_combos {
+                    for value in &table.values {
+                        let mut c = combo.clone();
+                        c.insert(table.name.clone(), value.clone());
+                        next.push(c);
+                    }
+                }
+                value_combos = next;
+            }
+
+            if uses_pair_wildcard {
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
+                // Expand for each value-combo × pair combination (orthogonal
+                // fan-out — [[values]] adds a dimension on top of pairs).
+                for value_combo in &value_combos {
+                    for pair_combo in &pair_combos {
+                        // Merge the binding sources so `{assembler}` and
+                        // `{experiment}` both resolve during expansion.
+                        let mut combo = pair_combo.clone();
+                        combo.extend(value_combo.clone());
+
+                        // Filter by constraints (non-matching combos are
+                        // skipped, per docs).
+                        if validate_wildcard_constraints_compiled(&combo, &compiled_constraints)
+                            .is_err()
+                        {
+                            continue;
+                        }
+
+                        // Per-instance `when` filtering (snakemake-style DAG
+                        // morphing): conditions referencing `wildcard.<key>`
+                        // resolve against this combo and non-matching
+                        // instances never enter the DAG. Conditions without
+                        // wildcard references keep the execution-time flow.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            let config_values: HashMap<String, toml::Value> = self
+                                .config
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            let combo_values = Self::expansion_when_context(&combo);
+                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                                when,
+                                &config_values,
+                                &combo_values,
+                            ) {
+                                continue;
+                            }
+                        }
+
+                        let suffix = pair_combo.get("pair_id").cloned().unwrap_or_else(|| {
+                            pair_combo.values().cloned().collect::<Vec<_>>().join("_")
+                        });
+                        let new_name = format!(
+                            "{}{}_{}",
+                            rule.name,
+                            value_instance_suffix(value_combo, &active_value_tables),
+                            suffix
+                        );
+                        expanded_names.push(new_name.clone());
+
+                        if !seen_names.insert(new_name.clone()) {
+                            return Err(OxoFlowError::DuplicateRule { name: new_name });
+                        }
+
+                        let mut expanded = rule.clone();
+                        expanded.name = new_name;
+
+                        // Bake the per-instance wildcard bindings into the
+                        // `when` (the instance survived filtering above), so
+                        // the execution-time re-check re-evaluates this same
+                        // verdict with no wildcard context.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            expanded.when = Some(Self::bake_wildcard_when(when, &combo));
+                        }
+
+                        // Expand input/output/shell/log patterns
+                        expanded.input = expand_rule_patterns(&rule.input, &combo);
+                        expanded.output = expand_rule_patterns(&rule.output, &combo);
+                        if let Some(ref shell) = rule.shell {
+                            expanded.shell = Some(expand_rule_shell(shell, &combo));
+                        }
+                        if let Some(ref log) = rule.log {
+                            expanded.log = Some(expand_rule_shell(log, &combo));
+                        }
+                        // Script and hooks carry the per-instance
+                        // substitution too (issue #98) — same class as
+                        // shell/log.
+                        expand_command_text_fields(&mut expanded, rule, |s| {
+                            expand_rule_shell(s, &combo)
+                        });
+
+                        // Record which sample names this expansion belongs to
+                        // (issue #63 readiness attribution).
+                        let mut involved: Vec<String> = Vec::new();
+                        for key in ["experiment", "control"] {
+                            if let Some(value) = combo.get(key)
+                                && !value.is_empty()
+                                && !involved.contains(value)
+                            {
+                                involved.push(value.clone());
+                            }
+                        }
+                        self.expansion_samples
+                            .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
+
+                        if !value_combo.is_empty() {
+                            self.expansion_values
+                                .insert(expanded.name.clone(), value_combo.clone());
+                        }
+                        self.expansion_templates
+                            .insert(expanded.name.clone(), orig_name.clone());
+
+                        expanded_rules.push(expanded);
+                    }
+                }
+                name_map.insert(orig_name, expanded_names);
+            } else if uses_group_wildcard {
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
+                // Expand for each value-combo × (group, sample) combination
+                // (orthogonal fan-out — [[values]] adds a dimension on top
+                // of sample groups).
+                for value_combo in &value_combos {
+                    for combo in &group_combos {
+                        let mut merged = combo.clone();
+                        merged.extend(value_combo.clone());
+
+                        // Filter by constraints (non-matching combos are
+                        // skipped, per docs).
+                        if validate_wildcard_constraints_compiled(&merged, &compiled_constraints)
+                            .is_err()
+                        {
+                            continue;
+                        }
+
+                        // Per-instance `when` filtering (snakemake-style DAG
+                        // morphing) — see the pair branch above.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            let config_values: HashMap<String, toml::Value> = self
+                                .config
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            let combo_values = Self::expansion_when_context(&merged);
+                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                                when,
+                                &config_values,
+                                &combo_values,
+                            ) {
+                                continue;
+                            }
+                        }
+
+                        let group = combo.get("group").map(String::as_str).unwrap_or("group");
+                        let sample = combo.get("sample").map(String::as_str).unwrap_or("sample");
+                        let new_name = format!(
+                            "{}{}_{}_{}",
+                            rule.name,
+                            value_instance_suffix(value_combo, &active_value_tables),
+                            group,
+                            sample
+                        );
+                        expanded_names.push(new_name.clone());
+
+                        if !seen_names.insert(new_name.clone()) {
+                            return Err(OxoFlowError::DuplicateRule { name: new_name });
+                        }
+
+                        let mut expanded = rule.clone();
+                        expanded.name = new_name;
+
+                        // Bake the per-instance wildcard bindings into the
+                        // `when` (the instance survived filtering above) —
+                        // see the pair branch for the rationale.
+                        if let Some(ref when) = rule.when
+                            && when.contains("wildcard.")
+                        {
+                            expanded.when = Some(Self::bake_wildcard_when(when, &merged));
+                        }
+
+                        expanded.input = rule
+                            .input
+                            .iter()
+                            .map(|p| {
+                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
+                                {
+                                    crate::wildcard::expand_values_namespace(
+                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
+                                        &merged,
+                                    )
+                                } else {
+                                    p.clone()
+                                }
+                            })
+                            .collect();
+                        expanded.output = rule
+                            .output
+                            .iter()
+                            .map(|p| {
+                                if has_wildcards(p) || crate::wildcard::contains_values_namespace(p)
+                                {
+                                    crate::wildcard::expand_values_namespace(
+                                        &expand_pattern(p, &merged).unwrap_or_else(|_| p.clone()),
+                                        &merged,
+                                    )
+                                } else {
+                                    p.clone()
+                                }
+                            })
+                            .collect();
+                        if let Some(ref shell) = rule.shell {
+                            expanded.shell = if has_wildcards(shell)
+                                || crate::wildcard::contains_values_namespace(shell)
+                            {
+                                Some(crate::wildcard::expand_values_namespace(
+                                    &expand_pattern(shell, &merged)
+                                        .unwrap_or_else(|_| shell.clone()),
+                                    &merged,
+                                ))
+                            } else {
+                                Some(shell.clone())
+                            };
+                        }
+                        if let Some(ref log) = rule.log {
+                            expanded.log = if has_wildcards(log)
+                                || crate::wildcard::contains_values_namespace(log)
+                            {
+                                Some(crate::wildcard::expand_values_namespace(
+                                    &expand_pattern(log, &merged).unwrap_or_else(|_| log.clone()),
+                                    &merged,
+                                ))
+                            } else {
+                                Some(log.clone())
+                            };
+                        }
+                        // Free-text command fields take the same per-instance
+                        // substitution as shell/log (issue #98): script and
+                        // the hooks render through the same placeholder pass
+                        // at execution time, which never sees pair/group
+                        // names, so the values must be baked in here.
+                        expand_command_text_fields(&mut expanded, rule, |s| {
+                            expand_rule_shell(s, &merged)
+                        });
+
+                        // Record which sample this expansion belongs to
+                        // (issue #63 readiness attribution).
+                        let involved: Vec<String> = combo
+                            .get("sample")
+                            .cloned()
+                            .into_iter()
+                            .filter(|name| !name.is_empty())
+                            .collect();
+                        self.expansion_samples
+                            .insert(expanded.name.clone(), involved);
+                        // Per-instance pair/group bindings for expand_inputs
+                        // pattern resolution (see the field docs).
+                        self.expansion_pairs
+                            .insert(expanded.name.clone(), combo.clone());
+
+                        if !value_combo.is_empty() {
+                            self.expansion_values
+                                .insert(expanded.name.clone(), value_combo.clone());
+                        }
+                        self.expansion_templates
+                            .insert(expanded.name.clone(), orig_name.clone());
+
+                        expanded_rules.push(expanded);
+                    }
+                }
+                name_map.insert(orig_name, expanded_names);
+            } else if uses_value_wildcard {
+                // [[values]] fan-out without pair/group wildcards.
+                let orig_name = rule.name.clone();
+                let mut expanded_names = Vec::new();
+                for combo in &value_combos {
+                    // Filter by constraints (non-matching combos are skipped,
+                    // per docs).
+                    if validate_wildcard_constraints_compiled(combo, &compiled_constraints).is_err()
+                    {
+                        continue;
+                    }
+
+                    // Per-instance `when` filtering (snakemake-style DAG
+                    // morphing) — see the pair branch above.
+                    if let Some(ref when) = rule.when
+                        && when.contains("wildcard.")
+                    {
+                        let config_values: HashMap<String, toml::Value> = self
+                            .config
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let combo_values = Self::expansion_when_context(combo);
+                        if !crate::executor::process::evaluate_condition_with_wildcards(
+                            when,
+                            &config_values,
+                            &combo_values,
+                        ) {
+                            continue;
+                        }
+                    }
+
+                    let new_name = format!(
+                        "{}{}",
+                        rule.name,
+                        value_instance_suffix(combo, &active_value_tables)
+                    );
+                    expanded_names.push(new_name.clone());
+
+                    if !seen_names.insert(new_name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule { name: new_name });
+                    }
+
+                    let mut expanded = rule.clone();
+                    expanded.name = new_name.clone();
+
+                    // Bake the per-instance wildcard bindings into the
+                    // `when` (the instance survived filtering above) — see
+                    // the pair branch for the rationale.
+                    if let Some(ref when) = rule.when
+                        && when.contains("wildcard.")
+                    {
+                        expanded.when = Some(Self::bake_wildcard_when(when, combo));
+                    }
+
+                    // Structure-preserving expansion (List / Map / Dir).
+                    expanded.input = expand_rule_patterns(&rule.input, combo);
+                    expanded.output = expand_rule_patterns(&rule.output, combo);
+                    if let Some(ref shell) = rule.shell {
+                        expanded.shell = Some(expand_rule_shell(shell, combo));
+                    }
+                    if let Some(ref log) = rule.log {
+                        expanded.log = Some(expand_rule_shell(log, combo));
+                    }
+                    // Script and hooks carry the per-instance substitution
+                    // too (issue #98) — same class as shell/log.
+                    expand_command_text_fields(&mut expanded, rule, |s| {
+                        expand_rule_shell(s, combo)
+                    });
+
+                    self.expansion_values
+                        .insert(new_name.clone(), combo.clone());
+                    self.expansion_templates
+                        .insert(new_name.clone(), orig_name.clone());
+                    expanded_rules.push(expanded);
+                }
+                name_map.insert(orig_name, expanded_names);
+            } else {
+                // No expansion needed — keep rule as-is
+                if !seen_names.insert(rule.name.clone()) {
+                    return Err(OxoFlowError::DuplicateRule {
+                        name: rule.name.clone(),
+                    });
+                }
+                expanded_rules.push(rule.clone());
+            }
+        }
+
+        // Resolve depends_on references: replace template names with expanded names
+        if !name_map.is_empty() {
+            for rule in &mut expanded_rules {
+                if rule.depends_on.is_empty() {
+                    continue;
+                }
+                let mut resolved_deps = Vec::new();
+                for dep in &rule.depends_on {
+                    if let Some(expanded_names) = name_map.get(dep.as_str()) {
+                        resolved_deps.extend(expanded_names.clone());
+                    } else {
+                        resolved_deps.push(dep.clone());
+                    }
+                }
+                rule.depends_on = resolved_deps;
+            }
+        }
+
+        let mut final_rules = Vec::new();
+        let mut gather_injections: HashMap<String, Vec<String>> = HashMap::new();
+
+        for rule in expanded_rules {
+            if let Some(ref scatter) = rule.scatter {
+                let mut values = scatter.values.clone();
+                if values.is_empty()
+                    && let Some(ref v_from) = scatter.values_from
+                    && let Some(resolved) = self.resolve_config_list(v_from)
+                {
+                    values = resolved;
+                }
+
+                let mut scatter_outputs = Vec::new();
+
+                for val in &values {
+                    let mut combo = HashMap::new();
+                    combo.insert(scatter.variable.clone(), val.clone());
+
+                    let mut scattered_rule = rule.clone();
+                    scattered_rule.name = format!("{}_{}", rule.name, val);
+                    scattered_rule.scatter = None; // remove scatter from generated rule
+
+                    scattered_rule.input = match scattered_rule.input {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    expand_pattern(p, &combo).unwrap_or_else(|_| p.to_string())
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        expand_pattern(v, &combo).unwrap_or_else(|_| v.to_string()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
+                            path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
+                            pattern: pattern.clone(),
+                        },
+                    };
+                    scattered_rule.output = match scattered_rule.output {
+                        FilePatterns::List(ref v) => FilePatterns::List(
+                            v.iter()
+                                .map(|p| {
+                                    expand_pattern(p, &combo).unwrap_or_else(|_| p.to_string())
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Map(ref m) => FilePatterns::Map(
+                            m.iter()
+                                .map(|(k, v)| {
+                                    (
+                                        k.clone(),
+                                        expand_pattern(v, &combo).unwrap_or_else(|_| v.to_string()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                        FilePatterns::Dir {
+                            ref path,
+                            ref pattern,
+                        } => FilePatterns::Dir {
+                            path: expand_pattern(path, &combo).unwrap_or_else(|_| path.clone()),
+                            pattern: pattern.clone(),
+                        },
+                    };
+                    if let Some(ref shell) = scattered_rule.shell {
+                        scattered_rule.shell =
+                            Some(expand_pattern(shell, &combo).unwrap_or_else(|_| shell.clone()));
+                    }
+                    if let Some(ref log) = scattered_rule.log {
+                        scattered_rule.log =
+                            Some(expand_pattern(log, &combo).unwrap_or_else(|_| log.clone()));
+                    }
+                    // Script and hooks take the same substitution (issue #98):
+                    // a script whose path or content depends on the scatter
+                    // variable must resolve per instance (live: the pca rule
+                    // had to be split into three explicit rules).
+                    expand_command_text_fields(&mut scattered_rule, &rule, |text| {
+                        expand_pattern(text, &combo).unwrap_or_else(|_| text.to_string())
+                    });
+
+                    // Carry the pre-scatter [[values]] bindings over to the
+                    // scattered name and add the scatter variable, so
+                    // expand_inputs patterns referencing {assembler} (etc.)
+                    // still resolve per instance after the rename.
+                    let mut scatter_bindings = self
+                        .expansion_values
+                        .get(&rule.name)
+                        .cloned()
+                        .unwrap_or_default();
+                    scatter_bindings.insert(scatter.variable.clone(), val.clone());
+                    self.expansion_values
+                        .insert(scattered_rule.name.clone(), scatter_bindings);
+                    self.expansion_templates
+                        .insert(scattered_rule.name.clone(), rule.name.clone());
+
+                    scatter_outputs.extend(scattered_rule.output.to_vec());
+                    final_rules.push(scattered_rule);
+                }
+
+                if let Some(ref gather_rule) = scatter.gather {
+                    gather_injections
+                        .entry(gather_rule.clone())
+                        .or_default()
+                        .extend(scatter_outputs);
+                }
+            } else if let Some(ref transform) = rule.transform {
+                // Handle transform operator: split -> map -> combine
+                let split_values = self.resolve_split_values(&transform.split)?;
+
+                // Validate that split values are not empty
+                if split_values.is_empty() {
+                    return Err(OxoFlowError::Validation {
+                        message: format!("transform rule '{}' has no split values", rule.name),
+                        rule: Some(rule.name.clone()),
+                        suggestion: Some(
+                            "provide values, values_from, n, or glob in split config".to_string(),
+                        ),
+                    });
+                }
+
+                let split_var = &transform.split.by;
+                let mut all_chunk_outputs: Vec<String> = Vec::new();
+
+                // Generate map rules for each split value
+                for value in &split_values {
+                    // Determine chunk output path
+                    let chunk_output = if rule.output.is_empty() {
+                        format!(".oxo-flow/chunks/{split_var}/{value}.out")
+                    } else if rule
+                        .output
+                        .get_index(0)
+                        .map(|o| o.contains(&format!("{{{split_var}}}")))
+                        .unwrap_or(false)
+                    {
+                        // Replace only {split_var} in output
+                        rule.output
+                            .get_index(0)
+                            .unwrap()
+                            .replace(&format!("{{{split_var}}}"), value)
+                    } else {
+                        let base = rule
+                            .output
+                            .get_index(0)
+                            .expect("output non-empty: guarded by is_empty() check");
+                        // Keep the full multi-part extension (e.g. "vcf.gz", not
+                        // just "gz") so tools can infer the format from the name.
+                        let file_part = base.rsplit('/').next().unwrap_or(base);
+                        let ext = file_part.split_once('.').map(|(_, e)| e).unwrap_or("out");
+                        format!(".oxo-flow/chunks/{split_var}/{value}.{ext}")
+                    };
+
+                    all_chunk_outputs.push(chunk_output.clone());
+
+                    let map_rule_name = format!("{}_{}", rule.name, value);
+                    // Replace only {split_var} in map shell, keep other placeholders for execution
+                    let map_shell = transform.map.replace(&format!("{{{split_var}}}"), value);
+
+                    let mut map_rule = Rule {
+                        name: map_rule_name,
+                        input: rule.input.clone(),
+                        output: vec![chunk_output].into(),
+                        shell: Some(map_shell),
+                        // Inherit the parent's required semantics (issue
+                        // #142 H5): Rule's plain Default makes bools false
+                        // while serde defaults `required` to true — an
+                        // engine-generated chunk must not silently become
+                        // best-effort.
+                        required: rule.required,
+
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        retries: rule.retries,
+                        ..Default::default()
+                    };
+
+                    #[allow(deprecated)]
+                    {
+                        map_rule.threads = rule.threads;
+                        map_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(map_rule);
+                }
+
+                // Generate combine rule if specified
+                if let Some(ref combine) = transform.combine {
+                    let combine_rule_name = format!("{}_combine", rule.name);
+                    let combine_shell = if let Some(ref shell) = combine.shell {
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        shell
+                            .replace("{chunks}", &chunks_str)
+                            .replace("{input}", &chunks_str)
+                            .replace("{output}", &rule.output.join(" "))
+                    } else if combine.aggregate {
+                        let method = combine.method.as_deref().unwrap_or("concat");
+                        let chunks_str = all_chunk_outputs.join(" ");
+                        let output_str = rule.output.join(" ");
+
+                        match method {
+                            "concat" => {
+                                let header = combine
+                                    .header
+                                    .as_deref()
+                                    .map(|h| format!("echo '{}' && ", h))
+                                    .unwrap_or_default();
+                                format!("{}cat {} > {}", header, chunks_str, output_str)
+                            }
+                            "json_merge" => {
+                                format!("jq -s 'add' {} > {}", chunks_str, output_str)
+                            }
+                            _ => {
+                                return Err(OxoFlowError::Validation {
+                                    message: format!("unknown aggregation method: {}", method),
+                                    rule: Some(rule.name.clone()),
+                                    suggestion: Some("use 'concat' or 'json_merge'".to_string()),
+                                });
+                            }
+                        }
+                    } else {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform rule '{}' has combine but no shell or aggregate method",
+                                rule.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(
+                                "specify combine.shell or combine.aggregate".to_string(),
+                            ),
+                        });
+                    };
+
+                    let mut combine_rule = Rule {
+                        name: combine_rule_name,
+                        input: FilePatterns::List(all_chunk_outputs.clone()),
+                        output: rule.output.clone(),
+                        shell: Some(combine_shell),
+                        required: rule.required,
+                        cleanup_chunks: transform.cleanup,
+                        threads: rule.threads,
+                        memory: rule.memory.clone(),
+                        resources: rule.resources.clone(),
+                        environment: rule.environment.clone(),
+                        ..Default::default()
+                    };
+
+                    #[allow(deprecated)]
+                    {
+                        combine_rule.threads = rule.threads;
+                        combine_rule.memory = rule.memory.clone();
+                    }
+
+                    final_rules.push(combine_rule);
+                }
+            } else {
+                final_rules.push(rule);
+            }
+        }
+
+        // Apply gather injections and expand_inputs
+        for rule in &mut final_rules {
+            if let Some(injected) = gather_injections.get(&rule.name) {
+                let mut current_input = rule.input.to_vec();
+                current_input.extend(injected.clone());
+                rule.input = FilePatterns::List(current_input);
+            }
+
+            // process expand_inputs
+            for exp in &rule.expand_inputs {
+                let mut variables = HashMap::new();
+                for (var_name, var_ref) in &exp.variables {
+                    if let Some(vals) = self.resolve_config_list(var_ref) {
+                        variables.insert(var_name.clone(), vals);
+                    } else if var_ref.starts_with('[') && var_ref.ends_with(']') {
+                        let inner = &var_ref[1..var_ref.len() - 1];
+                        let vals = inner
+                            .split(',')
+                            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        variables.insert(var_name.clone(), vals);
+                    } else {
+                        variables.insert(var_name.clone(), vec![var_ref.clone()]);
+                    }
+                }
+
+                // Bind this instance's own [[values]] values so `{assembler}`
+                // inside the expand pattern resolves per instance — the
+                // spades instance never sees the megahit value.
+                let bindings = self.expansion_values.get(&rule.name).cloned();
+                if let Some(bindings) = &bindings {
+                    for (name, value) in bindings {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| vec![value.clone()]);
+                    }
+                }
+
+                // Same per-instance binding for pair wildcards: `{pair_id}`
+                // (and the other pair keys) inside an expand pattern resolve
+                // to THIS instance's pair, so a per-pair gather rule picks up
+                // its own pair's files only (snakemake-style; the
+                // cohort-level `pair_id = "config.pairs_list"` variable form
+                // still wins when declared explicitly).
+                if let Some(pair_bindings) = self.expansion_pairs.get(&rule.name) {
+                    for (name, value) in pair_bindings {
+                        variables
+                            .entry(name.clone())
+                            .or_insert_with(|| vec![value.clone()]);
+                    }
+                }
+
+                let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+                // Resolve the `{values.name}` namespace form per instance.
+                if let Some(bindings) = &bindings {
+                    for path in &mut expanded {
+                        *path = crate::wildcard::expand_values_namespace(path, bindings);
+                    }
+                }
+                let mut current_input = rule.input.to_vec();
+                current_input.extend(expanded);
+                rule.input = FilePatterns::List(current_input);
+            }
+        }
+
+        self.rules = final_rules;
+        Ok(())
+    }
+
+    /// Resolve split values from SplitConfig.
+    pub(crate) fn resolve_split_values(
+        &self,
+        split: &crate::rule::SplitConfig,
+    ) -> Result<Vec<String>> {
+        // Priority: values > values_from > n > glob
+        if !split.values.is_empty() {
+            return Ok(split.values.clone());
+        }
+
+        if let Some(ref values_from) = split.values_from {
+            if let Some(vals) = self.resolve_config_list(values_from) {
+                return Ok(vals);
+            }
+            return Err(OxoFlowError::Validation {
+                message: format!("cannot resolve split.values_from: {}", values_from),
+                rule: None,
+                suggestion: Some("ensure config variable exists and is an array".to_string()),
+            });
+        }
+
+        if let Some(ref n_str) = split.n {
+            // Resolve n from config (config.<key> or bare <key>) or parse as number
+            let n = self
+                .resolve_config_list(n_str)
+                .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()))
+                .unwrap_or_else(|| n_str.parse::<usize>().unwrap_or(1));
+            // Generate chunk indices: 0, 1, 2, ..., n-1
+            return Ok((0..n).map(|i| i.to_string()).collect());
+        }
+
+        if let Some(ref glob) = split.glob {
+            // Glob expansion - find matching files
+            let matches: Vec<String> = glob::glob(glob)
+                .map_err(|e| OxoFlowError::Validation {
+                    message: format!("invalid glob pattern: {}", e),
+                    rule: None,
+                    suggestion: None,
+                })?
+                .filter_map(|p| p.ok())
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            if matches.is_empty() {
+                return Err(OxoFlowError::Validation {
+                    message: format!("glob pattern '{}' matched no files", glob),
+                    rule: None,
+                    suggestion: Some("check the glob path and ensure files exist".to_string()),
+                });
+            }
+            return Ok(matches);
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Resolve a config variable (e.g., "config.samples") into a list of strings.
+    ///
+    /// Accepts both the `config.<key>` form and a bare `<key>` reference.
+    ///
+    /// String values are split on commas (trimmed, empties dropped) so
+    /// engine-injected comma-joined lists like `config.samples_list`,
+    /// `config.pairs_list`, and `config.samples_<group>` expand per value.
+    /// A string without commas
+    /// still resolves to a single value; use a single-element array
+    /// (e.g. `["a,b"]`) to force a comma-containing string to stay whole.
+    pub fn resolve_config_list(&self, var: &str) -> Option<Vec<String>> {
+        let key = var.strip_prefix("config.").unwrap_or(var);
+        let val = self.config.get(key)?;
+        if let Some(arr) = val.as_array() {
+            return Some(
+                arr.iter()
+                    .map(|v| match v {
+                        toml::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect(),
+            );
+        } else if let Some(s) = val.as_str() {
+            return Some(
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
+        }
+        None
+    }
+
+    /// Resolve environment for a rule, checking env_group first.
+    ///
+    /// Returns the environment spec from the following sources (in order):
+    /// 1. `env_groups[group_name]` if `rule.env_group` is set
+    /// 2. `rule.environment` if not empty
+    /// 3. `defaults.environment` as fallback
+    pub fn resolve_environment(&self, rule: &Rule) -> Option<EnvironmentSpec> {
+        // Check env_group first
+        if let Some(ref group_name) = rule.env_group
+            && let Some(env) = self.env_groups.get(group_name)
+        {
+            return Some(env.clone());
+        }
+        // Fall back to rule's environment if not empty
+        if !rule.environment.is_empty() {
+            return Some(rule.environment.clone());
+        }
+        // Fall back to defaults
+        self.defaults.environment.clone()
+    }
+}
