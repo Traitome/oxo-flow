@@ -206,6 +206,12 @@ read = "[12]"
 
 If a value discovered from the filesystem does not match its constraint, it is ignored.
 
+### Safe Default Character Set
+
+Because wildcard values are substituted into shell command strings, wildcards **without** a declared constraint may only carry values matching `[A-Za-z0-9._/-]+` (letters, digits, dot, underscore, dash, path separator). Values outside this set fail validation before any shell runs. Direct command substitution (`$(` and backticks) is rejected unconditionally — including for constrained wildcards.
+
+If your data legitimately needs other characters, declare an explicit `[wildcard_constraints]` entry for that wildcard, or export `OXO_FLOW_UNSAFE_WILDCARDS=1` to relax the character-set layer for the process (a one-time warning is logged; the substitution floor remains enforced).
+
 ---
 
 ## Rule Name Expansion

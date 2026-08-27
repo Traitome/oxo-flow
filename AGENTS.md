@@ -117,6 +117,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
+| `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
 
 ### AI Provider Examples
 

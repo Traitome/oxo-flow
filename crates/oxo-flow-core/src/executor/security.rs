@@ -3,6 +3,11 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Logs the `OXO_FLOW_UNSAFE_WILDCARDS` relaxation exactly once per process
+/// instead of once per rule execution.
+static UNSAFE_WILDCARDS_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Validate that an interpreter path is safe to use.
 ///
@@ -212,26 +217,56 @@ pub fn validate_shell_safety(cmd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate wildcard VALUES for shell injection patterns.
+/// Character class accepted for wildcard values when the workflow declares
+/// no explicit `wildcard_constraints` entry (issue #203): letters, digits,
+/// dot, underscore, dash, and path separator — the superset observed across
+/// every shipped example. Anything else needs an explicit constraint.
+pub const DEFAULT_WILDCARD_PATTERN: &str = r"^[A-Za-z0-9._/-]+$";
+
+static DEFAULT_WILDCARD_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(DEFAULT_WILDCARD_PATTERN).expect("static regex"));
+
+/// Validate wildcard VALUES before they are substituted into shell commands.
 ///
-/// Unlike [`validate_shell_safety`] which operates on the full rendered
-/// command (and therefore trusts the shell template), this function checks
-/// only the values that will be *substituted* into the template via
-/// wildcard expansion (e.g., sample names from a CSV file, file paths).
+/// Two independent layers:
 ///
-/// Returns `Ok(())` if all values are safe, or an error if any value
-/// contains a pattern that would execute arbitrary shell code.
+/// 1. **Hard floor (always enforced)** — no `$(`, no backticks. This blocks
+///    direct command substitution regardless of configuration.
+/// 2. **Default charset (issue #203)** — values for wildcards WITHOUT an
+///    explicit `wildcard_constraints` entry must match
+///    [`DEFAULT_WILDCARD_PATTERN`]. Pipelines that legitimately need other
+///    characters declare a constraint for that wildcard (the pre-existing
+///    mechanism), or set `OXO_FLOW_UNSAFE_WILDCARDS=1` to relax the charset
+///    layer for the process — a one-time warning is logged and the
+///    `$(`/backtick floor still applies.
+///
+/// Values from `config.*` keys come from the trusted .oxoflow file itself
+/// and skip both layers, as before.
 #[must_use = "wildcard injection validation returns a Result that must be checked"]
-pub fn validate_wildcard_injection(wildcard_values: &HashMap<String, String>) -> Result<()> {
-    // Patterns that indicate injection attempts in externally supplied values.
-    // Config values from the .oxoflow file itself (prefixed with "config.")
-    // are trusted and skipped.
+pub fn validate_wildcard_injection(
+    wildcard_values: &HashMap<String, String>,
+    declared_constraints: &HashMap<String, String>,
+) -> Result<()> {
+    let unsafe_mode = std::env::var("OXO_FLOW_UNSAFE_WILDCARDS").as_deref() == Ok("1");
+    if unsafe_mode && !UNSAFE_WILDCARDS_WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            "OXO_FLOW_UNSAFE_WILDCARDS=1: wildcard value charset checks are relaxed \
+             for this process; command-substitution values are still rejected"
+        );
+    }
+    validate_wildcard_injection_inner(wildcard_values, declared_constraints, unsafe_mode)
+}
+
+fn validate_wildcard_injection_inner(
+    wildcard_values: &HashMap<String, String>,
+    declared_constraints: &HashMap<String, String>,
+    unsafe_mode: bool,
+) -> Result<()> {
     let injection_patterns = [
         ("$(", "command substitution"),
         ("`", "backtick substitution"),
     ];
     for (key, value) in wildcard_values {
-        // Skip config.* keys — these come from the trusted .oxoflow file.
         if key.starts_with("config.") {
             continue;
         }
@@ -249,6 +284,25 @@ pub fn validate_wildcard_injection(wildcard_values: &HashMap<String, String>) ->
                     ),
                 });
             }
+        }
+        // Charset layer only applies to unconstrained wildcards.
+        if declared_constraints.contains_key(key) || unsafe_mode {
+            continue;
+        }
+        if !DEFAULT_WILDCARD_RE.is_match(value) {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Wildcard '{key}' has value '{}' outside the safe default \
+                     character set ({DEFAULT_WILDCARD_PATTERN})",
+                    value
+                ),
+                rule: None,
+                suggestion: Some(format!(
+                    "Declare a constraint for this wildcard in `wildcard_constraints` \
+                     (e.g. {key} = '^.+$' to allow anything), or set \
+                     OXO_FLOW_UNSAFE_WILDCARDS=1 to accept any characters with a logged warning."
+                )),
+            });
         }
     }
     Ok(())
@@ -299,4 +353,60 @@ pub fn validate_path_safety(workdir: &Path, path: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+#[cfg(test)]
+mod wildcard_default_tests {
+    use super::*;
+
+    fn v(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, val)| (k.to_string(), val.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn default_charset_accepts_realistic_samples() {
+        let vals = v(&[
+            ("sample", "SRR1039508"),
+            ("chr", "chr21"),
+            ("path", "data/subdir/genome.fa"),
+        ]);
+        assert!(validate_wildcard_injection_inner(&vals, &HashMap::new(), false).is_ok());
+    }
+
+    #[test]
+    fn default_charset_rejects_metacharacters_and_spaces() {
+        for bad in ["a; b", "x&&y", "a|b", "$(id)", "`id`", "two words", "a>b"] {
+            let vals = v(&[("sample", bad)]);
+            let err = validate_wildcard_injection_inner(&vals, &HashMap::new(), false)
+                .err()
+                .unwrap_or_else(|| panic!("'{bad}' must be rejected"));
+            let msg = err.to_string();
+            if bad.contains("$(") || bad.contains('`') {
+                assert!(msg.contains("injection"), "{msg}");
+            } else {
+                assert!(msg.contains("safe default"), "{msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_constraint_overrides_default_charset() {
+        let vals = v(&[("sample", "tumor / normal")]);
+        let mut constraints = HashMap::new();
+        constraints.insert("sample".to_string(), "^.+$".to_string());
+        assert!(
+            validate_wildcard_injection_inner(&vals, &constraints, false).is_ok(),
+            "declared constraint governs"
+        );
+    }
+
+    #[test]
+    fn unsafe_mode_relaxes_charset_but_not_substitution_floor() {
+        let relaxed = v(&[("sample", "two words")]);
+        assert!(validate_wildcard_injection_inner(&relaxed, &HashMap::new(), true).is_ok());
+        let hostile = v(&[("sample", "$(id)")]);
+        assert!(validate_wildcard_injection_inner(&hostile, &HashMap::new(), true).is_err());
+    }
 }
