@@ -3024,6 +3024,262 @@ fn expand_inputs_resolves_injected_samples_list_per_sample() {
 }
 
 #[test]
+fn input_groups_config_parses() {
+    // Issue #227 item 3 (groupTuple pattern): `input_groups` declares a
+    // filesystem pattern whose per-group-key files feed ONE instance.
+    // `keep` accepts both the single-string form (`keep = "lane"`) and an
+    // array form (`keep = ["lane", "read"]`).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("groups.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "groups"
+
+        [[rules]]
+        name = "lanemerge"
+        input_groups = [
+            { pattern = "results/adapterremoval/{sample}_{lane}_R1.fastq.gz", group_by = "sample", keep = "lane" }
+        ]
+        output = ["results/merged/{sample}_R1.fastq.gz"]
+        shell = "cat {input} > {output}"
+
+        [[rules]]
+        name = "seqmerge"
+        input_groups = [
+            { pattern = "bams/{sample}_{replicate}_{seqtype}.bam", group_by = "sample", keep = ["replicate", "seqtype"] }
+        ]
+        output = ["merged/{sample}.bam"]
+        shell = "samtools merge {output} {input}"
+        "#,
+    )
+    .unwrap();
+
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let lanemerge = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge")
+        .expect("lanemerge rule");
+    assert_eq!(lanemerge.input_groups.len(), 1);
+    let g = &lanemerge.input_groups[0];
+    assert_eq!(
+        g.pattern,
+        "results/adapterremoval/{sample}_{lane}_R1.fastq.gz"
+    );
+    assert_eq!(g.group_by, "sample");
+    // Single-string `keep` normalizes to a one-element list.
+    assert_eq!(g.keep.as_deref(), Some(&["lane".to_string()][..]));
+
+    let seqmerge = config
+        .rules
+        .iter()
+        .find(|r| r.name == "seqmerge")
+        .expect("seqmerge rule");
+    assert_eq!(
+        seqmerge.input_groups[0].keep.as_deref(),
+        Some(&["replicate".to_string(), "seqtype".to_string()][..])
+    );
+}
+
+#[test]
+fn input_groups_fans_rule_into_one_instance_per_group_key() {
+    // The groupTuple expansion: files on disk matching the pattern are
+    // grouped by the `group_by` wildcard; each group key becomes one rule
+    // instance whose `{input}` renders ALL of the group's files (sorted)
+    // and whose wildcard map binds the key plus the first occurrence of
+    // every other pattern wildcard. Per-group value lists are exposed as
+    // `{input_group.<wildcard>}`.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("merge.oxoflow");
+    for file in [
+        "raw/S1_L1_R1.fastq.gz",
+        "raw/S1_L2_R1.fastq.gz",
+        "raw/S2_L1_R1.fastq.gz",
+    ] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "merge"
+
+        [[rules]]
+        name = "lanemerge"
+        input_groups = [
+            { pattern = "raw/{sample}_{lane}_R1.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}_R1.fastq.gz"]
+        shell = "cat {input} > merged/{sample}_R1.fastq.gz && echo lanes: {input_group.lane}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, vec!["lanemerge_S1", "lanemerge_S2"]);
+
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S1")
+        .expect("S1 instance");
+    assert_eq!(
+        s1.input.to_vec(),
+        vec![
+            "raw/S1_L1_R1.fastq.gz".to_string(),
+            "raw/S1_L2_R1.fastq.gz".to_string(),
+        ]
+    );
+    assert_eq!(s1.output.to_vec(), vec!["merged/S1_R1.fastq.gz"]);
+    assert!(
+        s1.input_groups.is_empty(),
+        "instances must not carry the input_groups declaration"
+    );
+    // The shell baked the instance map ({sample} = key, {lane} = first
+    // occurrence) and the space-joined {input_group.lane} list; {input}
+    // stays for execution-time rendering.
+    assert_eq!(
+        s1.shell.as_deref(),
+        Some("cat {input} > merged/S1_R1.fastq.gz && echo lanes: L1 L2")
+    );
+    // Readiness attribution (issue #63) records the group key.
+    assert_eq!(
+        config.expansion_samples.get("lanemerge_S1"),
+        Some(&vec!["S1".to_string()])
+    );
+    // Per-instance bindings for expand_inputs pattern resolution.
+    let s1_bindings = config.expansion_values.get("lanemerge_S1").unwrap();
+    assert_eq!(s1_bindings.get("sample").map(String::as_str), Some("S1"));
+    assert_eq!(s1_bindings.get("lane").map(String::as_str), Some("L1"));
+
+    let s2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S2")
+        .expect("S2 instance");
+    assert_eq!(s2.input.to_vec(), vec!["raw/S2_L1_R1.fastq.gz"]);
+}
+
+#[test]
+fn input_groups_matches_zero_files_drops_rule_with_warning() {
+    // A group key that matches zero files is not instantiated — no
+    // instance means nothing to run (issue #227 item 3 skip semantics).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("empty.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "empty"
+
+        [[rules]]
+        name = "noop"
+        input_groups = [
+            { pattern = "missing/{sample}_{lane}_R1.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}_R1.fastq.gz"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert!(
+        config.rules.iter().all(|r| r.name != "noop"),
+        "zero-match input_groups rule must not be instantiated"
+    );
+}
+
+#[test]
+fn input_groups_regular_input_appends_after_group_files() {
+    // `input` and `input_groups` coexist: the group files come first in
+    // the instance's input list, the declared inputs append after them.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("coexist.oxoflow");
+    for file in ["raw/S1_L1_R1.fastq.gz", "raw/S1_L2_R1.fastq.gz"] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "coexist"
+
+        [[rules]]
+        name = "merge"
+        input = ["meta/{sample}.txt"]
+        input_groups = [
+            { pattern = "raw/{sample}_{lane}_R1.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}_R1.fastq.gz"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "merge_S1")
+        .expect("S1 instance");
+    assert_eq!(
+        s1.input.to_vec(),
+        vec![
+            "raw/S1_L1_R1.fastq.gz".to_string(),
+            "raw/S1_L2_R1.fastq.gz".to_string(),
+            // Regular inputs append AFTER the group files, expanded with
+            // the instance map ({sample} = group key).
+            "meta/S1.txt".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn input_groups_rejects_invalid_declarations() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("invalid.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "invalid"
+
+        [[rules]]
+        name = "bad_group_by"
+        input_groups = [
+            { pattern = "raw/{sample}_{lane}_R1.fastq.gz", group_by = "read" }
+        ]
+        shell = "echo hi"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("group_by"),
+        "group_by not in pattern must fail: {err}"
+    );
+}
+
+#[test]
 fn from_file_injects_pairs_list_from_pairs() {
     // [[pairs]] is the single source of truth: the engine injects
     // config.pairs_list (a sorted, comma-joined string) exactly like

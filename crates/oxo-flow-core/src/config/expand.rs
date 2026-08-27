@@ -253,8 +253,26 @@ impl WorkflowConfig {
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Track original → expanded name mapping for depends_on resolution
         let mut name_map: HashMap<String, Vec<String>> = HashMap::new();
+        // input_groups rules (issue #227 item 3): fanned out in the
+        // post-loop pass below, where producer outputs are known.
+        let mut pending_input_groups: Vec<Rule> = Vec::new();
 
         for rule in &self.rules {
+            if !rule.input_groups.is_empty() {
+                // Per-sample multi-file grouping (issue #227 item 3 — the
+                // groupTuple pattern). The fan-out runs in a post-loop pass
+                // once every producer's expanded literal outputs are known:
+                // group enumeration must see the files the workflow ITSELF
+                // will produce, not only files that pre-exist on disk. Rules
+                // declaring input_groups never fan out on pair/group/value
+                // wildcards — the discovered group key IS the instance's
+                // binding source; any wildcard the instance map does not
+                // bind stays literal and hits the execution-time
+                // residual-placeholder guard (loud, attributable).
+                pending_input_groups.push(rule.clone());
+                continue;
+            }
+
             // Collect all text fields that might contain wildcards. The fan-out
             // TRIGGER set is input/output/shell only — script and the hooks
             // substitute per instance when the rule fans out, but never start
@@ -997,6 +1015,77 @@ impl WorkflowConfig {
             }
         }
 
+        // ── input_groups fan-out (issue #227 item 3, the groupTuple
+        // pattern) ────────────────────────────────────────────────────────
+        // Runs AFTER scatter/transform expansion so group enumeration sees
+        // every materialized producer's literal outputs — the
+        // plan-time-known paths that make exact-match DAG edges work even
+        // for files that only come into existence mid-run. The producer
+        // pool grows as instances materialize, so input_groups chains
+        // (lanemerge → library_merge → seqtype_merge) resolve in
+        // declaration order. Producers declared AFTER their input_groups
+        // consumer are not yet in the pool when the consumer processes
+        // (v1: declare in topological order; a zero-match consumer then
+        // warns and instantiates nothing, per the skip semantics).
+        // Generated instances append after the regular rules — DAG edges,
+        // not list order, drive scheduling.
+        if !pending_input_groups.is_empty() {
+            // Literal (wildcard-free, `{config.x}`-expanded) outputs of
+            // every rule materialized so far — the enumeration source for
+            // files the workflow itself will produce.
+            let mut producer_outputs: Vec<String> = Vec::new();
+            for rule in &final_rules {
+                producer_outputs.extend(
+                    rule.output
+                        .to_vec()
+                        .into_iter()
+                        .map(|o| expand_config_vars_in_path(&o, &self.config)),
+                );
+            }
+            for rule in pending_input_groups {
+                let instances = self.expand_input_groups_rule(&rule, &producer_outputs)?;
+                let mut expanded_names = Vec::new();
+                for instance in instances {
+                    if !seen_names.insert(instance.name.clone()) {
+                        return Err(OxoFlowError::DuplicateRule {
+                            name: instance.name.clone(),
+                        });
+                    }
+                    expanded_names.push(instance.name.clone());
+                    producer_outputs.extend(
+                        instance
+                            .output
+                            .to_vec()
+                            .into_iter()
+                            .map(|o| expand_config_vars_in_path(&o, &self.config)),
+                    );
+                    final_rules.push(instance);
+                }
+                name_map.insert(rule.name.clone(), expanded_names);
+            }
+
+            // The input_groups instances joined the rule set after the
+            // depends_on pass above ran on expanded_rules — re-resolve on
+            // the final set so `depends_on = ["lanemerge"]` reaches every
+            // instance (idempotent: already-expanded names are not keys).
+            if !name_map.is_empty() {
+                for rule in &mut final_rules {
+                    if rule.depends_on.is_empty() {
+                        continue;
+                    }
+                    let mut resolved_deps = Vec::new();
+                    for dep in &rule.depends_on {
+                        if let Some(expanded_names) = name_map.get(dep.as_str()) {
+                            resolved_deps.extend(expanded_names.clone());
+                        } else {
+                            resolved_deps.push(dep.clone());
+                        }
+                    }
+                    rule.depends_on = resolved_deps;
+                }
+            }
+        }
+
         // Apply gather injections and expand_inputs
         for rule in &mut final_rules {
             if let Some(injected) = gather_injections.get(&rule.name) {
@@ -1065,6 +1154,319 @@ impl WorkflowConfig {
 
         self.rules = final_rules;
         Ok(())
+    }
+
+    /// Expand one `input_groups` rule into its per-group instances (issue
+    /// #227 item 3).
+    ///
+    /// Group candidates come from TWO plan-time-known sources, deduplicated
+    /// by path:
+    /// 1. files already on disk under the workflow root (the same
+    ///    filesystem walk as `sample_pattern` discovery), and
+    /// 2. literal outputs already materialized by producers (the files the
+    ///    workflow itself will produce — matching a producer's expanded
+    ///    output against the pattern extracts the same wildcard values, so
+    ///    exact-match DAG edges to those producers work).
+    ///
+    /// Files are grouped by the `group_by` wildcard: one instance per key
+    /// with `{input}` = the group's files (sorted), the instance wildcard
+    /// map = group key + first occurrence of every `keep`-listed wildcard,
+    /// and `{input_group.<wildcard>}` = space-joined per-group value lists.
+    fn expand_input_groups_rule(
+        &mut self,
+        rule: &Rule,
+        producer_outputs: &[String],
+    ) -> Result<Vec<Rule>> {
+        if rule.input_groups.len() > 1 {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares {} input_groups entries — v1 supports at most one",
+                    rule.name,
+                    rule.input_groups.len()
+                ),
+                rule: Some(rule.name.clone()),
+                suggestion: Some("split the rule into one rule per pattern".to_string()),
+            });
+        }
+        let decl = &rule.input_groups[0];
+        let pattern_wildcards = crate::wildcard::extract_wildcards(&decl.pattern);
+        if pattern_wildcards.is_empty() {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "input_groups pattern '{}' of rule '{}' has no {{wildcard}} placeholders",
+                    decl.pattern, rule.name
+                ),
+                rule: Some(rule.name.clone()),
+                suggestion: Some(
+                    "add a {wildcard} (e.g. {sample}) to the pattern so files can be grouped"
+                        .to_string(),
+                ),
+            });
+        }
+        if !pattern_wildcards.contains(&decl.group_by) {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "input_groups group_by '{}' of rule '{}' is not a wildcard in pattern '{}'",
+                    decl.group_by, rule.name, decl.pattern
+                ),
+                rule: Some(rule.name.clone()),
+                suggestion: Some(format!(
+                    "use one of the pattern wildcards: {}",
+                    pattern_wildcards.join(", ")
+                )),
+            });
+        }
+        let others: Vec<String> = pattern_wildcards
+            .iter()
+            .filter(|w| w.as_str() != decl.group_by)
+            .cloned()
+            .collect();
+        let keep: Vec<String> = match &decl.keep {
+            Some(names) => {
+                for name in names {
+                    if !others.contains(name) {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "input_groups keep of rule '{}' names '{}' which is not a \
+                                 pattern wildcard (other than group_by '{}')",
+                                rule.name, name, decl.group_by
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(format!("keep may only list: {}", others.join(", "))),
+                        });
+                    }
+                }
+                names.clone()
+            }
+            None => others.clone(),
+        };
+
+        // `{config.x}` placeholders resolve against the workflow config
+        // before matching, exactly like every other path in the engine.
+        let base = self
+            .base_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let pattern = expand_config_vars_in_path(&decl.pattern, &self.config);
+        let pattern_re = crate::wildcard::pattern_to_regex(&pattern)?;
+
+        // Source 1: files already on disk under the workflow root.
+        let mut candidates: Vec<(String, crate::wildcard::WildcardValues)> = Vec::new();
+        for combo in crate::wildcard::discover_wildcards_from_pattern_tree(&base, &pattern)? {
+            let Some(key) = combo.get(&decl.group_by).cloned() else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
+            let path = crate::wildcard::expand_pattern(&pattern, &combo)
+                .unwrap_or_else(|_| pattern.clone());
+            candidates.push((path, combo));
+        }
+
+        // Source 2: literal outputs of producers already materialized —
+        // the files this workflow itself will create. Matching the
+        // config-expanded output string against the pattern regex
+        // extracts the same wildcard values a disk scan would.
+        for output in producer_outputs {
+            let Some(captures) = pattern_re.captures(output) else {
+                continue;
+            };
+            let mut combo = crate::wildcard::WildcardValues::new();
+            let mut any = false;
+            for name in &pattern_wildcards {
+                if let Some(m) = captures.name(name) {
+                    combo.insert(name.clone(), m.as_str().to_string());
+                    any = true;
+                }
+            }
+            if !any {
+                continue;
+            }
+            let Some(key) = combo.get(&decl.group_by) else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
+            candidates.push((output.clone(), combo));
+        }
+
+        if candidates.is_empty() {
+            tracing::warn!(
+                rule = %rule.name,
+                "input_groups pattern '{}' matched no files (disk or producer outputs) — the rule is not instantiated (nothing to run)",
+                decl.pattern
+            );
+            return Ok(Vec::new());
+        }
+
+        // Group the (file, combo) pairs by the group_by value. Determinism
+        // matters: keys sort by BTreeMap, files sort within a group, and
+        // the "first occurrence" wildcard bindings come from the FIRST
+        // SORTED file — never from readdir order.
+        let mut grouped: std::collections::BTreeMap<
+            String,
+            Vec<(String, crate::wildcard::WildcardValues)>,
+        > = std::collections::BTreeMap::new();
+        for (path, combo) in candidates {
+            let key = combo[&decl.group_by].clone();
+            grouped.entry(key).or_default().push((path, combo));
+        }
+
+        let mut out = Vec::with_capacity(grouped.len());
+        for (key, mut entries) in grouped {
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries.dedup_by(|a, b| a.0 == b.0);
+            let mut files = Vec::with_capacity(entries.len());
+            let mut value_lists: HashMap<String, Vec<String>> = HashMap::new();
+            for (path, combo) in &entries {
+                files.push(path.clone());
+                for name in &pattern_wildcards {
+                    if let Some(v) = combo.get(name)
+                        && !value_lists
+                            .get(name)
+                            .is_some_and(|list: &Vec<String>| list.contains(v))
+                    {
+                        value_lists.entry(name.clone()).or_default().push(v.clone());
+                    }
+                }
+            }
+            // The instance wildcard map: the group key + the first
+            // occurrence of every kept wildcard (for `{output}` etc.).
+            let mut instance_map = crate::wildcard::WildcardValues::new();
+            instance_map.insert(decl.group_by.clone(), key.clone());
+            for name in &keep {
+                if let Some(v) = entries[0].1.get(name) {
+                    instance_map.insert(name.clone(), v.clone());
+                }
+            }
+            // Space-joined per-group value lists for `{input_group.<name>}`.
+            let mut group_lists = HashMap::new();
+            for (name, values) in value_lists {
+                group_lists.insert(name, values.join(" "));
+            }
+
+            // ── Build the instance ──────────────────────────────────────
+            let orig_name = rule.name.clone();
+            let new_name = format!(
+                "{}_{}",
+                rule.name,
+                crate::wildcard::sanitize_instance_value(&key)
+            );
+            let mut expanded = rule.clone();
+            expanded.name = new_name;
+            // Instances never re-expand: the declaration is consumed by
+            // this fan-out.
+            expanded.input_groups.clear();
+
+            // Group files come FIRST (sorted, stable order), the declared
+            // `input` entries append after — both resolved against the
+            // instance map and `{input_group.*}` lists.
+            let mut inputs = files;
+            inputs.extend(
+                rule.input
+                    .to_vec()
+                    .into_iter()
+                    .map(|p| expand_group_text(&p, &instance_map, &group_lists)),
+            );
+            expanded.input = FilePatterns::List(inputs);
+            expanded.output = match &rule.output {
+                FilePatterns::List(v) => FilePatterns::List(
+                    v.iter()
+                        .map(|p| expand_group_text(p, &instance_map, &group_lists))
+                        .collect(),
+                ),
+                FilePatterns::Map(m) => FilePatterns::Map(
+                    m.iter()
+                        .map(|(k, v)| {
+                            (k.clone(), expand_group_text(v, &instance_map, &group_lists))
+                        })
+                        .collect(),
+                ),
+                FilePatterns::Dir { path, pattern } => FilePatterns::Dir {
+                    path: expand_group_text(path, &instance_map, &group_lists),
+                    pattern: pattern.clone(),
+                },
+            };
+            if let Some(ref shell) = rule.shell {
+                expanded.shell = Some(expand_group_text(shell, &instance_map, &group_lists));
+            }
+            if let Some(ref log) = rule.log {
+                expanded.log = Some(expand_group_text(log, &instance_map, &group_lists));
+            }
+            // Script and hooks take the same per-instance substitution
+            // (issue #98) — same class as shell/log.
+            expand_command_text_fields(&mut expanded, rule, |s| {
+                expand_group_text(s, &instance_map, &group_lists)
+            });
+            // Per-instance `when` filtering (snakemake-style DAG morphing):
+            // wildcard references bake like the pair/group branches;
+            // `{input_group.*}` and bare `{sample}`-style placeholders
+            // resolve from the instance map.
+            if let Some(ref when) = rule.when {
+                let baked = if when.contains("wildcard.") {
+                    Self::bake_wildcard_when(when, &instance_map)
+                } else {
+                    when.clone()
+                };
+                expanded.when = Some(expand_group_text(&baked, &instance_map, &group_lists));
+            }
+
+            // A leftover `{input_group.<name>}` means the author referenced
+            // a wildcard this pattern never captures — fail the plan
+            // instead of running a literal token.
+            let mut known: Vec<&str> = group_lists.keys().map(String::as_str).collect();
+            known.sort_unstable();
+            let mut residual: Vec<&str> = expanded
+                .input
+                .iter()
+                .map(String::as_str)
+                .chain(expanded.output.iter().map(String::as_str))
+                .collect();
+            if let Some(ref shell) = expanded.shell {
+                residual.push(shell);
+            }
+            if let Some(ref log) = expanded.log {
+                residual.push(log);
+            }
+            if let Some(ref script) = expanded.script {
+                residual.push(script);
+            }
+            if let Some(ref w) = expanded.when {
+                residual.push(w);
+            }
+            if let Some(bad) = residual.iter().find(|t| t.contains("{input_group.")) {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "rule '{}' references unknown `{{{{input_group.<wildcard>}}}}` \
+                         placeholder in '{}' — input_groups exposes: {}",
+                        expanded.name,
+                        bad,
+                        known.join(", ")
+                    ),
+                    rule: Some(rule.name.clone()),
+                    suggestion: Some(
+                        "fix the wildcard name, or add it to the input_groups pattern".to_string(),
+                    ),
+                });
+            }
+
+            // Readiness attribution (issue #63): the group key is the
+            // sample in the common case.
+            self.expansion_samples
+                .insert(expanded.name.clone(), vec![key]);
+            // Per-instance bindings so expand_inputs patterns referencing
+            // `{sample}` / kept wildcards resolve per instance (same
+            // contract as the pair/group branches).
+            self.expansion_values
+                .insert(expanded.name.clone(), instance_map);
+            self.expansion_templates
+                .insert(expanded.name.clone(), orig_name);
+
+            out.push(expanded);
+        }
+        Ok(out)
     }
 
     /// Resolve split values from SplitConfig.
@@ -1176,4 +1578,21 @@ impl WorkflowConfig {
         // Fall back to defaults
         self.defaults.environment.clone()
     }
+}
+
+/// Expand a rule text field with an input_groups instance: bake the bare
+/// wildcard bindings (`{sample}`, kept wildcards) and then the
+/// space-joined `{input_group.<wildcard>}` lists. `{input}` and the other
+/// execution-time placeholders never match the `\w+` placeholder regex
+/// and pass through untouched.
+fn expand_group_text(
+    text: &str,
+    combo: &crate::wildcard::WildcardValues,
+    lists: &HashMap<String, String>,
+) -> String {
+    let mut out = expand_rule_shell(text, combo);
+    for (name, joined) in lists {
+        out = out.replace(&format!("{{input_group.{name}}}"), joined);
+    }
+    out
 }

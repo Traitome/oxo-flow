@@ -1536,6 +1536,14 @@ pub struct WorkflowConfig {
     /// call — the source for checkpoint re-entry re-expansion (issue #78 P3).
     #[serde(skip)]
     pub rule_templates: Vec<Rule>,
+
+    /// Engine-internal: the directory `input_groups` patterns resolve
+    /// against — the workflow file's parent, the same root
+    /// `sample_pattern` discovery scans (issue #227 item 3). Set by
+    /// [`WorkflowConfig::from_file`]; falls back to the current directory
+    /// when unset. Never serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub(crate) base_dir: Option<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------

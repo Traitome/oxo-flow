@@ -200,6 +200,64 @@ fn cli_samples_pilot_then_scale_up() {
     assert!(dir.path().join("out/S3.txt").exists());
 }
 
+/// input_groups (issue #227 item 3 — the groupTuple pattern): rule 1
+/// writes per-(sample, lane) files, rule 2 groups them per sample and
+/// merges. Each rule-2 instance receives ALL of the sample's files as
+/// `{input}`, with DAG edges inferred from the plan-time-discovered
+/// literal paths (the exact-match win over the dir/glob convention).
+#[test]
+fn cli_input_groups_merges_per_sample_lane_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("lanemerge.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "lanemerge"
+version = "1.0.0"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[values]]
+name = "lane"
+values = ["L1", "L2"]
+
+[[rules]]
+name = "simulate"
+output = ["raw/{sample}_{lane}_R1.txt"]
+shell = "echo {sample}-{lane} > {output}"
+
+[[rules]]
+name = "lanemerge"
+input_groups = [
+    { pattern = "raw/{sample}_{lane}_R1.txt", group_by = "sample" }
+]
+output = ["merged/{sample}_R1.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-j", "2"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Each sample's merged file contains BOTH lanes, in stable (sorted)
+    // file order — {input} rendered the full group, not one file.
+    let s1 = fs::read_to_string(dir.path().join("merged/S1_R1.txt")).unwrap();
+    assert_eq!(s1, "S1-L1\nS1-L2\n");
+    let s2 = fs::read_to_string(dir.path().join("merged/S2_R1.txt")).unwrap();
+    assert_eq!(s2, "S2-L1\nS2-L2\n");
+}
+
 /// `--samples @sheet` REPLACES inline fixture samples with the sheet's —
 /// the invocation-side sample swap (workflow ships S1/S2, caller runs
 /// real identifiers without editing the file).
