@@ -1,6 +1,8 @@
 //! Embedded Bioconda CLI tool database.
 //!
-//! The full Bioconda channel metadata (6103 CLI tools, curated by the
+//! The full Bioconda channel metadata: 6,470 raw registry entries filtered
+//! down to 6,103 curated CLI tools at refresh time (counts recorded in
+//! knowledge_meta.json; keep this comment in sync when refreshing).
 //! oxo-call-extends project) is embedded into the binary at build time
 //! via `include_str!` and exposed as a searchable database. AI agents
 //! query it through the `lookup_tool` to find real tools, their purposes,

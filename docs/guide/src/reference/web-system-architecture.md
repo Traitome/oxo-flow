@@ -37,7 +37,7 @@ The execution backend is a dropdown — local, HPC queue, Docker, cloud batch. E
 
 ---
 
-## Architecture Overview (v0.8+)
+## Architecture Overview
 
 The web crate follows a **domain-driven modular monolith** pattern. Each domain has:
 - `types.rs` — request/response structs
@@ -131,7 +131,7 @@ Rate limiting and SSE:
 
 ---
 
-## Domain-Driven Module Structure (v0.8+)
+## Domain-Driven Module Structure
 
 | Domain | Path | Responsibility |
 |--------|------|---------------|
@@ -151,7 +151,7 @@ Rate limiting and SSE:
 
 ---
 
-## API Namespace (v0.8+)
+## API Namespace
 
 ```
 /api

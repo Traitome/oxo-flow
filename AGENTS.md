@@ -162,7 +162,7 @@ AI features stay disabled (config via env vars or `~/.oxo-flow/ai_config.json`).
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()` (web crate, `src/ai_provider.rs`). Workflow generation lives in `domains/ai/service.rs` and uses the configured provider, falling back to template matching if AI is disabled or fails.
 
-## 🤖 AI CLI Integration (v0.10.0+)
+## 🤖 AI CLI Integration
 
 The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web.
 
