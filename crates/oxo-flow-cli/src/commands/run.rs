@@ -73,6 +73,19 @@ fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
         .collect()
 }
 
+fn print_truncated_list(label: &str, names: &[String]) {
+    // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
+    // expanded rule instances (e.g. step5 × 100 samples).
+    let shown: Vec<&str> = names.iter().take(3).map(String::as_str).collect();
+    let extra = names.len().saturating_sub(3);
+    let suffix = if extra > 0 {
+        format!(", … (+{extra} more)")
+    } else {
+        String::new()
+    };
+    eprintln!("  {label} {}{}", shown.join(", "), suffix);
+}
+
 fn print_config_change_summary(
     report: &ConfigChangeReport,
     old_snapshot: &HashMap<String, String>,
@@ -97,6 +110,7 @@ fn print_config_change_summary(
         && report.added_keys.is_empty()
         && report.removed_keys.is_empty()
         && report.fingerprint_mismatches.is_empty()
+        && report.when_flip_invalidated.is_empty()
     {
         return;
     }
@@ -122,21 +136,21 @@ fn print_config_change_summary(
         eprintln!("  {key}: (removed)");
     }
     if !report.fingerprint_mismatches.is_empty() {
-        // Truncate the list — a cohort-wide shell edit can mismatch hundreds
-        // of expanded rule instances (e.g. step5 × 100 samples).
-        let shown: Vec<&str> = report
-            .fingerprint_mismatches
-            .iter()
-            .take(3)
-            .map(String::as_str)
-            .collect();
-        let extra = report.fingerprint_mismatches.len().saturating_sub(3);
-        let suffix = if extra > 0 {
-            format!(", … (+{extra} more)")
-        } else {
-            String::new()
-        };
-        eprintln!("  rule definition changed: {}{}", shown.join(", "), suffix);
+        print_truncated_list("rule definition changed:", &report.fingerprint_mismatches);
+    }
+
+    if !report.when_flip_invalidated.is_empty() {
+        // Truncate like fingerprint lists — flips can cascade across many
+        // expanded instances.
+        print_truncated_list("when-condition flipped:", &report.when_flip_invalidated);
+    }
+    if !report.when_gate_exempt.is_empty() {
+        // Issue #198: gates whose truth value survived the toggle keep their
+        // checkpoint entries — say so, or the reuse looks like a bug.
+        print_truncated_list(
+            "when-condition unchanged, reused:",
+            &report.when_gate_exempt,
+        );
     }
 
     let order_set: HashSet<&str> = order.iter().map(String::as_str).collect();

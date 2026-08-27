@@ -669,9 +669,21 @@ structural fingerprint of every completed rule. On each run, oxo-flow
 compares them against the current workflow:
 
 - **Changed config keys** invalidate exactly the rules that reference them
-  (in `shell`, `script`, `input`/`output` paths, `envvars`, `params`, or
-  `when` conditions) **plus their DAG downstream**. Unrelated completed
-  rules keep their checkpoint records.
+  **plus their DAG downstream**; unrelated completed rules keep their
+  checkpoint records. How a rule references a key decides the verdict:
+  - A key **interpolated** into `shell`, `script`, `input`/`output` paths,
+    `envvars`, or `params` (`{config.<key>}`) always invalidates — the new
+    value bakes straight into the command or paths.
+  - A key referenced only inside a **`when` condition** invalidates only
+    when the condition's truth value actually flips under the new config.
+    A toggle that leaves the gate true (or false) — e.g.
+    `(config.refine_bins || config.run_checkm)` switching which term is
+    true — reuses the completed rules instead of re-running hours-long
+    chains whose inputs and commands are identical (issue #198). Flipping a
+    gate in either direction still invalidates: the engine pre-marks
+    completed rules without re-evaluating `when`, so only plan-time
+    detection can retire a now-skipped producer or cascade a newly-activated
+    one to its consumers.
 - **Edited rule definitions** (shell, inputs, outputs, environment, …) are
   caught by the per-rule fingerprint and invalidate the same way.
 - `samples_list` / `samples_<group>` are engine-injected and never trigger
@@ -691,13 +703,16 @@ compares them against the current workflow:
   run after an upgrade may re-run such a rule once (safe default).
 
 ```bash
-# min_quality is referenced by fastp_trim; only it and its downstream re-run
+# min_quality is interpolated by fastp_trim; only it and its downstream re-run.
+# A flag toggled in a when-only rule whose gate stays true re-runs nothing —
+# the run reports those rules as reused instead.
 oxo-flow run pipeline.oxoflow min_quality=30
 ```
 
 ```console
 Config change:
   min_quality: 20 → 30
+  when-condition unchanged, reused: bin_classify
   → invalidated 3 (1 directly affected), re-running 3/10 this run, skipping 7
   ⊝ index_reference (already completed)
   Running: fastp_trim
@@ -716,7 +731,10 @@ correctly when the split values change.
 - A checkpoint written before config tracking was introduced is adopted as
   a one-time baseline: the first post-upgrade run reuses everything and
   records the snapshot; changes made before that baseline cannot be
-  detected.
+  detected. The same applies to the per-rule `when` verdicts behind
+  gate-aware reuse: a pre-verdict checkpoint invalidates when-referencing
+  rules once on the first changed-key run, records their verdicts, and
+  reuses stably from then on.
 - Config values declared `sensitive` are stored in the snapshot as SHA-256
   digests, never as plaintext.
 - Concurrent `oxo-flow run` invocations on the same workdir are prevented

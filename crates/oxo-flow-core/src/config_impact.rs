@@ -1,9 +1,19 @@
-//! Config-change impact analysis: precise checkpoint invalidation (issue #62).
+//! Config-change impact analysis: precise checkpoint invalidation (issue
+//! #62, refined by issue #198).
 //!
 //! When a workflow is re-run with changed config values, only the rules that
 //! reference the changed keys — plus their DAG downstream — are invalidated.
 //! Rules whose structure (shell, inputs, …) changed are detected the same way
 //! via per-rule fingerprints. Everything else keeps hitting the checkpoint.
+//!
+//! Since #198 the reference channels are weighted differently:
+//!
+//! - A key interpolated into shell/script/IO/envvars/params (`{config.<key>}`)
+//!   always invalidates — the changed value bakes into what runs.
+//! - A key referenced only inside a `when` condition invalidates ONLY when
+//!   the gate's truth value flips under the new config. A gate that stays
+//!   true (or false) leaves completed outputs valid, so flag toggles no
+//!   longer re-run hours-long chains whose inputs and commands are identical.
 //!
 //! Two complementary mechanisms, with a strict correctness invariant: the
 //! invalidation direction is monotone-safe. Over-invalidation wastes compute;
@@ -13,6 +23,7 @@
 use crate::config::ReferenceDef;
 use crate::dag::WorkflowDag;
 use crate::executor::checkpoint::CheckpointState;
+use crate::executor::process::evaluate_condition_with_wildcards;
 use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -55,11 +66,24 @@ pub fn snapshot_value(value: &toml::Value, sensitive: bool) -> String {
     }
 }
 
-/// Maps each config key to the set of rules that reference it at execution
-/// time (`{config.<key>}` in shell/script/IO/envvars/params, or bare
-/// `config.<key>` inside `when` conditions).
+/// Maps each config key to the rules that reference it, split by channel.
+///
+/// The two channels have very different invalidation semantics (issue #198):
+///
+/// - **Interpolation** (`{config.<key>}` inside shell/script/IO/envvars/
+///   params): the changed value bakes into the command or paths — the rule
+///   MUST re-run.
+/// - **`when` gate** (bare `config.<key>` inside the condition text): the
+///   key only steers WHETHER the rule runs. If the gate's truth value is
+///   unchanged under the new config and the inputs are untouched, the
+///   completed output is still exactly what the new run would produce — it
+///   can be reused from the checkpoint instead of invalidated.
 pub struct ConfigReferenceGraph {
-    key_rules: HashMap<String, HashSet<String>>,
+    /// Key → rules interpolating `{config.<key>}` at execution time
+    /// (shell/script/IO/envvars/params).
+    interp_key_rules: HashMap<String, HashSet<String>>,
+    /// Key → rules mentioning bare `config.<key>` inside `when`.
+    when_key_rules: HashMap<String, HashSet<String>>,
 }
 
 impl ConfigReferenceGraph {
@@ -75,36 +99,55 @@ impl ConfigReferenceGraph {
         // Bare `config.<key>` — `when` conditions (evaluator syntax, no braces).
         let bare = regex::Regex::new(r"config\.([A-Za-z0-9_.-]+)").expect("valid bare regex");
 
-        let mut key_rules: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut interp_key_rules: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut when_key_rules: HashMap<String, HashSet<String>> = HashMap::new();
         for rule in rules {
-            let mut refs: HashSet<String> = HashSet::new();
-
             for text in braced_texts(rule) {
                 for cap in braced.captures_iter(&text) {
-                    refs.insert(cap[1].to_string());
+                    interp_key_rules
+                        .entry(cap[1].to_string())
+                        .or_default()
+                        .insert(rule.name.clone());
                 }
             }
             if let Some(ref when) = rule.when {
                 for cap in bare.captures_iter(when) {
-                    refs.insert(cap[1].to_string());
+                    when_key_rules
+                        .entry(cap[1].to_string())
+                        .or_default()
+                        .insert(rule.name.clone());
                 }
             }
-
-            for key in refs {
-                key_rules.entry(key).or_default().insert(rule.name.clone());
-            }
         }
-        Self { key_rules }
+        Self {
+            interp_key_rules,
+            when_key_rules,
+        }
     }
 
-    /// All rules referencing any of the given keys.
-    pub fn rules_referencing<'a>(
+    /// All rules interpolating any of the given keys into their execution
+    /// surface (conservative invalidation: the value changed what runs).
+    pub fn interpolating_rules_referencing<'a>(
         &self,
         keys: impl IntoIterator<Item = &'a str>,
     ) -> HashSet<String> {
         let mut rules = HashSet::new();
         for key in keys {
-            if let Some(referencing) = self.key_rules.get(key) {
+            if let Some(referencing) = self.interp_key_rules.get(key) {
+                rules.extend(referencing.iter().cloned());
+            }
+        }
+        rules
+    }
+
+    /// All rules whose `when` condition mentions any of the given keys.
+    pub fn when_rules_referencing<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a str>,
+    ) -> HashSet<String> {
+        let mut rules = HashSet::new();
+        for key in keys {
+            if let Some(referencing) = self.when_key_rules.get(key) {
                 rules.extend(referencing.iter().cloned());
             }
         }
@@ -113,7 +156,7 @@ impl ConfigReferenceGraph {
 
     /// Returns `true` if no rule references any config key.
     pub fn is_empty(&self) -> bool {
-        self.key_rules.is_empty()
+        self.interp_key_rules.is_empty() && self.when_key_rules.is_empty()
     }
 }
 
@@ -377,6 +420,16 @@ pub struct ConfigChangeReport {
     pub sample_selection_exempt: Vec<String>,
     /// Rules directly affected (reference a changed key or mismatch).
     pub directly_affected: Vec<String>,
+    /// Completed rules whose `when` gate references changed keys but whose
+    /// verdict is unchanged under the new config — NOT invalidated; their
+    /// checkpoint entry is reused (issue #198). Safe because interpolation
+    /// channels invalidate separately and the input-manifest check still
+    /// verifies file sets independently.
+    pub when_gate_exempt: Vec<String>,
+    /// Rules invalidated because their `when` gate's truth value flipped
+    /// between the recorded run and the current config, in either direction
+    /// (issue #198): a flipped producer changes what its consumers see.
+    pub when_flip_invalidated: Vec<String>,
     /// Full invalidation set: directly affected rules plus their transitive
     /// DAG dependents. These were removed from `completed_rules`.
     pub invalidated: Vec<String>,
@@ -481,23 +534,82 @@ pub fn detect_config_changes(
     fingerprint_mismatches.sort();
     sample_selection_exempt.sort();
 
-    // ── 3. Bootstrap path: record provenance, keep everything completed ──
+    // ── 3. When-gate verdicts under the CURRENT config (issue #198) ──────
+    // The same evaluator the executor uses at execution time, with an empty
+    // wildcard context: expansion bakes kept instances' bindings into their
+    // `when` as literals, which this evaluator resolves identically.
+    let current_verdicts: HashMap<String, bool> = rules
+        .iter()
+        .filter_map(|rule| {
+            rule.when.as_ref().map(|condition| {
+                (
+                    rule.name.clone(),
+                    evaluate_condition_with_wildcards(condition, current, &HashMap::new()),
+                )
+            })
+        })
+        .collect();
+
+    // ── 4. Bootstrap path: record provenance, keep everything completed ──
     if is_legacy {
         checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys);
         checkpoint.rule_fingerprints.extend(current_fingerprints);
         checkpoint
             .rule_fingerprints_no_input
             .extend(current_no_input_fingerprints);
+        checkpoint.when_verdicts.extend(current_verdicts);
         return ConfigChangeReport {
             is_legacy: true,
             ..Default::default()
         };
     }
 
-    // ── 4. Affected rules + DAG downstream closure ───────────────────────
+    // ── 5. Affected rules + DAG downstream closure ───────────────────────
+    // Interpolation is the conservative channel: a changed value baked into
+    // shell/IO/params changes what runs.
     let mut directly_affected: HashSet<String> =
-        graph.rules_referencing(all_diff_keys.iter().map(String::as_str));
+        graph.interpolating_rules_referencing(all_diff_keys.iter().map(String::as_str));
     directly_affected.extend(fingerprint_mismatches.iter().cloned());
+
+    // `when`-gated references (issue #198): a gate that keeps its truth
+    // value between runs leaves completed outputs valid — skip them instead
+    // of invalidating whole chains whenever a flag toggles. A flipped gate
+    // invalidates in BOTH directions: false→false stays skipped-free reuse,
+    // but true→false means the completed output must stop being served and
+    // false→true means the producer starts contributing fresh output to its
+    // consumers.
+    let mut when_flip_invalidated: Vec<String> = Vec::new();
+    let mut when_gate_exempt: Vec<String> = Vec::new();
+    for rule_name in graph.when_rules_referencing(all_diff_keys.iter().map(String::as_str)) {
+        if directly_affected.contains(&rule_name) {
+            continue; // interpolation or fingerprint mismatch already handles it
+        }
+        let Some(current_verdict) = current_verdicts.get(&rule_name) else {
+            continue;
+        };
+        match checkpoint.when_verdicts.get(&rule_name) {
+            Some(stored) if stored == current_verdict => {
+                // Gate unchanged: a completed entry stays valid (nothing in
+                // this channel baked the changed value into its execution);
+                // a non-completed rule simply isn't cached — leave it be.
+                if checkpoint.is_completed(&rule_name) {
+                    when_gate_exempt.push(rule_name);
+                }
+            }
+            Some(_) => {
+                when_flip_invalidated.push(rule_name.clone());
+                directly_affected.insert(rule_name);
+            }
+            None => {
+                // No recorded verdict (checkpoint predates issue #198 or the
+                // rule entered a run for the first time): adopt the same
+                // one-time conservative window as fingerprints — invalidate,
+                // record, and never again churn on unchanged gates.
+                when_flip_invalidated.push(rule_name.clone());
+                directly_affected.insert(rule_name);
+            }
+        }
+    }
 
     let mut invalidated: HashSet<String> = directly_affected.clone();
     let mut frontier: Vec<String> = directly_affected.iter().cloned().collect();
@@ -513,7 +625,7 @@ pub fn detect_config_changes(
         }
     }
 
-    // ── 5. Mutate checkpoint ─────────────────────────────────────────────
+    // ── 6. Mutate checkpoint ─────────────────────────────────────────────
     for rule_name in &invalidated {
         checkpoint.completed_rules.remove(rule_name);
     }
@@ -522,9 +634,12 @@ pub fn detect_config_changes(
     checkpoint
         .rule_fingerprints_no_input
         .extend(current_no_input_fingerprints);
+    checkpoint.when_verdicts.extend(current_verdicts);
 
     let mut directly_affected: Vec<String> = directly_affected.into_iter().collect();
     directly_affected.sort();
+    when_flip_invalidated.sort();
+    when_gate_exempt.sort();
     let mut invalidated: Vec<String> = invalidated.into_iter().collect();
     invalidated.sort();
 
@@ -536,6 +651,8 @@ pub fn detect_config_changes(
         fingerprint_mismatches,
         sample_selection_exempt,
         directly_affected,
+        when_gate_exempt,
+        when_flip_invalidated,
         invalidated,
     }
 }
@@ -609,12 +726,16 @@ mod tests {
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
         assert_eq!(
-            graph.rules_referencing(["min_quality"]),
+            graph.interpolating_rules_referencing(["min_quality"]),
             HashSet::from(["fastp_trim".to_string()])
         );
         // Non-config placeholders ({threads} without the config. prefix)
         // must not be captured.
-        assert!(graph.rules_referencing(["threads"]).is_empty());
+        assert!(
+            graph
+                .interpolating_rules_referencing(["threads"])
+                .is_empty()
+        );
         // `{config.threads}` IS a config reference (key "threads").
         let rules = vec![Rule {
             name: "r".to_string(),
@@ -622,7 +743,11 @@ mod tests {
             ..Default::default()
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
-        assert!(graph.rules_referencing(["threads"]).contains("r"));
+        assert!(
+            graph
+                .interpolating_rules_referencing(["threads"])
+                .contains("r")
+        );
     }
 
     #[test]
@@ -648,7 +773,9 @@ mod tests {
         let graph = ConfigReferenceGraph::from_rules(&rules);
         for key in ["mode", "adapter", "ref_dir", "data_dir", "out_dir"] {
             assert!(
-                graph.rules_referencing([key]).contains("align"),
+                graph
+                    .interpolating_rules_referencing([key])
+                    .contains("align"),
                 "expected key {key} to reference align"
             );
         }
@@ -662,21 +789,22 @@ mod tests {
             ..Default::default()
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
-        assert!(graph.rules_referencing(["min_qual"]).contains("qc"));
-        assert!(graph.rules_referencing(["enable_qc"]).contains("qc"));
+        assert!(graph.when_rules_referencing(["min_qual"]).contains("qc"));
+        assert!(graph.when_rules_referencing(["enable_qc"]).contains("qc"));
     }
 
     #[test]
     fn graph_tolerates_file_exists_false_positive_as_safe_over_invalidation() {
         // `file_exists("config.yaml")` matches the bare `config.<key>` regex
-        // with key "yaml". Over-invalidation only — never stale reuse.
+        // with key "yaml": an adoption-only false positive of the when
+        // channel — over-invalidation at worst, never stale reuse.
         let rules = vec![Rule {
             name: "r".to_string(),
             when: Some(r#"file_exists("config.yaml")"#.to_string()),
             ..Default::default()
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
-        assert!(graph.rules_referencing(["yaml"]).contains("r"));
+        assert!(graph.when_rules_referencing(["yaml"]).contains("r"));
     }
 
     #[test]
@@ -687,7 +815,11 @@ mod tests {
             ..Default::default()
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
-        assert!(graph.rules_referencing(["min.qual"]).contains("r"));
+        assert!(
+            graph
+                .interpolating_rules_referencing(["min.qual"])
+                .contains("r")
+        );
     }
 
     #[test]
@@ -705,7 +837,7 @@ mod tests {
         }];
         let graph = ConfigReferenceGraph::from_rules(&rules);
         assert_eq!(
-            graph.rules_referencing(["min_quality"]),
+            graph.interpolating_rules_referencing(["min_quality"]),
             HashSet::from(["r".to_string()])
         );
     }
@@ -1522,5 +1654,335 @@ mod tests {
         );
         assert_eq!(report.invalidated, vec!["orphan".to_string()]);
         assert!(!checkpoint.is_completed("orphan"));
+    }
+
+    // ── When-gate verdicts (issue #198) ──────────────────────────────────
+
+    fn completed_checkpoint(names: &[&str]) -> CheckpointState {
+        let mut checkpoint = CheckpointState::new();
+        for name in names {
+            checkpoint.mark_completed(
+                name,
+                super::super::executor::checkpoint::BenchmarkRecord {
+                    rule: name.to_string(),
+                    wall_time_secs: 1.0,
+                    max_memory_mb: None,
+                    memory_limit_mb: None,
+                    cpu_seconds: None,
+                    retries: 0,
+                },
+            );
+        }
+        checkpoint
+    }
+
+    fn typed_cfg(pairs: &[(&str, toml::Value)]) -> HashMap<String, toml::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn when_only_gate_unchanged_keeps_completed_rule() {
+        // The #198 core case: a rule whose `when` REFERENCES toggled keys but
+        // whose gate stays true keeps its checkpoint entry — the toggle
+        // neither baked into its command nor changed its inputs.
+        let mut rules = diamond_rules();
+        rules[1].when = Some("(config.enabled_a || config.enabled_b)".to_string()); // b
+
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "true"), ("enabled_b", "false")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        // Toggle: a → false, b → true. The DISJUNCTION stays true.
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "false"), ("enabled_b", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+
+        assert!(report.invalidated.is_empty(), "{:?}", report.invalidated);
+        assert_eq!(report.when_gate_exempt, vec!["b".to_string()]);
+        assert!(report.when_flip_invalidated.is_empty());
+        assert_eq!(checkpoint.completed_rules.len(), 4);
+        // Verdicts re-recorded under the new config for the next diff.
+        assert_eq!(checkpoint.when_verdicts.get("b"), Some(&true));
+    }
+
+    #[test]
+    fn when_flip_true_to_false_invalidates_with_downstream() {
+        let mut rules = diamond_rules();
+        rules[1].when = Some("config.enabled_a".to_string()); // b
+
+        // Run 1: gate true, chain completes.
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        // Run 2: gate flips true→false. The completed output must stop being
+        // served — the executor pre-marks completed rules as Success without
+        // ever re-evaluating `when` (issue #198) — and downstream d follows.
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "false")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            report.when_flip_invalidated,
+            vec!["b".to_string()],
+            "true→false flip must invalidate"
+        );
+        let invalidated: HashSet<&String> = report.invalidated.iter().collect();
+        assert!(invalidated.contains(&"b".to_string()));
+        assert!(invalidated.contains(&"d".to_string()));
+        assert!(!checkpoint.is_completed("b"));
+        assert!(!checkpoint.is_completed("d"));
+    }
+
+    #[test]
+    fn when_flip_false_to_true_invalidates_too() {
+        let mut rules = diamond_rules();
+        rules[1].when = Some("config.enabled_a".to_string()); // b
+
+        // Run 1: gate false, chain completes anyway (authored workflows may
+        // complete consumers against pre-existing files).
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "false")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        // Run 2: gate flips false→true — b starts producing for consumers;
+        // completed dependents cannot be silently reused across that change.
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("enabled_a", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            report.when_flip_invalidated,
+            vec!["b".to_string()],
+            "false→true flip must invalidate"
+        );
+        assert!(!checkpoint.is_completed("d"));
+    }
+
+    #[test]
+    fn flipped_false_to_true_producer_cascades_to_completed_consumer() {
+        // A producer SKIPPED under the old gate now runs; its fresh output
+        // lands mid-run, so its completed consumer cannot be reused.
+        let producer = Rule {
+            name: "extra_prod".to_string(),
+            input: FilePatterns::List(vec![]),
+            output: FilePatterns::List(vec!["extra.out".to_string()]),
+            shell: Some("echo x > extra.out".to_string()),
+            when: Some("config.make_extra".to_string()),
+            ..Default::default()
+        };
+        let consumer = make_rule("consume", &["extra.out"], &["final.out"]);
+        let rules = vec![producer, consumer];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        // Run 1: gate false (producer skipped, never completed).
+        let mut checkpoint = completed_checkpoint(&["consume"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &dag,
+            &cfg(&[("make_extra", "false")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        // Run 2: gate flips on. Even though the producer has no completed
+        // entry, its flip cascades to the completed consumer.
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &dag,
+            &cfg(&[("make_extra", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert!(
+            report
+                .when_flip_invalidated
+                .contains(&"extra_prod".to_string())
+        );
+        assert!(
+            !checkpoint.is_completed("consume"),
+            "consumer of a newly-activated producer must re-run"
+        );
+    }
+
+    #[test]
+    fn interpolation_channel_still_invalidates_even_when_gate_unchanged() {
+        // Conservative channel: `{config.k}` in the shell means the changed
+        // value alters what runs, regardless of any unchanged when-verdict.
+        let mut rules = diamond_rules();
+        rules[1].shell = Some("fastp -q {config.k}".to_string());
+        rules[1].when = Some("config.gate".to_string());
+
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("k", "20"), ("gate", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("k", "30"), ("gate", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        let invalidated: HashSet<&String> = report.invalidated.iter().collect();
+        assert!(invalidated.contains(&"b".to_string()));
+        assert!(invalidated.contains(&"d".to_string()));
+        assert!(report.when_gate_exempt.is_empty());
+        assert!(!checkpoint.is_completed("b"));
+    }
+
+    #[test]
+    fn missing_stored_verdict_invalidates_once_then_stabilizes() {
+        // Checkpoints written by pre-#198 binaries carry no verdicts — same
+        // adoption story as issue #142 M1's input-excluded fingerprints: one
+        // conservative invalidation, then stable gate-aware reuse forever.
+        let mut rules = diamond_rules();
+        rules[1].when = Some("(config.feature || config.alt_path)".to_string()); // b
+
+        // Old-binary checkpoint: snapshot exists, verdicts map empty, and its
+        // recorded feature value differs from the incoming run's.
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        checkpoint
+            .config_snapshot
+            .insert("feature".to_string(), "false".to_string());
+
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("feature", "true"), ("alt_path", "false")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            report.when_flip_invalidated,
+            vec!["b".to_string()],
+            "no stored verdict → conservative once-only invalidation"
+        );
+        assert!(!checkpoint.is_completed("b"));
+        assert_eq!(checkpoint.when_verdicts.get("b"), Some(&true));
+
+        // Adoption done. A later toggle of the sibling key leaves the gate
+        // (still a disjunction containing a true term) unchanged: reuse.
+        checkpoint.mark_completed(
+            "b",
+            super::super::executor::checkpoint::BenchmarkRecord {
+                rule: "b".to_string(),
+                wall_time_secs: 1.0,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+            },
+        );
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &cfg(&[("feature", "true"), ("alt_path", "true")]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(report.when_gate_exempt, vec!["b".to_string()]);
+        assert!(report.invalidated.is_empty());
+        assert!(checkpoint.is_completed("b"));
+    }
+
+    #[test]
+    fn numeric_when_comparison_flips_use_typed_current_config() {
+        // Typed config values reach the evaluator unharmed: an integer
+        // threshold comparison flips exactly at the boundary.
+        let mut rules = diamond_rules();
+        rules[1].when = Some("config.min_qual >= 20".to_string()); // b
+
+        let mut checkpoint = completed_checkpoint(&["a", "b", "c", "d"]);
+        let mut cp = checkpoint.clone();
+        let _ = detect_config_changes(
+            &mut cp,
+            &rules,
+            &diamond_dag(),
+            &typed_cfg(&[("min_qual", toml::Value::Integer(25))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        checkpoint = cp;
+
+        let report = detect_config_changes(
+            &mut checkpoint,
+            &rules,
+            &diamond_dag(),
+            &typed_cfg(&[("min_qual", toml::Value::Integer(10))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(report.when_flip_invalidated, vec!["b".to_string()]);
+        assert!(!checkpoint.is_completed("d"));
     }
 }

@@ -241,6 +241,15 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub input_manifests: HashMap<String, InputManifest>,
+    /// Per-rule `when`-condition verdicts under the run's config (issue
+    /// #198). Maps rule name → the boolean the gate evaluated to at config-
+    /// change detection time. A completed rule whose gate references changed
+    /// keys but whose verdict is unchanged keeps its checkpoint entry; a
+    /// flipped verdict invalidates it. Absent in checkpoints written by
+    /// older binaries — referencing rules keep invalidating until adopted.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub when_verdicts: HashMap<String, bool>,
 
     /// Tombstones for `temporary = true` rules whose outputs were deleted
     /// after a fully successful run. Maps rule name → deleted output paths;
@@ -296,6 +305,7 @@ impl CheckpointState {
             rule_fingerprints: HashMap::new(),
             rule_fingerprints_no_input: HashMap::new(),
             input_manifests: HashMap::new(),
+            when_verdicts: HashMap::new(),
             tombstones: HashMap::new(),
             reentries: Vec::new(),
             rule_runs: HashMap::new(),
