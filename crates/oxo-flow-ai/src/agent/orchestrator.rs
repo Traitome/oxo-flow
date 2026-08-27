@@ -146,11 +146,7 @@ impl Orchestrator {
                             if let Some(sink) = &mut sink {
                                 sink(AgentEvent::ToolResult {
                                     name: tc.name.clone(),
-                                    summary: if content.len() > 200 {
-                                        format!("{}...", &content[..200])
-                                    } else {
-                                        content.clone()
-                                    },
+                                    summary: truncate_preview(content),
                                 });
                             }
                             messages.push(Message::tool(&tc.id, &tc.name, content));
@@ -158,11 +154,7 @@ impl Orchestrator {
                                 timestamp: Utc::now(),
                                 tool_name: tc.name.clone(),
                                 arguments: tc.arguments.clone(),
-                                result_preview: if content.len() > 200 {
-                                    format!("{}...", &content[..200])
-                                } else {
-                                    content.clone()
-                                },
+                                result_preview: truncate_preview(content),
                                 success: true,
                                 duration_ms,
                             });
@@ -327,6 +319,21 @@ pub fn tool_call_approved(
         (Some(tool), Some(approve)) => approve(&tool.def(), arguments),
         _ => false,
     }
+}
+
+/// Preview text capped at 200 chars. Byte-slicing (`&s[..200]`) panics when
+/// the cut lands inside a multi-byte UTF-8 sequence, which is common in
+/// bioinformatics tool output — truncate on a char boundary instead.
+fn truncate_preview(content: &str) -> String {
+    const LIMIT: usize = 200;
+    if content.len() <= LIMIT {
+        return content.to_string();
+    }
+    let mut end = LIMIT;
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &content[..end])
 }
 
 #[cfg(test)]

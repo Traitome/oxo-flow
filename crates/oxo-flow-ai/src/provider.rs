@@ -52,6 +52,17 @@ const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
 const OLLAMA_DEFAULT_MODEL: &str = "llama3";
 const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
+/// Shared HTTP client for all provider backends. Without explicit timeouts a
+/// hung endpoint would block the agent loop indefinitely; 120s covers slow
+/// long-form completions while still bounding worst-case latency.
+fn provider_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_default()
+}
+
 // ── AiProvider enum ────────────────────────────────────────────────────────
 
 /// A configured AI provider instance. Dispatch via the convenience methods
@@ -287,7 +298,7 @@ pub struct ClaudeBackend {
 impl ClaudeBackend {
     pub fn new(api_key: String, model: Option<String>, api_url: Option<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: provider_http_client(),
             api_key,
             model: model.unwrap_or_else(|| CLAUDE_DEFAULT_MODEL.to_string()),
             api_url: {
@@ -518,7 +529,7 @@ impl OpenAiBackend {
         label: &str,
     ) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: provider_http_client(),
             api_key,
             label: label.to_string(),
             model: model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string()),
@@ -729,7 +740,7 @@ pub struct OllamaBackend {
 impl OllamaBackend {
     pub fn new(model: Option<String>, api_url: Option<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: provider_http_client(),
             model: model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string()),
             api_url: {
                 let url = api_url.unwrap_or_else(|| OLLAMA_API_URL.to_string());
@@ -1170,8 +1181,25 @@ pub fn save_ai_config(
         "model": model.unwrap_or(""),
     });
     if let Ok(json) = serde_json::to_string_pretty(&config) {
-        std::fs::write(&path, json).ok();
-        tracing::info!("AI config saved to {}", path.display());
+        // The file holds a live API key in plaintext — restrict it to the
+        // owner so shared HPC systems and group-readable homes don't leak it.
+        match std::fs::File::create(&path) {
+            Ok(file) => {
+                use std::io::Write;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+                let mut file = file;
+                if let Err(e) = file.write_all(json.as_bytes()) {
+                    tracing::warn!("Failed to write AI config to {}: {e}", path.display());
+                } else {
+                    tracing::info!("AI config saved to {}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("Failed to create AI config at {}: {e}", path.display()),
+        }
     }
 }
 
