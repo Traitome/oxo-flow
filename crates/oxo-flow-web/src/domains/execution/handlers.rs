@@ -89,6 +89,66 @@ pub(crate) async fn load_owned_run(
     Ok(run)
 }
 
+/// Per-identity sliding-window rate limit for run creation (issue #213).
+/// Expensive spawns must not share the global request limiter's budget with
+/// health checks and reads. Configurable via `OXO_FLOW_RUNS_RATE_LIMIT`
+/// (allowed runs per minute, default 5; 0 disables the limiter entirely).
+mod run_rate_limit {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+
+    const WINDOW: Duration = Duration::from_secs(60);
+    pub const DEFAULT_LIMIT: u32 = 5;
+
+    fn limit() -> u32 {
+        std::env::var("OXO_FLOW_RUNS_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_LIMIT)
+    }
+
+    static HITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    /// Returns `Err(seconds_until_next_slot)` when over the limit.
+    pub fn check(identity: &str) -> Result<(), u64> {
+        let max = limit();
+        if max == 0 {
+            return Ok(()); // disabled
+        }
+        let now = Instant::now();
+        let mut map = HITS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stamps = map.entry(identity.to_string()).or_default();
+        stamps.retain(|t| now.duration_since(*t) < WINDOW);
+        if stamps.len() >= max as usize {
+            let oldest = stamps.first().copied().unwrap_or(now);
+            let wait = WINDOW.saturating_sub(now.duration_since(oldest)).as_secs() + 1;
+            return Err(wait);
+        }
+        stamps.push(now);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn allows_up_to_limit_then_blocks_with_wait() {
+            // Isolated identity so parallel tests don't interfere.
+            let id = format!("rate-test-{}", std::process::id());
+            for _ in 0..DEFAULT_LIMIT {
+                assert!(check(&id).is_ok());
+            }
+            let wait = check(&id).expect_err("expected limit breach");
+            assert!(wait > 0 && wait <= 61);
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/runs",
@@ -119,6 +179,33 @@ pub async fn create_run(
                 ),
                 suggestion: Some(
                     "Execute via `oxo-flow run` from the CLI, or use a personal-mode                      server backed by SQLite."
+                        .into(),
+                ),
+            }),
+        ));
+    }
+    // Issue #213: dedicated budget for expensive run creation — separate
+    // from the global per-minute request limiter so health checks / reads
+    // cannot crowd it out (and vice versa).
+    if let Err(wait_secs) = run_rate_limit::check(
+        authenticated
+            .as_ref()
+            .map(|e| e.0.id.as_str())
+            .unwrap_or("anonymous"),
+    ) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                code: "RUN_RATE_LIMITED".into(),
+                message: format!("Too many runs created recently; retry in {wait_secs}s."),
+                detail: Some(format!(
+                    "Default allowance: {} runs per minute (override with \
+                     OXO_FLOW_RUNS_RATE_LIMIT).",
+                    run_rate_limit::DEFAULT_LIMIT
+                )),
+                suggestion: Some(
+                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
+                     instead of many small runs."
                         .into(),
                 ),
             }),
