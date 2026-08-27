@@ -97,16 +97,37 @@ async fn main() -> Result<()> {
 
     // Determine effective host based on mode
     let mode_str = cli.mode.to_string();
+    fn is_loopback_host(host: &str) -> bool {
+        matches!(host, "127.0.0.1" | "::1" | "localhost")
+    }
     let effective_host = match cli.mode {
         ServerMode::Personal => {
-            // Force localhost for personal mode unless explicitly overridden
-            if cli.host == "0.0.0.0" {
-                "127.0.0.1".to_string()
-            } else {
+            if is_loopback_host(&cli.host) {
                 cli.host.clone()
+            } else {
+                // Personal mode has no sign-in: any non-loopback bind would
+                // expose unauthenticated management endpoints to the network.
+                tracing::warn!(
+                    "personal mode requires sign-in credentials that are not \
+                     enforced, forcing loopback bind instead of '{}'",
+                    cli.host
+                );
+                "127.0.0.1".to_string()
             }
         }
-        _ => cli.host.clone(),
+        _ => {
+            if std::env::var("OXO_FLOW_DEV_MODE").as_deref() == Ok("1")
+                && !is_loopback_host(&cli.host)
+            {
+                anyhow::bail!(
+                    "OXO_FLOW_DEV_MODE=1 accepts password==username logins for \
+                     any user and is only safe on a loopback bind; refusing to \
+                     start on '{}'. Unset OXO_FLOW_DEV_MODE or bind to 127.0.0.1.",
+                    cli.host
+                );
+            }
+            cli.host.clone()
+        }
     };
 
     tracing::info!(

@@ -133,6 +133,22 @@
         }
       }
     },
+    "reference_dir": {
+      "type": "string",
+      "description": "Root directory holding reference genome/annotation files; entries under it are auto-exposed through [references]"
+    },
+    "values": {
+      "type": "array",
+      "description": "Named value groups bind key/value lists that rules can iterate over (e.g. [[values]] name = \"assembler\", values = [\"spades\", \"megahit\"]), usable as {assembler} wildcards",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "values": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
     "sample_groups": {
       "type": "array",
       "description": "Named sample groups for cohort-level analysis",

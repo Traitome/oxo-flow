@@ -1,7 +1,7 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit contributors
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift contributors
 
 ## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
-ci: fmt clippy build test schema-drift audit
+ci: fmt clippy build test schema-drift audit frontend-lint
 
 fmt:
 	cargo fmt -- --check
@@ -17,6 +17,14 @@ test:
 
 audit:
 	cargo audit --no-fetch 2>&1 || cargo audit
+
+## Lint and type-check the frontend SPA (mirrors the "Frontend" job in ci.yml).
+frontend-lint:
+	cd frontend && npm install --no-audit --no-fund && npm run lint
+
+## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
+frontend-test:
+	cd frontend && npx playwright test
 
 ## Single-source rule: the CLI-embedded workflow schema must match the
 ## docs copy (the docs copy is canonical; `oxo-flow schema` serves the

@@ -86,3 +86,15 @@ crates/oxo-flow-web/static/index.html
 # Python bytecode (refresh-knowledge / eval scripts)
 __pycache__/
 *.pyc
+
+# Local tool/agent state directories (never commit)
+.snakemake/
+.nextflow/
+.superpowers/
+.claude/
+.vscode/
+.playwright-mcp/
+
+# Local benchmark outputs (machine-specific)
+benches/macro/results/*.json
+!benches/macro/results/.gitkeep

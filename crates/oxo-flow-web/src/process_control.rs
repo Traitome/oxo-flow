@@ -27,7 +27,7 @@ fn registry() -> &'static RwLock<HashMap<String, i32>> {
 pub fn register(run_id: &str, pgid: i32) {
     registry()
         .write()
-        .expect("registry poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(run_id.to_string(), pgid);
 }
 
@@ -35,7 +35,7 @@ pub fn register(run_id: &str, pgid: i32) {
 pub fn unregister(run_id: &str) {
     registry()
         .write()
-        .expect("registry poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(run_id);
 }
 
@@ -43,7 +43,7 @@ pub fn unregister(run_id: &str) {
 pub fn pgid(run_id: &str) -> Option<i32> {
     registry()
         .read()
-        .expect("registry poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(run_id)
         .copied()
 }

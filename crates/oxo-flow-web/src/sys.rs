@@ -15,11 +15,12 @@ pub struct HostResources {
 }
 
 /// Retrieve current host resource metrics.
-///
-/// # Panics
-/// Panics if the system lock is poisoned (which should never happen in normal operation).
 pub fn get_host_resources() -> HostResources {
-    let mut sys = SYS.lock().expect("System lock should never be poisoned");
+    // Recover from a poisoned lock instead of panicking: the System payload is
+    // plain metrics data and remains usable after another thread panicked.
+    let mut sys = SYS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 

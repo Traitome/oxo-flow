@@ -138,17 +138,16 @@ Rate limiting and SSE:
 | **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
 | **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace; runs delegate to the `oxo-flow` CLI subprocess, which owns checkpointing and invalidation |
 | **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama) |
-| **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
 | **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |
+| **chat** | `domains/chat/` | Real-time AI copilot chat and streaming |
+| **clusters** | `domains/clusters/` | Remote cluster submission over SSH, job polling, result pull-back |
+| **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
+| **dag** | `domains/dag/` | DAG-specific types and operations |
 | **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
 | **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations |
 | **infra/license** | `infra/license.rs` | License notice text, banner, footer HTML, X-OxoFlow-License header middleware |
 | **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
 | **infra/hpc** | `infra/hpc.rs` | Slurm script generation, scheduler detection |
-
-### Legacy Modules (deprecated since 0.8.0)
-
-The `handlers/` directory contains pre-v0.8 handler modules marked `#[deprecated(since = "0.8.0")]`. These are preserved so the crate still builds (via the crate-level `#![allow(deprecated)]`), but they are **not mounted in the served router**: both `oxo-flow serve` and the `oxo-flow-web` binary assemble their routes exclusively from the `domains/*` modules via `server.rs::build_router`. The legacy routes (including the old `/api/workflows/*` endpoints) are not reachable on a running server and are scheduled for removal in a future release. New code should use `domains/*/` modules.
 
 ---
 

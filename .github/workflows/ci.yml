@@ -354,6 +354,11 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
 
+      # Mirrors `make schema-drift`: the CLI-embedded schema must match the
+      # docs copy, which is canonical.
+      - name: Schema drift check
+        run: make schema-drift
+
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
         with:
@@ -370,9 +375,9 @@ jobs:
     # Skip on pull_request events — the test job already validates compilation.
     # Build and package are only needed for releases and main-branch pushes.
     if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
-    # A single target failure must not block the GitHub Release; partial
-    # artifact sets are acceptable.
-    continue-on-error: true
+    # Partial artifact sets are acceptable for feature branches only —
+    # a broken release build must fail CI on main and tag pushes.
+    continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: read
     strategy:
@@ -446,9 +451,9 @@ jobs:
     needs: [test]
     # Skip on pull_request events — macOS runners are slow and expensive.
     if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
-    # A cancelled/unavailable runner (e.g., deprecated macos-13) must not
-    # block the GitHub Release; partial artifact sets are acceptable.
-    continue-on-error: true
+    # A cancelled/unavailable runner must not block feature-branch runs,
+    # but a broken macOS release build must fail CI on main and tags.
+    continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
     strategy:
       fail-fast: false
       matrix:

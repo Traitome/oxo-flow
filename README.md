@@ -210,13 +210,13 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 ## CLI Commands
 
-The `oxo-flow` binary provides **29 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
+The `oxo-flow` binary provides **30 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.
 
 | Category | Commands |
 |----------|----------|
 | **Execution** | `run`, `resume`, `dry-run`, `test`, `batch` |
 | **Development** | `init`, `validate`, `format`, `lint`, `debug`, `template` |
-| **Inspection** | `graph`, `report`, `status`, `config`, `diff`, `provenance`, `schema` |
+| **Inspection** | `graph`, `info`, `report`, `status`, `config`, `diff`, `provenance`, `schema` |
 | **Environment** | `env`, `export`, `clean`, `touch` |
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |
 | **AI & System** | `ai`, `completions`, `license` |
@@ -236,7 +236,7 @@ oxo-flow/
 │   ├── oxo-flow-core/     # Core library: DAG engine, executor, environment mgmt,
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
-│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 29 subcommands
+│   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 30 subcommands
 │   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
@@ -278,9 +278,9 @@ oxo-flow/
 `oxo-flow serve` starts the web interface with an embedded REST API and React SPA. Run it without arguments for local experimentation:
 
 ```bash
-# Mode 1: Personal workstation (default) — SQLite, localhost:8080, no auth
+# Mode 1: Personal workstation (default) — SQLite, localhost:3000, no auth
 oxo-flow serve
-# → Open http://127.0.0.1:8080 in your browser
+# → Open http://127.0.0.1:3000 in your browser
 
 # Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
 oxo-flow serve --mode team --db postgres://...

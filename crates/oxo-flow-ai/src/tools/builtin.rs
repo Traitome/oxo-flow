@@ -203,6 +203,31 @@ impl Tool for WriteFileTool {
             message: "missing 'content' argument".into(),
         })?;
 
+        // Archive the previous contents so an agent's overwrite is always
+        // recoverable — this is what the tool description promises.
+        let mut backed_up_to = None;
+        if path.exists() {
+            let backup = std::path::PathBuf::from(format!(
+                "{}.bak.{}",
+                path.display(),
+                chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            ));
+            match std::fs::copy(path, &backup) {
+                Ok(_) => backed_up_to = Some(backup),
+                Err(e) => {
+                    return Err(AiError::ToolError {
+                        tool: "write_file".into(),
+                        message: format!(
+                            "refusing to overwrite {}: cannot create backup ({}). \
+                             Back up or remove the file manually first.",
+                            path.display(),
+                            e
+                        ),
+                    });
+                }
+            }
+        }
+
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AiError::ToolError {
@@ -216,11 +241,19 @@ impl Tool for WriteFileTool {
             message: format!("cannot write file: {e}"),
         })?;
 
-        Ok(format!(
-            "Successfully wrote {} bytes to {}",
-            content.len(),
-            path.display()
-        ))
+        match backed_up_to {
+            Some(backup) => Ok(format!(
+                "Successfully wrote {} bytes to {} (previous contents archived to {})",
+                content.len(),
+                path.display(),
+                backup.display()
+            )),
+            None => Ok(format!(
+                "Successfully wrote {} bytes to {}",
+                content.len(),
+                path.display()
+            )),
+        }
     }
 }
 

@@ -251,6 +251,20 @@ pub fn spawn_background_run_with_args(
     tokio::spawn(async move {
         info!("Starting background run {} for user {}", run_id, username);
 
+        // The legacy SQLite pool backs all run bookkeeping here. PostgreSQL
+        // deployments never initialize it; without this guard every query
+        // below would panic inside the spawned task and leave the run stuck
+        // in 'running' with no way to recover short of a restart.
+        let Some(pool) = db::try_pool() else {
+            error!(
+                "SQLite pool unavailable (PostgreSQL backend?) — cannot run \
+                 workflow '{}' in background; marking as failed is impossible \
+                 so it stays 'queued' for manual cleanup",
+                run_id
+            );
+            return;
+        };
+
         // Update status to running — only from 'queued'. A cancel (or
         // pause) can land between create_run and this task; without the
         // predicate the executor would overwrite 'cancelled' and run the
@@ -262,7 +276,7 @@ pub fn spawn_background_run_with_args(
         )
         .bind(now)
         .bind(&run_id)
-        .execute(db::pool())
+        .execute(pool)
         .await
         {
             Ok(r) if r.rows_affected() == 0 => {
@@ -441,7 +455,7 @@ pub fn spawn_background_run_with_args(
                     && let Err(e) = sqlx::query("UPDATE runs SET pid = ? WHERE id = ?")
                         .bind(pid as i64)
                         .bind(&run_id)
-                        .execute(db::pool())
+                        .execute(pool)
                         .await
                 {
                     warn!("Failed to record PID for run {run_id}: {e}");
@@ -498,12 +512,17 @@ pub fn spawn_background_run_with_args(
 /// never be overwritten nor executed past (a cancel is the user's last
 /// word; the kill fallout must not rewrite it).
 async fn run_is_cancelled(run_id: &str) -> bool {
-    sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
-        .bind(run_id)
-        .fetch_one(db::pool())
-        .await
-        .map(|n: i64| n > 0)
-        .unwrap_or(false)
+    match db::try_pool() {
+        Some(pool) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = ? AND status = 'cancelled'")
+                .bind(run_id)
+                .fetch_one(pool)
+                .await
+                .map(|n: i64| n > 0)
+                .unwrap_or(false)
+        }
+        None => false,
+    }
 }
 
 pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path: &std::path::Path) {
@@ -518,6 +537,16 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
         crate::infra::quota::global_quota_tracker().record_complete(&user_id, threads, memory_mb);
     }
 
+    // Everything below is SQLite bookkeeping; degrade instead of panicking
+    // when that backend is not active (PostgreSQL deployments).
+    let Some(pool) = db::try_pool() else {
+        error!(
+            "SQLite pool unavailable (PostgreSQL backend?) — cannot finalize \
+             run {run_id} state in the database"
+        );
+        return;
+    };
+
     if run_is_cancelled(run_id).await {
         info!("Run {run_id} exited after cancel; keeping 'cancelled'");
         return;
@@ -530,7 +559,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
             .bind(final_state)
             .bind(end)
             .bind(run_id)
-            .execute(db::pool())
+            .execute(pool)
             .await
     {
         error!("Failed to update final status for run {run_id}: {e}");
@@ -563,7 +592,7 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     // Scope the terminal event to the run owner (issue #82 P0-5).
     let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
         .bind(run_id)
-        .fetch_optional(db::pool())
+        .fetch_optional(pool)
         .await
         .unwrap_or(None);
     broadcast_event_for(
@@ -622,11 +651,17 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
 /// `⊝ <rule>` (skipped).
 fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
     tokio::spawn(async move {
+        // Without the pool this loop could never observe a terminal state and
+        // would spin forever — exit instead of panicking (PostgreSQL builds).
+        let Some(pool) = db::try_pool() else {
+            warn!("SQLite pool unavailable — log tailer disabled for run {run_id}");
+            return;
+        };
         let log_path = workdir.join("execution.log");
         let mut offset: u64 = 0;
         let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
             .bind(&run_id)
-            .fetch_optional(db::pool())
+            .fetch_optional(pool)
             .await
             .unwrap_or(None);
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(1500));
@@ -635,7 +670,7 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
             ticker.tick().await;
             let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
                 .bind(&run_id)
-                .fetch_optional(db::pool())
+                .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
             match active.as_deref() {
@@ -699,6 +734,12 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
 /// run reaches a terminal DB state.
 fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
     tokio::spawn(async move {
+        // Terminal-state detection below needs the pool; without it the
+        // sampler would never stop — exit instead of panicking.
+        let Some(pool) = db::try_pool() else {
+            warn!("SQLite pool unavailable — resource sampler disabled for run {run_id}");
+            return;
+        };
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.tick().await; // fire immediately, then every 5s
         // The sampler is the only writer of metrics.jsonl, so counting the
@@ -712,7 +753,7 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
             ticker.tick().await;
             let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
                 .bind(&run_id)
-                .fetch_optional(db::pool())
+                .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
             match active.as_deref() {
@@ -790,13 +831,23 @@ async fn append_metrics(workdir: &std::path::Path, line: &str, existing_lines: u
 
 /// Mark a run as failed with the current timestamp.
 async fn mark_run_failed(run_id: &str) {
+    // Quota release must happen even without the SQLite pool (PostgreSQL
+    // deployments) — it is in-memory state and leaking it pins resources.
+    let Some(pool) = db::try_pool() else {
+        error!("SQLite pool unavailable (PostgreSQL backend?) — cannot mark run {run_id} failed");
+        if let Some((user_id, threads, memory_mb)) = crate::infra::quota::release(run_id) {
+            crate::infra::quota::global_quota_tracker()
+                .record_complete(&user_id, threads, memory_mb);
+        }
+        return;
+    };
     let end = Utc::now();
     if let Err(e) = sqlx::query(
         "UPDATE runs SET status = 'failed', phase = 'failed', finished_at = ? WHERE id = ?",
     )
     .bind(end)
     .bind(run_id)
-    .execute(db::pool())
+    .execute(pool)
     .await
     {
         error!("Failed to mark run {run_id} as failed: {e}");
@@ -805,7 +856,7 @@ async fn mark_run_failed(run_id: &str) {
     // Broadcast run failure event, scoped to the run owner (issue #82 P0-5).
     let user_id: Option<String> = sqlx::query_scalar("SELECT user_id FROM runs WHERE id = ?")
         .bind(run_id)
-        .fetch_optional(db::pool())
+        .fetch_optional(pool)
         .await
         .unwrap_or(None);
     broadcast_event_for(
