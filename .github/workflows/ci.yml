@@ -1009,6 +1009,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # Dependency-vulnerability gate (issue #209): the local npm mirror
+      # does not implement the audit endpoint, so this must query the
+      # canonical registry explicitly. Prod deps gate hard; dev deps are
+      # reported until a baseline is established.
+      - name: Audit npm dependencies
+        working-directory: frontend
+        run: |
+          npm audit --omit=dev --registry=https://registry.npmjs.org
+          npm audit --registry=https://registry.npmjs.org || \
+            echo "::warning::dev-dependency advisories present — triage before merging"
+
       - name: Lint the SPA
         working-directory: frontend
         run: npm run lint
