@@ -280,12 +280,49 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 }
             }
 
+            // Targeted cluster runs close over the INSTANTIATED DAG
+            // (issue #247): when-gated instances never enter the set.
+            let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                let wildcard_values: std::collections::HashMap<String, String> = config
+                    .config
+                    .iter()
+                    .map(|(key, value)| {
+                        let string_val = match value {
+                            toml::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        (format!("config.{key}"), string_val)
+                    })
+                    .collect();
+                config
+                    .rules
+                    .iter()
+                    .filter(|rule| {
+                        crate::commands::run_preview::when_condition_false(
+                            rule,
+                            &config,
+                            &wildcard_values,
+                        )
+                    })
+                    .map(|rule| rule.name.clone())
+                    .collect()
+            };
             let order = if target.is_empty() {
                 dag.execution_order()?
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                dag.execution_order_for_targets(&target_refs)
-                    .with_context(|| "failed to resolve target rules")?
+                let (filtered, skipped_targets) = dag
+                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .with_context(|| "failed to resolve target rules")?;
+                for skipped in &skipped_targets {
+                    eprintln!(
+                        "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
+                        "Note:".yellow()
+                    );
+                }
+                filtered
             };
 
             let cluster_config = oxo_flow_core::cluster::ClusterJobConfig {
