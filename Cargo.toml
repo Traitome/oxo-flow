@@ -19,7 +19,7 @@ authors = ["Traitome <https://github.com/Traitome>"]
 license = "Apache-2.0"
 repository = "https://github.com/Traitome/oxo-flow"
 homepage = "https://github.com/Traitome/oxo-flow"
-rust-version = "1.97.1"
+rust-version = "1.98.0"
 
 [workspace.dependencies]
 async-trait = "0.1"
