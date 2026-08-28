@@ -1405,6 +1405,23 @@ mod tests {
             ..Default::default()
         };
         std::fs::write(dir.path().join("out.txt"), "out").unwrap();
+        // Pin explicit filetimes: a fresh tempdir can host both writes inside
+        // one filesystem timestamp tick, and equal mtimes read as "not
+        // fresher than input" — an mtime-comparison flake, not a gate bug
+        // (issue #249 family). in.txt strictly older than out.txt.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        filetime::set_file_mtime(
+            dir.path().join("in.txt"),
+            filetime::FileTime::from_unix_time(now.as_secs() as i64 - 60, 0),
+        )
+        .unwrap();
+        filetime::set_file_mtime(
+            dir.path().join("out.txt"),
+            filetime::FileTime::from_unix_time(now.as_secs() as i64, 0),
+        )
+        .unwrap();
         assert!(
             should_skip_rule(&regular, dir.path(), &HashMap::new()),
             "a regular file output with fresh mtime must still skip"

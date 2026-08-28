@@ -649,6 +649,51 @@ fn evaluate_condition_complex_expression() {
 }
 
 #[test]
+fn evaluate_condition_len_empty_array_issue_252() {
+    // Issue #252: `config.<key>` truthiness is `Some(_) => true` for arrays,
+    // so an empty array could not gate "list is non-empty". `len()` is the
+    // additive escape hatch — empty-array truthiness stays untouched.
+    let mut config = HashMap::new();
+    config.insert(
+        "gene_sets".to_string(),
+        toml::Value::Array(vec![toml::Value::String("hallmark".into())]),
+    );
+    config.insert("empty_sets".to_string(), toml::Value::Array(vec![]));
+    config.insert("samples".to_string(), toml::Value::String("abc".into()));
+
+    // The reported gap: an empty array is truthy, so this never gated.
+    assert!(
+        evaluate_condition("config.empty_sets", &config),
+        "array truthiness unchanged (Some(_) => true)"
+    );
+    // len() separates empty from non-empty.
+    assert!(!evaluate_condition("len(config.empty_sets) > 0", &config));
+    assert!(evaluate_condition("len(config.gene_sets) > 0", &config));
+    assert!(evaluate_condition("len(config.gene_sets) >= 1", &config));
+    assert!(evaluate_condition("len(config.gene_sets) == 1", &config));
+    assert!(!evaluate_condition("len(config.gene_sets) == 2", &config));
+    assert!(evaluate_condition("len(config.gene_sets) != 0", &config));
+    // Bare len(): non-empty value.
+    assert!(evaluate_condition("len(config.gene_sets)", &config));
+    assert!(!evaluate_condition("len(config.empty_sets)", &config));
+    // Strings count chars.
+    assert!(evaluate_condition("len(config.samples) == 3", &config));
+    // Absent key: 0 elements — len(...) == 0 is true, len(...) > 0 false.
+    assert!(evaluate_condition("len(config.missing) == 0", &config));
+    assert!(!evaluate_condition("len(config.missing) > 0", &config));
+    // Non-length types (bool/number): no length — every comparison false,
+    // bare len() false.
+    config.insert("flag".to_string(), toml::Value::Boolean(true));
+    assert!(!evaluate_condition("len(config.flag) > 0", &config));
+    // Composes with the rest of the vocabulary.
+    config.insert("run_qc".to_string(), toml::Value::Boolean(true));
+    assert!(evaluate_condition(
+        "len(config.gene_sets) > 0 && config.run_qc != false",
+        &config
+    ));
+}
+
+#[test]
 fn evaluate_condition_with_config_prefix() {
     let mut config = HashMap::new();
     config.insert("mode".to_string(), toml::Value::String("dna".to_string()));

@@ -190,6 +190,35 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
                 });
             }
         }
+        // `len(config.<key>)` (issue #252): a length comparison against a
+        // non-numeric literal is a silent always-false — flag it.
+        let len_ref_re = regex::Regex::new(
+            r#"len\(\s*config\.(\w+)\s*\)\s*(==|!=|>=|<=|>|<)\s*(?:'([^']*)'|"([^"]*)"|([^&|)]+))"#,
+        )
+        .expect("valid regex");
+        for cap in len_ref_re.captures_iter(when) {
+            let rhs = cap
+                .get(3)
+                .or_else(|| cap.get(4))
+                .or_else(|| cap.get(5))
+                .map(|m| m.as_str().trim())
+                .unwrap_or("");
+            if rhs.parse::<i64>().is_err() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "len(config.{}) comparison against '{}' is not numeric - len() compares element counts and always evaluates false here",
+                        &cap[1],
+                        rhs
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W029".to_string(),
+                    suggestion: Some(
+                        "compare against a whole number, e.g. len(config.key) > 0".to_string(),
+                    ),
+                });
+            }
+        }
     }
     diagnostics
 }
@@ -2287,6 +2316,46 @@ mod tests {
         assert!(w027[0].message.contains("input_type"));
         assert_eq!(w027[0].severity, Severity::Warning);
         assert_eq!(w027[0].rule.as_deref(), Some("download_sra"));
+    }
+
+    #[test]
+    fn lint_len_non_numeric_comparison_fires_w029() {
+        // Issue #252: `len()` compares element counts; comparing against a
+        // non-numeric literal is a silent always-false — warn.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            gene_sets = ["hallmark"]
+
+            [[rules]]
+            name = "enrich"
+            input = ["sets.txt"]
+            output = ["out.txt"]
+            when = "len(config.gene_sets) > 'few'"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        let w029: Vec<&Diagnostic> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "W029")
+            .collect();
+        assert_eq!(w029.len(), 1, "one W029, got: {:?}", result.diagnostics);
+        assert!(w029[0].message.contains("gene_sets"));
+        assert_eq!(w029[0].severity, Severity::Warning);
+
+        // Numeric comparisons never flag.
+        let ok_toml = toml.replace("len(config.gene_sets) > 'few'", "len(config.gene_sets) > 0");
+        let ok = WorkflowConfig::parse(&ok_toml).unwrap();
+        assert!(
+            validate_format(&ok)
+                .diagnostics
+                .iter()
+                .all(|d| d.code != "W029")
+        );
     }
 
     #[test]

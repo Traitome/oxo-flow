@@ -2978,6 +2978,55 @@ fn evaluate_condition_inner(
     if let Some(rest) = s.strip_prefix('!') {
         return !evaluate_condition_inner(rest.trim(), config_values, wildcard_values);
     }
+    // `len(...)` — cardinality of a config value (issue #252): array length,
+    // string char count, table key count. An absent key has length 0 (nothing
+    // in it), so `len(config.x) > 0` separates "declared non-empty" from
+    // "absent or empty" without changing the bare truthiness of arrays
+    // (`Some(_) => true` — `when = "config.gene_sets"` stays true for `[]`).
+    if let Some(rest) = s.strip_prefix("len(")
+        && let Some(close) = find_matching_paren(rest)
+    {
+        let inner = rest[..close].trim();
+        let after = rest[close + 1..].trim();
+        let n = if let Some(key) = inner.strip_prefix("config.") {
+            // Absent key: 0 elements (nothing in it) — `len(config.x) == 0`
+            // is true both for an empty array and an undefined key. Defined
+            // non-length types (bool/number) stay None: they have no length.
+            match config_values.get(key.trim()) {
+                Some(v) => len_of_value(Some(v)),
+                None => Some(0),
+            }
+        } else if let Some(key) = inner.strip_prefix("wildcard.") {
+            wildcard_values
+                .get(key.trim())
+                .map(|v| v.chars().count() as i64)
+        } else {
+            // `len()` of an unnamespaced term — outside the condition
+            // vocabulary; evaluate false rather than falling through to a
+            // string comparison that would silently misread the intent.
+            None
+        };
+        if after.is_empty() {
+            // Bare `len(config.x)` — true when the value exists and is
+            // non-empty.
+            return n.is_some_and(|n| n > 0);
+        }
+        for op in &["==", "!=", ">=", "<=", ">", "<"] {
+            if let Some(rhs) = after.strip_prefix(op) {
+                let rhs_num = rhs.trim().parse::<i64>().unwrap_or(i64::MIN);
+                return match *op {
+                    "==" => n == Some(rhs_num),
+                    "!=" => n != Some(rhs_num),
+                    ">=" => n.is_some_and(|n| n >= rhs_num),
+                    "<=" => n.is_some_and(|n| n <= rhs_num),
+                    ">" => n.is_some_and(|n| n > rhs_num),
+                    "<" => n.is_some_and(|n| n < rhs_num),
+                    _ => false,
+                };
+            }
+        }
+        return false;
+    }
     if let Some(inner) = s
         .strip_prefix("file_exists(")
         .and_then(|s| s.strip_suffix(')'))
@@ -3029,6 +3078,48 @@ fn evaluate_condition_inner(
         };
     }
     true
+}
+
+/// Element count of a config/wildcard value for `len(...)` (issue #252).
+/// Arrays count items, strings count chars, tables count keys, booleans and
+/// numbers have no length (None → the comparison evaluates false; an absent
+/// key is 0 elements so `len(config.missing) == 0` is true).
+fn len_of_value(val: Option<&toml::Value>) -> Option<i64> {
+    match val {
+        Some(toml::Value::Array(items)) => Some(items.len() as i64),
+        Some(toml::Value::String(s)) => Some(s.chars().count() as i64),
+        Some(toml::Value::Table(t)) => Some(t.len() as i64),
+        _ => None,
+    }
+}
+
+/// Byte index of the `)` that balances the `(` implied by the caller's
+/// `strip_prefix("len(")` — i.e., relative to the string starting just
+/// after that `(`. Respects nesting and quoted strings.
+fn find_matching_paren(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 1i32;
+    let mut in_double = false;
+    let mut in_single = false;
+    let n = bytes.len();
+    let mut i = 0usize;
+    while i < n {
+        let b = bytes[i];
+        match b {
+            b'"' if !in_single => in_double = !in_double,
+            b'\'' if !in_double => in_single = !in_single,
+            b'(' if !in_double && !in_single => depth += 1,
+            b')' if !in_double && !in_single => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 fn find_top_level_op(s: &str, op: &str) -> Option<usize> {
