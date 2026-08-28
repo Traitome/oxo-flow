@@ -273,6 +273,7 @@ const ENVIRONMENT_KEYS: &[&str] = &[
     "conda",
     "conda_prefix",
     "docker",
+    "gpus",
     "mamba",
     "mamba_prefix",
     "modules",

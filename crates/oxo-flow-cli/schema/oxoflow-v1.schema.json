@@ -919,6 +919,18 @@
         },
         "venv_requirements": {
           "type": "string"
+        },
+        "gpus": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
         }
       }
     },
