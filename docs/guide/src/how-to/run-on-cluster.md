@@ -282,6 +282,12 @@ On clusters, the scheduler enforces resources based on the generated directives.
 !!! tip "Use `--keep-going` for large batches"
     When running hundreds of samples, use `oxo-flow run -k` so that a single failure does not abort the entire run.
 
+!!! note "Aborted in-flight siblings are incomplete, not failed"
+    When a run aborts, rules still in flight are killed and recorded as
+    **incomplete** (neither completed nor failed) — `resume` re-runs them
+    from their checkpoint, so no output is silently trusted from a killed
+    job.
+
 !!! tip "Check resource availability"
     Use `sinfo` (SLURM), `pbsnodes` (PBS), or `qhost` (SGE) to verify available resources before submitting.
 
