@@ -9499,3 +9499,74 @@ shell = "cat {input} > {output}"
         "must report the skipped target, got: {stderr}"
     );
 }
+
+// ─── Workflow webhook notifications (issue #227 item 1) ─────────────────────
+
+/// A `[webhook]` endpoint receives workflow events — and an unreachable
+/// endpoint must never fail the run (best-effort by design).
+#[test]
+fn cli_webhook_is_best_effort_on_run_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("hook.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "hook"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:9/no-such-endpoint"
+timeout_secs = 1
+max_retries = 0
+
+[[rules]]
+name = "gen"
+output = ["out.txt"]
+shell = "echo hi > {output}"
+"#,
+    )
+    .unwrap();
+
+    // Success path: the run completes even though every webhook call dies.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "an unreachable webhook must never fail the run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.path().join("out.txt").exists());
+
+    // Failure path: same contract.
+    let wf2 = dir.path().join("fail.oxoflow");
+    fs::write(
+        &wf2,
+        r#"[workflow]
+name = "hook2"
+version = "1.0.0"
+
+[webhook]
+url = "http://127.0.0.1:9/no-such-endpoint"
+timeout_secs = 1
+max_retries = 0
+
+[[rules]]
+name = "boom"
+output = ["never.txt"]
+shell = "exit 3"
+"#,
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the failing rule must still fail the run"
+    );
+}

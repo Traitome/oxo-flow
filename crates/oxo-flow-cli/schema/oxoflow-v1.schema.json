@@ -878,6 +878,51 @@
           "null"
         ],
         "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "webhook": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      }
+    },
+    "webhook": {
+      "type": "object",
+      "description": "Workflow-level webhook notifications (issue #227)",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "signature_scheme": {
+          "type": "string"
+        },
+        "timeout_secs": {
+          "type": "integer"
+        },
+        "max_retries": {
+          "type": "integer"
+        }
       }
     }
   },

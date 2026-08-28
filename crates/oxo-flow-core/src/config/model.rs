@@ -1676,6 +1676,14 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub citation: Option<CitationInfo>,
 
+    /// Workflow-level webhook notifications (issue #227 item 1): the run
+    /// path posts `workflow_started` / `workflow_completed` /
+    /// `workflow_failed` events to the configured endpoint. Best-effort —
+    /// a failing endpoint never fails the run.
+    #[serde(default, rename = "webhook")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<crate::webhook::WebhookConfig>,
+
     /// Cluster execution profile.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

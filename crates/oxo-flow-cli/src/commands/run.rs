@@ -1022,6 +1022,12 @@ pub async fn run_command(
         workflow_name: config.workflow.name.clone(),
         total_rules: order.len(),
     });
+    notify_webhook(
+        &config,
+        oxo_flow_core::webhook::WebhookEvent::WorkflowStarted,
+        None,
+    )
+    .await;
     eprintln!(
         "{} {} rules in execution order",
         "DAG:".bold().green(),
@@ -1464,6 +1470,16 @@ pub async fn run_command(
             // report time, not the live checkpoint — empty here.
             vec![],
         );
+        notify_webhook(
+            &config,
+            if summary.is_success() {
+                oxo_flow_core::webhook::WebhookEvent::WorkflowCompleted
+            } else {
+                oxo_flow_core::webhook::WebhookEvent::WorkflowFailed
+            },
+            Some((summary.succeeded, summary.failed, summary.skipped)),
+        )
+        .await;
         if !summary.is_success() {
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
@@ -3079,6 +3095,16 @@ pub async fn run_command(
                 skipped_count.load(std::sync::atomic::Ordering::Relaxed),
             )
             .await;
+            notify_webhook(
+                &config,
+                oxo_flow_core::webhook::WebhookEvent::WorkflowFailed,
+                Some((
+                    success_count.load(std::sync::atomic::Ordering::Relaxed),
+                    fail_count.load(std::sync::atomic::Ordering::Relaxed),
+                    skipped_count.load(std::sync::atomic::Ordering::Relaxed),
+                )),
+            )
+            .await;
             return Err(anyhow::anyhow!("workflow execution failed"));
         }
 
@@ -3250,13 +3276,24 @@ pub async fn run_command(
     }
 
     // Workflow-level terminal hooks (issue #227 item 1): on_complete /
-    // on_error fire on every terminal path of the run loop.
+    // on_error fire on every terminal path of the run loop, and the
+    // configured `[webhook]` endpoint receives the matching event.
     run_terminal_hook(
         &config,
         &workdir_actual,
         success_count,
         fail_count,
         skipped_count,
+    )
+    .await;
+    notify_webhook(
+        &config,
+        if fail_count > 0 {
+            oxo_flow_core::webhook::WebhookEvent::WorkflowFailed
+        } else {
+            oxo_flow_core::webhook::WebhookEvent::WorkflowCompleted
+        },
+        Some((success_count, fail_count, skipped_count)),
     )
     .await;
 
@@ -3566,6 +3603,47 @@ async fn run_terminal_hook(
         config.defaults.shell_prelude.as_deref(),
     )
     .await;
+}
+
+/// Workflow-level webhook notification (issue #227 item 1): posts the
+/// `workflow_started` / `workflow_completed` / `workflow_failed` event to
+/// the `[webhook]` endpoint. Best-effort by design — a failing endpoint
+/// logs a warning and never changes the run status. Awaited (not spawned)
+/// so the process cannot exit before the request lands; the client's own
+/// timeout bounds the wait.
+async fn notify_webhook(
+    config: &WorkflowConfig,
+    event: oxo_flow_core::webhook::WebhookEvent,
+    counts: Option<(usize, usize, usize)>,
+) {
+    let Some(ref webhook) = config.webhook else {
+        return;
+    };
+    let (succeeded, failed, skipped) = counts.unwrap_or_default();
+    let payload = oxo_flow_core::webhook::WebhookPayload {
+        event,
+        workflow_name: config.workflow.name.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        data: oxo_flow_core::webhook::WebhookData {
+            total_rules: None,
+            succeeded: Some(succeeded),
+            failed: Some(failed),
+            skipped: Some(skipped),
+            duration_ms: None,
+            rule: None,
+            exit_code: None,
+            error: if failed > 0 {
+                Some(format!("{failed} rule(s) failed"))
+            } else {
+                None
+            },
+        },
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let client = oxo_flow_core::webhook::WebhookClient::new(webhook.clone());
+    if let Err(e) = client.send(&payload).await {
+        tracing::warn!(error = %e, event = %event, "webhook notification failed (run continues)");
+    }
 }
 
 /// Terminal run counters shared by the `--json` summary and the workflow

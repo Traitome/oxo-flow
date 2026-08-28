@@ -40,6 +40,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "rules",
     "sample_groups",
     "values",
+    "webhook",
     "wildcard_constraints",
     "workflow",
 ];
@@ -129,6 +130,19 @@ const EXECUTION_GROUP_KEYS: &[&str] = &["mode", "name", "rules"];
 
 /// Keys of the `[citation]` table.
 const CITATION_KEYS: &[&str] = &["authors", "doi", "title", "url"];
+
+/// Keys of the `[webhook]` table (issue #227 item 1) — mirrors
+/// `crate::webhook::WebhookConfig`.
+const WEBHOOK_KEYS: &[&str] = &[
+    "events",
+    "headers",
+    "max_retries",
+    "method",
+    "secret",
+    "signature_scheme",
+    "timeout_secs",
+    "url",
+];
 
 /// Keys of the `[cluster]` table.
 const CLUSTER_KEYS: &[&str] = &[
@@ -398,6 +412,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "scatter" => Some(SCATTER_KEYS),
         "split" => Some(SPLIT_KEYS),
         "transform" => Some(TRANSFORM_KEYS),
+        "webhook" => Some(WEBHOOK_KEYS),
         "workflow" => Some(WORKFLOW_KEYS),
         _ => None,
     }

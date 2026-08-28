@@ -1576,6 +1576,51 @@ fn workflow_meta_hooks_parse() {
 }
 
 #[test]
+fn webhook_section_parses_and_defaults() {
+    // Issue #227 item 1: the `[webhook]` section reaches WorkflowConfig —
+    // the previously dead surface. Partial sections take the serde
+    // defaults (POST, [workflow_completed], 30s timeout, 3 retries).
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [webhook]
+        url = "https://hooks.example.com/oxo"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+    "#;
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let webhook = config.webhook.as_ref().expect("[webhook] parses");
+    assert_eq!(webhook.url, "https://hooks.example.com/oxo");
+    assert_eq!(
+        webhook.events,
+        vec![crate::webhook::WebhookEvent::WorkflowCompleted]
+    );
+    assert_eq!(webhook.max_retries, 3);
+    assert_eq!(webhook.timeout_secs, 30);
+
+    // Event selection parses.
+    let full = toml.replace(
+        "url = \"https://hooks.example.com/oxo\"",
+        "url = \"https://hooks.example.com/oxo\"\n        events = [\"workflow_started\", \"workflow_completed\", \"workflow_failed\"]\n        secret = \"hunter2\"",
+    );
+    let config = WorkflowConfig::parse(&full).unwrap();
+    let webhook = config.webhook.as_ref().unwrap();
+    assert_eq!(webhook.events.len(), 3);
+    assert_eq!(webhook.secret.as_deref(), Some("hunter2"));
+
+    // A workflow without [webhook] stays None.
+    let plain = WorkflowConfig::parse(
+        "[workflow]\nname = \"t\"\n\n[[rules]]\nname = \"s\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    assert!(plain.webhook.is_none());
+}
+
+#[test]
 fn override_samples_replaces_inline_samples() {
     // `--samples` explicit names replace inline [[sample_groups]] fixture
     // names instead of filtering them — the fix for "inline samples can't
