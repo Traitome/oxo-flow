@@ -5516,6 +5516,13 @@ converts it to a SIF in the workdir on first use, reusing the SIF when it
 exists — or a <strong>local SIF path</strong> (e.g. a site image store's
 <code>/data/images/bwa_0.7.17.sif</code>), which is used as-is with no pull step. A
 local path that does not exist fails the rule with a clear diagnostic.</p>
+<p><strong>GPU passthrough (<code>gpus</code>):</strong> <code>environment = { docker = "nvcr.io/nvidia/clara-parabricks:4.4.0-1", gpus = "all" }</code>
+passes the host's GPU devices to the container via docker's
+<code>--gpus &lt;value&gt;</code> (also <code>"0"</code> or <code>"device=0,1"</code>). Requires
+nvidia-container-toolkit on the host. Declaring <code>gpus</code> without a docker
+image is a validation error — the flag would otherwise be silently
+ignored on system/conda backends. (Singularity <code>--nv</code> passthrough is not
+implemented yet; <code>gpus</code> with a <code>singularity</code> image is rejected for now.)</p>
 <h1 id="mamba-micromamba-auto-detects-binary-same-yaml-format-as-conda"># Mamba / micromamba (auto-detects binary, same YAML format as conda)<a class="headerlink" href="#mamba-micromamba-auto-detects-binary-same-yaml-format-as-conda" title="Permanent link">#</a></h1>
 <h1 id="environment" mamba="mamba">environment =<a class="headerlink" href="#environment" title="Permanent link">#</a></h1>
 <h1 id="venv-with-custom-requirements-file"># venv with custom requirements file<a class="headerlink" href="#venv-with-custom-requirements-file" title="Permanent link">#</a></h1>
