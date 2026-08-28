@@ -1045,7 +1045,14 @@ shell = "cat {input} > {output}"
 ```
 
 - `pattern` — path glob with `{wildcard}` placeholders, relative to the
-  workflow file's directory (the same root `sample_pattern` scans).
+  workflow file's directory (the same root `sample_pattern` scans). A
+  bare `*` outside `{wildcard}` spans is a **segment-local glob**
+  (issue #246): `raw/{sample}_*_R1.fastq.gz` groups every lane file of a
+  sample without enumerating lane names — the CAT_FASTQ shape, where the
+  per-sample file count is not known ahead of time and no `[[values]]`
+  table can list it. `**` (cross-segment recursion) is rejected. Note a
+  `{wildcard}` span may span a separator by design (`\S+`); the segment
+  locality applies to bare `*` only.
 - `group_by` — the wildcard that names each group. One instance is
   created per discovered group value. May also be a metadata column,
   `group_by = "meta.<column>"` — see below.
@@ -1072,7 +1079,8 @@ shell = "cat {input} > {output}"
   skipped for that key with a warning (no instance = nothing to run).
 
 v1 constraints: at most **one** `input_groups` entry per rule;
-`**` recursion is not supported in `pattern` (single-level paths);
+`**` recursion is not supported in `pattern` (bare `*` globs within one
+segment are supported);
 producers must be declared **before** their `input_groups` consumer;
 the `keep` wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via

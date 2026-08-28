@@ -9352,3 +9352,61 @@ shell = "echo {config.threshold} > {output}"
         "matching override must not warn, got:\n{stderr}"
     );
 }
+
+/// input_groups glob semantics (issue #246): a bare `*` in the pattern is
+/// a segment-local glob — `raw/{sample}_*_R1.txt` groups EVERY lane file
+/// of a sample without enumerating lane names (the CAT_FASTQ shape). The
+/// producer simulates runtime-discovered lanes (not in any [[values]]).
+#[test]
+fn cli_input_groups_glob_star_groups_per_sample_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("catfastq.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "catfastq"
+version = "1.0.0"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "lanemerge"
+input_groups = [
+    { pattern = "raw/{sample}_*_R1.txt", group_by = "sample" }
+]
+output = ["merged/{sample}_R1.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+
+    // Pre-existing per-sample lane files with UNEVEN lane counts and lane
+    // names no [[values]] table declares — only the glob can express
+    // "every file of this sample".
+    for (sample, lanes) in [("S1", vec!["L001", "L002", "L003"]), ("S2", vec!["L001"])] {
+        for lane in lanes {
+            let p = dir.path().join(format!("raw/{sample}_{lane}_R1.txt"));
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, format!("{sample}-{lane}\n")).unwrap();
+        }
+    }
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // S1 merged all three lanes (sorted), S2 its single lane.
+    let s1 = fs::read_to_string(dir.path().join("merged/S1_R1.txt")).unwrap();
+    assert_eq!(s1, "S1-L001\nS1-L002\nS1-L003\n");
+    let s2 = fs::read_to_string(dir.path().join("merged/S2_R1.txt")).unwrap();
+    assert_eq!(s2, "S2-L001\n");
+}
