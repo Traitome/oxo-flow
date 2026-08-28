@@ -7,7 +7,42 @@
 
 use anyhow::Result;
 use colored::Colorize;
+use oxo_flow_ai::error::AiError;
 use oxo_flow_ai::provider;
+
+/// Carry an already-configured endpoint over a setup run that supplies none.
+///
+/// The wizard never asks for an endpoint, so a re-run used to persist
+/// `api_url = ""` and silently drop a custom one. The saved URL is kept —
+/// but only while the provider kind is unchanged, since an endpoint belongs
+/// to the provider it was configured for.
+fn keep_saved_api_url(
+    kind: &str,
+    new_url: Option<&str>,
+    saved_kind: Option<&str>,
+    saved_url: Option<&str>,
+) -> Option<String> {
+    match new_url {
+        Some(url) => Some(url.to_string()),
+        None => saved_kind
+            .filter(|saved| saved.eq_ignore_ascii_case(kind))
+            .and_then(|_| saved_url)
+            .filter(|url| !url.is_empty())
+            .map(String::from),
+    }
+}
+
+/// The quick-status exit contract: the connectivity probe is a real network
+/// call, and a FAIL must surface as a non-zero exit so scripts can rely on
+/// `oxo-flow ai` — the same contract `ai test` follows.
+fn connectivity_outcome(probe: &Result<String, AiError>) -> Result<()> {
+    match probe {
+        Ok(_) => Ok(()),
+        Err(e) => anyhow::bail!(
+            "Connectivity check failed: {e} — run 'oxo-flow ai test' for the full self-test"
+        ),
+    }
+}
 
 /// Quick AI status + connectivity test.
 pub async fn ai_status_command() -> Result<()> {
@@ -101,7 +136,8 @@ pub async fn ai_status_command() -> Result<()> {
     // Connectivity
     println!();
     print!("  Connectivity ... ");
-    match provider.chat("You are helpful.", "Say OK").await {
+    let connectivity = provider.chat("You are helpful.", "Say OK").await;
+    match &connectivity {
         Ok(_) => println!("{}", "OK".green()),
         Err(e) => println!("{} ({})", "FAIL".red(), e),
     }
@@ -122,7 +158,7 @@ pub async fn ai_status_command() -> Result<()> {
         "oxo-flow ai test".bold()
     );
 
-    Ok(())
+    connectivity_outcome(&connectivity)
 }
 
 /// Comprehensive self-test: connectivity + generation + analysis.
@@ -290,10 +326,18 @@ pub async fn ai_setup_command() -> Result<()> {
     let model = model.trim().to_string();
     let model = if model.is_empty() { None } else { Some(model) };
 
-    // Save config
+    // Save config. The wizard never asks for an endpoint, so keep the one
+    // already persisted (for this provider) instead of wiping it.
     let key_ref: Option<&str> = api_key.as_deref();
     let model_ref: Option<&str> = model.as_deref();
-    oxo_flow_ai::provider::save_ai_config(provider_name, key_ref, None, model_ref);
+    let saved = provider::load_ai_config();
+    let api_url = keep_saved_api_url(
+        provider_name,
+        None,
+        saved.as_ref().map(|(k, ..)| k.as_str()),
+        saved.as_ref().map(|(_, _, url, _)| url.as_str()),
+    );
+    oxo_flow_ai::provider::save_ai_config(provider_name, key_ref, api_url.as_deref(), model_ref);
 
     println!();
     println!(
@@ -323,4 +367,79 @@ pub async fn ai_setup_command() -> Result<()> {
     println!("  Run {} anytime to check status.", "oxo-flow ai".bold());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_without_url_keeps_saved_endpoint_for_same_provider() {
+        assert_eq!(
+            keep_saved_api_url(
+                "deepseek",
+                None,
+                Some("deepseek"),
+                Some("https://api.example.com/v1")
+            ),
+            Some("https://api.example.com/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_switching_provider_does_not_inherit_endpoint() {
+        assert_eq!(
+            keep_saved_api_url(
+                "ollama",
+                None,
+                Some("deepseek"),
+                Some("https://api.example.com/v1")
+            ),
+            None
+        );
+        // Case differences in the provider spelling are the same provider.
+        assert_eq!(
+            keep_saved_api_url(
+                "DeepSeek",
+                None,
+                Some("deepseek"),
+                Some("https://api.example.com/v1")
+            )
+            .as_deref(),
+            Some("https://api.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn setup_explicit_url_wins_and_empty_saved_url_is_ignored() {
+        assert_eq!(
+            keep_saved_api_url(
+                "deepseek",
+                Some("https://new.example.com/v1"),
+                Some("deepseek"),
+                Some("https://old.example.com/v1")
+            ),
+            Some("https://new.example.com/v1".to_string())
+        );
+        assert_eq!(
+            keep_saved_api_url("deepseek", None, Some("deepseek"), Some("")),
+            None
+        );
+        assert_eq!(keep_saved_api_url("deepseek", None, None, None), None);
+    }
+
+    #[test]
+    fn connectivity_outcome_propagates_probe_failure() {
+        assert!(connectivity_outcome(&Ok("OK".to_string())).is_ok());
+
+        let err = AiError::Auth {
+            provider: "openai".into(),
+            message: "HTTP 401: bad key".into(),
+        };
+        let outcome = connectivity_outcome(&Err(err)).unwrap_err().to_string();
+        assert!(
+            outcome.contains("Connectivity check failed"),
+            "unexpected message: {outcome}"
+        );
+    }
 }
