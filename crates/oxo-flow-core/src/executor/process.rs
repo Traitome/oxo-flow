@@ -1354,6 +1354,26 @@ impl LocalExecutor {
             }
         }
 
+        // Residual-wildcard gate (output patterns): a bare `{identifier}`
+        // token surviving instance expansion means that wildcard never got
+        // a value for this instance — executing would create literal-brace
+        // paths like `trim/S1_{lane}.trim.txt` and report success (live
+        // audit finding). Output patterns are engine-owned, so there is no
+        // legitimate literal-brace use; fail loudly before the shell runs.
+        for pattern in rule.output.to_vec() {
+            let expanded = super::checkpoint::expand_config_in_path(&pattern, wildcard_values);
+            if let Some(token) = residual_wildcard_token(&expanded) {
+                return Err(OxoFlowError::Execution {
+                    rule: rule.name.clone(),
+                    message: format!(
+                        "output pattern '{pattern}' contains unbound wildcard {{{token}}} for \
+                         this instance — declare a value source (sample_pattern, [[values]], \
+                         [[sample_groups]], input_groups) or remove it"
+                    ),
+                });
+            }
+        }
+
         // Validate output paths for traversal safety
         for output_pattern in rule.output.to_vec() {
             validate_path_safety(&self.config.workdir, &output_pattern)?;
@@ -2707,6 +2727,42 @@ fn render_shell_command_inner(
     expanded
 }
 
+/// Return the first `{bare_identifier}` token left in an expanded path
+/// pattern.
+///
+/// Only bare identifiers count: engine namespaces (`{config.x}`,
+/// `{input[0]}`, `{params.k}`, `{wildcard.k}`) contain dots or brackets,
+/// and shell brace literals (awk `'{print $1}'`) contain spaces or
+/// operators — none of those are wildcards.
+pub(crate) fn residual_wildcard_token(pattern: &str) -> Option<String> {
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        match pattern[i + 1..].find('}') {
+            Some(end) => {
+                let inner = &pattern[i + 1..i + 1 + end];
+                let first = inner.chars().next();
+                let is_bare = first
+                    .map(|c| c.is_ascii_alphabetic() || c == '_')
+                    .unwrap_or(false)
+                    && inner
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if is_bare {
+                    return Some(inner.to_string());
+                }
+                i += end + 2;
+            }
+            None => i += 1,
+        }
+    }
+    None
+}
+
 /// Expand every `{key}` placeholder in a path pattern with the instance's
 /// wildcard values, using shell-friendly rendering for array config values
 /// (same semantics as the trailing wildcard pass of `render_shell_command`).
@@ -3104,6 +3160,31 @@ pub fn hostname() -> String {
 mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
+
+    #[test]
+    fn residual_wildcard_token_flags_unbound_wildcards() {
+        assert_eq!(
+            residual_wildcard_token("trim/S1_{lane}.trim.txt"),
+            Some("lane".to_string())
+        );
+        assert_eq!(
+            residual_wildcard_token("{sample}_{lane}.txt"),
+            Some("sample".to_string()),
+            "first residual token wins"
+        );
+    }
+
+    #[test]
+    fn residual_wildcard_token_ignores_engine_namespaces_and_shell_braces() {
+        assert_eq!(residual_wildcard_token("out/{config.build}/a.txt"), None);
+        assert_eq!(residual_wildcard_token("out/in[0]_{params.k}.txt"), None);
+        assert_eq!(residual_wildcard_token("logs/{wildcard.lane}/x"), None);
+        assert_eq!(residual_wildcard_token("awk '{print $1}'"), None);
+        assert_eq!(residual_wildcard_token("awk '{a = $1}'"), None);
+        assert_eq!(residual_wildcard_token("plain/path.txt"), None);
+        assert_eq!(residual_wildcard_token("{1numeric}/x"), None);
+        assert_eq!(residual_wildcard_token("{}/x"), None);
+    }
 
     #[test]
     fn mask_sensitive_redacts_matching_values_only() {
