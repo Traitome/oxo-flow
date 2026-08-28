@@ -855,7 +855,6 @@ impl EnvironmentBackend for DockerBackend {
         workdir: &std::path::Path,
     ) -> Result<String> {
         self.wrap_command_with_gpus(command, spec, resources, workdir, None)
-
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
