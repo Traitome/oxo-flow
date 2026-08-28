@@ -10,7 +10,7 @@
 //! - `GET /api/files` — list the user's uploaded inputs.
 
 use axum::body::Body;
-use axum::extract::{Multipart, Path, Query};
+use axum::extract::{Multipart, Path};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -517,6 +517,7 @@ async fn zip_into_channel(
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct FileQuery {
     pub path: String,
     #[serde(default)]
@@ -527,6 +528,7 @@ pub struct FileQuery {
     get,
     path = "/api/runs/{id}/files",
     tag = "files",
+    params(FileQuery),
     responses(
         (status = 200, description = "Success", content_type = "application/octet-stream"),
         (status = 404, description = "Error", body = ApiError),
@@ -536,7 +538,7 @@ pub struct FileQuery {
 pub async fn get_run_file(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Query(q): Query<FileQuery>,
+    crate::extract::ApiQuery(q): crate::extract::ApiQuery<FileQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response {
     let user = resolve(authenticated.as_ref());

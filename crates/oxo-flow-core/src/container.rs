@@ -58,6 +58,15 @@ pub struct PackageConfig {
     /// Defaults to the current crate version.
     pub oxo_flow_version: String,
 
+    /// Workflow file the export should run (e.g. `main.oxoflow`).
+    ///
+    /// `export -f` knows the file it loaded; the compose file needs it,
+    /// because the image ENTRYPOINT already carries `run`. When unset the
+    /// compose file hands the choice to the engine's own discovery
+    /// (`main.oxoflow`, else the first `*.oxoflow`) instead of assuming a
+    /// name the exported directory may not have.
+    pub workflow_file: Option<String>,
+
     /// Override the oxo-flow binary download URL (for custom registries).
     pub oxo_flow_download_url: Option<String>,
 }
@@ -75,6 +84,7 @@ impl Default for PackageConfig {
             healthcheck: None,
             oxo_flow_version: env!("CARGO_PKG_VERSION").to_string(),
             oxo_flow_download_url: None,
+            workflow_file: None,
         }
     }
 }
@@ -96,7 +106,11 @@ pub fn generate_docker_run_command(
     if let Some(mem) = &resources.memory {
         cmd.push_str(&format!(" --memory={mem}"));
     }
-    cmd.push_str(&format!(" --cpus={}", resources.threads));
+    // Same sentinel as the run path: threads == 1 means "unset", and an
+    // unset rule must not be pinned to a single CPU inside the image.
+    if resources.threads > 1 {
+        cmd.push_str(&format!(" --cpus={}", resources.threads));
+    }
 
     // GPU support - use gpu_spec if available (more specific), fall back to gpu count
     if let Some(ref spec) = resources.gpu_spec {
@@ -492,13 +506,20 @@ fn write_system_deps(dockerfile: &mut String, config: &PackageConfig) {
 }
 
 /// Write rootless user directives to the Dockerfile.
+///
+/// The user is switched, but the working directory stays on the copied
+/// workflow tree: `WORKDIR /home/oxoflow` left both the image CMD and the
+/// compose command looking for a workflow in a directory that has none.
 fn write_rootless(dockerfile: &mut String) {
     dockerfile.push_str("# Run as non-root user\n");
     dockerfile.push_str(
         "RUN groupadd -r oxoflow && useradd -r -g oxoflow -d /home/oxoflow -s /bin/bash oxoflow\n",
     );
+    // The copied tree is root-owned; the run user has to be able to write
+    // results into it (compose mounts ./results:/workflow/results).
+    dockerfile.push_str("RUN chown -R oxoflow:oxoflow /workflow\n");
     dockerfile.push_str("USER oxoflow\n");
-    dockerfile.push_str("WORKDIR /home/oxoflow\n\n");
+    dockerfile.push_str("WORKDIR /workflow\n\n");
 }
 
 /// Write the HEALTHCHECK directive to the Dockerfile.
@@ -705,7 +726,16 @@ pub fn generate_compose_file(workflow: &WorkflowConfig, config: &PackageConfig) 
     }
     compose.push_str("      - ./results:/workflow/results\n");
 
-    compose.push_str("    command: [\"run\", \"workflow.oxoflow\"]\n");
+    // The image ENTRYPOINT already carries `run`, so `command` holds only
+    // the workflow path — `["run", "workflow.oxoflow"]` rendered
+    // `oxo-flow run run workflow.oxoflow` and no exported stack could boot.
+    // Without a recorded file name the engine's own discovery decides
+    // (`oxo-flow run` finds main.oxoflow, else the first *.oxoflow), which
+    // beats a hardcoded name the directory may not have.
+    match &config.workflow_file {
+        Some(file) => compose.push_str(&format!("    command: [\"{file}\"]\n")),
+        None => compose.push_str("    command: []\n"),
+    }
 
     Ok(compose)
 }
@@ -1109,7 +1139,71 @@ mod tests {
         assert!(compose.contains("oxo-flow:"));
         assert!(compose.contains("build: ."));
         assert!(compose.contains("./results:/workflow/results"));
-        assert!(compose.contains("command: [\"run\", \"workflow.oxoflow\"]"));
+        // The image ENTRYPOINT already carries `run`; a command that repeats
+        // it renders `oxo-flow run run …` and no exported stack boots.
+        assert!(
+            !compose.contains("\"run\""),
+            "compose command must not repeat the entrypoint: {compose}"
+        );
+        // No file recorded at export time → the engine's own discovery runs
+        // instead of a name the directory may not have.
+        assert!(compose.contains("command: []"), "{compose}");
+    }
+
+    #[test]
+    fn compose_command_targets_the_exported_workflow_file() {
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "compose-named"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let config = PackageConfig {
+            workflow_file: Some("rnaseq.oxoflow".to_string()),
+            ..Default::default()
+        };
+        let compose = generate_compose_file(&workflow, &config).unwrap();
+        assert!(
+            compose.contains("command: [\"rnaseq.oxoflow\"]"),
+            "{compose}"
+        );
+        assert!(
+            !compose.contains("workflow.oxoflow"),
+            "the hardcoded default name must be gone: {compose}"
+        );
+    }
+
+    #[test]
+    fn exported_image_and_compose_agree_on_where_the_workflow_lives() {
+        // The export is only runnable as a set: the image must end in the
+        // directory the workflow was copied into, and the compose command
+        // must be a workflow path for that entrypoint.
+        let workflow = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "compose-consistency"
+            version = "1.0.0"
+        "#,
+        )
+        .unwrap();
+
+        let dockerfile = generate_dockerfile(&workflow, &PackageConfig::default()).unwrap();
+        let compose = generate_compose_file(&workflow, &PackageConfig::default()).unwrap();
+        let last_workdir = dockerfile
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix("WORKDIR "));
+        assert_eq!(
+            last_workdir,
+            Some("/workflow"),
+            "the run must start where the workflow was copied:\
+             \n{dockerfile}"
+        );
+        assert!(dockerfile.contains("COPY . /workflow/"));
+        assert!(compose.contains("./results:/workflow/results"));
     }
 
     #[test]
@@ -1231,7 +1325,15 @@ mod tests {
         assert!(dockerfile.contains("groupadd -r oxoflow"));
         assert!(dockerfile.contains("useradd -r -g oxoflow -d /home/oxoflow -s /bin/bash oxoflow"));
         assert!(dockerfile.contains("USER oxoflow"));
-        assert!(dockerfile.contains("WORKDIR /home/oxoflow"));
+        // The user is switched, but the working directory stays on the
+        // copied workflow tree — /home/oxoflow holds no workflow file, so
+        // `oxo-flow run <file>` (and the compose command) could not find one.
+        let user_pos = dockerfile.find("USER oxoflow").unwrap();
+        assert!(
+            dockerfile[user_pos..].contains("WORKDIR /workflow"),
+            "the run must start in the workflow directory, as the run user:\n{dockerfile}"
+        );
+        assert!(!dockerfile[user_pos..].contains("WORKDIR /home/oxoflow"));
     }
 
     #[test]
@@ -1340,6 +1442,15 @@ mod tests {
             "docker run --rm --cpus=2 -v /work:/data -w /data img:1.0"
         );
         assert!(!cmd.contains("--memory"));
+    }
+
+    #[test]
+    fn generate_docker_run_command_treats_threads_one_as_unset() {
+        // Run-path parity: an unset thread count must not become a 1-CPU
+        // cgroup quota (and `--cpus=0` would not even be a valid flag).
+        let unset = crate::rule::Resources::default();
+        let cmd = generate_docker_run_command("img:1.0", &unset, "/work");
+        assert!(!cmd.contains("--cpus"), "{cmd}");
     }
 
     #[test]

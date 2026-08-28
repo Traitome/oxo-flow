@@ -154,6 +154,7 @@ memory = "16G"
 
 [rules.environment]
 singularity = "docker://broadinstitute/gatk:4.5.0.0"
+```
 
 !!! note "Why `input = []` + `expand_inputs` — not `{sample}` in `input`"
     `combine_gvcfs` must run **once**, with all per-sample GVCFs in its
@@ -170,6 +171,7 @@ singularity = "docker://broadinstitute/gatk:4.5.0.0"
     [Gathering Inputs with `expand_inputs`](../reference/wildcards.md#gathering-inputs-with-expand_inputs),
     and the [field reference](../reference/workflow-format.md#expand-inputs).
 
+```toml
 [[rules]]
 name = "genotype_gvcfs"
 input = ["variants/cohort.g.vcf.gz"]

@@ -228,6 +228,27 @@ pub fn compress_transcript(messages: &[Message]) -> Option<Vec<Message>> {
     Some(out)
 }
 
+/// Placeholder written over a leaked API key in provider error text.
+const MASKED_KEY: &str = "sk-***";
+
+/// Keys shorter than this are passed through unmasked: masking a 3-character
+/// string would corrupt unrelated error text without protecting anything.
+const MASK_MIN_KEY_LEN: usize = 8;
+
+/// Replace every occurrence of `secret` in `text` with [`MASKED_KEY`].
+///
+/// Provider error bodies reflect request material — openai-compatible
+/// endpoints have been observed echoing the bearer token back inside a 401
+/// body — and those messages reach the terminal and the session log. The
+/// masking is applied where the error text is built, so no caller can print
+/// an unmasked key by forgetting to scrub it.
+fn mask_secret(text: &str, secret: &str) -> String {
+    if secret.len() < MASK_MIN_KEY_LEN {
+        return text.to_string();
+    }
+    text.replace(secret, MASKED_KEY)
+}
+
 /// Classify a non-success HTTP status + error body into an [`AiError`].
 ///
 /// Body matching is keyword-based: context-window markers map to
@@ -351,18 +372,22 @@ impl ClaudeBackend {
             .await
             .map_err(|e| AiError::Provider {
                 provider: "claude".into(),
-                message: e.to_string(),
+                message: mask_secret(&e.to_string(), &self.api_key),
             })?;
 
         let status = resp.status();
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
             provider: "claude".into(),
-            message: format!("response parse failed: {e}"),
+            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
         })?;
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(classify_http_error("claude", status.as_u16(), err_msg));
+            return Err(classify_http_error(
+                "claude",
+                status.as_u16(),
+                &mask_secret(err_msg, &self.api_key),
+            ));
         }
 
         parse_claude_response(&json)
@@ -621,18 +646,22 @@ impl OpenAiBackend {
             .await
             .map_err(|e| AiError::Provider {
                 provider: self.label.clone(),
-                message: e.to_string(),
+                message: mask_secret(&e.to_string(), &self.api_key),
             })?;
 
         let status = resp.status();
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
             provider: self.label.clone(),
-            message: format!("response parse failed: {e}"),
+            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
         })?;
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(classify_http_error(&self.label, status.as_u16(), err_msg));
+            return Err(classify_http_error(
+                &self.label,
+                status.as_u16(),
+                &mask_secret(err_msg, &self.api_key),
+            ));
         }
 
         parse_openai_response(&json, &self.label)
@@ -941,7 +970,7 @@ impl OpenAiBackend {
             .await
             .map_err(|e| AiError::Provider {
                 provider: self.label.clone(),
-                message: e.to_string(),
+                message: mask_secret(&e.to_string(), &self.api_key),
             })?;
 
         let status = resp.status();
@@ -951,7 +980,11 @@ impl OpenAiBackend {
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(String::from))
                 .unwrap_or(text);
-            return Err(classify_http_error(&self.label, status.as_u16(), &err_msg));
+            return Err(classify_http_error(
+                &self.label,
+                status.as_u16(),
+                &mask_secret(&err_msg, &self.api_key),
+            ));
         }
 
         let stream = resp.bytes_stream();
@@ -1114,11 +1147,16 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
         && kind_str != "disabled"
         && let Ok(kind) = kind_str.parse::<ProviderKind>()
     {
-        let key = if api_key.is_empty() {
-            None
-        } else {
-            Some(api_key.to_string())
-        };
+        // A saved config with no key is an unfinished setup, not a working
+        // provider: treat it as unconfigured so status probes do not fire
+        // real (and guaranteed-failing) network calls on an empty key.
+        if api_key.is_empty() {
+            tracing::info!(
+                "AI provider {} saved without an API key — treated as unconfigured",
+                kind_str
+            );
+            return AiProvider::Noop;
+        }
         let url = if api_url.is_empty() {
             None
         } else {
@@ -1129,7 +1167,7 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
         } else {
             Some(model.to_string())
         };
-        let provider = create_provider(kind, key, url, mdl);
+        let provider = create_provider(kind, Some(api_key.to_string()), url, mdl);
         tracing::info!("AI provider from saved config: {}", provider.name());
         return provider;
     }
@@ -1203,7 +1241,11 @@ pub fn save_ai_config(
     }
 }
 
-fn load_ai_config() -> Option<(String, String, String, String)> {
+/// Read the persisted AI config: `(provider, api_key, api_url, model)`.
+/// Empty strings mean the field was absent. Canonical path first, with the
+/// pre-unification location still honored as a migration fallback (see
+/// [`ai_config_path`]).
+pub fn load_ai_config() -> Option<(String, String, String, String)> {
     // Canonical path first; a legacy-location config is honored only when
     // no canonical file exists (migration — see ai_config_path docs).
     let path = ai_config_path();
@@ -1279,6 +1321,57 @@ mod tests {
             "CLAUDE".parse::<ProviderKind>().unwrap(),
             ProviderKind::Claude
         );
+    }
+
+    #[test]
+    fn mask_secret_redacts_key_echoed_in_error_body() {
+        // Regression: openai-compatible endpoints reflect the bearer token
+        // back inside the error body, and that text reached the terminal and
+        // the session log.
+        let key = "sk-fake-51b482c0abcd1234";
+        let body = format!(
+            r#"{{"error":{{"message":"Incorrect API key provided: {key}. You can find your key at https://api.openai.com."}}}}"#
+        );
+        let masked = mask_secret(&body, key);
+        assert!(!masked.contains(key), "key must not survive: {masked}");
+        assert!(masked.contains(MASKED_KEY));
+        // Everything around the key stays readable.
+        assert!(masked.contains("Incorrect API key provided:"));
+        assert!(masked.contains("https://api.openai.com"));
+    }
+
+    #[test]
+    fn mask_secret_masks_every_occurrence_and_keeps_other_text() {
+        let key = "sk-fake-51b482c0abcd1234";
+        let text = format!("auth failed for {key} (Bearer {key}) retrying");
+        assert_eq!(
+            mask_secret(&text, key),
+            "auth failed for sk-*** (Bearer sk-***) retrying"
+        );
+        assert_eq!(
+            mask_secret("HTTP 500: upstream unavailable", key),
+            "HTTP 500: upstream unavailable"
+        );
+    }
+
+    #[test]
+    fn mask_secret_leaves_short_values_alone() {
+        // Below MASK_MIN_KEY_LEN a mask would corrupt unrelated error text
+        // while protecting nothing.
+        assert_eq!(mask_secret("token abc present", "abc"), "token abc present");
+        assert_eq!(mask_secret("any text", ""), "any text");
+    }
+
+    #[test]
+    fn classified_error_carries_masked_body() {
+        // The masking happens before classification, so every variant built
+        // from the body (including Auth) carries masked text.
+        let key = "sk-fake-51b482c0abcd1234";
+        let body = format!("invalid key {key}");
+        let err = classify_http_error("openai", 401, &mask_secret(&body, key));
+        let rendered = err.to_string();
+        assert!(!rendered.contains(key));
+        assert!(rendered.contains(MASKED_KEY));
     }
 
     #[test]

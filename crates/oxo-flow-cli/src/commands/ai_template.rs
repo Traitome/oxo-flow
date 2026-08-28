@@ -5,8 +5,106 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
+use oxo_flow_ai::tools::{Tool, builtin::FetchUrlTool};
 use oxo_flow_ai::{knowledge::builtin::format_tool_table, provider::AiProvider};
 use std::path::{Path, PathBuf};
+
+/// Fetch a `--from-url` reference through the agent's SSRF-screened fetcher.
+///
+/// The builtin `fetch_url` tool validates every hop (scheme/host screen,
+/// DNS-resolution check, pinned reconnect) before anything is fetched;
+/// routing the CLI's own `--from-url` through it keeps that guard from
+/// being bypassable by simply not using `--ai`'s tool loop.
+async fn fetch_reference(fetcher: &FetchUrlTool, url: &str) -> Result<String, String> {
+    let arguments = serde_json::json!({ "url": url }).to_string();
+    fetcher.execute(&arguments).await.map_err(|e| e.to_string())
+}
+
+/// Where the generated workflow lands.
+///
+/// `-o` documents two shapes: a file path, and a directory signalled by a
+/// trailing `/`. Only the first was implemented — the directory form fell
+/// through to a plain write and failed with ENOENT after the paid LLM call
+/// had already produced the artifact. The shape is therefore resolved (and
+/// its directories created) up front.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OutputTarget {
+    /// `-o dir/` — write `<dir>/<derived name>`.
+    Directory { dir: PathBuf, file_name: String },
+    /// `-o path`, or the default derived name when `-o` is absent.
+    File(PathBuf),
+}
+
+impl OutputTarget {
+    /// The concrete file this target resolves to.
+    fn file_path(&self) -> PathBuf {
+        match self {
+            Self::Directory { dir, file_name } => dir.join(file_name),
+            Self::File(path) => path.clone(),
+        }
+    }
+
+    /// Human-readable destination for progress and error messages.
+    fn display(&self) -> String {
+        self.file_path().display().to_string()
+    }
+}
+
+/// Derive the default workflow file name from the user's intent: the first
+/// three words, lower-cased, with punctuation stripped.
+fn derived_file_name(intent: &str) -> String {
+    let name = intent
+        .split_whitespace()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    // Punctuation-only intents degrade to a bare underscore — fall back to a
+    // fixed stem rather than writing a hidden ".oxoflow" file.
+    let stem = name.trim_matches('_');
+    if stem.is_empty() {
+        "workflow.oxoflow".to_string()
+    } else {
+        format!("{stem}.oxoflow")
+    }
+}
+
+/// Resolve the `-o` value into a concrete output target.
+fn resolve_output_target(output: Option<&Path>, intent: &str) -> OutputTarget {
+    match output {
+        Some(path) if path.to_string_lossy().ends_with('/') => OutputTarget::Directory {
+            dir: path.to_path_buf(),
+            file_name: derived_file_name(intent),
+        },
+        Some(path) => OutputTarget::File(path.to_path_buf()),
+        None => OutputTarget::File(PathBuf::from(derived_file_name(intent))),
+    }
+}
+
+/// Create the directories the target needs. Runs before the LLM call so a
+/// bad destination fails cheaply instead of after a paid generation.
+fn prepare_output_target(target: &OutputTarget) -> Result<()> {
+    let dir = match target {
+        OutputTarget::Directory { dir, .. } => Some(dir.clone()),
+        OutputTarget::File(path) => path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf),
+    };
+    let Some(dir) = dir else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("cannot create output directory {}", dir.display()))
+}
+
+/// Write the generated workflow, returning the path it landed on.
+fn write_output(target: &OutputTarget, toml_content: &str) -> Result<PathBuf> {
+    let path = target.file_path();
+    std::fs::write(&path, toml_content)?;
+    Ok(path)
+}
 
 /// Resolve AI provider from environment or config, returning an error if not configured.
 pub fn resolve_ai_provider() -> Result<AiProvider> {
@@ -54,6 +152,11 @@ pub async fn generate_workflow(
     output: Option<PathBuf>,
     ai_max_retries: Option<u32>,
 ) -> Result<()> {
+    // Resolve and prepare the destination BEFORE anything is sent to the
+    // provider: a bad `-o` must fail cheaply, not after a paid generation.
+    let output_target = resolve_output_target(output.as_deref(), intent);
+    prepare_output_target(&output_target)?;
+
     // L1-L3: Initialize AI runtime with scope config + tools
     let project_dir = std::env::current_dir().ok();
     let runtime =
@@ -72,24 +175,23 @@ pub async fn generate_workflow(
     let mut external_context = String::new();
 
     // Fetch URLs
+    let fetcher = FetchUrlTool::new();
     for url in from_urls {
         println!("{} Fetching {url}...", "  •".dimmed());
-        match reqwest::get(url).await {
-            Ok(resp) => {
-                if let Ok(text) = resp.text().await {
-                    let preview = if text.len() > 300 {
-                        format!("{}...", &text[..300])
-                    } else {
-                        text.clone()
-                    };
-                    external_context.push_str(&format!(
-                        "## External Reference: {url}\n\n```\n{preview}\n```\n\n"
-                    ));
-                    println!("{}   Fetched {} chars", "  ✓".green(), text.len());
-                }
+        match fetch_reference(&fetcher, url).await {
+            Ok(text) => {
+                let preview = if text.len() > 300 {
+                    format!("{}...", &text[..300])
+                } else {
+                    text.clone()
+                };
+                external_context.push_str(&format!(
+                    "## External Reference: {url}\n\n```\n{preview}\n```\n\n"
+                ));
+                println!("{}   Fetched {} chars", "  ✓".green(), text.len());
             }
             Err(e) => {
-                eprintln!("{}   Failed to fetch: {e}", "  ⚠".yellow());
+                eprintln!("{}   Blocked or failed to fetch: {e}", "  ⚠".yellow());
             }
         }
     }
@@ -416,19 +518,33 @@ Your TOML MUST include:
         }
     }
 
-    // Write output
-    let output_path = output.unwrap_or_else(|| {
-        let name = intent
-            .split_whitespace()
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("_")
-            .to_lowercase()
-            .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-        PathBuf::from(format!("{name}.oxoflow"))
-    });
-
-    std::fs::write(&output_path, &toml_content)?;
+    // Write output. A failure here must not swallow the artifact — the
+    // generation already happened and was paid for, so the full TOML is
+    // echoed to stdout before the command reports the write failure.
+    let output_path = match write_output(&output_target, &toml_content) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!(
+                "{} Could not write {}: {e}",
+                "  ⚠".yellow().bold(),
+                output_target.display()
+            );
+            println!();
+            println!(
+                "{}",
+                "── Generated workflow (write failed; full TOML below) ──"
+                    .yellow()
+                    .bold()
+            );
+            println!("{toml_content}");
+            println!("{}", "── end ──".yellow().bold());
+            cmd_session.fail(&format!("output write failed: {e}"));
+            anyhow::bail!(
+                "Workflow could not be written to {} — the full TOML was printed above",
+                output_target.display()
+            );
+        }
+    };
     println!(
         "{} Workflow written to {} ({} bytes)",
         "  ✓".green(),
@@ -555,5 +671,112 @@ mod tests {
     fn validate_basic_structure_missing_shell() {
         let toml = "[workflow]\nname = \"test\"\n\n[[rules]]\nname = \"s1\"";
         assert!(validate_basic_structure(toml).is_err());
+    }
+
+    #[test]
+    fn derived_file_name_uses_first_three_words() {
+        assert_eq!(
+            derived_file_name("RNA seq analysis of tumor"),
+            "rna_seq_analysis.oxoflow"
+        );
+    }
+
+    #[test]
+    fn derived_file_name_falls_back_when_intent_has_no_words() {
+        assert_eq!(derived_file_name("/// ???"), "workflow.oxoflow");
+        assert_eq!(derived_file_name(""), "workflow.oxoflow");
+    }
+
+    #[test]
+    fn trailing_slash_selects_directory_target_with_derived_name() {
+        // `-o out/` is documented as "output directory"; previously the raw
+        // value (slash included) was handed to fs::write and failed with
+        // ENOENT only after the paid LLM call.
+        let target = resolve_output_target(Some(Path::new("out/")), "RNA seq analysis");
+        assert_eq!(
+            target,
+            OutputTarget::Directory {
+                dir: PathBuf::from("out/"),
+                file_name: "rna_seq_analysis.oxoflow".to_string(),
+            }
+        );
+        assert!(target.display().ends_with("out/rna_seq_analysis.oxoflow"));
+    }
+
+    #[test]
+    fn explicit_path_and_absent_output_resolve_to_file_targets() {
+        assert_eq!(
+            resolve_output_target(Some(Path::new("custom.oxoflow")), "RNA seq"),
+            OutputTarget::File(PathBuf::from("custom.oxoflow"))
+        );
+        assert_eq!(
+            resolve_output_target(None, "RNA seq analysis"),
+            OutputTarget::File(PathBuf::from("rna_seq_analysis.oxoflow"))
+        );
+    }
+
+    #[test]
+    fn prepare_output_target_creates_missing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = OutputTarget::Directory {
+            dir: tmp.path().join("nested/deep"),
+            file_name: "w.oxoflow".to_string(),
+        };
+        prepare_output_target(&target).unwrap();
+        assert!(tmp.path().join("nested/deep").is_dir());
+    }
+
+    #[test]
+    fn prepare_output_target_creates_missing_parent_for_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = OutputTarget::File(tmp.path().join("new/dir/w.oxoflow"));
+        prepare_output_target(&target).unwrap();
+        assert!(tmp.path().join("new/dir").is_dir());
+    }
+
+    #[test]
+    fn write_output_lands_inside_directory_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = OutputTarget::Directory {
+            dir: tmp.path().to_path_buf(),
+            file_name: "gen.oxoflow".to_string(),
+        };
+        let written = write_output(&target, "[workflow]").unwrap();
+        assert_eq!(written, tmp.path().join("gen.oxoflow"));
+        assert_eq!(std::fs::read_to_string(written).unwrap(), "[workflow]");
+    }
+
+    #[test]
+    fn write_output_reports_failure_instead_of_losing_the_artifact() {
+        // The write can still fail (permissions, target removed mid-run);
+        // the caller's fallback is echoing the TOML, so this path must be
+        // an Err rather than a silent loss.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = OutputTarget::Directory {
+            dir: tmp.path().to_path_buf(),
+            file_name: "gen.oxoflow".to_string(),
+        };
+        prepare_output_target(&target).unwrap();
+        std::fs::remove_dir(tmp.path()).unwrap();
+        assert!(write_output(&target, "[workflow]").is_err());
+    }
+
+    #[tokio::test]
+    async fn from_url_reference_is_ssrf_screened() {
+        // `--from-url` must go through the same guard as the fetch_url tool:
+        // loopback targets are rejected before any connection is attempted.
+        let fetcher = FetchUrlTool::new();
+        for url in [
+            "http://127.0.0.1:9/workflow.oxoflow",
+            "http://localhost:9/x",
+        ] {
+            let err = fetch_reference(&fetcher, url)
+                .await
+                .expect_err("loopback URL must be rejected");
+            assert!(
+                err.contains("blocked"),
+                "expected an SSRF rejection for {url}, got: {err}"
+            );
+        }
     }
 }

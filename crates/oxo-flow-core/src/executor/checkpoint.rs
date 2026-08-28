@@ -368,6 +368,40 @@ impl CheckpointState {
         self.workflow_path = Some(path.to_string_lossy().to_string());
     }
 
+    /// Whether this checkpoint was written by a DIFFERENT workflow than
+    /// `current` (audit B8). A checkpoint lives under a shared workdir, so
+    /// two workflows pointed at the same directory read each other's
+    /// completed-rule records and reuse one another's artifacts; freshness
+    /// is per-workflow identity, not per-path.
+    ///
+    /// `None` means the checkpoint predates workflow tracking — callers
+    /// keep the historical behavior and surface a note.
+    pub fn foreign_workflow(&self, current: &Path) -> Option<bool> {
+        let recorded = self.workflow_path.as_deref()?;
+        Some(!same_workflow_path(Path::new(recorded), current))
+    }
+
+    /// Drop every reuse record a foreign checkpoint contributed (audit B8):
+    /// completed and failed rules, benchmark and provenance records, and the
+    /// per-rule fingerprints/manifests that gate re-execution. Structural
+    /// fields that describe THIS run (workflow identity, workdir) are left
+    /// for the caller to set.
+    pub fn invalidate_reuse_records(&mut self) {
+        self.completed_rules.clear();
+        self.failed_rules.clear();
+        self.benchmarks.clear();
+        self.checksums.clear();
+        self.config_snapshot.clear();
+        self.rule_fingerprints.clear();
+        self.rule_fingerprints_no_input.clear();
+        self.input_manifests.clear();
+        self.when_verdicts.clear();
+        self.tombstones.clear();
+        self.rule_runs.clear();
+        self.reentries.clear();
+        self.output_pattern_domains.clear();
+    }
+
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
     pub fn set_workflow_git_sha(&mut self, sha: String) {
         self.workflow_git_sha = Some(sha);
@@ -1068,6 +1102,17 @@ pub fn should_skip_rule_with_checksums(
         return false;
     }
 
+    // A character device, FIFO, or socket can never prove a rule ran: its
+    // mtime is effectively frozen (audit B4 — a `/dev/null` output made the
+    // mtime gate report "up to date" forever), so any non-regular, non-
+    // directory output forces re-execution.
+    if expanded_outputs
+        .iter()
+        .any(|o| is_special_file(&workdir.join(o)))
+    {
+        return false;
+    }
+
     // Checksum path (issue #194 B2): taken only when EVERY output has both a
     // recorded hash AND a re-computable digest (small-file cap). Content
     // identity then decides; a divergence re-executes even when mtime looks
@@ -1115,6 +1160,40 @@ pub fn should_skip_rule_with_checksums(
             file_is_newer(&output_path, &input_path)
         })
     })
+}
+
+/// Compare two recorded workflow paths for identity: canonicalized when both
+/// resolve (so a moved workdir or a different mount spelling does not
+/// invalidate an honest checkpoint), falling back to the raw strings.
+fn same_workflow_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Returns `true` when `path` is a character device, block device, FIFO, or
+/// socket — file types whose mtime says nothing about a rule having run, so
+/// the freshness gate must never treat them as up to date (audit B4).
+/// Directories stay eligible: a rule may legitimately declare one.
+fn is_special_file(path: &Path) -> bool {
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
+    let ft = md.file_type();
+    if ft.is_file() || ft.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        ft.is_char_device() || ft.is_block_device() || ft.is_fifo() || ft.is_socket()
+    }
+    #[cfg(not(unix))]
+    {
+        // No device/FIFO/socket types on this platform: nothing to exclude.
+        false
+    }
 }
 
 /// Expand `{key}` placeholders in a path string using the provided values map.
@@ -1296,6 +1375,72 @@ mod tests {
             .unwrap()
             .set_modified(future)
             .unwrap();
+    }
+
+    /// A character device output must never read as up to date (audit B4):
+    /// its mtime is effectively constant, so the mtime comparison would skip
+    /// the rule forever regardless of what the rule was supposed to produce.
+    /// `/dev/null` is the only portable char device a test can declare.
+    #[cfg(unix)]
+    #[test]
+    fn character_device_output_is_never_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("in.txt"), "input").unwrap();
+        let rule = crate::rule::Rule {
+            name: "devnull".to_string(),
+            input: vec!["in.txt".to_string()].into(),
+            output: vec!["/dev/null".to_string()].into(),
+            ..Default::default()
+        };
+        assert!(
+            !should_skip_rule(&rule, dir.path(), &HashMap::new()),
+            "a char-device output must be re-executed, never skipped as up to date"
+        );
+        // A regular output under the same inputs stays skippable: the gate is
+        // about the file TYPE, not the absolute path.
+        let regular = crate::rule::Rule {
+            name: "regular".to_string(),
+            input: vec!["in.txt".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
+            ..Default::default()
+        };
+        std::fs::write(dir.path().join("out.txt"), "out").unwrap();
+        assert!(
+            should_skip_rule(&regular, dir.path(), &HashMap::new()),
+            "a regular file output with fresh mtime must still skip"
+        );
+    }
+
+    /// A checkpoint written by another workflow must be reported as foreign
+    /// (audit B8) — even when the two workflows share rule names and output
+    /// paths, their artifacts must not be reused — while a checkpoint from
+    /// the same workflow (same path, different spelling) is not.
+    #[test]
+    fn foreign_workflow_detection_and_reuse_invalidation() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf_a = dir.path().join("a.oxoflow");
+        let wf_b = dir.path().join("b.oxoflow");
+        std::fs::write(&wf_a, "").unwrap();
+        std::fs::write(&wf_b, "").unwrap();
+
+        let mut ck = CheckpointState::new();
+        // No recorded path: legacy checkpoint, caller keeps the old behavior.
+        assert_eq!(ck.foreign_workflow(&wf_a), None);
+
+        ck.set_workflow_path(&wf_a);
+        ck.completed_rules.insert("fastqc".to_string());
+        ck.checksums
+            .insert("out.txt".to_string(), "sha256:deadbeef".to_string());
+        ck.rule_fingerprints
+            .insert("fastqc".to_string(), "sha256:01".to_string());
+        assert_eq!(ck.foreign_workflow(&wf_a), Some(false));
+        assert_eq!(ck.foreign_workflow(&wf_b), Some(true));
+
+        // Dropping the reuse records leaves nothing to reuse.
+        ck.invalidate_reuse_records();
+        assert!(ck.completed_rules.is_empty());
+        assert!(ck.checksums.is_empty());
+        assert!(ck.rule_fingerprints.is_empty());
     }
 
     /// In-memory cloud backend with a mutable etag per key — the semantic

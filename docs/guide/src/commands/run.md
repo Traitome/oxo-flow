@@ -279,13 +279,19 @@ to a scheduler instead of executing locally:
 backend       = "slurm"      # slurm | pbs | sge | lsf — required
 partition     = "compute"
 account       = "lab01"
-walltime      = "24h"
+walltime      = "24h"        # a rule's own time_limit wins
 max_submitted = 50           # jobs in flight at once
 poll_interval = "30s"
+extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim directives
 
 [config]
 reference = "/data/ref/hg38.fa"
 ```
+
+Keys the profile omits fall back to the driver defaults: `max_submitted`
+50, `max_array_size` 1001, `poll_interval` 5s. `extra_args` entries are
+emitted as scheduler directives verbatim and are not validated — a typo
+reaches the scheduler as written.
 
 ```bash
 oxo-flow run pipeline.oxoflow --profile slurm
@@ -451,7 +457,11 @@ oxo-flow pull gh:user/repo@v1 && oxo-flow run --bundle repo-bundle.tar.zst -j 16
 ### Pilot runs and scale-up
 
 For a large cohort, run a fast pilot on a subset first; the checkpoint
-then skips the pilot samples when you scale up:
+then skips the pilot samples when you scale up. `--samples` needs a
+workflow that *has* a sample dimension (`sample_pattern`,
+`[[sample_groups]]`, `sample_groups_file`, or `[[pairs]]`): a
+workflow with none rejects the flag with
+`--samples matched no samples in this workflow`.
 
 ```bash
 # Pilot: run the full pipeline on the first 2 samples only

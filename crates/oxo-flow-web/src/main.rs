@@ -185,19 +185,9 @@ async fn main() -> Result<()> {
 
     // Initialize AI provider from environment variables
     oxo_flow_web::ai_provider::AiProviderRegistry::global().init_from_env();
-    // Issue #205: at-rest encryption is opt-in. Loudly surface the plaintext
-    // trade-off so operators make the choice consciously; legacy rows keep
-    // working and enabling the key later only affects new writes.
-    if std::env::var("OXO_FLOW_MASTER_KEY")
-        .map(|v| v.is_empty())
-        .unwrap_or(true)
-    {
-        tracing::warn!(
-            "OXO_FLOW_MASTER_KEY is not set: AI provider keys are stored as \
-             plaintext in the local database. Set it to encrypt new writes \
-             (existing rows remain readable)."
-        );
-    }
+    // Issue #205: at-rest encryption is opt-in. The shared notice lives in
+    // infra::crypto so `oxo-flow serve` emits the same warning.
+    oxo_flow_web::infra::crypto::warn_if_plaintext_key();
     // Restore the DB-persisted tier (settings UI) when env did not configure
     // a provider — otherwise a saved key would be lost on restart.
     oxo_flow_web::domains::ai::handlers::restore_ai_config_from_db().await;

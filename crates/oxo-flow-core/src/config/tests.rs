@@ -1811,13 +1811,15 @@ fn cleanup_chunks_is_not_settable_from_user_toml() {
         shell = "cp {input} {output}"
         cleanup_chunks = true
     "#;
-    let config = WorkflowConfig::parse(toml).unwrap();
-    let rule = config.rules.iter().find(|r| r.name == "step1").unwrap();
-    // The flag is engine-internal: a user setting it on a plain rule
-    // would silently delete their real input files after success.
+    // E017 (audit B1): the engine-internal key is no longer silently
+    // ignored — it is rejected as unknown, which is strictly safer than
+    // the old behavior (a user setting it on a plain rule would silently
+    // delete their real input files after success).
+    let err = WorkflowConfig::parse(toml).unwrap_err();
+    let msg = err.to_string();
     assert!(
-        !rule.cleanup_chunks,
-        "user TOML must not be able to set cleanup_chunks"
+        msg.contains("cleanup_chunks") && msg.contains("E017"),
+        "parse must reject cleanup_chunks: {msg}"
     );
 }
 

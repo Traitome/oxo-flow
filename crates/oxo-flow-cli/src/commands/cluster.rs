@@ -1,14 +1,68 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
+use oxo_flow_core::backend::BackendJobStatus;
 use oxo_flow_core::backend::ExecutorBackend;
 use oxo_flow_core::cluster::ClusterBackend;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 
 use crate::ClusterAction;
 use crate::commands::print_banner;
+
+/// Resolve a `--backend` value, refusing to guess.
+///
+/// An unrecognised name used to fall back to SLURM, so a typo (`-b slrm`,
+/// `-b pbs-torque`) submitted real jobs to, or queried, the wrong scheduler.
+fn parse_backend(name: &str) -> Result<ClusterBackend> {
+    ClusterBackend::from_str(name).map_err(|_| {
+        anyhow::anyhow!("unknown cluster backend '{name}' — expected slurm, pbs, sge, or lsf")
+    })
+}
+
+/// Human one-liner for the parsed status of one job.
+fn status_line(id: &str, status: BackendJobStatus) -> String {
+    match status {
+        BackendJobStatus::Unknown => {
+            format!("  {id}: not in the queue (finished, or an unknown id)")
+        }
+        other => format!("  {id}: {}", other.label()),
+    }
+}
+
+/// Ask the scheduler after `job_ids` and answer one status per id.
+///
+/// The scheduler's output is CAPTURED and parsed rather than streamed: a bare
+/// passthrough gave the caller a transcript when it asked a question, and
+/// nothing a machine could read. `run` is the execution seam — the command
+/// hands in the real scheduler binary, tests hand in a stub.
+fn query_status(
+    backend: &ClusterBackend,
+    job_ids: &[String],
+    run: impl Fn(&str, &[String]) -> Result<String>,
+) -> Result<Vec<(String, BackendJobStatus)>> {
+    let mut report: Vec<(String, BackendJobStatus)> = job_ids
+        .iter()
+        .map(|id| (id.clone(), BackendJobStatus::Unknown))
+        .collect();
+    for (program, args) in oxo_flow_core::backend::cluster::status_invocations(backend, job_ids) {
+        for (id, status) in
+            oxo_flow_core::backend::cluster::status_report(backend, job_ids, &run(program, &args)?)
+        {
+            // A scheduler that does not know an id stays silent about it:
+            // keep the earlier verdict rather than overwriting it with
+            // unknown.
+            if status != BackendJobStatus::Unknown
+                && let Some(entry) = report.iter_mut().find(|(rid, _)| rid == &id)
+            {
+                entry.1 = status;
+            }
+        }
+    }
+    Ok(report)
+}
 
 /// Emit the `oxo_submit` shell helper: submits a script and echoes the bare
 /// scheduler job id.
@@ -181,6 +235,10 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             dry_run,
             with_dependencies,
         } => {
+            // The backend is validated before any workflow is read: a typo
+            // must not cost a parse, let alone reach a queue.
+            let cluster_backend = parse_backend(&backend)?;
+
             let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
@@ -230,13 +288,6 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     .with_context(|| "failed to resolve target rules")?
             };
 
-            let cluster_backend = match backend.as_str() {
-                "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
-                "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
-                "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
-                _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
-            };
-
             let cluster_config = oxo_flow_core::cluster::ClusterJobConfig {
                 backend: cluster_backend,
                 queue: queue.clone(),
@@ -245,16 +296,11 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 extra_args: extra_args.clone(),
             };
 
-            if dry_run {
-                eprintln!(
-                    "{} (dry-run) would generate {} job scripts for {} rule instances",
-                    "Cluster:".bold().yellow(),
-                    backend,
-                    order.len()
-                );
-                return Ok(());
-            }
-
+            // A dry run writes the very scripts a real submit would: an HPC
+            // user asks for one to read the #SBATCH headers before the queue
+            // sees them. Nothing is submitted — the wrapper is left out and
+            // the summary says so (the old dry run generated nothing at all,
+            // so there was nothing to review).
             std::fs::create_dir_all(&output)?;
 
             // The rendered scripts declare `#SBATCH --output=logs/<rule>.out`
@@ -265,12 +311,21 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 std::fs::create_dir_all(wf_dir.join("logs"))?;
             }
 
-            eprintln!(
-                "{} Generating {} job scripts for {} rule instances",
-                "Cluster:".bold().cyan(),
-                backend,
-                order.len()
-            );
+            if dry_run {
+                eprintln!(
+                    "{} (dry-run) generating {} job scripts for {} rule instances — nothing is submitted",
+                    "Cluster:".bold().yellow(),
+                    backend,
+                    order.len()
+                );
+            } else {
+                eprintln!(
+                    "{} Generating {} job scripts for {} rule instances",
+                    "Cluster:".bold().cyan(),
+                    backend,
+                    order.len()
+                );
+            }
 
             // Create environment resolver for command wrapping
             let env_resolver = oxo_flow_core::environment::EnvironmentResolver::new();
@@ -341,7 +396,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             }
 
             // Generate dependency-aware submit script if requested
-            if with_dependencies {
+            if with_dependencies && !dry_run {
                 let submit_script =
                     generate_submit_wrapper(&cluster_backend, &order, &dag, &output)?;
                 let submit_path = output.join("submit.sh");
@@ -371,21 +426,25 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     order.len(),
                     output.display()
                 );
-                eprintln!(
-                    "  Submit with: {} {}/*.sh",
-                    oxo_flow_core::cluster::submit_command(&cluster_backend),
-                    output.display()
-                );
+                if dry_run {
+                    eprintln!("  DRY-RUN: review the scripts, then submit with:");
+                    eprintln!(
+                        "    {} {}/*.sh",
+                        oxo_flow_core::cluster::submit_command(&cluster_backend),
+                        output.display()
+                    );
+                } else {
+                    eprintln!(
+                        "  Submit with: {} {}/*.sh",
+                        oxo_flow_core::cluster::submit_command(&cluster_backend),
+                        output.display()
+                    );
+                }
             }
         }
 
         ClusterAction::Status { backend, job_ids } => {
-            let cluster_backend = match backend.as_str() {
-                "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
-                "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
-                "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
-                _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
-            };
+            let cluster_backend = parse_backend(&backend)?;
 
             if job_ids.is_empty() {
                 anyhow::bail!(
@@ -393,40 +452,49 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     oxo_flow_core::cluster::status_command(&cluster_backend)
                 );
             }
-            let status_cmd = oxo_flow_core::cluster::status_command(&cluster_backend);
-            eprintln!("{} Executing '{}'...", "Cluster:".bold().cyan(), status_cmd);
-
-            let mut parts = status_cmd.split_whitespace();
-            let program = parts.next().unwrap_or(status_cmd);
-            let mut args: Vec<&str> = parts.collect();
-
-            for id in &job_ids {
-                args.push(id);
+            for (program, args) in
+                oxo_flow_core::backend::cluster::status_invocations(&cluster_backend, &job_ids)
+            {
+                eprintln!(
+                    "{} Executing '{} {}'...",
+                    "Cluster:".bold().cyan(),
+                    program,
+                    args.join(" ")
+                );
             }
 
-            match std::process::Command::new(program).args(&args).status() {
-                Ok(status) => {
-                    if !status.success() {
-                        anyhow::bail!(
-                            "Command failed with exit code: {}",
-                            status.code().unwrap_or(-1)
-                        );
+            let report = query_status(&cluster_backend, &job_ids, |program, args| {
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let output = match std::process::Command::new(program).args(&arg_refs).output() {
+                    Ok(out) => out,
+                    Err(e) => {
+                        eprintln!("  Is {program} installed on this system?");
+                        anyhow::bail!("Failed to execute status command: {e}");
                     }
+                };
+                if !output.status.success() {
+                    // A scheduler exits non-zero for "no such job" (qstat -j)
+                    // while still naming the others; what it printed still
+                    // answers for the ids it did list.
+                    eprintln!("{} exited {}", program, output.status.code().unwrap_or(-1));
                 }
-                Err(e) => {
-                    eprintln!("  Is {} installed on this system?", program);
-                    anyhow::bail!("Failed to execute status command: {}", e);
-                }
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            })?;
+
+            eprintln!("{} {} job(s):", "Cluster:".bold().cyan(), report.len());
+            for (id, status) in &report {
+                eprintln!("{}", status_line(id, *status));
+            }
+            // Machine-readable form on stdout, one `<id>\t<state>` per job —
+            // human output stays on stderr, the codebase-wide convention.
+            for (id, status) in &report {
+                println!("{id}\t{}", status.label());
             }
         }
 
         ClusterAction::Cancel { backend, job_ids } => {
-            let cancel_cmd = match backend.as_str() {
-                "pbs" => "qdel",
-                "sge" => "qdel",
-                "lsf" => "bkill",
-                _ => "scancel",
-            };
+            let cancel_cmd =
+                oxo_flow_core::backend::cluster::cancel_command(&parse_backend(&backend)?);
 
             if job_ids.is_empty() {
                 eprintln!(
@@ -468,12 +536,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             // Elapsed,MaxRSS`); PBS/SGE/LSF stay best-effort (qstat -f /
             // qacct / bacct) — the same per-scheduler contract the
             // BackendDriver uses.
-            let cluster_backend = match backend.as_str() {
-                "pbs" => oxo_flow_core::cluster::ClusterBackend::Pbs,
-                "sge" => oxo_flow_core::cluster::ClusterBackend::Sge,
-                "lsf" => oxo_flow_core::cluster::ClusterBackend::Lsf,
-                _ => oxo_flow_core::cluster::ClusterBackend::Slurm,
-            };
+            let cluster_backend = parse_backend(&backend)?;
             let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
                 cluster_backend,
                 oxo_flow_core::cluster::ClusterJobConfig {
@@ -500,4 +563,189 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cluster_command, parse_backend, query_status, status_line};
+    use crate::ClusterAction;
+    use oxo_flow_core::backend::BackendJobStatus;
+    use std::path::PathBuf;
+
+    fn run(action: ClusterAction) -> anyhow::Result<()> {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(cluster_command(action))
+    }
+
+    fn workflow_file(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("wf.oxoflow");
+        std::fs::write(
+            &path,
+            "[workflow]\nname = \"wf\"\n[[rules]]\nname = \"align\"\n\
+             shell = \"true\"\noutput = [\"out.txt\"]\n",
+        )
+        .unwrap();
+        path
+    }
+
+    fn submit_action(
+        workflow: PathBuf,
+        output: PathBuf,
+        backend: &str,
+        dry_run: bool,
+    ) -> ClusterAction {
+        ClusterAction::Submit {
+            workflow,
+            backend: backend.to_string(),
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: Vec::new(),
+            output,
+            target: Vec::new(),
+            module: Vec::new(),
+            dry_run,
+            with_dependencies: true,
+        }
+    }
+
+    #[test]
+    fn unknown_backend_is_rejected_for_every_action() {
+        // A typo used to fall back to SLURM silently — submit scripts for the
+        // wrong scheduler, scancel where the user asked for qdel.
+        let cases = vec![
+            ClusterAction::Status {
+                backend: "slrm".to_string(),
+                job_ids: vec!["1".to_string()],
+            },
+            ClusterAction::Cancel {
+                backend: "torque".to_string(),
+                job_ids: vec!["1".to_string()],
+            },
+            ClusterAction::Logs {
+                backend: "ge".to_string(),
+                job_id: "1".to_string(),
+            },
+        ];
+        for action in cases {
+            let msg = run(action).unwrap_err().to_string();
+            assert!(
+                msg.starts_with("unknown cluster backend '"),
+                "must name the offending backend: {msg}"
+            );
+            assert!(
+                msg.contains("expected slurm, pbs, sge, or lsf"),
+                "must list the accepted values: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn submit_rejects_an_unknown_backend_before_reading_the_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent.oxoflow");
+        let err = run(submit_action(
+            missing,
+            dir.path().join("scripts"),
+            "slurm2",
+            true,
+        ))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown cluster backend 'slurm2'"),
+            "the backend is validated before anything else: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_backend_accepts_every_documented_name() {
+        for name in ["slurm", "SLURM", "pbs", "sge", "lsf"] {
+            assert!(parse_backend(name).is_ok(), "{name} must resolve");
+        }
+    }
+
+    #[test]
+    fn status_answers_every_requested_id() {
+        // SGE asks once per job: two invocations must not lose an answer, and
+        // an id the scheduler is silent about reads as unknown — not missing.
+        let report = query_status(
+            &oxo_flow_core::cluster::ClusterBackend::Sge,
+            &["1".to_string(), "2".to_string()],
+            |program, args| {
+                assert_eq!(program, "qstat");
+                // Job 1 is running; job 2 already left the queue — qstat
+                // prints nothing for it.
+                match args[1].as_str() {
+                    "1" => Ok("job_number: 1\nstate: r\n".to_string()),
+                    _ => Ok(String::new()),
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(report.len(), 2);
+        assert_eq!(report[0], ("1".to_string(), BackendJobStatus::Running));
+        assert_eq!(report[1], ("2".to_string(), BackendJobStatus::Unknown));
+    }
+
+    #[test]
+    fn status_surfaces_scheduler_failures() {
+        let err = query_status(
+            &oxo_flow_core::cluster::ClusterBackend::Slurm,
+            &["1".to_string()],
+            |_, _| Err(anyhow::anyhow!("squeue: slurm_load_jobs error")),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("slurm_load_jobs"),
+            "the scheduler's own words must reach the user: {err}"
+        );
+    }
+
+    #[test]
+    fn status_line_explains_a_missing_job() {
+        assert_eq!(
+            status_line("123", BackendJobStatus::Unknown),
+            "  123: not in the queue (finished, or an unknown id)"
+        );
+        assert_eq!(
+            status_line("123", BackendJobStatus::Running),
+            "  123: running"
+        );
+    }
+
+    #[test]
+    fn dry_run_writes_the_scripts_but_no_wrapper() {
+        // A dry run exists so an HPC user can read the #SBATCH headers before
+        // the queue does — it has to leave them on disk, and must leave
+        // nothing behind that would submit them.
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("scripts");
+        let workflow = workflow_file(dir.path());
+        run(submit_action(
+            workflow.clone(),
+            scripts.clone(),
+            "slurm",
+            true,
+        ))
+        .unwrap();
+        let body = std::fs::read_to_string(scripts.join("align.sh")).unwrap();
+        assert!(
+            body.contains("#SBATCH --job-name=align"),
+            "the generated header must be reviewable: {body}"
+        );
+        assert!(
+            body.contains("#SBATCH --chdir="),
+            "the generated header pins the working directory: {body}"
+        );
+        assert!(
+            !scripts.join("submit.sh").exists(),
+            "a dry run must not leave a submit wrapper behind"
+        );
+
+        // The real path keeps the wrapper it always wrote.
+        std::fs::remove_dir_all(&scripts).unwrap();
+        run(submit_action(workflow, scripts.clone(), "slurm", false)).unwrap();
+        assert!(scripts.join("submit.sh").exists());
+    }
 }

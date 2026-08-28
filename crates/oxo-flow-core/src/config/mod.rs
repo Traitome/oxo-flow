@@ -2,6 +2,7 @@
 //! Physical layout split only: public paths are unchanged.
 
 mod expand;
+mod known_keys;
 mod model;
 mod parse;
 mod references;

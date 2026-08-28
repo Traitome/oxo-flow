@@ -52,7 +52,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | `--target` | `-t` | — | Target rule(s) to execute |
 | `--module` | — | — | Run one include module plus the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem |
 | `--with-dependencies` | — | — | Generate dependency-aware submit script with job chains |
-| `--dry-run` | — | — | Preview scripts without generating files |
+| `--dry-run` | — | — | Generate and write the scripts but submit nothing (and skip `submit.sh` even with `--with-dependencies`) |
 
 One script is written per **rule instance**: wildcards expand first, so a
 scatter rule over three samples yields three scripts whose names match the
@@ -138,15 +138,26 @@ oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute -t align -t call_va
 ### Dry run mode
 
 ```bash
-# Preview what would be generated without creating files
+# Write the scripts without submitting anything
 oxo-flow cluster submit pipeline.oxoflow -b slurm -q compute --dry-run
 ```
 
+`--dry-run` still writes every script to the output directory — it prints
+`(dry-run) generating … job scripts … nothing is submitted` and ends with the
+submission line to review, e.g. `sbatch cluster_scripts/*.sh`.
+
 ### Check job status
 
+`status` needs at least one job id — an empty list is rejected, because
+querying a scheduler for "everything" is not what this command is for:
+
 ```bash
-oxo-flow cluster status -b slurm
+oxo-flow cluster status -b slurm 12345 12346
 ```
+
+Unknown backends are rejected rather than guessed: `-b slrm` fails with
+`unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf` instead of
+silently querying SLURM.
 
 ### Cancel specific jobs
 
@@ -274,8 +285,11 @@ conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin
 
 Environment wrapping is applied automatically: conda rules are wrapped in
 `conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'`, docker rules in
-`docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '...'`, and rules
-without an environment run the command directly.
+`docker run --rm --user $(id -u):$(id -g) ... <image> sh -c '<bash shim>' sh '...'`, singularity/apptainer rules in
+`<apptainer|singularity> exec --bind <workdir>:<workdir> ... <image> sh -c '<bash shim>' sh '...'`, and rules
+without an environment run the command directly. The shim re-execs the
+command under `bash` when the image ships it — see
+[Environment Wrapping](../how-to/run-on-cluster.md#environment-wrapping).
 
 ### Dependency-Aware Submit Script
 
@@ -291,17 +305,26 @@ set -e
 # Track job IDs
 declare -A JOB_IDS
 
+# Submit one script and echo its scheduler job id.
+oxo_submit() {
+  local out id
+  out=$(sbatch --parsable "$@") || return $?
+  id=${out%%;*}
+  if [ -z "$id" ]; then
+    echo "oxo-flow: cannot parse job id from: $out" >&2
+    return 1
+  fi
+  printf '%s' "$id"
+}
+
 echo 'Submitting fastqc...'
-JOB_IDS[fastqc]=$(sbatch cluster_scripts/fastqc.sh)
-echo '  Submitted fastqc as job ID: ${JOB_IDS[fastqc]}'
+JOB_IDS[fastqc]=$(oxo_submit cluster_scripts/fastqc.sh)
 
 echo 'Submitting trim_reads...'
-JOB_IDS[trim_reads]=$(sbatch --dependency=afterok:${JOB_IDS[fastqc]} cluster_scripts/trim_reads.sh)
-echo '  Submitted trim_reads as job ID: ${JOB_IDS[trim_reads]}'
+JOB_IDS[trim_reads]=$(oxo_submit --dependency=afterok:${JOB_IDS[fastqc]} cluster_scripts/trim_reads.sh)
 
 echo 'Submitting bwa_align...'
-JOB_IDS[bwa_align]=$(sbatch --dependency=afterok:${JOB_IDS[trim_reads]} cluster_scripts/bwa_align.sh)
-echo '  Submitted bwa_align as job ID: ${JOB_IDS[bwa_align]}'
+JOB_IDS[bwa_align]=$(oxo_submit --dependency=afterok:${JOB_IDS[trim_reads]} cluster_scripts/bwa_align.sh)
 
 echo 'All jobs submitted successfully!'
 echo 'Job ID mapping:'

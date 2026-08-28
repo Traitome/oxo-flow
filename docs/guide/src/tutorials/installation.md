@@ -7,7 +7,7 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 ## Requirements
 
 - **Operating system**: Linux (x86_64, aarch64) or macOS (Apple Silicon, Intel)
-- **Disk space**: ~13 MB for the binary
+- **Disk space**: ~23 MB for the binary
 - **Optional**: Rust toolchain (1.85+) if building from source
 
 !!! note "Runtime dependencies"
@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.14.1
+# oxo-flow 0.16.0
 ```
 
 !!! tip "Updating"
@@ -58,8 +58,13 @@ Clone the repository and build the workspace:
 ```bash
 git clone https://github.com/Traitome/oxo-flow.git
 cd oxo-flow
-cargo build --release
+cargo build --release --workspace
 ```
+
+!!! note "`--workspace` is required"
+    The repo root is also a library package (the integration tests). A bare
+    `cargo build --release` compiles only that package and produces **no**
+    `target/release/oxo-flow` — pass `--workspace` to build every crate.
 
 The binary is at `target/release/oxo-flow`. Copy it to a directory on your `$PATH`:
 
@@ -72,7 +77,7 @@ cp target/release/oxo-flow ~/.local/bin/
 For faster compile times during development (without optimizations):
 
 ```bash
-cargo build
+cargo build --workspace
 # Binary at: target/debug/oxo-flow
 ```
 

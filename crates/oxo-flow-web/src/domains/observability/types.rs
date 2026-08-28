@@ -17,6 +17,11 @@ pub struct ComponentHealth {
     pub filesystem: ComponentStatus,
     pub scheduler: Option<ComponentStatus>,
     pub ai_provider: Option<ComponentStatus>,
+    /// How third-party AI credentials are stored: `"encrypted"` when
+    /// `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise. `/api/health`
+    /// carries the flag so the trade-off is visible to API consumers (issue
+    /// #205), not only to whoever reads the server log.
+    pub ai_key_storage: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -172,6 +177,7 @@ mod tests {
                     latency_ms: Some(1.0),
                 }),
                 ai_provider: None,
+                ai_key_storage: "encrypted".into(),
             },
             resources: ResourceInfo {
                 cpu_pct: 25.0,

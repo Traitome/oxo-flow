@@ -1403,6 +1403,12 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
         "compose" => {
             let pkg = oxo_flow_core::container::PackageConfig {
                 format: oxo_flow_core::container::ContainerFormat::Compose,
+                // The compose command must name the actual workflow file —
+                // the old hardcoded "workflow.oxoflow" made every exported
+                // stack fail to start (audit C10).
+                workflow_file: workflow
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string()),
                 ..Default::default()
             };
             oxo_flow_core::container::generate_compose_file(&config, &pkg)

@@ -20,6 +20,16 @@ fn uptime_secs() -> u64 {
 
 /// Build health check response with component status.
 pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
+    health_check_with(
+        mode,
+        db_healthy,
+        crate::infra::crypto::master_key_configured(),
+    )
+}
+
+/// Pure core of [`health_check`] — `encrypted_keys` is injected so tests need
+/// no environment mutation (mirrors `effective_bind_host_with` in lib.rs).
+pub fn health_check_with(mode: &str, db_healthy: bool, encrypted_keys: bool) -> HealthResponse {
     let uptime = uptime_secs();
 
     HealthResponse {
@@ -55,6 +65,11 @@ pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
                 } else {
                     None
                 }
+            },
+            ai_key_storage: if encrypted_keys {
+                "encrypted".into()
+            } else {
+                "plaintext".into()
             },
         },
         resources: ResourceInfo {
@@ -103,6 +118,17 @@ mod tests {
         let h = health_check("team", false);
         assert_eq!(h.status, "degraded");
         assert_eq!(h.components.database.status, "error");
+    }
+
+    #[test]
+    fn test_health_reports_ai_key_storage_flag() {
+        // The flag is the only API-visible signal that third-party AI keys
+        // are being written to the database unencrypted (issue #205 audit).
+        let plaintext = health_check_with("personal", true, false);
+        assert_eq!(plaintext.components.ai_key_storage, "plaintext");
+
+        let encrypted = health_check_with("personal", true, true);
+        assert_eq!(encrypted.components.ai_key_storage, "encrypted");
     }
 
     #[test]

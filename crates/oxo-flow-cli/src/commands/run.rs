@@ -7,6 +7,7 @@ use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock};
 use oxo_flow_core::rule::{Rule, parse_duration_secs};
 use std::collections::{HashMap, HashSet};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,19 +27,65 @@ fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<S
         .collect()
 }
 
-/// Emit one progress narrative line to BOTH the console (stderr, exactly
-/// as before) and the tracing stream — the tracing copy is what the
-/// archived run log preserves (issue #194 B1). Colors live in the console
-/// form; the log side gets the same text and strips ANSI at write time.
+/// The active run log, shared so spawned rule tasks can write their own
+/// narrative lines — the tee's file side is private to `crate::logging`, and
+/// the guard cannot move into a spawned task while the loop still needs it.
+type SharedRunLog = Arc<std::sync::Mutex<Option<crate::logging::RunLogGuard>>>;
+
+/// Emit one progress narrative line exactly TWICE in total — once on stderr
+/// (the console surface) and once in the archived run log (issue #194 B1).
+/// The historical form routed the log copy through the tracing stream, whose
+/// writer also targets stderr, so every line printed twice and a leading
+/// blank line in the message surfaced as an empty INFO row (audit P4-11).
+/// Colors live in the console form; the log side gets plain text.
 ///
-/// Background runs skip the tracing copy: their stderr is already
-/// redirected onto the run log, so a second copy would duplicate the line
-/// (issue #194 A3).
-fn progress_narrate(msg: std::fmt::Arguments<'_>) {
+/// Background runs hold no run log (their stderr already lands in it), so
+/// only the console copy is written.
+fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
     eprintln!("{msg}");
-    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
-        tracing::info!(target: "progress", message = %msg.to_string());
+    let mut slot = run_log
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(log) = slot.as_mut() {
+        let text = strip_ansi(&msg.to_string());
+        let line = format!("{}\n", text.trim_start());
+        if let Err(e) = log.write_all(line.as_bytes()) {
+            tracing::debug!(error = %e, "progress line could not be written to the run log");
+        }
     }
+}
+
+/// Strip ANSI escape sequences: run-log files are plain text. Mirrors the
+/// file-side filter of `crate::logging`, which exposes no public writer.
+fn strip_ansi(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut plain = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                // CSI sequence: ESC '[' parameters final-byte.
+                i += 2;
+                while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            } else {
+                // Stray escape.
+                i += 1;
+            }
+        } else {
+            let start = i;
+            while i < bytes.len() && bytes[i] != 0x1b {
+                i += 1;
+            }
+            // 0x1b never appears inside a multi-byte UTF-8 sequence.
+            plain.push_str(&text[start..i]);
+        }
+    }
+    plain
 }
 
 /// Emit a structured [`ExecutionEvent`] as one JSON line in the tracing
@@ -50,6 +97,105 @@ fn emit_execution_event(event: oxo_flow_core::executor::ExecutionEvent) {
     if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
         tracing::info!(target: "execution_event", "{}", event.to_json_log());
     }
+}
+
+/// A termination signal `run` handles (audit C14), with the shell exit
+/// convention `128 + signum`: SIGINT → 130, SIGTERM → 143, SIGHUP → 129.
+#[derive(Debug, Clone, Copy)]
+pub struct InterruptSignal {
+    /// Signal name, for the operator-facing message.
+    pub name: &'static str,
+    /// Raw signal number.
+    pub signum: i32,
+}
+
+impl InterruptSignal {
+    /// Process exit status for a run stopped by this signal.
+    pub fn exit_code(&self) -> i32 {
+        128 + self.signum
+    }
+}
+
+/// Resolve when a termination signal arrives (audit C14). Installs handlers
+/// for SIGINT, SIGTERM, and SIGHUP; `None` where they cannot be installed.
+async fn wait_for_termination_signal() -> Option<InterruptSignal> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigint = signal(SignalKind::interrupt()).ok()?;
+        let mut sigterm = signal(SignalKind::terminate()).ok()?;
+        let mut sighup = signal(SignalKind::hangup()).ok()?;
+        tokio::select! {
+            _ = sigint.recv() => Some(InterruptSignal { name: "SIGINT", signum: 2 }),
+            _ = sigterm.recv() => Some(InterruptSignal { name: "SIGTERM", signum: 15 }),
+            _ = sighup.recv() => Some(InterruptSignal { name: "SIGHUP", signum: 1 }),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok()?;
+        Some(InterruptSignal {
+            name: "SIGINT",
+            signum: 2,
+        })
+    }
+}
+
+/// Tear the run down on a termination signal (audit C14): signal every
+/// in-flight rule's process tree (the default disposition would orphan them
+/// with PPID 1), record the interrupted rules in the checkpoint, persist it,
+/// and exit `128 + signum`. Never returns.
+async fn terminate_on_signal(
+    signal: InterruptSignal,
+    executor: &LocalExecutor,
+    join_set: &mut tokio::task::JoinSet<(
+        String,
+        oxo_flow_core::executor::JobStatus,
+        oxo_flow_core::executor::JobRecord,
+    )>,
+    in_flight: impl Iterator<Item = &String>,
+    checkpoint: &Arc<Mutex<CheckpointState>>,
+    checkpoint_path: &Path,
+) -> ! {
+    eprintln!(
+        "\n{} {} received — stopping in-flight rules and saving the checkpoint",
+        "Interrupted:".yellow().bold(),
+        signal.name
+    );
+    // Same teardown as the first-failure abort (issue #131): release queued
+    // resource waiters, then signal each live child's whole subtree.
+    executor.clear_resource_waiters().await;
+    for (rule, pid) in executor.active_pids() {
+        if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
+            tracing::warn!(rule = %rule, pid, error = %e, "failed to signal in-flight rule on {}", signal.name);
+        }
+    }
+    join_set.abort_all();
+
+    let mut ck = checkpoint.lock().await;
+    for rule in in_flight {
+        let record = oxo_flow_core::executor::JobRecord {
+            rule: rule.clone(),
+            status: oxo_flow_core::executor::JobStatus::Failed,
+            started_at: None,
+            finished_at: Some(chrono::Utc::now()),
+            exit_code: Some(signal.exit_code()),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            timeout: None,
+            skip_reason: Some(format!("interrupted by {}", signal.name)),
+            max_rss_mb: None,
+            cpu_seconds: None,
+        };
+        ck.record_run(&record);
+        ck.mark_failed(rule);
+    }
+    if let Err(e) = ck.save_to_file(checkpoint_path) {
+        tracing::warn!(error = %e, "failed to save checkpoint after interruption");
+    }
+    std::process::exit(signal.exit_code());
 }
 
 /// Print the config-change impact summary (issue #62).
@@ -71,6 +217,35 @@ fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
         .filter_map(|(key, _)| config.config.get(key))
         .map(oxo_flow_core::config_impact::config_value_string)
         .collect()
+}
+
+/// Adopt a loaded checkpoint for the workflow about to run (audit B8).
+///
+/// A checkpoint lives at `<workdir>/.oxo-flow/checkpoint.json`, so two
+/// workflows pointed at the same directory read each other's records and
+/// would reuse one another's artifacts: the freshness gate only compares
+/// paths, mtimes, and content hashes, never workflow identity. A checkpoint
+/// recorded under a different workflow path therefore has its reuse records
+/// dropped (every rule re-executes), and one that predates workflow tracking
+/// keeps the historical behavior with a note.
+fn adopt_checkpoint_for_workflow(ck: &mut CheckpointState, workflow: &Path) {
+    match ck.foreign_workflow(workflow) {
+        Some(true) => {
+            eprintln!(
+                "  {} checkpoint belongs to a different workflow — ignoring its \
+                 completed/failed records so nothing is reused (every rule re-executes)",
+                "Note:".yellow()
+            );
+            ck.invalidate_reuse_records();
+        }
+        Some(false) => {}
+        None => {
+            tracing::debug!(
+                "checkpoint predates workflow-identity tracking; reuse checks stay \
+                 path/mtime/fingerprint based"
+            );
+        }
+    }
 }
 
 fn print_truncated_list(label: &str, names: &[String]) {
@@ -781,18 +956,20 @@ pub async fn run_command(
     // tee here would write every event TWICE into the same file. In that
     // mode the header is printed to stderr (→ the redirect) and the tee is
     // skipped entirely; foreground runs arm the tee as before.
-    let _run_log_guard = if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some() {
-        eprintln!("{run_log_header}");
-        None
-    } else {
-        match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
-            Ok(guard) => Some(guard),
-            Err(e) => {
-                tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
-                None
+    let run_log: SharedRunLog = Arc::new(std::sync::Mutex::new(
+        if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some() {
+            eprintln!("{run_log_header}");
+            None
+        } else {
+            match crate::logging::activate_run_log(&run_log_path, &run_log_header) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %run_log_path.display(), "failed to open run log; continuing without file logging");
+                    None
+                }
             }
-        }
-    };
+        },
+    ));
     tracing::info!(
         workflow = %config.workflow.name,
         version = %config.workflow.version,
@@ -847,13 +1024,13 @@ pub async fn run_command(
         );
     }
 
-    let checkpoint: Arc<Mutex<CheckpointState>> = if checkpoint_path.exists() {
-        Arc::new(Mutex::new(
-            CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default(),
-        ))
+    let mut loaded_checkpoint = if checkpoint_path.exists() {
+        CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default()
     } else {
-        Arc::new(Mutex::new(CheckpointState::default()))
+        CheckpointState::default()
     };
+    adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs);
+    let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
 
     // Store workflow path and working directory in the checkpoint so
     // `resume` re-runs from the same place (issue #68). Both are made
@@ -1943,6 +2120,21 @@ pub async fn run_command(
 
     // ---- main event loop -------------------------------------------------
 
+    // Termination signals (audit C14): SIGINT/SIGTERM/SIGHUP stop the run
+    // through `terminate_on_signal` instead of killing the process outright.
+    // A watch channel keeps the wait re-armable across loop iterations, the
+    // way a oneshot receiver could only be awaited once.
+    let (signal_tx, mut signal_rx) = tokio::sync::watch::channel(None::<InterruptSignal>);
+    tokio::spawn(async move {
+        if let Some(signal) = wait_for_termination_signal().await
+            && signal_tx.send(Some(signal)).is_err()
+        {
+            // The run loop is gone but the handlers are still installed, so
+            // a late signal must still end the process.
+            std::process::exit(signal.exit_code());
+        }
+    });
+
     loop {
         // Check deadlock before each scheduling round.
         if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
@@ -2060,7 +2252,10 @@ pub async fn run_command(
 
             progress.set_message(format!("executing {}", rule_name));
             if !is_tty {
-                progress_narrate(format_args!("  {} {}", "Running:".bold().cyan(), rule_name));
+                progress_narrate(
+                    format_args!("  {} {}", "Running:".bold().cyan(), rule_name),
+                    &run_log,
+                );
             }
             emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleStarted {
                 rule: rule_name.clone(),
@@ -2071,6 +2266,7 @@ pub async fn run_command(
             // Register the task name BEFORE the spawn: the closure moves
             // `rule_name` in, so the id→name map needs its own clone.
             let task_rule_name = rule_name.clone();
+            let task_run_log = Arc::clone(&run_log);
             let handle = join_set.spawn(async move {
                 let _permit = semaphore.acquire().await;
 
@@ -2113,18 +2309,19 @@ pub async fn run_command(
                                 if record.skip_reason.as_deref()
                                     == Some("restored from content cache")
                                 {
-                                    progress_narrate(format_args!(
-                                        "  {} {} (restored from content cache)",
-                                        "↺".cyan(),
-                                        rule_name,
-                                    ));
+                                    progress_narrate(
+                                        format_args!(
+                                            "  {} {} (restored from content cache)",
+                                            "↺".cyan(),
+                                            rule_name,
+                                        ),
+                                        &task_run_log,
+                                    );
                                 } else {
-                                    progress_narrate(format_args!(
-                                        "  {} {} ({:.1}s)",
-                                        "✓".green(),
-                                        rule_name,
-                                        duration
-                                    ));
+                                    progress_narrate(
+                                        format_args!("  {} {} ({:.1}s)", "✓".green(), rule_name, duration),
+                                        &task_run_log,
+                                    );
                                 }
                             }
                             let benchmark =
@@ -2259,7 +2456,10 @@ pub async fn run_command(
                             if let Some(code) = record.exit_code {
                                 err_msg.push_str(&format!("\nexit code: {}", code));
                             }
-                            progress_narrate(format_args!("  {} {}", "✗".red(), err_msg));
+                            progress_narrate(
+                            format_args!("  {} {}", "✗".red(), err_msg),
+                            &task_run_log,
+                        );
                             // Always record: keep_going needs the final
                             // listing, non-required failures are listed in
                             // either mode, and the AI recovery path must be
@@ -2344,12 +2544,15 @@ pub async fn run_command(
                             tracing::warn!("Failed to save checkpoint: {e}");
                         }
                         if !keep_going {
-                            progress_narrate(format_args!(
-                                "  {} rule '{}' failed: {}",
-                                "✗".red(),
-                                rule_name,
-                                e
-                            ));
+                            progress_narrate(
+                                format_args!(
+                                    "  {} rule '{}' failed: {}",
+                                    "✗".red(),
+                                    rule_name,
+                                    e
+                                ),
+                                &task_run_log,
+                            );
                         }
                         // Always record: keep_going needs the final
                         // listing, non-required failures are listed in
@@ -2377,8 +2580,41 @@ pub async fn run_command(
             break;
         }
 
-        // Wait for the next rule to finish.
-        let (completed_rule, status, record) = match join_set.join_next_with_id().await {
+        // Wait for the next rule to finish — or for a termination signal
+        // (audit C14): the in-flight rules must be torn down and the
+        // checkpoint persisted before the process exits, instead of the
+        // default disposition killing oxo-flow outright and orphaning every
+        // child (PPID 1) with a half-written checkpoint.
+        let join_result = tokio::select! {
+            received = async {
+                match signal_rx.changed().await {
+                    Ok(()) => *signal_rx.borrow_and_update(),
+                    // The watcher died before the run did; the run then
+                    // keeps the signals' default dispositions.
+                    Err(_) => None,
+                }
+            } => match received {
+                Some(signal) => {
+                    terminate_on_signal(
+                        signal,
+                        &executor,
+                        &mut join_set,
+                        task_rule.values(),
+                        &checkpoint,
+                        &checkpoint_path,
+                    )
+                    .await
+                }
+                // The watcher died before the run did; the run then keeps
+                // the signals' default dispositions.
+                None => None,
+            },
+            result = join_set.join_next_with_id() => Some(result),
+        };
+        let Some(join_result) = join_result else {
+            continue;
+        };
+        let (completed_rule, status, record) = match join_result {
             Some(Ok((_id, v))) => v,
             Some(Err(e)) => {
                 if e.is_panic() {
@@ -2862,22 +3098,28 @@ pub async fn run_command(
         skipped: skipped_count,
     });
     if non_required_fail_count > 0 {
-        progress_narrate(format_args!(
-            "\n{} {} succeeded, {} skipped, {} failed, {} non-required failed",
-            "Done:".bold(),
-            success_count,
-            skipped_count,
-            fail_count,
-            non_required_fail_count
-        ));
+        progress_narrate(
+            format_args!(
+                "\n{} {} succeeded, {} skipped, {} failed, {} non-required failed",
+                "Done:".bold(),
+                success_count,
+                skipped_count,
+                fail_count,
+                non_required_fail_count
+            ),
+            &run_log,
+        );
     } else {
-        progress_narrate(format_args!(
-            "\n{} {} succeeded, {} skipped, {} failed",
-            "Done:".bold(),
-            success_count,
-            skipped_count,
-            fail_count
-        ));
+        progress_narrate(
+            format_args!(
+                "\n{} {} succeeded, {} skipped, {} failed",
+                "Done:".bold(),
+                success_count,
+                skipped_count,
+                fail_count
+            ),
+            &run_log,
+        );
     }
 
     // Automatic report snapshot (issue #83 P1-14): capture the final
@@ -3522,7 +3764,7 @@ pub async fn dry_run_command(
     // The preview is ALWAYS computed — with an empty state when no
     // checkpoint exists. `when` conditions can skip rules even on a fresh
     // run, so "every rule will execute" would be wrong without it.
-    let checkpoint_state =
+    let mut checkpoint_state =
         match oxo_flow_core::executor::checkpoint::CheckpointState::load_from_file(&checkpoint_path)
         {
             Ok(ck) => ck,
@@ -3535,6 +3777,9 @@ pub async fn dry_run_command(
                 oxo_flow_core::executor::checkpoint::CheckpointState::default()
             }
         };
+    // Same identity gate `run` applies (audit B8): another workflow's
+    // artifacts must not be reported as up to date in the plan either.
+    adopt_checkpoint_for_workflow(&mut checkpoint_state, &workflow);
     let sensitive_keys: std::collections::HashSet<String> = config
         .config_meta
         .iter()

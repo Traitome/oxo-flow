@@ -104,7 +104,7 @@ export interface RunItem {
   workflow_name?: string | null;
   /** The TOML the run executed (get_run only — powers Manual Edit). */
   pipeline_snapshot?: string;
-  status: string; phase: string; pid: number | null; workdir: string | null;
+  status: string; phase: string; workdir: string | null;
   started_at: string | null; finished_at: string | null; created_at: string;
 }
 /** One expanded sample×rule instance from a run's checkpoint

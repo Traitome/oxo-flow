@@ -103,6 +103,68 @@ fn job_config(cluster: &ClusterProfile) -> Result<(ClusterBackend, ClusterJobCon
     ))
 }
 
+/// Fail before any submission when a rule declares more than the workflow's
+/// own `[resource_budget]` allows.
+///
+/// Only an explicit cap gates — auto-detected machine limits are advice, not
+/// a threshold, the same contract the local path applies to
+/// `--max-threads`/`--max-memory`. A job that alone exceeds the budget its
+/// workflow declares can never be scheduled inside it; on a scheduler the
+/// queue rejects it (or runs it into swap) long after the submit, so saying
+/// so here — with every offender named — beats discovering it mid-run.
+fn check_budget(
+    plan: &ScheduledPlan,
+    to_run: &HashSet<String>,
+    budget: &oxo_flow_core::config::ResourceBudget,
+) -> Result<()> {
+    // A cap that cannot be read is not "no cap": gating on `u64::MAX` would
+    // silently wave every rule through.
+    let memory_cap = budget
+        .max_memory
+        .as_deref()
+        .map(|m| {
+            oxo_flow_core::scheduler::parse_memory_mb(m)
+                .map(|mb| (m, mb))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "[resource_budget] max_memory = '{m}' is not a memory figure — use e.g. 64G"
+                    )
+                })
+        })
+        .transpose()?;
+    let mut breaches: Vec<String> = Vec::new();
+    for name in to_run {
+        let Some(sr) = plan.rules.get(name) else {
+            continue; // not schedulable — skipped later, nothing to submit
+        };
+        let rule = &sr.rule;
+        if let Some((cap, cap_mb)) = memory_cap
+            && let Some(requested) = rule.effective_memory()
+            && oxo_flow_core::scheduler::parse_memory_mb(requested).is_some_and(|mb| mb > cap_mb)
+        {
+            breaches.push(format!(
+                "rule '{name}' requests {requested} but [resource_budget] max_memory = {cap}"
+            ));
+        }
+        if let Some(cap) = budget.max_threads
+            && rule.effective_threads() > cap
+        {
+            breaches.push(format!(
+                "rule '{name}' requests {} threads but [resource_budget] max_threads = {cap}",
+                rule.effective_threads()
+            ));
+        }
+    }
+    if breaches.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "{} rule(s) exceed the workflow's [resource_budget] — nothing was submitted:\n  {}",
+        breaches.len(),
+        breaches.join("\n  ")
+    ))
+}
+
 /// Create `.oxo-flow/runs/<timestamp>/` and repoint the `latest` symlink.
 ///
 /// The timestamp is the directory name so runs sort chronologically with
@@ -307,6 +369,13 @@ pub(crate) async fn run_on_cluster(
 
     let run_dir = create_run_dir(args.workdir)?;
 
+    // A rule that alone exceeds the workflow's own declared budget would be
+    // rejected by the queue (or run into swap) after the fact — say so before
+    // anything leaves for the scheduler.
+    if let Some(budget) = args.config.resource_budget.as_ref() {
+        check_budget(&plan, &to_run, budget)?;
+    }
+
     let driver_defaults = DriverConfig::default();
     let driver_config = DriverConfig {
         // CLI flag beats the profile, which beats the driver default.
@@ -336,7 +405,8 @@ pub(crate) async fn run_on_cluster(
     );
     eprintln!("  run directory: {}", run_dir.display());
 
-    let executor = ClusterExecutor::new(backend, cluster_config);
+    let executor =
+        ClusterExecutor::new(backend, cluster_config).with_workdir(args.workdir.to_path_buf());
     let driver = BackendDriver::new(Arc::new(executor), driver_config);
     // Submit-time checkpoint recording (issue #136 H6): a crashed driver
     // leaves truthful RUNNING entries for accepted jobs, so `resume` /
@@ -412,7 +482,13 @@ pub(crate) async fn run_on_cluster(
 
 #[cfg(test)]
 mod tests {
+    use super::check_budget;
     use super::cluster_env_cache_dir;
+    use oxo_flow_core::backend::ScheduledPlan;
+    use oxo_flow_core::config::{ResourceBudget, WorkflowConfig};
+    use oxo_flow_core::dag::WorkflowDag;
+    use oxo_flow_core::environment::EnvironmentResolver;
+    use std::collections::HashMap;
 
     #[test]
     fn env_cache_defaults_to_workdir_env_cache() {
@@ -430,5 +506,118 @@ mod tests {
             std::path::Path::new("/wf"),
         );
         assert_eq!(dir, std::path::PathBuf::from("/custom/cache"));
+    }
+
+    /// A plan with one rule declaring `memory` and `threads`.
+    fn hungry_plan(workdir: &std::path::Path, memory: &str, threads: u32) -> ScheduledPlan {
+        let toml = format!(
+            "[workflow]\nname = \"budget\"\n[[rules]]\nname = \"align\"\n\
+             memory = \"{memory}\"\nthreads = {threads}\n\
+             shell = \"true\"\noutput = [\"out.txt\"]\n"
+        );
+        let path = workdir.join("wf.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&path).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        ScheduledPlan::build(
+            &config,
+            &dag,
+            workdir,
+            &EnvironmentResolver::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn budget_rejects_a_rule_that_cannot_fit() {
+        // A rule asking for 100000G against a declared budget of 64G used to
+        // be handed to the scheduler verbatim.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "100000G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let budget = ResourceBudget {
+            max_threads: None,
+            max_memory: Some("64G".to_string()),
+            max_jobs: None,
+        };
+        let err = check_budget(&plan, &to_run, &budget).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("align") && msg.contains("100000G") && msg.contains("64G"),
+            "the breach must name the rule, the request, and the cap: {msg}"
+        );
+        assert!(
+            msg.contains("nothing was submitted"),
+            "the run must be able to stop before any submission: {msg}"
+        );
+    }
+
+    #[test]
+    fn budget_rejects_an_impossible_thread_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 64);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let budget = ResourceBudget {
+            max_threads: Some(16),
+            max_memory: None,
+            max_jobs: None,
+        };
+        let msg = check_budget(&plan, &to_run, &budget)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("requests 64 threads") && msg.contains("max_threads = 16"),
+            "unexpected breach message: {msg}"
+        );
+    }
+
+    #[test]
+    fn budget_passes_a_request_that_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let budget = ResourceBudget {
+            max_threads: Some(16),
+            max_memory: Some("64G".to_string()),
+            max_jobs: None,
+        };
+        assert!(check_budget(&plan, &to_run, &budget).is_ok());
+    }
+
+    #[test]
+    fn budget_ignores_rules_outside_this_run() {
+        // Only what this run submits is gated: a stale rule kept out of
+        // `to_run` by the invalidation analysis must not block the run.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "100000G", 64);
+        let budget = ResourceBudget {
+            max_threads: Some(1),
+            max_memory: Some("1G".to_string()),
+            max_jobs: None,
+        };
+        assert!(check_budget(&plan, &std::collections::HashSet::new(), &budget).is_ok());
+    }
+
+    #[test]
+    fn budget_rejects_an_unreadable_cap_instead_of_ignoring_it() {
+        // An unparseable cap must not silently become "no cap at all".
+        let dir = tempfile::tempdir().unwrap();
+        let plan = hungry_plan(dir.path(), "8G", 4);
+        let to_run: std::collections::HashSet<String> = plan.order.iter().cloned().collect();
+        let budget = ResourceBudget {
+            max_threads: None,
+            max_memory: Some("lots".to_string()),
+            max_jobs: None,
+        };
+        let msg = check_budget(&plan, &to_run, &budget)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("max_memory = 'lots'"),
+            "the message must name the bad value: {msg}"
+        );
     }
 }

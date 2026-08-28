@@ -72,6 +72,21 @@ dry-run preview uses). The driver:
   dynamically discovered instances execute in the same run (see
   [Checkpoint re-entry](#checkpoint-re-entry) below).
 
+`DriverConfig` supplies the knobs, with these defaults:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `max_submitted` | `50` | In-flight jobs (pending + running) before submissions top up as slots free |
+| `max_array_size` | `1001` | Scheduler array limit — larger groups are chunked into several arrays |
+| `no_arrays` | `false` | Set to submit every instance as its own job |
+| `poll_interval` | `5s` | Delay between scheduler polls |
+| `poll_timeout` | `None` | Overall wall-clock budget; unset means run until terminal states |
+
+A `[cluster]` profile block overrides `max_submitted`, `max_array_size`, and
+`poll_interval` (see
+[Cluster submission](../commands/run.md#cluster-submission)); `no_arrays`,
+`poll_timeout`, and the defaults themselves are driver-internal.
+
 ## Testing without a cluster
 
 The workspace ships a **mock SLURM scheduler** at

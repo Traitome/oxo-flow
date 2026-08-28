@@ -2956,6 +2956,7 @@ dependencies = [
  "oxo-flow-core",
  "oxo-flow-web",
  "oxo-license",
+ "predicates",
  "reqwest",
  "serde",
  "serde_json",

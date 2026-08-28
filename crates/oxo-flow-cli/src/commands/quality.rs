@@ -6,6 +6,16 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
 
+/// `"1 rule"` / `"2 rules"` — the summary counts read "1 rules" before the
+/// CLI grew pluralisation (audit P4-1d).
+fn plural(count: usize, singular: &str, plural_form: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural_form}")
+    }
+}
+
 pub async fn validate_command(
     workflow: PathBuf,
     as_include: bool,
@@ -145,11 +155,11 @@ pub async fn validate_command(
             } else {
                 if error_count == 0 {
                     eprintln!(
-                        "{} {} — {} rules, {} dependencies",
+                        "{} {} — {}, {}",
                         "✓".green().bold(),
                         workflow.display(),
-                        rules,
-                        dependencies
+                        plural(rules, "rule", "rules"),
+                        plural(dependencies, "dependency", "dependencies")
                     );
                 } else {
                     eprintln!(
@@ -205,8 +215,35 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint", "").await?;
         println!();
     }
-    let config = WorkflowConfig::from_file(&workflow)
-        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+    let config = match WorkflowConfig::from_file(&workflow) {
+        Ok(config) => config,
+        Err(e) => {
+            // The JSON surface stays machine-readable on a parse failure too
+            // (audit P4-6): it used to emit nothing on stdout, so a caller
+            // could not tell a broken workflow from a crashed run — the same
+            // case `validate --json` already reports as code=PARSE.
+            if json {
+                let output = serde_json::json!({
+                    "command": "lint",
+                    "workflow": workflow.display().to_string(),
+                    "strict": strict,
+                    "diagnostics": [{
+                        "severity": "error",
+                        "code": "PARSE",
+                        "message": e.to_string(),
+                        "rule": serde_json::Value::Null,
+                        "suggestion": serde_json::Value::Null,
+                    }],
+                    "error_count": 1,
+                    "warning_count": 0,
+                    "info_count": 0,
+                    "passed": false,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            }
+            return Err(e).with_context(|| format!("failed to parse {}", workflow.display()));
+        }
+    };
 
     let validation = oxo_flow_core::format::validate_format(&config);
     let lint_diags = oxo_flow_core::format::lint_format(&config, workflow.parent());
@@ -608,6 +645,7 @@ pub fn touch_command(
 #[cfg(test)]
 mod tests {
     use assert_cmd::Command;
+    use predicates::prelude::PredicateBooleanExt;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -659,5 +697,63 @@ input = ["test.txt"]
             .arg(file.path())
             .assert()
             .failure();
+    }
+
+    #[test]
+    fn validate_summary_pluralises_counts() {
+        // Audit P4-1d: a single-rule workflow reported "1 rules".
+        let single = r#"
+[workflow]
+name = "one-rule"
+
+[[rules]]
+name = "only"
+output = ["o.txt"]
+shell = "true"
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(single.as_bytes()).unwrap();
+
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("validate")
+            .arg(file.path())
+            .assert()
+            .success()
+            .stderr(
+                predicates::str::contains("1 rule, 0 dependencies")
+                    .and(predicates::str::contains("1 rules").not()),
+            );
+    }
+
+    #[test]
+    fn lint_json_reports_parse_failures() {
+        // Audit P4-6: `lint --json` on an unparseable workflow used to print
+        // nothing on stdout, leaving the caller without a machine-readable
+        // verdict; `validate --json` already reports code=PARSE here.
+        let broken = "[workflow\nname = \"broken\"\n";
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(broken.as_bytes()).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .arg("lint")
+            .arg("--json")
+            .arg(file.path())
+            .assert()
+            .failure();
+
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("lint --json must emit JSON on stdout");
+        assert_eq!(parsed["command"], "lint");
+        assert_eq!(parsed["passed"], false);
+        assert_eq!(parsed["error_count"], 1);
+        assert_eq!(parsed["diagnostics"][0]["code"], "PARSE");
+        assert_eq!(parsed["diagnostics"][0]["severity"], "error");
+        assert!(
+            !stdout.is_empty(),
+            "the JSON surface must never be empty, even on a parse failure"
+        );
     }
 }

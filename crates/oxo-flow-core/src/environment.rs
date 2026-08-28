@@ -180,9 +180,16 @@ impl EnvironmentBackend for CondaBackend {
         // or the file stem. Without `-n`, conda 25+ fails with "Unable to
         // determine environment" for YAMLs that declare no name (the common
         // nf-core style — found live: mixscape's seurat_lda.yaml).
+        //
+        // Neither arm redirects stderr: conda's solver progress is the only
+        // window into a cold bootstrap, and when create fails the engine
+        // must report create's root cause, not the fallback update's.
+        // `create || update --prune` runs after the executor's verify step
+        // already found the env missing/broken, so the "already exists"
+        // noise the redirect used to hide is rare.
         let env_name = conda_env_name_from_spec("conda", spec)?;
         Ok(format!(
-            "conda env create -n {env_name} -f {spec} 2>/dev/null || conda env update -n {env_name} -f {spec} --prune"
+            "conda env create -n {env_name} -f {spec} || conda env update -n {env_name} -f {spec} --prune"
         ))
     }
 
@@ -217,7 +224,7 @@ impl CondaBackend {
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
             Ok(format!(
-                "conda env create -p {prefix} -f {spec} 2>/dev/null || conda env update -p {prefix} -f {spec} --prune"
+                "conda env create -p {prefix} -f {spec} || conda env update -p {prefix} -f {spec} --prune"
             ))
         } else {
             self.setup_command(spec)
@@ -310,6 +317,29 @@ fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+/// Reject container image references that could alter the meaning of the
+/// rendered wrapper line (`docker run {spec} ...`, `{binary} exec {spec}`).
+///
+/// Validation (E016) catches this at workflow level; this is the backend
+/// boundary guard so nothing reaches the shell even when a caller skips
+/// validation. Image references never legitimately contain shell-active
+/// characters (see [`crate::rule::EnvironmentSpec::shell_risk`]).
+fn ensure_container_spec_safe(spec: &str) -> Result<()> {
+    const RISKY: &[char] = &[
+        ';', '&', '|', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n', '\r', '{',
+        '}', '~', '*', '?', '[', ']', '!', '#', ',',
+    ];
+    if let Some(c) = spec.chars().find(|c| RISKY.contains(c) || c.is_control()) {
+        return Err(OxoFlowError::Config {
+            message: format!(
+                "container image reference contains shell-unsafe character {c:?}: {spec:?} — \
+                 image specs may only contain [A-Za-z0-9._:/@-]"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Absolute host path for container bind mounts: docker's `-v`/`-w` and
 /// singularity's `--bind` reject relative sources ("the working directory
 /// '.' is invalid"). Resolves relative paths against the process CWD;
@@ -331,6 +361,172 @@ fn absolute_host_path(path: &std::path::Path) -> String {
         }
     }
     clean.display().to_string()
+}
+
+/// Host prefixes that must never be bind-mounted into a container: they
+/// carry the container's own toolchain (a mount there shadows the very
+/// binaries the wrapper is about to run) or are kernel pseudo-filesystems.
+const PROTECTED_BIND_PREFIXES: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/run",
+    "/boot",
+    "/snap",
+    "/var",
+    "/tmp",
+    "/root",
+    "/opt/conda",
+];
+
+/// Characters that end a word in a rendered shell command line.
+const SHELL_WORD_BREAKS: &[char] = &[
+    ' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '<', '>', '\'', '"', '`',
+];
+
+/// Whether a host path may be bind-mounted read-only into a container.
+///
+/// Refuses the workdir itself (already mounted read-write), the protected
+/// toolchain prefixes, and paths that do not exist on the host — docker
+/// silently creates a directory for a missing `-v` source, which would
+/// paper over a typo as an empty mount.
+fn is_bindable_host_path(path: &std::path::Path, workdir: &str) -> bool {
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    if !path.is_absolute() || text == "/" {
+        return false;
+    }
+    let workdir = std::path::Path::new(workdir);
+    if path == workdir || path.starts_with(workdir) {
+        return false;
+    }
+    if PROTECTED_BIND_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        return false;
+    }
+    path.exists()
+}
+
+/// Absolute host paths a rendered command references that the workdir mount
+/// does not already make visible inside the container.
+///
+/// Only the workdir is bind-mounted, so a rule consuming a `[config]`
+/// reference genome or index outside it failed with "No such file" inside
+/// the container while the same command ran fine on the host. Paths come
+/// back deduplicated and sorted, so the rendered wrapper is deterministic.
+fn external_bind_mounts(command: &str, workdir: &str) -> Vec<String> {
+    command
+        .split(|c: char| SHELL_WORD_BREAKS.contains(&c))
+        .filter(|token| {
+            token.starts_with('/') && is_bindable_host_path(std::path::Path::new(token), workdir)
+        })
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Whether a container image reference is registry-unqualified.
+///
+/// A spec like `bwa:0.7.17` or `biocontainers/bwa:0.7.17` carries no
+/// registry host, so `docker run` resolves it against docker.io (plus this
+/// engine's single [`quay_biocontainers_fallback`] retry) — never against
+/// the registry the author may have meant. Backends accept it silently, so
+/// validate/lint is the place to say it; this predicate is that check.
+///
+/// Scheme-prefixed (`docker://…`, `library://…`) and local SIF paths are
+/// never unqualified: they name their transport or a file, not a registry
+/// namespace.
+pub fn is_unqualified_image_spec(spec: &str) -> bool {
+    match spec.split_once("://") {
+        // Only a docker:// URI can hide a bare docker.io name.
+        Some(("docker", rest)) => is_unqualified_image_spec(rest),
+        Some(_) => false,
+        None => {
+            if spec.starts_with('/') || spec.starts_with('.') {
+                return false; // local SIF path
+            }
+            if std::path::Path::new(spec)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sif"))
+            {
+                return false; // a deployed SIF file, not a registry namespace
+            }
+            let image = spec.split('@').next().unwrap_or(spec);
+            // Strip the tag, but only when the colon starts one — a colon
+            // whose suffix contains '/' belongs to a host:port registry.
+            let name = match image.rsplit_once(':') {
+                Some((head, tail)) if !tail.is_empty() && !tail.contains('/') => head,
+                _ => image,
+            };
+            match name.split('/').next() {
+                Some(host) => !host.contains('.') && !host.contains(':'),
+                None => false,
+            }
+        }
+    }
+}
+
+/// Whether an input pattern is a directory reference or a glob.
+///
+/// Producer edges are inferred by exact string match between a producer's
+/// output pattern and a consumer's input pattern, so `results/bam/` or
+/// `*.bam` can never form one — the consumer silently ends up with no
+/// producer and runs too early (or reads a half-written tree). `validate`
+/// can now warn about it; this predicate is that check. Wildcard
+/// placeholders (`{sample}`, `{config.x}`) are engine-expanded to exact
+/// strings and are not globs.
+pub fn dir_glob_input_pattern(pattern: &str) -> bool {
+    pattern.ends_with('/') || pattern.contains(['*', '?', '['])
+}
+
+/// Reject a spec that names HPC `modules` alongside another backend.
+///
+/// [`EnvironmentResolver`] resolves exactly one backend per rule (conda →
+/// pixi → docker → … → modules), so a mixed spec executed the first arm and
+/// silently dropped the `module load`s — the rule then died with
+/// "command not found" far from the cause. Combining them is not supported
+/// (a container has no module system, and conda/mamba/pixi ignore module
+/// environment), so fail loudly instead.
+fn ensure_no_backend_conflict(env_spec: &EnvironmentSpec) -> Result<()> {
+    if env_spec.modules.is_empty() {
+        return Ok(());
+    }
+    let others: &[(&str, bool)] = &[
+        ("mamba", env_spec.mamba.is_some()),
+        ("conda", env_spec.conda.is_some()),
+        ("pixi", env_spec.pixi.is_some()),
+        ("docker", env_spec.docker.is_some()),
+        ("singularity", env_spec.singularity.is_some()),
+        ("venv", env_spec.venv.is_some()),
+    ];
+    let combined: Vec<&str> = others
+        .iter()
+        .filter(|(_, set)| *set)
+        .map(|(kind, _)| *kind)
+        .collect();
+    if combined.is_empty() {
+        return Ok(());
+    }
+    Err(OxoFlowError::Environment {
+        kind: "modules".to_string(),
+        message: format!(
+            "environment.modules is combined with {} — oxo-flow runs one environment backend per \
+             rule and would silently drop the module loads. Split them across rules, or load the \
+             modules inside the rule's own shell.",
+            combined.join(" + ")
+        ),
+    })
 }
 
 /// Mamba / micromamba environment backend.
@@ -378,7 +574,7 @@ impl MambaBackend {
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
             Ok(format!(
-                "{} env create -p {prefix} -f {spec} 2>/dev/null || {} env update -p {prefix} -f {spec} --prune",
+                "{} env create -p {prefix} -f {spec} || {} env update -p {prefix} -f {spec} --prune",
                 self.binary, self.binary
             ))
         } else {
@@ -480,7 +676,7 @@ impl EnvironmentBackend for MambaBackend {
         // refuses nameless YAMLs without `-n`.
         let env_name = conda_env_name_from_spec("mamba", spec)?;
         Ok(format!(
-            "{} env create -n {env_name} -f {spec} 2>/dev/null || {} env update -n {env_name} -f {spec} --prune",
+            "{} env create -n {env_name} -f {spec} || {} env update -n {env_name} -f {spec} --prune",
             self.binary, self.binary
         ))
     }
@@ -604,9 +800,19 @@ impl DockerBackend {
         // Docker requires absolute paths for -v/-w: a relative workdir
         // ("." when running from the workflow dir) is rejected by the
         // daemon ("the working directory '.' is invalid").
+        // The spec is validated (no shell metacharacters) and single-quoted
+        // so it is parsed as one word, never as command syntax (audit C1).
+        ensure_container_spec_safe(spec)?;
         let workdir = absolute_host_path(workdir);
+        // Inputs referenced by absolute host path are invisible inside the
+        // container unless they are mounted — only the workdir is. Read-only:
+        // the container consumes these files, it does not own them.
+        let mounts = external_bind_mounts(command, &workdir)
+            .iter()
+            .map(|path| format!(" -v {path}:{path}:ro"))
+            .collect::<String>();
         let escaped_cmd = escape_for_sh_single_quote(command);
-        let spec = mirrored_spec(spec);
+        let spec = escape_for_sh_single_quote(&mirrored_spec(spec));
 
         let mut mem_arg = String::new();
         if let Some(res) = resources
@@ -615,9 +821,16 @@ impl DockerBackend {
             mem_arg = format!(" --memory {mem}");
         }
         let gpus_arg = gpus.map(|g| format!(" --gpus {g}")).unwrap_or_default();
+        // CPU limit parity with the exported-image path
+        // (`generate_docker_run_command` renders --cpus). threads == 1 is
+        // the documented "unset" sentinel, so an unset rule stays unlimited.
+        let cpu_arg = match resources {
+            Some(res) if res.threads > 1 => format!(" --cpus {}", res.threads),
+            _ => String::new(),
+        };
 
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg}{cpu_arg} -v {workdir}:{workdir}{mounts} -w {workdir} '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 }
@@ -661,15 +874,18 @@ impl EnvironmentBackend for DockerBackend {
         // even when the quay image exists locally, so without the tag
         // the run step would fail with the same 404 (live-verified on
         // tx-ubuntu).
+        ensure_container_spec_safe(spec)?;
         let spec = mirrored_spec(spec);
-        let mut pull = format!("docker pull {spec}");
+        let quoted = escape_for_sh_single_quote(&spec);
+        let mut pull = format!("docker pull '{quoted}'");
         if let Some(fallback) = quay_biocontainers_fallback(&spec) {
+            let fallback = escape_for_sh_single_quote(&fallback);
             pull.push_str(&format!(
-                " || (docker pull {fallback} && docker tag {fallback} {spec})"
+                " || (docker pull '{fallback}' && docker tag '{fallback}' '{quoted}')"
             ));
         }
         Ok(format!(
-            "docker image inspect {spec} >/dev/null 2>&1 || {pull}"
+            "docker image inspect '{quoted}' >/dev/null 2>&1 || {pull}"
         ))
     }
 
@@ -739,12 +955,18 @@ impl EnvironmentBackend for SingularityBackend {
         workdir: &std::path::Path,
     ) -> Result<String> {
         // Same as docker: --bind sources must be absolute host paths.
+        // URI-form specs are validated as image references; a bare local
+        // SIF path keeps path semantics, so only quote it (no whitelist).
+        let spec = mirrored_spec(spec);
+        if spec.contains("://") {
+            ensure_container_spec_safe(&spec)?;
+        }
         let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
-        let spec = mirrored_spec(spec);
+        let quoted_spec = escape_for_sh_single_quote(&spec);
 
         Ok(format!(
-            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
+            "{} exec --bind {workdir}:{workdir} '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }
@@ -1144,6 +1366,12 @@ pub struct EnvironmentResolver {
     /// the user owns (issue #136). The resolver lives for one run, so this
     /// is exactly "created this run".
     setup_origins: std::sync::Mutex<HashMap<String, bool>>,
+    /// Wall-clock start of every setup this resolver issued, keyed by cache
+    /// key. [`Self::cache_mark_ready`] turns it into one bootstrap-duration
+    /// log line: without it the environment's cost is silently billed to
+    /// whichever rule happened to trigger the setup first (a cold conda
+    /// bootstrap is minutes, all of it spent inside the first rule).
+    setup_started: std::sync::Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl Default for EnvironmentResolver {
@@ -1167,6 +1395,7 @@ impl EnvironmentResolver {
             cache: Arc::new(Mutex::new(EnvironmentCache::new())),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
             setup_origins: std::sync::Mutex::new(HashMap::new()),
+            setup_started: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -1184,6 +1413,7 @@ impl EnvironmentResolver {
             cache: Arc::new(Mutex::new(EnvironmentCache::with_cache_dir(cache_dir))),
             setup_locks: std::sync::Mutex::new(HashMap::new()),
             setup_origins: std::sync::Mutex::new(HashMap::new()),
+            setup_started: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -1195,8 +1425,28 @@ impl EnvironmentResolver {
 
     /// Mark an environment as ready in the cache (async).
     pub async fn cache_mark_ready(&self, key: &str) {
-        let mut cache = self.cache.lock().await;
-        cache.mark_ready(key);
+        // One report per bootstrap: the timer only exists when this resolver
+        // issued a setup, so the "already present and verified" path stays
+        // silent and rules sharing the env log it exactly once.
+        let bootstrap = {
+            let mut started = self
+                .setup_started
+                .lock()
+                .expect("environment cache mutex poisoned");
+            started.remove(key)
+        };
+        {
+            let mut cache = self.cache.lock().await;
+            cache.mark_ready(key);
+        }
+        if let Some(started_at) = bootstrap {
+            tracing::info!(
+                env = %key,
+                elapsed_secs = started_at.elapsed().as_secs_f32(),
+                "environment ready — bootstrap (setup + verification) complete; \
+                 this time was billed to the first rule that needed the environment"
+            );
+        }
     }
 
     /// Invalidate a cache entry (the cached environment vanished on disk).
@@ -1213,6 +1463,7 @@ impl EnvironmentResolver {
         resources: Option<&crate::rule::Resources>,
         workdir: &std::path::Path,
     ) -> Result<String> {
+        ensure_no_backend_conflict(env_spec)?;
         if let Some(ref mamba) = env_spec.mamba {
             return self.mamba.wrap_command_with_opts(
                 command,
@@ -1296,6 +1547,24 @@ impl EnvironmentResolver {
     /// executor runs conda in the workflow dir, and the standard invocation
     /// runs from there too).
     pub fn setup_command(&self, env_spec: &EnvironmentSpec) -> Result<String> {
+        ensure_no_backend_conflict(env_spec)?;
+        // Announce the bootstrap and start its timer: this is the single
+        // choke point right before the executor runs the setup command, and
+        // `cache_mark_ready` reports the duration from here. Backends with
+        // no environment (system) are not a bootstrap — logging one for
+        // them would be noise on every rule of a plain workflow.
+        let key = self.cache_key(env_spec);
+        if env_spec.kind() != "system" {
+            tracing::info!(
+                env = %key,
+                "environment not ready — running setup (a cold bootstrap can take several minutes; \
+                 conda's own progress is captured and reported if the setup fails)"
+            );
+            self.setup_started
+                .lock()
+                .expect("environment cache mutex poisoned")
+                .insert(key, std::time::Instant::now());
+        }
         if let Some(ref mamba) = env_spec.mamba {
             let pre_existed = env_spec
                 .mamba_prefix
@@ -1471,6 +1740,7 @@ impl EnvironmentResolver {
 
     /// Validate that the required environment backend is available for a spec.
     pub fn validate_spec(&self, env_spec: &EnvironmentSpec) -> Result<()> {
+        ensure_no_backend_conflict(env_spec)?;
         if env_spec.mamba.is_some() && !self.mamba.is_available() {
             return Err(OxoFlowError::Environment {
                 kind: "mamba".to_string(),
@@ -1817,12 +2087,14 @@ mod tests {
     fn docker_setup_command() {
         let backend = DockerBackend;
         let cmd = backend.setup_command("biocontainers/bwa:0.7.17").unwrap();
+        // Specs are single-quoted so a reference that slipped past E016 is
+        // still parsed as one shell word, never as command syntax.
         assert_eq!(
             cmd,
-            "docker image inspect biocontainers/bwa:0.7.17 >/dev/null 2>&1 || \
-             docker pull biocontainers/bwa:0.7.17 || \
-             (docker pull quay.io/biocontainers/bwa:0.7.17 && \
-             docker tag quay.io/biocontainers/bwa:0.7.17 biocontainers/bwa:0.7.17)"
+            "docker image inspect 'biocontainers/bwa:0.7.17' >/dev/null 2>&1 || \
+             docker pull 'biocontainers/bwa:0.7.17' || \
+             (docker pull 'quay.io/biocontainers/bwa:0.7.17' && \
+             docker tag 'quay.io/biocontainers/bwa:0.7.17' 'biocontainers/bwa:0.7.17')"
         );
     }
 
@@ -1835,8 +2107,8 @@ mod tests {
         let cmd = backend.setup_command("bwa:0.7.19").unwrap();
         assert!(
             cmd.contains(
-                "docker pull quay.io/biocontainers/bwa:0.7.19 \
-                 && docker tag quay.io/biocontainers/bwa:0.7.19 bwa:0.7.19"
+                "docker pull 'quay.io/biocontainers/bwa:0.7.19' \
+                 && docker tag 'quay.io/biocontainers/bwa:0.7.19' 'bwa:0.7.19'"
             ),
             "fallback pull must be re-tagged with the original spec: {cmd}"
         );
@@ -1849,7 +2121,9 @@ mod tests {
         // against quay.io/biocontainers after a docker.io failure.
         let cmd = backend.setup_command("bwa:0.7.19").unwrap();
         assert!(
-            cmd.contains("docker pull bwa:0.7.19 || (docker pull quay.io/biocontainers/bwa:0.7.19"),
+            cmd.contains(
+                "docker pull 'bwa:0.7.19' || (docker pull 'quay.io/biocontainers/bwa:0.7.19'"
+            ),
             "bare name must get the quay.io/biocontainers fallback: {cmd}"
         );
     }
@@ -1867,7 +2141,7 @@ mod tests {
             "explicit quay spec must not get a second (fallback) pull: {cmd}"
         );
         assert!(
-            cmd.ends_with("docker pull quay.io/nf-core/cellranger:7.1.0"),
+            cmd.ends_with("docker pull 'quay.io/nf-core/cellranger:7.1.0'"),
             "explicit quay spec must be pulled verbatim: {cmd}"
         );
         // Local registries (host:port) and multi-segment paths also stay verbatim.
@@ -1884,6 +2158,131 @@ mod tests {
         assert!(
             !cmd.contains("quay.io/biocontainers"),
             "docker.io explicit: {cmd}"
+        );
+    }
+
+    /// A scratch directory the bind-mount logic is allowed to mount: the
+    /// default temp root (/var/folders on macOS, /tmp on Linux) sits under
+    /// one of the protected prefixes, so these tests need somewhere else.
+    fn mountable_scratch_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("oxo-bind-test")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn docker_wrap_mounts_external_absolute_paths() {
+        // Absolute inputs outside the workdir are invisible inside the
+        // container — only the workdir is bind-mounted. validate steers
+        // users to `[config]` absolute paths, so the wrapper must carry
+        // them (read-only: the container is a consumer of these files).
+        let dir = mountable_scratch_dir();
+        let reference = dir.path().join("hg38.fa");
+        std::fs::write(&reference, b"ACGT").unwrap();
+        let reference = reference.display().to_string();
+        let workdir = mountable_scratch_dir();
+
+        let wrapped = DockerBackend
+            .wrap_command(
+                &format!("bwa mem {reference} reads.fq > out.sam"),
+                "quay.io/biocontainers/bwa:0.7.17",
+                None,
+                workdir.path(),
+            )
+            .unwrap();
+        assert!(
+            wrapped.contains(&format!(" -v {reference}:{reference}:ro ")),
+            "the referenced absolute input must be bind-mounted read-only: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn docker_wrap_does_not_remount_paths_inside_the_workdir() {
+        let dir = mountable_scratch_dir();
+        let inner = dir.path().join("reads.fq");
+        std::fs::write(&inner, b"ACGT").unwrap();
+        let inner = inner.display().to_string();
+
+        let wrapped = DockerBackend
+            .wrap_command(&format!("cat {inner}"), "ubuntu:24.04", None, dir.path())
+            .unwrap();
+        assert!(
+            !wrapped.contains(":ro"),
+            "workdir contents are already visible through the rw workdir mount: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn docker_wrap_skips_system_pseudo_and_missing_paths() {
+        // Mounting a toolchain or kernel path shadows what the container
+        // needs to run; mounting a nonexistent host path makes docker
+        // create an empty directory there. All three must be left alone.
+        let workdir = mountable_scratch_dir();
+        let wrapped = DockerBackend
+            .wrap_command(
+                "/usr/bin/env samtools view /dev/null 2>/tmp/oxo-nope/x || /oxo-does-not-exist/x",
+                "ubuntu:24.04",
+                None,
+                workdir.path(),
+            )
+            .unwrap();
+        assert!(!wrapped.contains(":ro"), "{wrapped}");
+    }
+
+    #[test]
+    fn docker_wrap_mounts_a_repeated_external_path_once() {
+        let dir = mountable_scratch_dir();
+        let db = dir.path().join("blast.db");
+        std::fs::write(&db, b"x").unwrap();
+        let db = db.display().to_string();
+        let workdir = mountable_scratch_dir();
+
+        let wrapped = DockerBackend
+            .wrap_command(
+                &format!("blastp -db {db} -query a.fa; blastn -db {db} -query b.fa"),
+                "ubuntu:24.04",
+                None,
+                workdir.path(),
+            )
+            .unwrap();
+        assert_eq!(
+            wrapped.matches(&format!("-v {db}:{db}:ro")).count(),
+            1,
+            "one mount per distinct path: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn docker_wrap_adds_cpus_for_multi_thread_rules() {
+        // Export parity: `export -f docker` renders --cpus, so the run path
+        // must too (threads == 1 is the documented "unset" sentinel).
+        let threads = crate::rule::Resources {
+            threads: 4,
+            ..Default::default()
+        };
+        let wrapped = DockerBackend
+            .wrap_command(
+                "echo hi",
+                "ubuntu:24.04",
+                Some(&threads),
+                std::path::Path::new("/tmp/oxo-cpus"),
+            )
+            .unwrap();
+        assert!(wrapped.contains(" --cpus 4 "), "{wrapped}");
+
+        let unset = crate::rule::Resources::default();
+        let wrapped = DockerBackend
+            .wrap_command(
+                "echo hi",
+                "ubuntu:24.04",
+                Some(&unset),
+                std::path::Path::new("/tmp/oxo-cpus"),
+            )
+            .unwrap();
+        assert!(
+            !wrapped.contains("--cpus"),
+            "threads=1 means unset: {wrapped}"
         );
     }
 
@@ -2851,5 +3250,210 @@ mod tests {
             )
             .unwrap();
         assert!(!result.contains("--memory"));
+    }
+
+    // ── Multi-backend specs must not drop a backend silently ───────
+
+    #[test]
+    fn resolver_rejects_modules_combined_with_another_backend() {
+        // wrap_command resolves ONE backend per rule, so a spec carrying
+        // both `modules` and `conda` ran the conda arm and silently dropped
+        // the module loads — the tool then failed with "command not found"
+        // far away from the cause.
+        let resolver = EnvironmentResolver::new();
+        for other in [
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                conda: Some("envs/qc.yaml".into()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                docker: Some("ubuntu:24.04".into()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                singularity: Some("img.sif".into()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                pixi: Some("pixi.toml".into()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                venv: Some(".venv".into()),
+                ..Default::default()
+            },
+            EnvironmentSpec {
+                modules: vec!["gcc/11.2".into()],
+                mamba: Some("envs/qc.yaml".into()),
+                ..Default::default()
+            },
+        ] {
+            let err = resolver
+                .wrap_command("echo hi", &other, None, std::path::Path::new("."))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("modules"),
+                "the error must name the dropped backend: {err}"
+            );
+            assert!(
+                resolver.setup_command(&other).is_err(),
+                "setup must refuse the same combination"
+            );
+        }
+    }
+
+    #[test]
+    fn resolver_accepts_modules_alone() {
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            modules: vec!["gcc/11.2".into(), "cuda/11.7".into()],
+            ..Default::default()
+        };
+        let wrapped = resolver
+            .wrap_command("echo hi", &spec, None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            wrapped.contains("module load gcc/11.2 cuda/11.7"),
+            "{wrapped}"
+        );
+        assert!(resolver.setup_command(&spec).is_ok());
+    }
+
+    #[test]
+    fn validate_spec_rejects_modules_combined_with_another_backend() {
+        // `env check` walks this per rule, so a mixed spec is reported
+        // before a run rather than mid-execution.
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            modules: vec!["gcc/11.2".into()],
+            conda: Some("envs/qc.yaml".into()),
+            ..Default::default()
+        };
+        assert!(resolver.validate_spec(&spec).is_err());
+    }
+
+    // ── Bootstrap progress (conda/mamba setup no longer self-mutes) ──
+
+    #[test]
+    fn conda_setup_keeps_solver_progress_visible() {
+        // `2>/dev/null` on the create arm threw away conda's own progress
+        // AND the root-cause error: when create failed, only the fallback
+        // `env update` error reached the engine's captured stderr.
+        let backend = CondaBackend;
+        let cmd = backend.setup_command("envs/qc.yaml").unwrap();
+        assert!(
+            !cmd.contains("2>/dev/null"),
+            "conda's progress must reach the engine's capture: {cmd}"
+        );
+        let cmd = backend
+            .setup_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
+            .unwrap();
+        assert!(!cmd.contains("2>/dev/null"), "{cmd}");
+        let backend = MambaBackend::new();
+        assert!(
+            !backend
+                .setup_command("envs/qc.yaml")
+                .unwrap()
+                .contains("2>/dev/null"),
+            "{}",
+            backend.setup_command("envs/qc.yaml").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_duration_is_reported_once_per_setup() {
+        // The bootstrap cost was invisible: it landed inside the first
+        // rule's benchmark with no record of its own. The resolver now
+        // times the setup it issues and reports it when the env is ready.
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".into()),
+            ..Default::default()
+        };
+        let key = resolver.cache_key(&spec);
+        let _ = resolver.setup_command(&spec).unwrap();
+        assert!(
+            resolver.setup_started.lock().unwrap().contains_key(&key),
+            "issuing a setup must start the bootstrap timer"
+        );
+        resolver.cache_mark_ready(&key).await;
+        assert!(
+            resolver.setup_started.lock().unwrap().is_empty(),
+            "the timer is consumed by the ready report (reported once, not on every rule)"
+        );
+    }
+
+    #[test]
+    fn system_backend_never_counts_as_a_bootstrap() {
+        // "no environment" rules run `true` — logging a bootstrap for them
+        // would be noise on every rule of every plain workflow.
+        let resolver = EnvironmentResolver::new();
+        let spec = EnvironmentSpec::default();
+        let _ = resolver.setup_command(&spec).unwrap();
+        assert!(resolver.setup_started.lock().unwrap().is_empty());
+    }
+
+    // ── Diagnostics helpers for validate/lint integration ──────────
+
+    #[test]
+    fn unqualified_image_specs_are_detected() {
+        // Docker resolves these against docker.io (plus the engine's single
+        // quay.io/biocontainers retry) — the author's registry is never
+        // consulted, so validate must be able to flag them.
+        for spec in [
+            "bwa",
+            "bwa:0.7.17",
+            "biocontainers/bwa:0.7.17",
+            "bwa@sha256:abc123",
+            "docker://bwa:0.7.17",
+        ] {
+            assert!(
+                is_unqualified_image_spec(spec),
+                "{spec} is registry-unqualified"
+            );
+        }
+        for spec in [
+            "quay.io/biocontainers/bwa:0.7.17",
+            "ghcr.io/org/tool:1.0",
+            "docker.io/library/ubuntu:22.04",
+            "localhost:5000/team/tool:1.0",
+            "quay.io/biocontainers/bwa@sha256:abc123",
+            "docker://quay.io/biocontainers/bwa:0.7.17",
+            "library://default/tool:1.0",
+            "images/tool.sif",
+            "./images/tool.sif",
+        ] {
+            assert!(
+                !is_unqualified_image_spec(spec),
+                "{spec} names its registry (or is a local path)"
+            );
+        }
+    }
+
+    #[test]
+    fn dir_glob_input_patterns_are_detected() {
+        // These input forms can never match a producer's exact output
+        // string, so they form no producer edge — validate should say so.
+        for pattern in [
+            "results/bam/",
+            "*.bam",
+            "data/{sample}/*.fq",
+            "s3://b/prefix/",
+        ] {
+            assert!(dir_glob_input_pattern(pattern), "{pattern} has no edge");
+        }
+        for pattern in [
+            "ref/hg38.fa",
+            "data/{sample}/reads.fq",
+            "results/{config.ref}.fa",
+            "",
+        ] {
+            assert!(!dir_glob_input_pattern(pattern), "{pattern} is exact");
+        }
     }
 }

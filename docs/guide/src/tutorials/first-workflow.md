@@ -186,15 +186,40 @@ graph TD
 
 ## 5. Prepare Test Data
 
-For this tutorial, create minimal test files so oxo-flow has something to process:
+For this tutorial, create minimal test files so oxo-flow has something to
+process. They must be *parseable* FASTQ — 4 lines per record with the
+sequence and quality lines the same length — or FastQC/fastp abort with a
+`SequenceFormatException` instead of producing their reports:
 
 ```bash
 mkdir -p raw_data
-# Create dummy compressed fastq files
-echo "@test1" | gzip > raw_data/sample1_R1.fastq.gz
-echo "@test1" | gzip > raw_data/sample1_R2.fastq.gz
-echo "@test2" | gzip > raw_data/sample2_R1.fastq.gz
-echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
+# 10 synthetic 60 bp reads per file (varied sequence, Q40 qualities).
+for sample in sample1 sample2; do
+  for read in 1 2; do
+    awk -v sample="$sample" 'BEGIN {
+      bases = "ACGT"
+      for (i = 1; i <= 10; i++) {
+        seq = ""
+        for (j = 0; j < 60; j++) seq = seq substr(bases, (i + j) % 4 + 1, 1)
+        qual = ""
+        for (j = 0; j < 60; j++) qual = qual "I"
+        print "@" sample ":" i
+        print seq
+        print "+"
+        print qual
+      }
+    }' | gzip > "raw_data/${sample}_R${read}.fastq.gz"
+  done
+done
+```
+
+Each file ends up as 10 valid records, e.g.:
+
+```
+@sample1:1
+CGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA
++
+IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 ```
 
 ---
@@ -203,7 +228,7 @@ echo "@test2" | gzip > raw_data/sample2_R2.fastq.gz
 
 ```bash
 oxo-flow validate qc-pipeline.oxoflow
-# ✓ qc-pipeline.oxoflow — 4 rules, 4 dependencies
+# ✓ qc-pipeline.oxoflow — 4 rules, 3 dependencies
 
 oxo-flow dry-run qc-pipeline.oxoflow
 ```
@@ -298,6 +323,13 @@ oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
 The `-j 2` flag allows up to 2 jobs to run concurrently — matching the suggestion from dry-run (machine threads ÷ per-rule threads). oxo-flow will execute the four independent level-0 tasks (two `fastp_trim`, two `fastqc_raw`) two at a time, then the two `fastqc_trimmed` tasks, then the two `multiqc` tasks.
+
+!!! note "The QC numbers themselves are meaningless"
+    The reads are synthetic 60 bp sequences, so FastQC/fastp run to
+    completion but report nothing biologically useful — the tutorial's goal
+    is a pipeline that executes end to end, not real QC. Point
+    `sample_pattern` at real FASTQs (or drop them into `raw_data/` and
+    re-run) to get meaningful metrics.
 
 ---
 

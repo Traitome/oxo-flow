@@ -388,6 +388,78 @@ impl EnvironmentSpec {
             "system"
         }
     }
+
+    /// Returns the first shell-unsafe character in this environment spec,
+    /// tagged with the offending field name.
+    ///
+    /// Every field here is interpolated into a rendered shell line
+    /// (`docker run <spec>`, `conda run -p <path>`, `module load <m>`),
+    /// so shell metacharacters would let a workflow author — or a pulled
+    /// third-party bundle — execute arbitrary commands on the host.
+    ///
+    /// Two tiers:
+    /// - reference fields (`docker`, `singularity`, `modules`) never
+    ///   legitimately contain anything outside the OCI/singularity
+    ///   reference grammar, so any shell-active character is rejected;
+    /// - path fields (`conda`, `mamba`, `pixi`, `venv`, prefixes) keep
+    ///   `~`, `$VAR`, and `{config.*}` placeholder semantics, so only the
+    ///   hard injection set and whitespace are rejected (unquoted spaces
+    ///   never worked in these paths — failing loudly beats silent
+    ///   misbehavior).
+    ///
+    /// The rendered wrappers additionally quote the reference fields as
+    /// defense in depth (issue: host RCE via `environment.docker`).
+    #[must_use]
+    pub fn shell_risk(&self) -> Option<(&'static str, char)> {
+        /// Shell-active in every context; never legitimate in any of these
+        /// fields. Whitespace is included: unquoted it splits arguments,
+        /// and no wrapper quotes path fields (that would break `~`/`$VAR`).
+        /// `$` alone stays legal for path fields (`$HOME/envs/x.yml`) —
+        /// every expansion form that could inject (`$(...)`, backticks)
+        /// is already in this set.
+        const HARD: &[char] = &[
+            ';', '&', '|', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n', '\r',
+        ];
+        /// Additional characters that are invalid inside image references
+        /// and module names but fine inside filesystem paths.
+        const REF_ONLY: &[char] = &['$', '{', '}', '~', '*', '?', '[', ']', '!', '#', ','];
+        let scan = |field: &'static str, value: &str, refs: bool| {
+            value.chars().find_map(|c| {
+                (HARD.contains(&c) || c.is_control() || (refs && REF_ONLY.contains(&c)))
+                    .then_some((field, c))
+            })
+        };
+        let refs = [
+            self.docker.as_deref().map(|v| ("docker", v)),
+            // A singularity spec with a URI scheme is a pure image
+            // reference; a bare value is a local SIF path, which follows
+            // path-tier rules (`~/images/tool.sif` is legitimate).
+            self.singularity
+                .as_deref()
+                .filter(|v| v.contains("://"))
+                .map(|v| ("singularity", v)),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|(field, value)| scan(field, value, true));
+        refs.or_else(|| self.modules.iter().find_map(|m| scan("modules", m, true)))
+            .or_else(|| {
+                [
+                    self.conda.as_deref().map(|v| ("conda", v)),
+                    self.mamba.as_deref().map(|v| ("mamba", v)),
+                    self.pixi.as_deref().map(|v| ("pixi", v)),
+                    self.venv.as_deref().map(|v| ("venv", v)),
+                    self.conda_prefix.as_deref().map(|v| ("conda_prefix", v)),
+                    self.mamba_prefix.as_deref().map(|v| ("mamba_prefix", v)),
+                    self.venv_requirements
+                        .as_deref()
+                        .map(|v| ("venv_requirements", v)),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(|(field, value)| scan(field, value, false))
+            })
+    }
 }
 
 /// Scatter configuration for fan-out parallel execution.
@@ -1706,6 +1778,82 @@ mod tests {
         let res = Resources::default();
         assert_eq!(res.threads, 1);
         assert!(res.memory.is_none());
+    }
+
+    #[test]
+    fn shell_risk_flags_docker_injection() {
+        // The space is the first shell-active character scanned; both the
+        // space and the `;` are rejected — the point is the spec is not
+        // renderable.
+        let env = EnvironmentSpec {
+            docker: Some("alpine ; touch HOSTPWN".into()),
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), Some(("docker", ' ')));
+    }
+
+    #[test]
+    fn shell_risk_flags_uri_singularity_strictly() {
+        let env = EnvironmentSpec {
+            singularity: Some("docker://alpine$(evil)".into()),
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), Some(("singularity", '$')));
+    }
+
+    #[test]
+    fn shell_risk_allows_local_sif_path_tilde() {
+        let env = EnvironmentSpec {
+            singularity: Some("~/images/tool.sif".into()),
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), None);
+    }
+
+    #[test]
+    fn shell_risk_allows_home_variable_in_path_fields() {
+        let env = EnvironmentSpec {
+            conda: Some("$HOME/envs/protein.yml".into()),
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), None);
+    }
+
+    #[test]
+    fn shell_risk_rejects_injection_set_in_path_fields() {
+        for payload in [
+            "envs/x.yml ; touch PWN",
+            "envs/$(touch PWN)/x.yml",
+            "envs/`touch PWN`/x.yml",
+            "envs/x&touch",
+            "envs/a|b.yml",
+        ] {
+            let env = EnvironmentSpec {
+                conda: Some(payload.into()),
+                ..Default::default()
+            };
+            assert!(env.shell_risk().is_some(), "must reject {payload:?}");
+        }
+    }
+
+    #[test]
+    fn shell_risk_flags_modules_items() {
+        let env = EnvironmentSpec {
+            modules: vec!["gcc/11.2".into(), "cuda/12;rm".into()],
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), Some(("modules", ';')));
+    }
+
+    #[test]
+    fn shell_risk_clean_spec_passes() {
+        let env = EnvironmentSpec {
+            docker: Some("quay.io/biocontainers/samtools:1.17--h5037bbc".into()),
+            conda: Some("envs/{config.build}.yaml".into()),
+            modules: vec!["gcc/11.2".into(), "cuda/11.7".into()],
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), None);
     }
 
     #[test]

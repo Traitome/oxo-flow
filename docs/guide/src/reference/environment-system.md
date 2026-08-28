@@ -102,37 +102,46 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 
 - **Detection**: Checks for `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file
-- **Activation**: Runs `conda run -n <env_name> bash -c '<command>'`
+- **Activation**: Runs `conda run --no-capture-output -n <env_name> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` — `--no-capture-output` (conda ≥ 4.13) keeps stdout/stderr live, and the `PATH` prefix makes the rule see the env's own tools first
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 
 ### Mamba
 
 - **Detection**: Checks for `mamba`, then `micromamba`, then falls back to `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file (same format as conda)
-- **Activation**: Runs `mamba run -n <env_name> bash -c '<command>'`
+- **Activation**: Runs `<mamba|micromamba|conda> run -n <env_name> bash -c '<command>'` (mamba has no `--no-capture-output` flag, so it is not added)
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 - **Usage**: Set `environment.mamba = "envs/qc.yaml"` in the rule. Uses the same YAML format as conda but with the mamba/micromamba binary for faster solving.
 
 ### Pixi
 
 - **Detection**: Checks for `pixi` on `$PATH`
-- **Resolution**: Parses `pixi.toml` project file
-- **Activation**: Uses `pixi run` to execute within the environment
+- **Resolution**: Parses the `pixi.toml` manifest the rule names
+- **Activation**: Runs `pixi run --manifest-path <pixi.toml> <command>` — the spec is a **manifest path**, not an environment name (`-e` would only search the current directory for a discoverable manifest)
 - **Lockfile**: Pixi's native lockfile ensures reproducible resolution
 
 ### Docker
 
-- **Detection**: Checks for `docker` on `$PATH` and daemon availability
+- **Detection**: Checks for `docker` on `$PATH` (the daemon itself is only
+  contacted when a rule runs)
 - **Resolution**: Parses image reference (registry/image:tag)
-- **Execution**: Wraps shell command in `docker run --rm -v $(pwd):$(pwd) -w $(pwd) <image> <cmd>`
+- **Execution**: Wraps the command in `docker run --rm --user $(id -u):$(id -g) -v <workdir>:<workdir> -w <workdir> <image> sh -c '<bash shim>' sh '<command>'`; absolute host paths referenced by the rule but living outside the workdir are added as extra **read-only** binds (`-v /data/ref:/data/ref:ro`)
 - **Pull policy**: Images are pulled on first use if not locally available
 
 ### Singularity / Apptainer
 
-- **Detection**: Checks for `singularity` or `apptainer` on `$PATH`
+- **Detection**: Prefers `apptainer` over `singularity`, whichever is found first on `$PATH`
 - **Resolution**: Parses image reference (can be `docker://`, `.sif` file, or library URI)
-- **Execution**: Wraps shell command in `singularity exec <image> <cmd>`
-- **Binding**: Working directory is automatically bound into the container
+- **Execution**: Wraps the command in `<apptainer|singularity> exec --bind <workdir>:<workdir> <image> sh -c '<bash shim>' sh '<command>'`
+- **Binding**: The working directory is bound into the container with an **absolute** path (`--bind` rejects relative sources), plus read-only binds for host paths the rule references
+
+!!! note "The container `<bash shim>`"
+    Both container backends hand the rule's command to the image's shell as
+    `sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else
+    exec sh -c "$1"; fi' sh '<command>'`. The image's entrypoint shell runs
+    first, and it is often a minimal `sh` that cannot execute multi-line or
+    `pipefail`-using scripts — the shim re-execs bash whenever the image
+    ships it, and falls back to `sh` when it does not.
 
 ### Python venv
 
@@ -154,6 +163,18 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 - **Resolution**: No environment spec required
 - **Activation**: No-op — the command runs directly in the current shell environment
 - **Usage**: This is the default backend for rules without an `environment` field
+
+---
+
+## Resolver Order
+
+A rule resolves at most **one** backend, checked in this order:
+
+`mamba` → `conda` → `pixi` → `docker` → `singularity` → `venv` → `modules`.
+
+Declaring `modules` alongside any other backend is a hard error rather than a
+silent drop — a container has no module system, so the `module load`s could
+only ever be lost.
 
 ---
 

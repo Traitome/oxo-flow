@@ -127,10 +127,10 @@ Done: 2 succeeded, 0 skipped, 0 failed
 
 ## 6. Check the results
 
-Ensure you are in the `my-pipeline` directory:
+You are already inside `my-pipeline/` (step 1 changed into it), so read the
+output directly:
 
 ```bash
-cd my-pipeline
 cat results/uppercase.txt
 # HELLO FROM OXO-FLOW!
 ```
@@ -238,7 +238,16 @@ See [Deployment Modes](../how-to/deploy-modes.md) for detailed configuration.
 
 ## Next Steps
 
-- **Run a pilot first**: on real cohorts, try `oxo-flow run my-pipeline.oxoflow --samples first:2` — the engine runs the full pipeline on two samples, reports a projected full-run time, and skips them automatically when you scale up. See [Pilot runs](../commands/run.md#pilot-runs-and-scale-up).
+- **Run a pilot first**: on a workflow that has a sample dimension
+  (`sample_pattern`, `[[sample_groups]]`, or `[[pairs]]`), try
+  `oxo-flow run pipeline.oxoflow --samples first:2` — the engine runs the
+  full pipeline on two samples, reports a projected full-run time, and skips
+  them automatically when you scale up. The two-rule demo above has no
+  samples, so `--samples` there would exit with
+  `--samples matched no samples in this workflow`. See
+  [Pilot runs](../commands/run.md#pilot-runs-and-scale-up) and
+  [Parallel Samples](../gallery/parallel-samples.md) for a sample-driven
+  workflow to try it on.
 - [Your First Workflow](./first-workflow.md) — build a real bioinformatics pipeline with environments
 - [Variant Calling Pipeline](./variant-calling.md) — complete NGS analysis tutorial
 - [Create a Workflow](../how-to/create-workflow.md) — reference guide for `.oxoflow` authoring

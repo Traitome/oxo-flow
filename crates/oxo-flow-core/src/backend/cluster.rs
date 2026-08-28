@@ -112,6 +112,147 @@ pub fn parse_status_line(
     }
 }
 
+/// The scheduler invocations that report `job_ids`, in the form each
+/// scheduler actually accepts: `(program, arguments)`, one entry per call.
+///
+/// SLURM's `-j` takes ONE comma-separated list — ids as separate arguments
+/// answer "Invalid job id specified" on a real cluster (the driver's own
+/// poller always joined them; the standalone `cluster status` command did
+/// not). PBS and LSF take ids positionally, SGE wants one `-j` per job.
+/// SLURM is asked for the same `%i|%t` shape the poller reads, so both
+/// paths share one parser.
+pub fn status_invocations(
+    backend: &ClusterBackend,
+    job_ids: &[String],
+) -> Vec<(&'static str, Vec<String>)> {
+    match backend {
+        ClusterBackend::Slurm => vec![(
+            "squeue",
+            vec![
+                "-j".to_string(),
+                job_ids.join(","),
+                "--noheader".to_string(),
+                "-o".to_string(),
+                "%i|%t".to_string(),
+            ],
+        )],
+        ClusterBackend::Pbs => vec![("qstat", job_ids.to_vec())],
+        ClusterBackend::Lsf => vec![("bjobs", job_ids.to_vec())],
+        ClusterBackend::Sge => job_ids
+            .iter()
+            .map(|id| ("qstat", vec!["-j".to_string(), id.clone()]))
+            .collect(),
+    }
+}
+
+/// The command that cancels a job, matching [`ClusterExecutor::cancel`] so
+/// the standalone `cluster cancel` command and the driver agree.
+pub fn cancel_command(backend: &ClusterBackend) -> &'static str {
+    match backend {
+        ClusterBackend::Slurm => "scancel",
+        ClusterBackend::Pbs | ClusterBackend::Sge => "qdel",
+        ClusterBackend::Lsf => "bkill",
+    }
+}
+
+/// One `(job id, status)` per REQUESTED id, read out of scheduler status
+/// output.
+///
+/// Reporting per request (rather than per parsed row) is what makes the
+/// command answerable: a job the scheduler no longer lists — finished and
+/// gone from the live queue, or a typo — comes back as
+/// [`BackendJobStatus::Unknown`] instead of silently vanishing, and column
+/// headers or site wrappers never turn into rows of their own.
+pub fn status_report(
+    backend: &ClusterBackend,
+    job_ids: &[String],
+    stdout: &str,
+) -> Vec<(String, BackendJobStatus)> {
+    let mut found: HashMap<String, BackendJobStatus> = HashMap::new();
+    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if let Some((id, status)) = parse_status_line(backend, line)
+            && job_ids.contains(&id)
+        {
+            found.insert(id, status);
+        }
+    }
+    // SGE's `qstat -j` splits an answer across two lines — the number and
+    // the state pair up positionally, not line-by-line.
+    if matches!(backend, ClusterBackend::Sge) {
+        let mut current: Option<&str> = None;
+        for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if let Some(id) = line.strip_prefix("job_number:") {
+                current = Some(id.trim());
+                found.insert(id.trim().to_string(), BackendJobStatus::Unknown);
+            } else if let (Some(id), Some(state)) =
+                (current, line.strip_prefix("state:").map(str::trim))
+            {
+                let status = match state {
+                    "r" | "t" => BackendJobStatus::Running,
+                    "qw" | "hqw" | "h" => BackendJobStatus::Pending,
+                    "Eqw" => BackendJobStatus::Failed,
+                    _ => BackendJobStatus::Unknown,
+                };
+                found.insert(id.to_string(), status);
+            }
+        }
+    }
+    job_ids
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                found.get(id).copied().unwrap_or(BackendJobStatus::Unknown),
+            )
+        })
+        .collect()
+}
+
+/// Absolute form of `path`, best effort. The scheduler resolves the
+/// working-directory directive on the EXEC node, where a relative path
+/// would mean somewhere else entirely.
+fn absolute_workdir(path: &Path) -> PathBuf {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return resolved;
+    }
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    }
+}
+
+/// Finish a generated scheduler script for submission.
+///
+/// Two things the directive generator (`crate::cluster`) does not do. It
+/// pins the working directory — PBS/Torque starts a job in `$HOME` and SGE
+/// in a queue-configured directory unless told otherwise, so a rule's
+/// relative output paths (`out/{sample}.txt`) silently landed outside the
+/// run directory. And it drops the `set -e` / `mkdir -p logs` lines the
+/// array renderer appends after the command on top of the copies the base
+/// script already carries before it.
+fn finish_script(script: &str, backend: &ClusterBackend, workdir: &Path) -> String {
+    let dir = absolute_workdir(workdir).display().to_string();
+    let directive = match backend {
+        ClusterBackend::Slurm => format!("#SBATCH --chdir={dir}"),
+        ClusterBackend::Pbs => format!("#PBS -d {dir}"),
+        ClusterBackend::Sge => format!("#$ -wd {dir}"),
+        ClusterBackend::Lsf => format!("#BSUB -cwd {dir}"),
+    };
+    let mut lines = script.lines();
+    let mut finished = vec![lines.next().unwrap_or_default().to_string(), directive];
+    for line in lines {
+        let duplicated = (line == "set -e" || line == "mkdir -p logs")
+            && finished.iter().any(|existing| existing.as_str() == line);
+        if !duplicated {
+            finished.push(line.to_string());
+        }
+    }
+    // Keep whatever trailing newline the generator emitted.
+    let tail = if script.ends_with('\n') { "\n" } else { "" };
+    format!("{}{tail}", finished.join("\n"))
+}
+
 /// Cluster executor: renders scripts with the existing directive generator
 /// and maps submit/poll/cancel/logs onto each scheduler's CLI.
 pub struct ClusterExecutor {
@@ -123,6 +264,10 @@ pub struct ClusterExecutor {
     bin_dir: Option<PathBuf>,
     /// Extra environment for scheduler commands (e.g. `MOCK_SCHEDULER_DIR`).
     env: Vec<(String, String)>,
+    /// Working directory array jobs run in. A per-index command carries its
+    /// own `cd` guard, but the scheduler still launches the script somewhere
+    /// before reading it — and that somewhere defaults to `$HOME` on PBS.
+    workdir: PathBuf,
 }
 
 impl ClusterExecutor {
@@ -132,7 +277,14 @@ impl ClusterExecutor {
             cluster,
             bin_dir: None,
             env: Vec::new(),
+            workdir: PathBuf::from("."),
         }
+    }
+
+    /// Set the directory array jobs run in.
+    pub fn with_workdir(mut self, dir: PathBuf) -> Self {
+        self.workdir = dir;
+        self
     }
 
     /// Resolve scheduler commands from `dir` instead of `PATH`.
@@ -206,11 +358,10 @@ impl super::ExecutorBackend for ClusterExecutor {
     }
 
     fn render_script(&self, rule: &ScheduledRule) -> Result<String> {
-        Ok(generate_submit_script(
+        Ok(finish_script(
+            &generate_submit_script(&self.backend, &rule.rule, &rule.shell_cmd, &self.cluster),
             &self.backend,
-            &rule.rule,
-            &rule.shell_cmd,
-            &self.cluster,
+            &rule.workdir,
         ))
     }
 
@@ -220,12 +371,10 @@ impl super::ExecutorBackend for ClusterExecutor {
         cmd_dir: &str,
         count: usize,
     ) -> Result<String> {
-        Ok(generate_array_submit_script(
+        Ok(finish_script(
+            &generate_array_submit_script(&self.backend, rule, cmd_dir, count, &self.cluster),
             &self.backend,
-            rule,
-            cmd_dir,
-            count,
-            &self.cluster,
+            &self.workdir,
         ))
     }
 
@@ -606,11 +755,17 @@ mod tests {
         let plan = single_rule_plan();
         let exec = ClusterExecutor::new(ClusterBackend::Slurm, cluster_config());
         let via_trait = exec.render_script(&plan.rules["align"]).unwrap();
-        let direct = generate_submit_script(
+        // The executor is a thin render layer over the directive generator,
+        // plus the working-directory pin and the duplicate-line cleanup.
+        let direct = finish_script(
+            &generate_submit_script(
+                &ClusterBackend::Slurm,
+                &plan.rules["align"].rule,
+                &plan.rules["align"].shell_cmd,
+                &cluster_config(),
+            ),
             &ClusterBackend::Slurm,
-            &plan.rules["align"].rule,
-            &plan.rules["align"].shell_cmd,
-            &cluster_config(),
+            &plan.rules["align"].workdir,
         );
         assert_eq!(via_trait, direct);
     }
@@ -724,6 +879,141 @@ mod tests {
         assert_eq!(
             parse_status_line(&ClusterBackend::Lsf, done),
             Some(("12345".into(), BackendJobStatus::Completed))
+        );
+    }
+
+    // ─── cluster-path audit findings ───────────────────────────────────────
+
+    #[test]
+    fn status_invocations_match_each_scheduler_cli() {
+        // G1: ids went to squeue as separate arguments, which real SLURM
+        // rejects — `-j` takes one comma-separated list.
+        let ids = ["101".to_string(), "202".to_string()];
+        assert_eq!(
+            status_invocations(&ClusterBackend::Slurm, &ids),
+            vec![(
+                "squeue",
+                vec![
+                    "-j".to_string(),
+                    "101,202".to_string(),
+                    "--noheader".to_string(),
+                    "-o".to_string(),
+                    "%i|%t".to_string(),
+                ]
+            )]
+        );
+        assert_eq!(
+            status_invocations(&ClusterBackend::Pbs, &ids),
+            vec![("qstat", ids.to_vec())]
+        );
+        assert_eq!(
+            status_invocations(&ClusterBackend::Lsf, &ids),
+            vec![("bjobs", ids.to_vec())]
+        );
+        // SGE answers one job per -j.
+        assert_eq!(
+            status_invocations(&ClusterBackend::Sge, &ids),
+            vec![
+                ("qstat", vec!["-j".to_string(), "101".to_string()]),
+                ("qstat", vec!["-j".to_string(), "202".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn status_report_answers_every_requested_id() {
+        // G2: the scheduler's own table came back raw. Parsed per request, a
+        // job that already left the queue reads as unknown rather than
+        // disappearing, and the qstat header row never becomes a job.
+        let squeue = "202|RUNNING\n303|COMPLETED\n";
+        assert_eq!(
+            status_report(
+                &ClusterBackend::Slurm,
+                &["101".into(), "202".into()],
+                squeue
+            ),
+            vec![
+                ("101".to_string(), BackendJobStatus::Unknown),
+                ("202".to_string(), BackendJobStatus::Running),
+            ]
+        );
+        // A qstat header row parses to a bogus id; it must not be reported.
+        let qstat = "Job id      Name    User  Time Use S Queue\n\
+                      404.queue   align   me    0:00   R batch\n";
+        assert_eq!(
+            status_report(&ClusterBackend::Pbs, &["404.queue".to_string()], qstat),
+            vec![("404.queue".to_string(), BackendJobStatus::Running)]
+        );
+    }
+
+    #[test]
+    fn finish_script_pins_the_working_directory_per_backend() {
+        // G9: no script ever said where it runs. PBS starts jobs in $HOME and
+        // SGE in a queue-configured directory, so relative outputs landed
+        // outside the run directory.
+        let cases = [
+            (ClusterBackend::Slurm, "#SBATCH --chdir=/wf"),
+            (ClusterBackend::Pbs, "#PBS -d /wf"),
+            (ClusterBackend::Sge, "#$ -wd /wf"),
+            (ClusterBackend::Lsf, "#BSUB -cwd /wf"),
+        ];
+        for (backend, directive) in cases {
+            let script = finish_script("#!/bin/bash\nset -e\ntrue\n", &backend, Path::new("/wf"));
+            assert_eq!(
+                script,
+                format!("#!/bin/bash\n{directive}\nset -e\ntrue\n"),
+                "{backend}: the working directory must be pinned"
+            );
+        }
+    }
+
+    #[test]
+    fn finish_script_resolves_a_relative_workdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let script = finish_script(
+            "#!/bin/bash\ntrue\n",
+            &ClusterBackend::Slurm,
+            nested.as_path(),
+        );
+        let expected = format!(
+            "#!/bin/bash\n#SBATCH --chdir={}\ntrue\n",
+            nested.canonicalize().unwrap().display()
+        );
+        assert_eq!(script, expected);
+    }
+
+    #[test]
+    fn array_script_pins_workdir_without_duplicating_body_lines() {
+        // G9 + P7-13: the array renderer re-appends `set -e` and
+        // `mkdir -p logs` after the base script already emitted them.
+        let exec = ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+            .with_workdir(PathBuf::from("/wf"));
+        let rule = crate::rule::Rule {
+            name: "align".to_string(),
+            ..crate::rule::Rule::default()
+        };
+        let script = exec
+            .render_array_script(&rule, "/run/jobs/align/chunk-1", 2)
+            .unwrap();
+        assert_eq!(
+            script.matches("set -e").count(),
+            1,
+            "one set -e only: {script}"
+        );
+        assert_eq!(
+            script.matches("mkdir -p logs").count(),
+            1,
+            "one mkdir -p logs only: {script}"
+        );
+        assert!(
+            script.contains("#SBATCH --chdir=/wf\n"),
+            "the array pins the working directory too: {script}"
+        );
+        assert!(
+            script.starts_with("#!/bin/bash\n#SBATCH --chdir=/wf\n#SBATCH --array=1-2\n"),
+            "the array range stays right after the new chdir directive: {script}"
         );
     }
 }
