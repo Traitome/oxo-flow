@@ -207,6 +207,12 @@ impl BackendDriver {
         // read-modify-write pattern could lose earlier chunks).
         let mut array_index: HashMap<String, Vec<String>> = HashMap::new();
         let index_path = opts.run_dir.join("index.json");
+        // Rules skipped because an upstream failed. Tracked separately from
+        // `done`'s Skipped status so the dependency gate can tell "blocked"
+        // (must not release downstream rules) from "skipped as complete"
+        // (up-to-date / non-schedulable — may release). Transitive: a rule
+        // blocked this round blocks its own dependents next round.
+        let mut blocked: HashSet<String> = HashSet::new();
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -222,11 +228,13 @@ impl BackendDriver {
                 .cloned()
                 .collect();
             for name in pending_names {
-                let blocked = plan
-                    .rules
-                    .get(&name)
-                    .is_some_and(|sr| sr.dependencies.iter().any(|d| failed.contains(d)));
-                if blocked {
+                let is_blocked = plan.rules.get(&name).is_some_and(|sr| {
+                    sr.dependencies
+                        .iter()
+                        .any(|d| failed.contains(d) || blocked.contains(d))
+                });
+                if is_blocked {
+                    blocked.insert(name.clone());
                     records.push(JobRecord {
                         rule: name.clone(),
                         status: JobStatus::Skipped,
@@ -265,7 +273,7 @@ impl BackendDriver {
                         to_run_set.contains(*n)
                             && !done.contains_key(*n)
                             && !inflight.values().any(|f| f.rule == **n)
-                            && deps_ok(n, &done, &to_run_set, plan)
+                            && deps_ok(n, &done, &to_run_set, plan, &blocked)
                     })
                     .cloned()
                     .collect();
@@ -282,7 +290,7 @@ impl BackendDriver {
                     if !to_run_set.contains(&name)
                         || done.contains_key(&name)
                         || inflight.values().any(|f| f.rule == name)
-                        || !deps_ok(&name, &done, &to_run_set, plan)
+                        || !deps_ok(&name, &done, &to_run_set, plan, &blocked)
                     {
                         continue;
                     }
@@ -331,7 +339,7 @@ impl BackendDriver {
                                     && !done.contains_key(*o)
                                     && to_run_set.contains(*o)
                                     && !inflight.values().any(|f| f.rule == **o)
-                                    && deps_ok(o, &done, &to_run_set, plan)
+                                    && deps_ok(o, &done, &to_run_set, plan, &blocked)
                                     && plan.rules.get(*o).is_some_and(|o_sr| {
                                         o_sr.template == sr.template
                                             && array_key(o_sr) == array_key(&sr)
@@ -861,16 +869,25 @@ impl BackendDriver {
 /// submitted and never lands in `done`. Requiring it there would wedge every
 /// partial re-run — resume after a failure, an edit to a downstream rule,
 /// `--target` on a leaf — into the stall branch below with nothing submitted.
+///
+/// A dependency in `blocked` is NOT satisfied even though `done` records it
+/// as Skipped: that Skipped means "an upstream failed", so releasing
+/// downstream rules would run them against stale or missing inputs and
+/// record success (live audit finding — a gather rule completed after its
+/// whole prep array failed). Only genuinely up-to-date skips — which never
+/// enter `to_run` — may satisfy a dependency.
 fn deps_ok(
     name: &str,
     done: &HashMap<String, JobStatus>,
     to_run: &HashSet<String>,
     plan: &ScheduledPlan,
+    blocked: &HashSet<String>,
 ) -> bool {
     plan.rules.get(name).is_none_or(|sr| {
         sr.dependencies.iter().all(|d| {
             !to_run.contains(d)
-                || matches!(done.get(d), Some(JobStatus::Success | JobStatus::Skipped))
+                || (!blocked.contains(d)
+                    && matches!(done.get(d), Some(JobStatus::Success | JobStatus::Skipped)))
         })
     })
 }
@@ -1247,6 +1264,60 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("blocked by failed upstream")
+        );
+    }
+
+    /// Regression (live audit finding): a rule blocked by a failed upstream
+    /// must itself block ITS dependents. The dependency gate used to treat
+    /// any Skipped as satisfied, so a two-levels-down rule (gather after a
+    /// failed prep → skipped stats) was submitted, ran against stale
+    /// inputs, and was recorded COMPLETED — a silent wrong scientific
+    /// result written into the checkpoint.
+    #[test]
+    fn driver_blocks_transitive_dependents_of_failed_rules() {
+        let fx = setup();
+        let (d, _) = driver(&fx);
+        let mut plan = chain_plan(
+            fx.workdir.path(),
+            &[
+                ("prep", "exit 1", "prep.txt"),
+                ("stats", "echo s > stats.txt", "stats.txt"),
+                ("gather", "echo g > gather.txt", "gather.txt"),
+            ],
+        );
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap();
+        let by_rule: std::collections::HashMap<&str, &crate::executor::JobRecord> =
+            records.iter().map(|r| (r.rule.as_str(), r)).collect();
+        assert_eq!(by_rule["prep"].status, JobStatus::Failed);
+        assert_eq!(by_rule["stats"].status, JobStatus::Skipped);
+        assert_eq!(
+            by_rule["gather"].status,
+            JobStatus::Skipped,
+            "gather must be blocked transitively — never submitted"
+        );
+        let ev = events(&fx);
+        let submitted: Vec<&str> = ev
+            .iter()
+            .filter(|e| e["t"] == "SUBMITTED")
+            .filter_map(|e| e["rule"].as_str())
+            .collect();
+        assert!(
+            !submitted.contains(&"gather") && !submitted.contains(&"stats"),
+            "blocked rules must never be submitted, got: {submitted:?}"
         );
     }
 
