@@ -490,9 +490,28 @@ impl super::ExecutorBackend for ClusterExecutor {
 
     /// Terminal record for a job that has left the live queue, read from the
     /// scheduler's accounting store (sacct / qstat -x / qacct / bacct).
+    ///
+    /// SLURM fallback (issue #244): on clusters WITHOUT slurmdbd, sacct
+    /// errors ("accounting storage is disabled") and returns nothing —
+    /// settlement would then poll forever. `scontrol show job <id>` reads
+    /// the controller's in-memory record, which survives briefly after a
+    /// job completes even without accounting; its JobState/ExitCode parse
+    /// into the same TerminalRecord (Elapsed/MaxRSS/TotalCPU unavailable —
+    /// the controller does not report them).
     async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord> {
-        let text = self.logs(job_id).await.ok()?;
-        parse_accounting(&self.backend, &text)
+        if let Ok(text) = self.logs(job_id).await
+            && let Some(rec) = parse_accounting(&self.backend, &text)
+        {
+            return Some(rec);
+        }
+        if self.backend == ClusterBackend::Slurm {
+            let out = self
+                .run_cmd("scontrol", &["show", "job", job_id])
+                .await
+                .ok()?;
+            return parse_scontrol(&String::from_utf8_lossy(&out.stdout));
+        }
+        None
     }
 
     fn polls_elements_directly(&self) -> bool {
@@ -701,6 +720,46 @@ fn parse_sacct(text: &str) -> Option<TerminalRecord> {
         elapsed_secs: allocation.get(3).copied().and_then(parse_duration_secs),
         max_rss_mb,
         cpu_seconds,
+    })
+}
+
+/// Parse `scontrol show job <id>` output (issue #244): the controller's
+/// in-memory record, available on clusters WITHOUT slurmdbd while the job
+/// stays in the controller's cache after completion. Only state and exit
+/// code are recoverable — the controller does not report Elapsed/MaxRSS/
+/// TotalCPU.
+fn parse_scontrol(text: &str) -> Option<TerminalRecord> {
+    let mut job_state = None;
+    let mut exit_code = None;
+    for token in text.split_whitespace() {
+        if let Some(state) = token.strip_prefix("JobState=") {
+            job_state = Some(state.trim_end_matches(['(', '+']).to_string());
+        }
+        if let Some(code) = token.strip_prefix("ExitCode=") {
+            exit_code = Some(code.to_string());
+        }
+    }
+    // A pending/running record from the controller is not terminal — the
+    // live poller owns those states; only settle on terminal vocabulary.
+    // "CANCELLED by <uid>"/"CANCELLED+(Reason)" — sacct/scontrol append
+    // reasons; the alphabetic head is the state word.
+    let state_word: String = job_state
+        .as_deref()?
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let status = match state_word.as_str() {
+        "COMPLETED" => BackendJobStatus::Completed,
+        "FAILED" | "TIMEOUT" | "OUT_OF_MEMORY" | "NODE_FAIL" | "BOOT_FAIL" => {
+            BackendJobStatus::Failed
+        }
+        "CANCELLED" | "PREEMPTED" => BackendJobStatus::Cancelled,
+        _ => return None,
+    };
+    Some(TerminalRecord {
+        status,
+        exit_code: exit_code.as_deref().and_then(parse_exit_code),
+        ..TerminalRecord::default()
     })
 }
 
@@ -1021,6 +1080,51 @@ mod tests {
 #[cfg(test)]
 mod accounting_tests {
     use super::*;
+
+    #[test]
+    fn parses_scontrol_completed_record() {
+        // Issue #244: the no-slurmdbd fallback. Real `scontrol show job`
+        // output (whitespace-separated key=value pairs).
+        let text = "JobId=12345 JobName=align\n\
+   UserId=ops(1000) GroupId=ops(1000) MCS_label=N/A\n\
+   Priority=4294901759 Nice=0 Account=(null) QOS=normal\n\
+   JobState=COMPLETED Reason=(None) Dependency=(null)\n\
+   ExitCode=0:0 RunTime=00:01:22 TimeLimit=02:00:00\n";
+        assert_eq!(
+            parse_scontrol(text),
+            Some(TerminalRecord {
+                status: BackendJobStatus::Completed,
+                exit_code: Some(0),
+                ..TerminalRecord::default()
+            })
+        );
+
+        // A failed job reports the signal-aware exit code.
+        let failed = "JobId=12346 JobName=align\n   JobState=FAILED Reason=NonZeroExitCode\n   ExitCode=1:0\n";
+        assert_eq!(
+            parse_scontrol(failed),
+            Some(TerminalRecord {
+                status: BackendJobStatus::Failed,
+                exit_code: Some(1),
+                ..TerminalRecord::default()
+            })
+        );
+
+        // A CANCELLED job (state may carry the reason in parentheses).
+        let cancelled = "JobId=12347 JobName=x\n   JobState=CANCELLED+(Reason)\n   ExitCode=0:15\n";
+        assert_eq!(
+            parse_scontrol(cancelled),
+            Some(TerminalRecord {
+                status: BackendJobStatus::Cancelled,
+                exit_code: Some(143),
+                ..TerminalRecord::default()
+            })
+        );
+
+        // A RUNNING record is NOT terminal — the live poller owns those.
+        let running = "JobId=12348 JobName=x\n   JobState=RUNNING\n   ExitCode=0:0\n";
+        assert_eq!(parse_scontrol(running), None);
+    }
 
     #[test]
     fn parses_sacct_terminal_lines() {

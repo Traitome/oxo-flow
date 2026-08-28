@@ -33,6 +33,13 @@ pub struct DriverConfig {
     pub poll_interval: Duration,
     /// Overall wall-clock budget; `None` = run until terminal states.
     pub poll_timeout: Option<Duration>,
+    /// How long a job must be in flight before the blind-settlement guard
+    /// starts counting (issue #244): accounting stores legitimately lag —
+    /// slurmdbd can take tens of seconds to surface a record — so the
+    /// guard must never race a slow-but-alive store. `UNKNOWN_SETTLE_
+    /// ROUNDS` consecutive blind rounds AFTER this grace settle the job
+    /// as Failed with an unknown exit code.
+    pub unknown_settle_grace: Duration,
 }
 
 impl Default for DriverConfig {
@@ -43,6 +50,7 @@ impl Default for DriverConfig {
             no_arrays: false,
             poll_interval: Duration::from_secs(5),
             poll_timeout: None,
+            unknown_settle_grace: Duration::from_secs(90),
         }
     }
 }
@@ -143,6 +151,14 @@ fn same_dependencies(a: &[String], b: &[String]) -> bool {
 /// to tell a full partition from a hung driver without drowning the log.
 const PENDING_HEARTBEAT_ROUNDS: u32 = 12;
 
+/// How many consecutive blind rounds (invisible to the live queue AND the
+/// accounting/terminal probes) a job may sit in before the driver settles
+/// it as Failed with an unknown exit code (issue #244). At the default 5s
+/// poll interval this is 3 minutes — long enough for a slow accounting
+/// store to catch up, short enough that a slurmdbd-less cluster cannot
+/// poll forever.
+const UNKNOWN_SETTLE_ROUNDS: u32 = 36;
+
 impl BackendDriver {
     pub fn new(backend: Arc<dyn ExecutorBackend>, config: DriverConfig) -> Self {
         Self { backend, config }
@@ -232,6 +248,9 @@ impl BackendDriver {
         // Consecutive polls each job has been seen waiting (PENDING, or not
         // yet reported by the scheduler) — drives the queue-wait heartbeat.
         let mut pending_rounds: HashMap<String, u32> = HashMap::new();
+        // Consecutive polls a job has been invisible to BOTH the live
+        // queue and the accounting/terminal probes (issue #244 guard).
+        let mut unknown_rounds: HashMap<String, u32> = HashMap::new();
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -729,6 +748,55 @@ impl BackendDriver {
                         Some(id),
                         Some(&format!("pending for {waited}s")),
                     );
+                }
+                // Terminal-unknown settlement guard (issue #244): a job
+                // gone from the live queue whose accounting store (and the
+                // scontrol fallback) yields NOTHING is otherwise polled
+                // forever — on a slurmdbd-less cluster the engine hung
+                // indefinitely (queue empty, sacct empty, zero progress).
+                // After UNKNOWN_SETTLE_ROUNDS consecutive blind rounds the
+                // job settles as Failed with exit code unavailable and a
+                // loud warning telling the operator to verify via output
+                // files. Never an infinite poll.
+                for (id, f) in inflight.iter() {
+                    let age = (now - f.submitted_at).to_std().unwrap_or_default();
+                    match statuses.get(id) {
+                        None | Some(BackendJobStatus::Unknown)
+                            if age >= self.config.unknown_settle_grace =>
+                        {
+                            *unknown_rounds.entry(id.clone()).or_insert(0) += 1;
+                        }
+                        _ => {
+                            unknown_rounds.remove(id);
+                        }
+                    }
+                }
+                let mut blind: Vec<String> = unknown_rounds
+                    .iter()
+                    .filter(|(_, r)| **r >= UNKNOWN_SETTLE_ROUNDS)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                blind.sort();
+                for id in &blind {
+                    if let Some(f) = inflight.get(id) {
+                        tracing::warn!(
+                            rule = %f.rule,
+                            job = %id,
+                            blind_rounds = unknown_rounds.get(id).copied().unwrap_or(0),
+                            "job left the queue but no terminal state is available from the scheduler or accounting store — settling as FAILED with exit code unknown; verify via the rule's output files"
+                        );
+                        emit(
+                            &mut events,
+                            "FAILED",
+                            &f.rule,
+                            Some(id),
+                            Some(
+                                "terminal state unavailable (no accounting store?) — verify via output files",
+                            ),
+                        );
+                        statuses.insert(id.clone(), BackendJobStatus::Failed);
+                    }
+                    unknown_rounds.remove(id);
                 }
                 let settled: Vec<(String, InFlight, BackendJobStatus)> = inflight
                     .iter()
@@ -1263,6 +1331,7 @@ mod tests {
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         (d, executor)
@@ -1514,6 +1583,7 @@ mod tests {
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(50),
                 poll_timeout: None,
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let mut plan = chain_plan(fx.workdir.path(), &[("a", "true", "a.txt")]);
@@ -1911,6 +1981,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(20),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -1959,6 +2030,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_secs(10)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let records = tokio::runtime::Runtime::new()
@@ -1987,6 +2059,46 @@ shell = "echo asm > out/{assembler}.txt"
                 );
             }
         }
+    }
+
+    #[test]
+    fn blind_unknown_jobs_settle_as_failed_instead_of_polling_forever() {
+        // Issue #244: on a cluster without slurmdbd the live queue empties,
+        // the accounting store knows nothing, and settlement polled
+        // forever. After UNKNOWN_SETTLE_ROUNDS blind rounds the driver
+        // settles the job as Failed with exit code unavailable.
+        let fx = setup();
+        let mut plan = priority_plan(fx.workdir.path(), &[("solo", 0)]);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Unknown));
+        let d = BackendDriver::new(
+            backend,
+            DriverConfig {
+                max_submitted: 1,
+                max_array_size: 0,
+                no_arrays: true,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: None, // NO timeout: only the guard ends this
+                unknown_settle_grace: std::time::Duration::from_millis(0),
+            },
+        );
+        let records = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .expect("the blind-settlement guard must end the run");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, JobStatus::Failed);
+        assert_eq!(records[0].exit_code, None, "exit code is unknown, not 0");
     }
 
     #[test]
@@ -2030,6 +2142,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2084,6 +2197,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(20),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         tokio::runtime::Runtime::new()
@@ -2142,6 +2256,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(5),
                 poll_timeout: Some(std::time::Duration::from_millis(300)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2195,6 +2310,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(5),
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         tokio::runtime::Runtime::new()
@@ -2232,6 +2348,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(2),
                 poll_timeout: Some(std::time::Duration::from_millis(200)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         let err = tokio::runtime::Runtime::new()
@@ -2276,6 +2393,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(2),
                 poll_timeout: Some(std::time::Duration::from_millis(120)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         tokio::runtime::Runtime::new()
@@ -2346,6 +2464,7 @@ shell = "echo asm > out/{assembler}.txt"
                 no_arrays: false,
                 poll_interval: std::time::Duration::from_millis(10),
                 poll_timeout: Some(std::time::Duration::from_secs(30)),
+                unknown_settle_grace: std::time::Duration::from_secs(90),
             },
         );
         tokio::runtime::Runtime::new()
