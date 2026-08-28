@@ -3169,6 +3169,96 @@ fn input_groups_fans_rule_into_one_instance_per_group_key() {
 }
 
 #[test]
+fn input_groups_intersects_declared_sample_set() {
+    // #246: the discovery domain of an input_groups rule is the
+    // FILESYSTEM, not the declared sample set — stale files for
+    // undeclared samples (a prior run's leftovers) instantiated orphan
+    // rules that executed with zero DAG consumers. When the workflow
+    // declares a sample domain (sample_groups/pairs/sample_pattern),
+    // group keys outside it are pruned at plan time with a warning.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("merge.oxoflow");
+    for sample in ["S1", "S2", "S3"] {
+        let path = dir.path().join(format!("raw/{sample}_R1.fastq.gz"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "merge"
+
+        [[sample_groups]]
+        name = "grp"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "merge"
+        input_groups = [
+            { pattern = "raw/{sample}_R1.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}.fq"]
+        shell = "cat {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    // S3 exists on disk but is not a declared sample — pruned.
+    assert_eq!(names, vec!["merge_S1", "merge_S2"]);
+}
+
+#[test]
+fn input_groups_non_sample_group_key_keeps_filesystem_domain() {
+    // The declared-set intersection applies ONLY when the group key is
+    // the sample dimension (`group_by = "sample"`). Other keys
+    // (chipseq-style `group_by = "meta.antibody"`) are orthogonal to the
+    // sample set and must keep their filesystem domain.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("ab.oxoflow");
+    std::fs::write(
+        dir.path().join("samples.tsv"),
+        "sample\tantibody\nS1\tA1\nS2\tA2\n",
+    )
+    .unwrap();
+    for sample in ["S1", "S2"] {
+        let path = dir.path().join(format!("bams/{sample}.bam"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "ab"
+        metadata_file = "samples.tsv"
+
+        [[sample_groups]]
+        name = "grp"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "concat"
+        input_groups = [
+            { pattern = "bams/{sample}.bam", group_by = "meta.antibody" }
+        ]
+        output = ["consensus/{antibody}.peaks.bed"]
+        shell = "touch {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    // Keys are antibody values (A1/A2), not sample names — no pruning.
+    assert_eq!(names, vec!["concat_A1", "concat_A2"]);
+}
+
+#[test]
 fn input_groups_matches_zero_files_drops_rule_with_warning() {
     // A group key that matches zero files is not instantiated — no
     // instance means nothing to run (issue #227 item 3 skip semantics).

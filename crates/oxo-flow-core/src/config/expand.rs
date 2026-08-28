@@ -1838,6 +1838,51 @@ impl WorkflowConfig {
             return Ok(Vec::new());
         }
 
+        // Declared-sample-set intersection (#246): when the workflow
+        // declares a sample domain — sample_groups (explicit or
+        // sample_pattern auto-discovered) or pairs — group keys for the
+        // SAMPLE dimension must live in that domain. Filesystem
+        // discovery alone instantiates orphan rules for stale files of
+        // undeclared samples (prior-run leftovers), which then execute
+        // with zero DAG consumers. Keys outside the domain are pruned at
+        // plan time with a warning naming them. The intersection applies
+        // ONLY to `group_by = "sample"` — other key dimensions
+        // (`meta.antibody` etc.) are orthogonal to the sample set, and
+        // workflows with no declared domain keep the filesystem as the
+        // source of truth.
+        if decl.group_by == "sample" {
+            let declared: std::collections::HashSet<&str> = self
+                .sample_groups
+                .iter()
+                .flat_map(|g| g.samples.iter().map(String::as_str))
+                .chain(
+                    self.pairs
+                        .iter()
+                        .flat_map(|p| std::iter::once(p.experiment.as_str()))
+                        .chain(self.pairs.iter().filter_map(|p| p.control.as_deref())),
+                )
+                .collect();
+            if !declared.is_empty() {
+                let stale: Vec<String> = grouped
+                    .keys()
+                    .filter(|key| !declared.contains(key.as_str()))
+                    .cloned()
+                    .collect();
+                for key in &stale {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        key,
+                        "input_groups discovered files for '{}' but no declared sample set (sample_groups/pairs/sample_pattern) names it — the instance is pruned (declare the sample to include it)",
+                        key
+                    );
+                    grouped.remove(key);
+                }
+                if grouped.is_empty() {
+                    return Ok(Vec::new());
+                }
+            }
+        }
+
         let mut out = Vec::with_capacity(grouped.len());
         for (key, mut entries) in grouped {
             entries.sort_by(|a, b| a.0.cmp(&b.0));
