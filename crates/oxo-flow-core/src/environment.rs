@@ -310,6 +310,29 @@ fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+/// Reject container image references that could alter the meaning of the
+/// rendered wrapper line (`docker run {spec} ...`, `{binary} exec {spec}`).
+///
+/// Validation (E016) catches this at workflow level; this is the backend
+/// boundary guard so nothing reaches the shell even when a caller skips
+/// validation. Image references never legitimately contain shell-active
+/// characters (see [`crate::rule::EnvironmentSpec::shell_risk`]).
+fn ensure_container_spec_safe(spec: &str) -> Result<()> {
+    const RISKY: &[char] = &[
+        ';', '&', '|', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n',
+        '\r', '{', '}', '~', '*', '?', '[', ']', '!', '#', ',',
+    ];
+    if let Some(c) = spec.chars().find(|c| RISKY.contains(c) || c.is_control()) {
+        return Err(OxoFlowError::Config {
+            message: format!(
+                "container image reference contains shell-unsafe character {c:?}: {spec:?} — \
+                 image specs may only contain [A-Za-z0-9._:/@-]"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Absolute host path for container bind mounts: docker's `-v`/`-w` and
 /// singularity's `--bind` reject relative sources ("the working directory
 /// '.' is invalid"). Resolves relative paths against the process CWD;
@@ -604,9 +627,12 @@ impl DockerBackend {
         // Docker requires absolute paths for -v/-w: a relative workdir
         // ("." when running from the workflow dir) is rejected by the
         // daemon ("the working directory '.' is invalid").
+        // The spec is validated (no shell metacharacters) and single-quoted
+        // so it is parsed as one word, never as command syntax (audit C1).
+        ensure_container_spec_safe(spec)?;
         let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
-        let spec = mirrored_spec(spec);
+        let spec = escape_for_sh_single_quote(&mirrored_spec(spec));
 
         let mut mem_arg = String::new();
         if let Some(res) = resources
@@ -617,7 +643,7 @@ impl DockerBackend {
         let gpus_arg = gpus.map(|g| format!(" --gpus {g}")).unwrap_or_default();
 
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg} -v {workdir}:{workdir} -w {workdir} '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 }
@@ -642,6 +668,7 @@ impl EnvironmentBackend for DockerBackend {
         workdir: &std::path::Path,
     ) -> Result<String> {
         self.wrap_command_with_gpus(command, spec, resources, workdir, None)
+
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -661,15 +688,18 @@ impl EnvironmentBackend for DockerBackend {
         // even when the quay image exists locally, so without the tag
         // the run step would fail with the same 404 (live-verified on
         // tx-ubuntu).
+        ensure_container_spec_safe(spec)?;
         let spec = mirrored_spec(spec);
-        let mut pull = format!("docker pull {spec}");
+        let quoted = escape_for_sh_single_quote(&spec);
+        let mut pull = format!("docker pull '{quoted}'");
         if let Some(fallback) = quay_biocontainers_fallback(&spec) {
+            let fallback = escape_for_sh_single_quote(&fallback);
             pull.push_str(&format!(
-                " || (docker pull {fallback} && docker tag {fallback} {spec})"
+                " || (docker pull '{fallback}' && docker tag '{fallback}' '{quoted}')"
             ));
         }
         Ok(format!(
-            "docker image inspect {spec} >/dev/null 2>&1 || {pull}"
+            "docker image inspect '{quoted}' >/dev/null 2>&1 || {pull}"
         ))
     }
 
@@ -739,12 +769,18 @@ impl EnvironmentBackend for SingularityBackend {
         workdir: &std::path::Path,
     ) -> Result<String> {
         // Same as docker: --bind sources must be absolute host paths.
+        // URI-form specs are validated as image references; a bare local
+        // SIF path keeps path semantics, so only quote it (no whitelist).
+        let spec = mirrored_spec(spec);
+        if spec.contains("://") {
+            ensure_container_spec_safe(&spec)?;
+        }
         let workdir = absolute_host_path(workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
-        let spec = mirrored_spec(spec);
+        let quoted_spec = escape_for_sh_single_quote(&spec);
 
         Ok(format!(
-            "{} exec --bind {workdir}:{workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
+            "{} exec --bind {workdir}:{workdir} '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }

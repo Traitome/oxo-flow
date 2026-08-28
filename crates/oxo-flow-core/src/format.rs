@@ -9,7 +9,7 @@
 
 use crate::config::WorkflowConfig;
 use crate::dag::WorkflowDag;
-use crate::rule::Rule;
+use crate::rule::{EnvironmentSpec, Rule};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -127,6 +127,24 @@ impl ValidationResult {
 /// config key must never silently expand to the literal placeholder text
 /// and exit 0 with wrong data. `when` conditions reference keys bare
 /// (`config.enabled`), the other surfaces use the `{config.key}` brace form.
+/// Best-effort recovery of the offending environment field's value for
+/// the E016 message (shell_risk returns only the field name + character).
+fn environment_field_value(env: &EnvironmentSpec, field: &str) -> String {
+    let value = match field {
+        "conda" => env.conda.as_deref(),
+        "mamba" => env.mamba.as_deref(),
+        "pixi" => env.pixi.as_deref(),
+        "docker" => env.docker.as_deref(),
+        "singularity" => env.singularity.as_deref(),
+        "venv" => env.venv.as_deref(),
+        "conda_prefix" => env.conda_prefix.as_deref(),
+        "mamba_prefix" => env.mamba_prefix.as_deref(),
+        "venv_requirements" => env.venv_requirements.as_deref(),
+        _ => None,
+    };
+    value.unwrap_or_default().to_string()
+}
+
 pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let config_ref_re = regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex");
@@ -324,6 +342,28 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // run/dry-run pre-execution gate (issue #142 H1), so validate and
         // run cannot drift on what counts as defined.
         diagnostics.extend(undefined_config_refs(rule, config));
+
+        // E016: shell-unsafe characters in the environment spec. Every
+        // environment field is interpolated into a rendered shell line, so
+        // a metacharacter in e.g. `environment.docker` would execute on
+        // the host. Path fields keep `~`/`$VAR`/`{config.*}` semantics and
+        // only reject the hard injection set — see
+        // `EnvironmentSpec::shell_risk` for the two-tier rules.
+        if let Some((field, ch)) = rule.environment.shell_risk() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "environment.{field} contains shell-unsafe character {ch:?}: '{}'",
+                    environment_field_value(&rule.environment, field),
+                ),
+                rule: Some(rule.name.clone()),
+                code: "E016".to_string(),
+                suggestion: Some(format!(
+                    "remove shell metacharacters from environment.{field} — image refs and \
+                     module names may only contain [A-Za-z0-9._:/@-]"
+                )),
+            });
+        }
     }
 
     // E013: checkpoint rule without a re-entry manifest (issue #78 P3).
@@ -1967,6 +2007,29 @@ mod tests {
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E005"));
+    }
+
+    #[test]
+    fn validate_rejects_injection_in_docker_spec() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "r1"
+            output = ["o.txt"]
+            shell = "echo hi > {output[0]}"
+
+            [rules.environment]
+            docker = "alpine ; touch HOSTPWN ; echo x"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.valid,
+            "E016 must reject shell metacharacters in environment.docker"
+        );
+        assert!(result.errors().iter().any(|d| d.code == "E016"));
     }
 
     #[test]
