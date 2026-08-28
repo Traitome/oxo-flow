@@ -4375,6 +4375,13 @@ module-based example below for module-only setups.</p>
 <p class="admonition-title">Use <code>--keep-going</code> for large batches</p>
 <p>When running hundreds of samples, use <code>oxo-flow run -k</code> so that a single failure does not abort the entire run.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">Aborted in-flight siblings are incomplete, not failed</p>
+<p>When a run aborts, rules still in flight are killed and recorded as
+<strong>incomplete</strong> (neither completed nor failed) — <code>resume</code> re-runs them
+from their checkpoint, so no output is silently trusted from a killed
+job.</p>
+</div>
 <div class="admonition tip">
 <p class="admonition-title">Check resource availability</p>
 <p>Use <code>sinfo</code> (SLURM), <code>pbsnodes</code> (PBS), or <code>qhost</code> (SGE) to verify available resources before submitting.</p>
