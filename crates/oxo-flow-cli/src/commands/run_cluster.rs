@@ -394,6 +394,7 @@ pub(crate) async fn run_on_cluster(
         // No wall-clock budget: cluster jobs legitimately sit in the queue
         // for hours. Cancellation is the user's call (phase 2 follow-up).
         poll_timeout: None,
+        unknown_settle_grace: std::time::Duration::from_secs(90),
     };
 
     eprintln!(
