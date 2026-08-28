@@ -673,27 +673,27 @@ fn cli_run_undeclared_wildcard_writes_literal_file() {
     )
     .unwrap();
 
-    oxo_flow_cmd()
+    // Audit C2: the literal-file behavior this test pinned was a silent
+    // wrong-result bug — an unbound wildcard in an output pattern now
+    // fails loudly BEFORE the shell runs, naming the wildcard and the
+    // value sources.
+    let out = oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap()])
-        .current_dir(dir.path())
-        .assert()
-        .success();
-
-    assert!(
-        dir.path().join("out_{sample}.txt").exists(),
-        "run must write the literal placeholder-named file (the wildcard has no source)"
-    );
-    // Dry-run AFTER the run agrees the rule is now up-to-date — the two
-    // surfaces stay in lockstep on the second round too.
-    let output = oxo_flow_cmd()
-        .args(["dry-run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("[skip: up to date]"),
-        "after a real run the literal file exists, so dry-run must agree the rule is fresh, got: {stderr}"
+        !out.status.success(),
+        "an unbound output wildcard must fail the run"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unbound wildcard {sample}"),
+        "the error must name the wildcard: {stderr}"
+    );
+    assert!(
+        !dir.path().join("out_{sample}.txt").exists(),
+        "no literal placeholder-named file may be written"
     );
 }
 
