@@ -1922,7 +1922,7 @@ shell = "fastqc {input[0]} -o qc/"
 | `config.<key> != "value"` | `config.mode != "WES"` | String inequality |
 | `config.<key> == true\|false` | `config.skip == false` | Boolean equality |
 | `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
-| `file_exists("path")` | `file_exists("panel.bed")` | File existence test |
+| `file_exists("path")` | `file_exists("panel.bed")` | File existence test. In per-instance predicates (`wildcard.<key>` / `{meta.<column>}`) it is evaluated at **plan time** — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with `{meta.*}` (plan-time bakeable) or an execution-time `config` gate instead |
 | `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `{meta.<column>} == "value"` | `{meta.endedness} == 'SE'` | Per-instance sample-metadata comparison (see [Sample Metadata](#sample-metadata-metadata_file)) — baked and evaluated per instance at plan time; instances whose gate evaluates false never enter the DAG. A missing row or column renders `''` in a comparison (a closed gate) |
 | `!<expr>` | `!config.skip` | Logical NOT |
