@@ -9268,3 +9268,87 @@ shell = "cat {input} > {output}"
         "no consumer output may exist when the producer failed"
     );
 }
+
+// ─── Resume config-drift warning (issue #243) ───────────────────────────────
+
+/// The checkpoint records the original run's EFFECTIVE config (workflow
+/// defaults + CLI overrides). Re-running the workflow without re-passing
+/// the overrides re-judges plan-time gates on defaults — the instance set
+/// can drift from the recorded run. The run must warn loudly, naming the
+/// drifted keys and their old → new values.
+#[test]
+fn cli_resume_without_overrides_warns_config_drift() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("drift.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "drift"
+version = "1.0.0"
+
+[config]
+threshold = "low"
+
+[[rules]]
+name = "step"
+output = ["out.txt"]
+shell = "echo {config.threshold} > {output}"
+"#,
+    )
+    .unwrap();
+
+    // Original run carries an override: snapshot records threshold=high.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--arg", "threshold=high"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Re-run with the DEFAULT (no override) — the effective config drifts
+    // from the snapshot. The run must warn, naming the key and values.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Config drift"),
+        "re-run without the original override must warn, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("threshold") && stderr.contains("high") && stderr.contains("low"),
+        "warning must name the drifted key and both values, got:\n{stderr}"
+    );
+
+    // Re-running WITH the original override right after the recorded run:
+    // snapshot still holds threshold=high → no drift, no warning.
+    let dir2 = tempfile::tempdir().unwrap();
+    let wf2 = dir2.path().join("drift2.oxoflow");
+    fs::write(&wf2, fs::read_to_string(&wf).unwrap()).unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap(), "--arg", "threshold=high"])
+        .current_dir(dir2.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap(), "--arg", "threshold=high"])
+        .current_dir(dir2.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("Config drift"),
+        "matching override must not warn, got:\n{stderr}"
+    );
+}
