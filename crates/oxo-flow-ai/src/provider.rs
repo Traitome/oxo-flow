@@ -1147,11 +1147,16 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
         && kind_str != "disabled"
         && let Ok(kind) = kind_str.parse::<ProviderKind>()
     {
-        let key = if api_key.is_empty() {
-            None
-        } else {
-            Some(api_key.to_string())
-        };
+        // A saved config with no key is an unfinished setup, not a working
+        // provider: treat it as unconfigured so status probes do not fire
+        // real (and guaranteed-failing) network calls on an empty key.
+        if api_key.is_empty() {
+            tracing::info!(
+                "AI provider {} saved without an API key — treated as unconfigured",
+                kind_str
+            );
+            return AiProvider::Noop;
+        }
         let url = if api_url.is_empty() {
             None
         } else {
@@ -1162,7 +1167,7 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
         } else {
             Some(model.to_string())
         };
-        let provider = create_provider(kind, key, url, mdl);
+        let provider = create_provider(kind, Some(api_key.to_string()), url, mdl);
         tracing::info!("AI provider from saved config: {}", provider.name());
         return provider;
     }

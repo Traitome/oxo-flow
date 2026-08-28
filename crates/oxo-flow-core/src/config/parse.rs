@@ -80,6 +80,13 @@ impl WorkflowConfig {
         let mut config: WorkflowConfig =
             Self::deserialize(toml::Value::Table(raw)).map_err(|e| parse_error(e.to_string()))?;
 
+        // Same order as `parse`: declarative config entries become
+        // config_meta + runtime values BEFORE any downstream consumer reads
+        // `config.config` — without this, { default = …, type = … } entries
+        // stay nested tables, `--key` validation and sensitive masking
+        // silently no-op.
+        config.extract_declarative_config()?;
+
         // input_groups patterns resolve against the workflow root — the
         // workflow file's parent, the same root sample_pattern scans.
         config.base_dir = Some(crate::parent_dir(path).to_path_buf());

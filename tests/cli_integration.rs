@@ -2766,7 +2766,13 @@ fn cli_export_compose_to_file() {
 
     let content = fs::read_to_string(&out).unwrap();
     assert!(content.contains("version: \"3.8\""));
-    assert!(content.contains("command: [\"run\", \"workflow.oxoflow\"]"));
+    // C10: the command names the actual exported workflow file — the old
+    // hardcoded "workflow.oxoflow" made the exported stack fail to start
+    // (the image ENTRYPOINT already carries `oxo-flow run`).
+    assert!(
+        content.contains("command: [\"01_hello_world.oxoflow\"]"),
+        "{content}"
+    );
 }
 
 // ─── Debug CLI tests ────────────────────────────────────────────────────────
@@ -6519,9 +6525,13 @@ shell = "echo 'token is s3cr3t-token-42' && echo 'token is s3cr3t-token-42' >&2 
         !cp.contains("s3cr3t-token-42"),
         "checkpoint must not contain the raw sensitive value"
     );
+    // Sensitive values are stored as irreversible SHA-256 digests in the
+    // snapshot (config-impact semantics), not the plain "***" marker —
+    // the digest keeps change detection working without leaking length
+    // or value.
     assert!(
-        cp.contains("***"),
-        "checkpoint must contain the masked marker: {cp}"
+        cp.contains("sha256:"),
+        "checkpoint must store sensitive values as sha256 digests: {cp}"
     );
 
     let snaps = snapshot_files(dir.path());
