@@ -500,12 +500,19 @@ output = ["finish.txt"]
                 Path::new("."),
             )
             .unwrap();
-        let expected = oxo_flow_core::cluster::generate_submit_script(
+        let base = oxo_flow_core::cluster::generate_submit_script(
             &ClusterBackend::Slurm,
             rule,
             &wrapped,
             &cluster_config(),
         );
+        // The trait path additionally pins the working directory (audit G9):
+        // the directive lands right after the shebang.
+        let chdir = dir.path().canonicalize().unwrap().display().to_string();
+        let chdir_directive = format!("#SBATCH --chdir={chdir}");
+        let mut lines: Vec<&str> = base.lines().collect();
+        lines.insert(1, &chdir_directive);
+        let expected = lines.join("\n");
         let actual = std::fs::read_to_string(out_dir.join(format!("{rule_name}.sh"))).unwrap();
         assert_eq!(actual, expected, "render diverged for rule '{rule_name}'");
         compared += 1;
