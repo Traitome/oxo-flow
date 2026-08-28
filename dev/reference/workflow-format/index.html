@@ -5995,7 +5995,14 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
 </span></code></pre></div>
 <ul>
 <li><code>pattern</code> — path glob with <code>{wildcard}</code> placeholders, relative to the
-  workflow file's directory (the same root <code>sample_pattern</code> scans).</li>
+  workflow file's directory (the same root <code>sample_pattern</code> scans). A
+  bare <code>*</code> outside <code>{wildcard}</code> spans is a <strong>segment-local glob</strong>
+  (issue #246): <code>raw/{sample}_*_R1.fastq.gz</code> groups every lane file of a
+  sample without enumerating lane names — the CAT_FASTQ shape, where the
+  per-sample file count is not known ahead of time and no <code>[[values]]</code>
+  table can list it. <code>**</code> (cross-segment recursion) is rejected. Note a
+  <code>{wildcard}</code> span may span a separator by design (<code>\S+</code>); the segment
+  locality applies to bare <code>*</code> only.</li>
 <li><code>group_by</code> — the wildcard that names each group. One instance is
   created per discovered group value. May also be a metadata column,
   <code>group_by = "meta.&lt;column&gt;"</code> — see below.</li>
@@ -6022,7 +6029,8 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
   skipped for that key with a warning (no instance = nothing to run).</li>
 </ul>
 <p>v1 constraints: at most <strong>one</strong> <code>input_groups</code> entry per rule;
-<code>**</code> recursion is not supported in <code>pattern</code> (single-level paths);
+<code>**</code> recursion is not supported in <code>pattern</code> (bare <code>*</code> globs within one
+segment are supported);
 producers must be declared <strong>before</strong> their <code>input_groups</code> consumer;
 the <code>keep</code> wildcard bindings come from the first sorted file only (the
 captured per-group values of every file stay available via
