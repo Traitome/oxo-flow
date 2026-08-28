@@ -7,7 +7,7 @@
 //! `?token=` session token (EventSource cannot set headers) and delivers
 //! only the subscriber's own events plus userless ones; admins see all.
 
-use axum::extract::Query;
+use crate::extract::ApiQuery;
 use axum::http::StatusCode;
 use axum::response::{
     IntoResponse, Response,
@@ -124,7 +124,7 @@ async fn validate_event_token(
 /// Team/hpc modes require `?token=<session token>` (EventSource cannot set
 /// an Authorization header). The stream is then filtered to the
 /// subscriber's own events; admins receive everything.
-pub async fn sse_events(Query(params): Query<HashMap<String, String>>) -> Response {
+pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> Response {
     let me = if crate::server::running_mode() == "personal" {
         None
     } else {

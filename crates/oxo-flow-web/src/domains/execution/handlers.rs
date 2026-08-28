@@ -7,7 +7,9 @@ use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, Resou
 use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
 use crate::domains::auth::current_user::{self, CurrentUser};
-use axum::{Extension, Json, extract::Path, extract::Query, http::StatusCode};
+use axum::{Extension, Json, extract::Path, http::StatusCode};
+
+use crate::extract::ApiQuery;
 
 use super::checkpoint_status;
 use super::service;
@@ -449,12 +451,19 @@ pub async fn create_run(
 /// row of the previous page), `status` filter, `q` search (workflow name
 /// or run id prefix). Response envelope: `{items, next_cursor, total}` —
 /// `next_cursor: null` means the last page.
+///
+/// Pagination is cursor-based by design: `created_at` is not unique, but a
+/// cursor plus the `ORDER BY created_at DESC` scan is stable and index-free.
+/// A `page` parameter is therefore rejected with 400 rather than ignored.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListRunsQuery {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
     pub status: Option<String>,
     pub q: Option<String>,
+    /// Rejected: this endpoint paginates with `cursor`, never by page number.
+    pub page: Option<String>,
 }
 
 #[utoipa::path(
@@ -462,6 +471,7 @@ pub struct ListRunsQuery {
     path = "/api/runs",
     tag = "runs",
     security(("bearerAuth" = [])),
+    params(ListRunsQuery),
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -469,8 +479,18 @@ pub struct ListRunsQuery {
 )]
 pub async fn list_runs(
     authenticated: Option<Extension<CurrentUser>>,
-    Query(params): Query<ListRunsQuery>,
+    ApiQuery(params): ApiQuery<ListRunsQuery>,
 ) -> ApiResult<serde_json::Value> {
+    // A `page` parameter means the caller expects offset pagination and would
+    // silently read the FIRST page forever (the cursor is what actually
+    // advances) — fail loudly instead.
+    if params.page.is_some() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "PAGE_NOT_SUPPORTED",
+            "This endpoint paginates with `cursor`, not `page`".into(),
+        ));
+    }
     let user = current_user::resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -572,7 +592,9 @@ pub async fn list_runs(
                 "workflow_name": r.workflow_name,
                 "status": r.status,
                 "phase": r.phase,
-                "pid": r.pid,
+                // No `pid`: the host process id is engine bookkeeping (cancel
+                // and liveness probes use it server-side) and discloses host
+                // internals to API consumers.
                 "workdir": r.workdir,
                 "started_at": r.started_at,
                 "finished_at": r.finished_at,
@@ -620,7 +642,8 @@ pub async fn get_run(
         "pipeline_snapshot": run.pipeline_snapshot,
         "status": run.status,
         "phase": run.phase,
-        "pid": run.pid,
+        // No `pid` — same reason as the list endpoint: the host process id
+        // stays engine-internal.
         "workdir": run.workdir,
         "started_at": run.started_at,
         "finished_at": run.finished_at,

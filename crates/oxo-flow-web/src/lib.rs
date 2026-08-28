@@ -13,6 +13,7 @@ pub mod config;
 pub mod db;
 pub mod domains;
 pub mod executor;
+pub mod extract;
 pub mod hpc;
 pub mod infra;
 pub mod openapi;

@@ -89,6 +89,15 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Rule count of a workflow definition, or the parse error. A definition the
+/// engine cannot read must never reach the database: it would be stored as an
+/// unrunnable `rules_count = 0` row while the API reports success.
+fn count_rules(toml: &str) -> Result<i64, String> {
+    oxo_flow_core::WorkflowConfig::parse(toml)
+        .map(|wf| wf.rules.len() as i64)
+        .map_err(|e| e.to_string())
+}
+
 pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -527,9 +536,13 @@ pub async fn save_pipeline(
     // never trusted (issue #82 P0-4).
     let user_id = crate::domains::auth::current_user::resolve(authenticated.as_ref()).id;
 
-    let rules_count = oxo_flow_core::WorkflowConfig::parse(toml_content)
-        .map(|wf| wf.rules.len() as i64)
-        .unwrap_or(0);
+    let rules_count = count_rules(toml_content).map_err(|e| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "PARSE_ERROR",
+            format!("toml_content is not a valid workflow: {e}"),
+        )
+    })?;
 
     let now = now_iso();
     let id = uuid::Uuid::new_v4().to_string();
@@ -762,9 +775,19 @@ pub async fn update_pipeline(
         ));
     }
 
-    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
-        .map(|wf| wf.rules.len() as i64)
-        .unwrap_or(existing.rules_count);
+    // A name-only rename keeps the stored rule count; supplied content must
+    // parse (same contract as POST /api/pipelines) or the stale count would
+    // mask an unrunnable definition.
+    let rules_count = match req.get("toml_content").and_then(|v| v.as_str()) {
+        Some(_) => count_rules(&toml_content).map_err(|e| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "PARSE_ERROR",
+                format!("toml_content is not a valid workflow: {e}"),
+            )
+        })?,
+        None => existing.rules_count,
+    };
 
     let now = now_iso();
     // Snapshot the pre-update content so rollback can restore it.

@@ -253,7 +253,7 @@ pub async fn update_quota_status(
 )]
 /// GET /api/audit — paginated audit trail for compliance review.
 pub async fn get_audit_logs(
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    crate::extract::ApiQuery(params): crate::extract::ApiQuery<std::collections::HashMap<String, String>>,
     headers: axum::http::HeaderMap,
 ) -> ApiResult<AuditLogResponse> {
     // The audit trail records every user's actions — team/hpc mode exposes

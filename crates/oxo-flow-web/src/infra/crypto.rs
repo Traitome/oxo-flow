@@ -56,6 +56,10 @@ pub fn seal(plain: &str) -> String {
 
 /// Decrypt anything previously written: transparently passes legacy
 /// plaintext through; `v1:` payloads require the same master key.
+///
+/// An unreadable payload degrades to an empty string — callers that need to
+/// distinguish "no key stored" from "key stored but unreadable" must consult
+/// [`is_recoverable`] instead of testing the result for emptiness.
 pub fn open(stored: &str) -> String {
     if !stored.starts_with(PREFIX) {
         return stored.to_string();
@@ -72,6 +76,47 @@ pub fn open(stored: &str) -> String {
             );
             String::new()
         }
+    }
+}
+
+/// Whether at-rest encryption is active (`seal` writes `v1:` ciphertext).
+/// Exposed so `/api/health` can surface plaintext key storage to API
+/// consumers, not only to whoever reads the server log.
+pub fn master_key_configured() -> bool {
+    master_key().is_some()
+}
+
+/// Loud startup notice when credentials would be written unencrypted. Shared
+/// by both entry points (the standalone `oxo-flow-web` binary and
+/// `oxo-flow serve`) so neither deployment path can skip it silently.
+pub fn warn_if_plaintext_key() {
+    if master_key().is_none() {
+        tracing::warn!(
+            "OXO_FLOW_MASTER_KEY is not set: AI provider keys are stored as \
+             plaintext in the local database. Set it to encrypt new writes \
+             (existing rows remain readable). /api/health reports the live \
+             state as components.ai_key_storage."
+        );
+    }
+}
+
+/// Whether `stored` can be read back under the current configuration: legacy
+/// plaintext always can, a `v1:` payload needs the same master key. This is
+/// the "is the credential usable" test — a rotated master key leaves the row
+/// in place while [`open`] degrades it to an empty string.
+pub fn is_recoverable(stored: &str) -> bool {
+    recoverable_with(master_key().as_ref(), stored)
+}
+
+/// Pure core of [`is_recoverable`] — the key is injected so tests need no
+/// environment mutation.
+fn recoverable_with(key: Option<&[u8; 32]>, stored: &str) -> bool {
+    if !stored.starts_with(PREFIX) {
+        return true;
+    }
+    match key {
+        Some(key) => decrypt_with(key, stored).is_some(),
+        None => false,
     }
 }
 
@@ -112,5 +157,25 @@ mod tests {
         assert_eq!(decrypt_with(&K2, &sealed), None);
         assert_eq!(decrypt_with(&K1, &sealed).as_deref(), Some("row-key"));
         assert!(seal("whatever") == "whatever" || seal("whatever").starts_with(PREFIX));
+    }
+
+    #[test]
+    fn recoverability_tracks_the_available_master_key() {
+        // Legacy plaintext is always readable, sealed ciphertext only under
+        // its own key — a rotated key leaves the row in place but unusable.
+        assert!(recoverable_with(None, "plaintext-key"));
+        assert!(!recoverable_with(None, "v1:bm9uY2U6Y2lwaGVydGV4dA"));
+        assert!(recoverable_with(Some(&K1), &encrypt_with(&K1, "row-key")));
+        assert!(!recoverable_with(Some(&K2), &encrypt_with(&K1, "row-key")));
+        // Garbage that merely claims the sealed prefix is not recoverable.
+        assert!(!recoverable_with(Some(&K1), "v1:not-base64:not-base64"));
+    }
+
+    #[test]
+    fn key_presence_flag_matches_the_wrapper_contract() {
+        // This test binary never sets OXO_FLOW_MASTER_KEY (see the plaintext
+        // test above); the health endpoint surfaces this flag verbatim.
+        assert!(!master_key_configured());
+        assert_eq!(seal("x"), "x");
     }
 }

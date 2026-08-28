@@ -473,6 +473,18 @@ pub async fn restore_ai_config_from_db() {
     if let Some((provider, api_key, api_url, model)) = row
         && !api_key.is_empty()
     {
+        // A sealed credential that cannot be read back (missing or rotated
+        // OXO_FLOW_MASTER_KEY) must not be registered as an empty-key
+        // provider: the config would look configured while every AI call
+        // fails. Leaving it unset keeps the "needs re-entry" state visible.
+        if !crate::infra::crypto::is_recoverable(&api_key) {
+            tracing::error!(
+                "AI provider '{provider}' is saved but its credential cannot be \
+                 decrypted with the current OXO_FLOW_MASTER_KEY; re-enter the API \
+                 key in the settings UI to restore AI features"
+            );
+            return;
+        }
         let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
             &provider,
             Some(crate::infra::crypto::open(&api_key)),
@@ -555,32 +567,53 @@ pub async fn get_ai_config_effective(
 )]
 /// GET /api/ai/config/server
 pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
-    let pool = crate::infra::db::sqlite::try_pool().ok();
-    let config = if let Some(p) = pool {
-        let row: Option<serde_json::Value> = sqlx::query_as::<_, (String, String, String, String, i64)>(
-            "SELECT provider, api_url, model, api_key, search_enabled FROM ai_provider_config WHERE user_id IS NULL ORDER BY updated_at DESC LIMIT 1"
-        )
-        .fetch_optional(p)
-        .await
-        .ok()
-        .flatten()
-        .map(|(provider, api_url, model, _api_key, search_enabled)| {
-            serde_json::json!({
-                "provider": provider,
-                "api_url": api_url,
-                "model": model,
-                "search_enabled": search_enabled == 1,
-            })
-        });
-        row
-    } else {
-        None
+    let row: Option<(String, String, String, String, i64)> =
+        match crate::infra::db::sqlite::try_pool() {
+            Ok(p) => sqlx::query_as(
+                "SELECT provider, api_url, model, api_key, search_enabled \
+                 FROM ai_provider_config WHERE user_id IS NULL \
+                 ORDER BY updated_at DESC LIMIT 1",
+            )
+            .fetch_optional(p)
+            .await
+            .ok()
+            .flatten(),
+            Err(_) => None,
+        };
+    // Split "a row exists" from "that row is usable": the api_key is sealed
+    // (issue #205) and only readable with the same OXO_FLOW_MASTER_KEY. After
+    // a key rotation the ciphertext stays in place but cannot be opened —
+    // reporting `configured: true` would let the settings UI advertise a
+    // provider that fails on every call.
+    let (configured, requires_reauth) = match &row {
+        None => (false, false),
+        Some((_, _, _, api_key, _)) => {
+            let usable = api_key.is_empty() || crate::infra::crypto::is_recoverable(api_key);
+            (usable, !usable)
+        }
     };
+    let config = row.map(|(provider, api_url, model, _, search_enabled)| {
+        serde_json::json!({
+            "provider": provider,
+            "api_url": api_url,
+            "model": model,
+            "search_enabled": search_enabled == 1,
+        })
+    });
 
-    Ok(Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "server_config": config,
-        "configured": config.is_some(),
-    })))
+        "configured": configured,
+        "requires_reauth": requires_reauth,
+    });
+    if requires_reauth {
+        body["message"] = serde_json::json!(
+            "The stored AI credential cannot be decrypted with the current \
+             OXO_FLOW_MASTER_KEY — re-enter the API key to restore AI features."
+        );
+    }
+
+    Ok(Json(body))
 }
 
 #[utoipa::path(
@@ -771,6 +804,7 @@ pub async fn update_user_ai_config(
 
 /// Query parameters for the knowledge search endpoints.
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct KnowledgeQuery {
     #[serde(default)]
     pub q: String,
@@ -781,6 +815,7 @@ pub struct KnowledgeQuery {
     get,
     path = "/api/knowledge/tools",
     tag = "ai",
+    params(KnowledgeQuery),
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -788,7 +823,7 @@ pub struct KnowledgeQuery {
 )]
 /// GET /api/knowledge/tools — search the embedded Bioconda tool database.
 pub async fn knowledge_tools(
-    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+    crate::extract::ApiQuery(params): crate::extract::ApiQuery<KnowledgeQuery>,
 ) -> ApiResult<serde_json::Value> {
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
     let tools = oxo_flow_ai::knowledge::bioconda::search_tools(&params.q, limit);
@@ -807,6 +842,7 @@ pub async fn knowledge_tools(
     get,
     path = "/api/knowledge/skills",
     tag = "ai",
+    params(KnowledgeQuery),
     responses(
         (status = 200, description = "Success", body = serde_json::Value),
         (status = 400, description = "Error", body = ApiError),
@@ -814,7 +850,7 @@ pub async fn knowledge_tools(
 )]
 /// GET /api/knowledge/skills — search the embedded bioSkills database.
 pub async fn knowledge_skills(
-    axum::extract::Query(params): axum::extract::Query<KnowledgeQuery>,
+    crate::extract::ApiQuery(params): crate::extract::ApiQuery<KnowledgeQuery>,
 ) -> ApiResult<serde_json::Value> {
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
     let skills = oxo_flow_ai::knowledge::skills::search_skills(&params.q, limit);
