@@ -4405,6 +4405,7 @@
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
 </span></code></pre></div>
 <hr />
 <h2 id="include-modular-workflow-composition"><code>[[include]]</code> — Modular Workflow Composition<a class="headerlink" href="#include-modular-workflow-composition" title="Permanent link">#</a></h2>
@@ -7561,6 +7562,85 @@ domain per sample instance, and consumers instantiate over the union.</p>
   a <code>resume</code> re-instantiates the consumers <strong>without re-running the
   producer</strong>; re-instantiation is idempotent (same names, same plan).</li>
 </ul>
+<h2 id="webhook-workflow-level-notifications"><code>[webhook]</code> — Workflow-Level Notifications<a class="headerlink" href="#webhook-workflow-level-notifications" title="Permanent link">#</a></h2>
+<p>Post <code>workflow_started</code> / <code>workflow_completed</code> / <code>workflow_failed</code> events
+to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
+the transport counterpart of the <code>on_complete</code> / <code>on_error</code> shell hooks.</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-93-1"><a id="__codelineno-93-1" name="__codelineno-93-1" href="#__codelineno-93-1"></a><span class="k">[webhook]</span>
+</span><span id="__span-93-2"><a id="__codelineno-93-2" name="__codelineno-93-2" href="#__codelineno-93-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
+</span><span id="__span-93-3"><a id="__codelineno-93-3" name="__codelineno-93-3" href="#__codelineno-93-3"></a><span class="c1"># method = "POST"                  # POST (default) | PUT | GET</span>
+</span><span id="__span-93-4"><a id="__codelineno-93-4" name="__codelineno-93-4" href="#__codelineno-93-4"></a><span class="c1"># events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed</span>
+</span><span id="__span-93-5"><a id="__codelineno-93-5" name="__codelineno-93-5" href="#__codelineno-93-5"></a><span class="c1"># headers = { Authorization = "Bearer …" }</span>
+</span><span id="__span-93-6"><a id="__codelineno-93-6" name="__codelineno-93-6" href="#__codelineno-93-6"></a><span class="c1"># secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)</span>
+</span><span id="__span-93-7"><a id="__codelineno-93-7" name="__codelineno-93-7" href="#__codelineno-93-7"></a><span class="c1"># signature_scheme = "hmac-sha256"</span>
+</span><span id="__span-93-8"><a id="__codelineno-93-8" name="__codelineno-93-8" href="#__codelineno-93-8"></a><span class="c1"># timeout_secs = 30</span>
+</span><span id="__span-93-9"><a id="__codelineno-93-9" name="__codelineno-93-9" href="#__codelineno-93-9"></a><span class="c1"># max_retries = 3</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>url</code></td>
+<td>String</td>
+<td><strong>Yes</strong></td>
+<td>Webhook endpoint URL</td>
+</tr>
+<tr>
+<td><code>method</code></td>
+<td>String</td>
+<td><code>POST</code></td>
+<td>HTTP method (<code>POST</code>/<code>PUT</code>/<code>GET</code>)</td>
+</tr>
+<tr>
+<td><code>events</code></td>
+<td>Array of String</td>
+<td><code>["workflow_completed"]</code></td>
+<td>Which events fire: <code>workflow_started</code>, <code>workflow_completed</code>, <code>workflow_failed</code>, <code>rule_completed</code>, <code>rule_failed</code></td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>Table</td>
+<td><code>{}</code></td>
+<td>Custom request headers</td>
+</tr>
+<tr>
+<td><code>secret</code></td>
+<td>String</td>
+<td>—</td>
+<td>HMAC key for the <code>X-OxoFlow-Signature</code> header</td>
+</tr>
+<tr>
+<td><code>signature_scheme</code></td>
+<td>String</td>
+<td><code>hmac-sha256</code></td>
+<td><code>hmac-sha256</code> (RFC 2104) or the legacy <code>sha256-keyed</code></td>
+</tr>
+<tr>
+<td><code>timeout_secs</code></td>
+<td>Integer</td>
+<td><code>30</code></td>
+<td>Per-request timeout</td>
+</tr>
+<tr>
+<td><code>max_retries</code></td>
+<td>Integer</td>
+<td><code>3</code></td>
+<td>Retries with exponential backoff</td>
+</tr>
+</tbody>
+</table>
+<p>The payload is JSON: <code>{event, workflow_name, timestamp, data, version}</code>
+where <code>data</code> carries the run counters (<code>succeeded</code>, <code>failed</code>, <code>skipped</code>)
+and, on failure, an <code>error</code> summary. Notifications are <strong>best-effort</strong> —
+an unreachable or erroring endpoint logs a warning and never changes the
+run status or its exit code.</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../how-to/create-workflow/">Create a Workflow</a> — practical authoring guide</li>

@@ -4482,6 +4482,13 @@ silently querying SLURM.</p>
 <p>SLURM prints the job's <code>sacct</code> record (<code>JobID|State|ExitCode|Elapsed|MaxRSS</code>);
 PBS/SGE/LSF are best-effort (<code>qstat -f</code> / <code>qacct</code> / <code>bacct</code>). Requires the
 scheduler's client commands on <code>PATH</code>.</p>
+<p>On SLURM clusters <strong>without slurmdbd</strong> (accounting storage disabled), <code>sacct</code>
+returns nothing — settlement falls back to <code>scontrol show job &lt;id&gt;</code>, which
+reads the controller's in-memory record (state + exit code; no Elapsed/RSS/
+CPU). A job that has left both the live queue and every probe for longer
+than the blind-settlement window settles as <strong>failed with an unknown exit
+code</strong> and a warning naming the rule — the run ends instead of polling
+forever, and the operator verifies via the rule's output files.</p>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <h3 id="basic-output">Basic Output<a class="headerlink" href="#basic-output" title="Permanent link">#</a></h3>
