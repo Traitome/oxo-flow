@@ -488,11 +488,37 @@ impl LocalExecutor {
         self.wait_report_interval = interval;
     }
 
+    /// Move a rule command's sensitive values from the command line into the
+    /// child environment (audit A1). Container backends are skipped: their
+    /// wrapper does not forward the host environment, so a substituted
+    /// reference would reach the tool empty — the leak there needs the
+    /// engine-level `docker -e` / singularity `--env` plumbing instead.
+    fn route_sensitive_values(
+        &self,
+        cmd: &str,
+        rule: &Rule,
+    ) -> (String, HashMap<String, String>) {
+        if self.config.sensitive_values.is_empty() {
+            return (cmd.to_string(), HashMap::new());
+        }
+        match rule.environment.kind() {
+            "docker" | "singularity" => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    environment = rule.environment.kind(),
+                    "sensitive config values stay on the command line for container backends \
+                     (the wrapper does not forward the host environment)"
+                );
+                (cmd.to_string(), HashMap::new())
+            }
+            _ => route_sensitive_values_through_env(cmd, &self.config.sensitive_values),
+        }
+    }
+
     /// Snapshot of the in-flight child pid per rule (issue #131). The
     /// CLI's abort path signals these process trees before cancelling the
     /// tasks, so a failed run never orphans running rules.
-    pub fn active_pids(&self) -> Vec<(String, u32)> {
-        self.active_pids
+    pub fn active_pids(&self) -> Vec<(String, u32)> {        self.active_pids
             .lock()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
             .unwrap_or_default()
@@ -1263,6 +1289,16 @@ impl LocalExecutor {
         // semantics.
         let base_cmd =
             crate::config::prepend_shell_prelude(&base_cmd, self.config.shell_prelude.as_deref());
+        // Sensitive values leave the command line here (audit A1): what the
+        // shell runs references environment variables instead, and the
+        // recorded command shows those references — the same masked surface
+        // the report, the checkpoint, and `--debug` display.
+        let (base_cmd, sensitive_envs) =
+            self.route_sensitive_values(&base_cmd, &rule);
+        let mut rule_envs = rule.envvars.clone();
+        for (var, value) in &sensitive_envs {
+            rule_envs.insert(var.clone(), value.clone());
+        }
 
         // Optional rules skip (no error) when their declared inputs are
         // absent — e.g. analysis steps that only apply to some samples
@@ -1555,7 +1591,13 @@ impl LocalExecutor {
                 &rendered,
                 self.config.shell_prelude.as_deref(),
             );
-            let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &rule.envvars);
+            let (rendered_pre, pre_sensitive_envs) =
+                self.route_sensitive_values(&rendered_pre, &rule);
+            let mut pre_envs = rule.envvars.clone();
+            for (var, value) in &pre_sensitive_envs {
+                pre_envs.insert(var.clone(), value.clone());
+            }
+            let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
                 Err(e) => {
@@ -1622,7 +1664,7 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let child = match spawn_rule_shell(cmd, rule_cwd, &rule.envvars) {
+                let child = match spawn_rule_shell(cmd, rule_cwd, &rule_envs) {
                     Ok(child) => child,
                     Err(e) => {
                         // The shell never started — no diagnostic files can
@@ -2426,6 +2468,98 @@ pub fn mask_sensitive(text: &str, values: &[String]) -> String {
     masked
 }
 
+/// Environment-variable namespace for secrets handed to rules OUTSIDE the
+/// command line (audit A1): each routed value becomes
+/// `{SENSITIVE_ENV_BASE}_{index}` (e.g. `OXO_FLOW_SENSITIVE_0`).
+pub const SENSITIVE_ENV_BASE: &str = "OXO_FLOW_SENSITIVE";
+
+/// The environment variable name for the `index`-th routed secret.
+fn sensitive_env_name(index: usize) -> String {
+    format!("{SENSITIVE_ENV_BASE}_{index}")
+}
+
+/// Route declared sensitive values out of a rendered command and into the
+/// child process environment (audit A1).
+///
+/// `/proc/<pid>/cmdline` is world-readable, so a secret embedded in the
+/// `sh -c` argv is exposed to every local user through `ps`; a process
+/// environment is readable only by its owner (and root). Every occurrence
+/// of a routed value is replaced by a shell reference to a numbered
+/// variable that the spawn site injects, and the variable → value map is
+/// returned alongside the rewritten command.
+///
+/// Occurrences inside single quotes are spliced out of the quoting span
+/// (`'x'"${VAR}"'y'`) because `$VAR` would not expand there. Values shorter
+/// than [`MASK_VARIANT_MIN_LEN`] stay on the command line: a 2-3 character
+/// secret collides with ordinary command text too easily to rewrite safely.
+pub(crate) fn route_sensitive_values_through_env(
+    cmd: &str,
+    values: &[String],
+) -> (String, HashMap<String, String>) {
+    // Longest first so a value that contains another claims its own
+    // occurrences before the shorter one does, then lexically for
+    // deterministic numbering.
+    let mut ordered: Vec<&String> = values
+        .iter()
+        .filter(|value| value.len() >= MASK_VARIANT_MIN_LEN)
+        .collect();
+    ordered.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+
+    let mut envs: HashMap<String, String> = HashMap::new();
+    let mut rewritten = cmd.to_string();
+    for value in ordered {
+        if !rewritten.contains(value.as_str()) {
+            continue;
+        }
+        let var = sensitive_env_name(envs.len());
+        envs.insert(var.clone(), value.clone());
+        rewritten = splice_out_value(&rewritten, value, &var);
+    }
+    (rewritten, envs)
+}
+
+/// Replace every occurrence of `value` in `text` with a reference to `var`,
+/// keeping the reference expandable in whatever quoting context it lands in.
+fn splice_out_value(text: &str, value: &str, var: &str) -> String {
+    let reference = format!("${{{var}}}");
+    let spliced = format!("'\"{reference}\"'");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(value) {
+        let (before, after) = rest.split_at(pos);
+        out.push_str(before);
+        if ends_inside_single_quotes(before) {
+            out.push_str(&spliced);
+        } else {
+            out.push_str(&reference);
+        }
+        rest = &after[value.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Shell quote state at the end of `text`: `true` when the text stops inside
+/// a single-quoted span. Backslash escapes apply outside single quotes only
+/// (`'\''` is the idiom for an embedded quote, not an escape inside one).
+fn ends_inside_single_quotes(text: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !in_single => {
+                chars.next();
+            }
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            _ => {}
+        }
+    }
+    in_single
+}
+
+
 /// Values shorter than this only mask in plaintext form: their encoded
 /// variants are too collision-prone to redact (a 3-char secret
 /// base64-encodes to a 4-char token that can appear legitimately in a
@@ -3184,6 +3318,126 @@ mod tests {
         assert_eq!(residual_wildcard_token("plain/path.txt"), None);
         assert_eq!(residual_wildcard_token("{1numeric}/x"), None);
         assert_eq!(residual_wildcard_token("{}/x"), None);
+    }
+
+    #[tokio::test]
+    async fn rule_receives_routed_sensitive_values_through_the_environment() {
+        // Audit A1 end to end: the shell reads the secret from its
+        // environment (the value never appears in the command it runs).
+        let dir = tempfile::tempdir().unwrap();
+        let executor = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            sensitive_values: vec!["s3cr3t-token-42".to_string()],
+            ..Default::default()
+        });
+        let rule = crate::RuleBuilder::new("use_secret")
+            .shell("printf '%s' {config.api_key} > out.txt")
+            .output(vec!["out.txt".to_string()])
+            .build();
+        let mut values = HashMap::new();
+        values.insert("config.api_key".to_string(), "s3cr3t-token-42".to_string());
+        let record = executor
+            .execute_rule_with_config(&rule, &values, &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            record.status,
+            JobStatus::Success,
+            "rule failed: {:?}",
+            record.stderr
+        );
+        let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+        assert_eq!(written, "s3cr3t-token-42", "the value must arrive");
+        assert!(
+            !record.command.as_deref().unwrap_or_default().contains("s3cr3t-token-42"),
+            "the recorded command must not carry the secret: {:?}",
+            record.command
+        );
+    }
+
+    #[test]
+    fn sensitive_values_route_through_the_environment_out_of_argv() {
+        // Audit A1: a rendered command that embeds a secret is visible to
+        // every local user through `ps`; the secret must travel in the child
+        // process environment instead.
+        let cmd = r#"curl -s -H "Authorization: Bearer s3cr3t-token-42" https://api.invalid"#;
+        let (rewritten, envs) =
+            route_sensitive_values_through_env(cmd, &["s3cr3t-token-42".to_string()]);
+        assert!(
+            !rewritten.contains("s3cr3t-token-42"),
+            "the rewritten command must not carry the secret: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(&format!("${{{SENSITIVE_ENV_BASE}_0}}")),
+            "the secret must be referenced through its environment variable: {rewritten}"
+        );
+        assert_eq!(
+            envs.get(&sensitive_env_name(0)).map(String::as_str),
+            Some("s3cr3t-token-42")
+        );
+    }
+
+    #[test]
+    fn sensitive_value_inside_single_quotes_is_spliced_out() {
+        // A `${VAR}` inside single quotes would not expand, so the rewrite
+        // closes and reopens the quoted span: 'x'"${VAR}"'y'.
+        let cmd = r#"curl -s -H 'Authorization: Bearer s3cr3t-token-42' https://api.invalid"#;
+        let (rewritten, envs) =
+            route_sensitive_values_through_env(cmd, &["s3cr3t-token-42".to_string()]);
+        assert!(!rewritten.contains("s3cr3t-token-42"), "{rewritten}");
+        assert!(
+            rewritten.contains("'\"${" ) && rewritten.contains("}\"'"),
+            "single-quoted occurrences must splice out of the quotes: {rewritten}"
+        );
+        assert_eq!(
+            envs.get(&sensitive_env_name(0)).map(String::as_str),
+            Some("s3cr3t-token-42")
+        );
+    }
+
+    #[test]
+    fn short_sensitive_values_stay_out_of_the_rewrite() {
+        // A 2-char secret would collide with ordinary command text; the
+        // masking policy already treats short values as too collision-prone
+        // (MASK_VARIANT_MIN_LEN), so rewriting keeps the historical form
+        // rather than corrupting the command.
+        let cmd = "tool --token ab --region eu-west-1";
+        let (rewritten, envs) = route_sensitive_values_through_env(cmd, &["ab".to_string()]);
+        assert_eq!(rewritten, cmd, "short values must not be rewritten");
+        assert!(envs.is_empty());
+    }
+
+    #[test]
+    fn sensitive_rewrite_without_a_match_is_a_noop() {
+        let cmd = "echo hello";
+        let (rewritten, envs) =
+            route_sensitive_values_through_env(cmd, &["s3cr3t-token-42".to_string()]);
+        assert_eq!(rewritten, cmd);
+        assert!(envs.is_empty(), "no occurrence means nothing to inject");
+        // No declared sensitive values: unchanged, nothing injected.
+        let (rewritten, envs) = route_sensitive_values_through_env(cmd, &[]);
+        assert_eq!(rewritten, cmd);
+        assert!(envs.is_empty());
+    }
+
+    #[test]
+    fn multiple_sensitive_values_get_distinct_variables() {
+        let cmd = "tool --user alice-01 --token s3cr3t-token-42";
+        let (rewritten, envs) = route_sensitive_values_through_env(
+            cmd,
+            &["alice-01".to_string(), "s3cr3t-token-42".to_string()],
+        );
+        assert!(!rewritten.contains("alice-01"), "{rewritten}");
+        assert!(!rewritten.contains("s3cr3t-token-42"), "{rewritten}");
+        assert_eq!(envs.len(), 2);
+        assert_eq!(
+            envs.get(&sensitive_env_name(0)).map(String::as_str),
+            Some("s3cr3t-token-42")
+        );
+        assert_eq!(
+            envs.get(&sensitive_env_name(1)).map(String::as_str),
+            Some("alice-01")
+        );
     }
 
     #[test]
