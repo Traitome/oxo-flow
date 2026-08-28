@@ -866,6 +866,69 @@ fn evaluate_condition_wildcard_context_missing_key_is_false() {
 }
 
 #[test]
+fn file_exists_resolves_against_base_dir_not_cwd() {
+    use super::process::evaluate_condition_with_wildcards_and_base_dir;
+
+    // Issue #241: relative `file_exists(...)` paths must resolve against the
+    // workflow root (base_dir) — the same root every other engine path uses —
+    // not the engine process's current working directory.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("panel.bed"), b"chr1\t1\t100").unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+
+    // Absolute path: base_dir is irrelevant.
+    let abs = dir.path().join("panel.bed");
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        &format!(r#"file_exists("{}")"#, abs.display()),
+        &config,
+        &empty,
+        Some(dir.path().join("elsewhere").as_path())
+    ));
+
+    // Relative path: resolves under base_dir, NOT process cwd.
+    assert!(
+        evaluate_condition_with_wildcards_and_base_dir(
+            r#"file_exists("panel.bed")"#,
+            &config,
+            &empty,
+            Some(dir.path())
+        ),
+        "relative path must resolve against base_dir"
+    );
+    assert!(
+        !evaluate_condition_with_wildcards_and_base_dir(
+            r#"file_exists("panel.bed")"#,
+            &config,
+            &empty,
+            Some(dir.path().join("nonexistent-root").as_path())
+        ),
+        "missing root must close the gate"
+    );
+
+    // None keeps the historical process-cwd behavior.
+    let cwd_relative = std::env::current_dir().expect("cwd available in tests");
+    let probe = cwd_relative.join(format!(".oxo-file-exists-probe-{}", std::process::id()));
+    std::fs::write(&probe, b"probe").unwrap();
+    let present = evaluate_condition_with_wildcards_and_base_dir(
+        &format!(r#"file_exists("{}")"#, probe.display()),
+        &config,
+        &empty,
+        None,
+    );
+    let _ = std::fs::remove_file(&probe);
+    assert!(present, "None must keep cwd-relative resolution");
+
+    // Composes inside && / !.
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        r#"file_exists("panel.bed") && !file_exists("missing.bed")"#,
+        &config,
+        &empty,
+        Some(dir.path())
+    ));
+}
+
+#[test]
 fn evaluate_condition_literal_comparisons_compare_for_real() {
     use super::process::evaluate_condition_with_wildcards;
 

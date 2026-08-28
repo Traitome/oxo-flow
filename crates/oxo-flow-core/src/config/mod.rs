@@ -21,6 +21,14 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
 
 impl WorkflowConfig {
+    /// The directory `when` conditions with `file_exists(...)` and
+    /// `input_groups` patterns resolve against — the workflow file's parent
+    /// (issue #241). `None` when the config was not loaded from a file
+    /// (tests, in-memory construction): callers fall back to process cwd.
+    pub fn base_dir(&self) -> Option<&std::path::Path> {
+        self.base_dir.as_deref()
+    }
+
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {

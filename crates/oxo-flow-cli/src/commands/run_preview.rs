@@ -204,6 +204,8 @@ pub fn preview_run_plan(
     }
 
     // 1. Config-impact invalidation (issue #62) — on the clone only.
+    // `file_exists(...)` in `when` resolves against the workflow root
+    // (issue #241) — same root as run and plan-time expansion.
     let config_report = oxo_flow_core::config_impact::detect_config_changes(
         &mut clone,
         &config.rules,
@@ -212,6 +214,7 @@ pub fn preview_run_plan(
         sensitive_keys,
         interpreter_map,
         config.defaults.shell_prelude.as_deref(),
+        config.base_dir(),
     );
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
     // Issue #142 M1: rules whose fingerprint differed only in the
@@ -762,6 +765,7 @@ pub(crate) fn invalidate_with_downstream(
 /// Whether the rule's `when` condition evaluates to false against the
 /// merged config — the same inputs `run` evaluates it with (typed config
 /// values win over string wildcard values; process.rs mirrors this).
+/// `file_exists(...)` resolves against the workflow root (issue #241).
 pub(crate) fn when_condition_false(
     rule: &Rule,
     config: &WorkflowConfig,
@@ -778,7 +782,12 @@ pub(crate) fn when_condition_false(
                 .or_insert_with(|| toml::Value::String(v.clone()));
         }
     }
-    !oxo_flow_core::executor::process::evaluate_condition(condition, &config_values)
+    !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+        condition,
+        &config_values,
+        &HashMap::new(),
+        config.base_dir(),
+    )
 }
 
 /// The profile names available in `<workflow-dir>/profiles/` — `<NAME>`
@@ -867,6 +876,53 @@ mod tests {
     use super::*;
     use oxo_flow_core::config::WorkflowConfig;
     use oxo_flow_core::executor::checkpoint::snapshot_input_manifest;
+
+    /// Issue #241: a `when` with a relative `file_exists(...)` gate must
+    /// resolve against the workflow root — the process cwd is irrelevant.
+    /// Regression scenario from the snparcher port: launching from a
+    /// different directory silently flipped every gated rule.
+    #[test]
+    fn when_file_exists_resolves_against_workflow_root_not_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("panel.bed"), b"chr1\t1\t100").unwrap();
+        let wf_path = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &wf_path,
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[[rules]]
+name = "gen"
+input = []
+output = ["out.txt"]
+when = 'file_exists("panel.bed")'
+shell = "echo hi > {output[0]}"
+"#,
+        )
+        .unwrap();
+
+        // Load via from_file (like run does): base_dir = workflow parent.
+        let config = WorkflowConfig::from_file(&wf_path).unwrap();
+        let rule = &config.rules[0];
+        let wildcard_values = HashMap::new();
+
+        // Gate is true regardless of process cwd (this test process's cwd is
+        // the repo root, which has no panel.bed).
+        assert!(
+            !when_condition_false(rule, &config, &wildcard_values),
+            "gate must resolve panel.bed against the workflow root, not cwd"
+        );
+
+        // And from a genuinely different cwd, same verdict.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(elsewhere.path()).unwrap();
+        let verdict = when_condition_false(rule, &config, &wildcard_values);
+        std::env::set_current_dir(prev).unwrap();
+        assert!(!verdict, "changing the process cwd must not flip the gate");
+    }
 
     /// Fixture: two samples, trim → align per sample, one queue-level combine.
     /// All input/output files exist so snapshots resolve.
@@ -1389,6 +1445,7 @@ version = "1.0"
             &sensitive(),
             &config.workflow.interpreter_map,
             config.defaults.shell_prelude.as_deref(),
+            config.base_dir(),
         );
 
         let mut changed_config = config.clone();

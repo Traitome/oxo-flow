@@ -240,10 +240,11 @@ impl WorkflowConfig {
             .iter()
             .filter(|pair| {
                 pair.when.as_deref().is_none_or(|when| {
-                    crate::executor::process::evaluate_condition_with_wildcards(
+                    crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
                         when,
                         &config_values,
                         &HashMap::new(),
+                        self.base_dir.as_deref(),
                     )
                 })
             })
@@ -730,10 +731,11 @@ impl WorkflowConfig {
                             // execution-time verdict exactly.
                             let baked = Self::bake_wildcard_when(when, &combo);
                             let baked = Self::bake_meta_when(&baked, &self.metadata, &combo);
-                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                            if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
                                 &baked,
                                 &config_values,
                                 &combo_values,
+                                self.base_dir.as_deref(),
                             ) {
                                 continue;
                             }
@@ -859,10 +861,11 @@ impl WorkflowConfig {
                             let combo_values = Self::expansion_when_context(&merged);
                             let baked = Self::bake_wildcard_when(when, &merged);
                             let baked = Self::bake_meta_when(&baked, &self.metadata, &merged);
-                            if !crate::executor::process::evaluate_condition_with_wildcards(
+                            if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
                                 &baked,
                                 &config_values,
                                 &combo_values,
+                                self.base_dir.as_deref(),
                             ) {
                                 continue;
                             }
@@ -1019,10 +1022,11 @@ impl WorkflowConfig {
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
                         let combo_values = Self::expansion_when_context(combo);
-                        if !crate::executor::process::evaluate_condition_with_wildcards(
+                        if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
                             when,
                             &config_values,
                             &combo_values,
+                            self.base_dir.as_deref(),
                         ) {
                             continue;
                         }

@@ -50,6 +50,11 @@ when = "config.dry_run == false"
 when = 'file_exists("panel_of_controls.vcf.gz")'
 ```
 
+Relative paths resolve against the **workflow root** (the workflow file's
+directory) — the same root every other engine path uses — so the gate reads
+the same no matter which directory you launch `oxo-flow` from. Absolute
+paths pass through unchanged.
+
 ### Wildcard-scoped conditions (`wildcard.<key>`)
 
 Conditions can reference the pair/group expansion context through the
