@@ -54,6 +54,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
+[webhook]           # Optional: workflow-level webhook notifications (issue #227)
 ```
 
 ---
@@ -2397,6 +2398,41 @@ Semantics:
 - Checkpoints persist the discovered domain (`output_pattern_domains`), so
   a `resume` re-instantiates the consumers **without re-running the
   producer**; re-instantiation is idempotent (same names, same plan).
+
+## `[webhook]` — Workflow-Level Notifications
+
+Post `workflow_started` / `workflow_completed` / `workflow_failed` events
+to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
+the transport counterpart of the `on_complete` / `on_error` shell hooks.
+
+```toml
+[webhook]
+url = "https://hooks.example.com/oxo"
+# method = "POST"                  # POST (default) | PUT | GET
+# events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed
+# headers = { Authorization = "Bearer …" }
+# secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)
+# signature_scheme = "hmac-sha256"
+# timeout_secs = 30
+# max_retries = 3
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | String | **Yes** | Webhook endpoint URL |
+| `method` | String | `POST` | HTTP method (`POST`/`PUT`/`GET`) |
+| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed`, `rule_completed`, `rule_failed` |
+| `headers` | Table | `{}` | Custom request headers |
+| `secret` | String | — | HMAC key for the `X-OxoFlow-Signature` header |
+| `signature_scheme` | String | `hmac-sha256` | `hmac-sha256` (RFC 2104) or the legacy `sha256-keyed` |
+| `timeout_secs` | Integer | `30` | Per-request timeout |
+| `max_retries` | Integer | `3` | Retries with exponential backoff |
+
+The payload is JSON: `{event, workflow_name, timestamp, data, version}`
+where `data` carries the run counters (`succeeded`, `failed`, `skipped`)
+and, on failure, an `error` summary. Notifications are **best-effort** —
+an unreachable or erroring endpoint logs a warning and never changes the
+run status or its exit code.
 
 ## See Also
 
