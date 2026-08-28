@@ -4217,6 +4217,18 @@ spawns the web server):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--test<span class="w"> </span>web_role_matrix<span class="w">   </span><span class="c1"># deployment + 3-role simulation matrix (auth, RBAC, persistence, base-path)</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--test<span class="w"> </span>web_integration<span class="w">   </span><span class="c1"># web API integration tests</span>
 </span></code></pre></div>
+<h4 id="flaky-test-policy-issue-249">Flaky-test policy (issue #249)<a class="headerlink" href="#flaky-test-policy-issue-249" title="Permanent link">#</a></h4>
+<p>CI runs the full suite once; if it fails, ONLY the failed tests are
+re-run a single time — passing then classifies the failure as a
+load-timing flake (the job stays green with a warning annotation),
+failing again is a genuine regression (the job goes red). The cap is
+exactly one re-run: persistent breakage is never masked.</p>
+<p>When writing time-sensitive tests, do not assert on wall-clock margins
+that only hold on an idle machine — grant the generous window in the
+test itself (e.g. an explicit long grace for signal handling) so the
+assertion measures the property under test, not machine load. A first
+run that flakes under CI load is a test bug, not an engine bug; fix
+the window before adding retries.</p>
 <h3 id="run-all-ci-checks-locally">Run All CI Checks Locally<a class="headerlink" href="#run-all-ci-checks-locally" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>ci
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Runs: cargo fmt --check, cargo clippy -D warnings, cargo build, cargo test</span>
