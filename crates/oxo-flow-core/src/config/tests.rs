@@ -5780,6 +5780,88 @@ fn output_pattern_and_output_mutually_exclusive_errors() {
 }
 
 #[test]
+fn gpus_without_container_backend_errors() {
+    // `gpus` only applies to container backends (docker `--gpus`); on a
+    // system/conda rule the flag would be silently ignored, so it is a
+    // validation error instead.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("gpus.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gpus"
+
+        [[rules]]
+        name = "smi"
+        output = ["out/smi.txt"]
+        environment = { gpus = "all" }
+        shell = "nvidia-smi > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("gpus") && err.to_string().contains("docker"),
+        "error should point at the backend mismatch: {err}"
+    );
+}
+
+#[test]
+fn gpus_with_singularity_errors_not_implemented() {
+    // GPU passthrough currently maps only to docker's --gpus; singularity
+    // --nv is not implemented, and passing validation silently would be
+    // the exact "silently ignored flag" pattern validation exists to kill.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("gpus-sif.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gpus-sif"
+
+        [[rules]]
+        name = "smi"
+        output = ["out/smi.txt"]
+        environment = { singularity = "docker://biocontainers/bwa:0.7.17", gpus = "all" }
+        shell = "nvidia-smi > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let err = config.expand_wildcards().unwrap_err();
+    assert!(
+        err.to_string().contains("gpus") && err.to_string().contains("docker"),
+        "error should point at the docker-only contract: {err}"
+    );
+}
+
+#[test]
+fn gpus_with_docker_passes_expansion() {
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("gpus-ok.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gpus-ok"
+
+        [[rules]]
+        name = "smi"
+        output = ["out/smi.txt"]
+        environment = { docker = "nvidia/cuda:12.6.3-base-ubuntu24.04", gpus = "all" }
+        shell = "nvidia-smi > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules[0].environment.gpus.as_deref(), Some("all"));
+}
+
+#[test]
 fn output_pattern_rejects_transform_rules() {
     let dir = tempfile::tempdir().unwrap();
     let workflow_path = dir.path().join("transform.oxoflow");

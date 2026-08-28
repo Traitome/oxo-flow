@@ -258,6 +258,37 @@ impl WorkflowConfig {
         self.expansion_values.clear();
         self.expansion_pairs.clear();
 
+        // Environment field-level validation (the CLI run path does not
+        // call per-rule `validate`): `gpus` requires a container backend.
+        for rule in &self.rules {
+            rule.environment.validate_gpus().map_err(|e| match e {
+                crate::error::OxoFlowError::Validation {
+                    message,
+                    suggestion,
+                    ..
+                } => crate::error::OxoFlowError::Validation {
+                    message: format!("rule '{}': {message}", rule.name),
+                    rule: Some(rule.name.clone()),
+                    suggestion,
+                },
+                other => other,
+            })?;
+        }
+        for (name, spec) in &self.env_groups {
+            spec.validate_gpus().map_err(|e| match e {
+                crate::error::OxoFlowError::Validation {
+                    message,
+                    suggestion,
+                    ..
+                } => crate::error::OxoFlowError::Validation {
+                    message: format!("environment group '{name}': {message}"),
+                    rule: None,
+                    suggestion,
+                },
+                other => other,
+            })?;
+        }
+
         // Validate [[values]] tables: non-empty names/values, unique names,
         // and no collisions with built-in wildcards (a rule referencing
         // `{sample}` must not be ambiguous between group and value fan-out).

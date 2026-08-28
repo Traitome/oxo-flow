@@ -635,6 +635,14 @@ exists — or a **local SIF path** (e.g. a site image store's
 `/data/images/bwa_0.7.17.sif`), which is used as-is with no pull step. A
 local path that does not exist fails the rule with a clear diagnostic.
 
+**GPU passthrough (`gpus`):** `environment = { docker = "nvcr.io/nvidia/clara-parabricks:4.4.0-1", gpus = "all" }`
+passes the host's GPU devices to the container via docker's
+`--gpus <value>` (also `"0"` or `"device=0,1"`). Requires
+nvidia-container-toolkit on the host. Declaring `gpus` without a docker
+image is a validation error — the flag would otherwise be silently
+ignored on system/conda backends. (Singularity `--nv` passthrough is not
+implemented yet; `gpus` with a `singularity` image is rejected for now.)
+
 # # Mamba / micromamba (auto-detects binary, same YAML format as conda)
 # environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
 

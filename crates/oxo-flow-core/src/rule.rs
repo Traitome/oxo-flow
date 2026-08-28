@@ -289,6 +289,15 @@ pub struct EnvironmentSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docker: Option<String>,
 
+    /// GPU devices to pass through to docker — `--gpus <value>` (e.g.
+    /// `"all"`, `"0"`, `"device=0,1"`). Requires nvidia-container-toolkit
+    /// on the host. Validated to require a docker image (singularity
+    /// `--nv` is not implemented; a bare `gpus` on any other backend is
+    /// an error).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpus: Option<String>,
+
     /// Singularity/Apptainer image reference.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,6 +339,24 @@ pub struct EnvironmentSpec {
 }
 
 impl EnvironmentSpec {
+    /// Validates the GPU-passthrough field: `gpus` currently maps only to
+    /// docker's `--gpus` (singularity `--nv` is not implemented yet). Any
+    /// other backend would silently ignore the flag, so it is a
+    /// validation error instead.
+    pub fn validate_gpus(&self) -> crate::error::Result<()> {
+        if self.gpus.is_some() && self.docker.is_none() {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: "environment declares 'gpus' but no docker image — GPU passthrough currently maps only to docker's --gpus (singularity --nv is not implemented)".to_string(),
+                rule: None,
+                suggestion: Some(
+                    "add `docker = \"<image>\"` (nvidia-container-toolkit required on the host)"
+                        .to_string(),
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// Returns `true` if no environment is specified.
     pub fn is_empty(&self) -> bool {
         self.conda.is_none()
@@ -1182,6 +1209,7 @@ impl Rule {
             });
         }
         self.validate_output_pattern()?;
+        self.environment.validate_gpus()?;
         if let Some(threads) = self.threads
             && threads == 0
         {
