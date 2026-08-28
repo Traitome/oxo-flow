@@ -259,11 +259,15 @@ POST   /api/pipelines/search       # Search by name, tags, content
 POST /api/runs
 Content-Type: application/json
 
-{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>"}
+{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>", "cluster_id": "<cluster-id>"}
 ```
-`max_jobs`, `dry_run`, `keep_going`, and `pipeline_id` are top-level fields (not nested under a `config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
+`toml_content` is the workflow source (required — the run is created from
+it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
+`pipeline_id`, and `cluster_id` are top-level fields (not nested under a
+`config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
-`pipeline_id` (optional) targets a saved pipeline: the run executes in the
+`pipeline_id` (optional) only *associates* the run with a saved pipeline —
+the TOML still comes from `toml_content`. It makes the run execute in the
 pipeline's **persistent working directory** (`workspace/users/<user>/pipelines/<id>`),
 so the checkpoint survives across re-runs. Re-running with a changed config
 rebuilds exactly the rules referencing the changed keys (plus their DAG
@@ -276,9 +280,25 @@ Execution flags are forwarded to the CLI executor:
 
 - `dry_run: true` spawns the preview subcommand (`oxo-flow dry-run`) —
   nothing executes; the log shows the would-be plan.
-- `max_jobs` maps to the executor's `-j` only when explicitly set; without
-  it the CLI default (1) applies (the resource estimate assumes 4).
+- `max_jobs` defaults to **4** at this endpoint (the CLI flag itself
+  defaults to 1): an omitted `max_jobs` still spawns the CLI with `-j 4`,
+  which is also the value the resource estimate assumes.
 - `keep_going: true` maps to `-k`.
+- `cluster_id` (optional) names a configured SSH cluster connection: the
+  workdir is staged to that host and executed there (see
+  [Cluster Connections](#cluster-connections--remote-execution)).
+
+### List Runs
+
+```
+GET /api/runs?limit=100&cursor=<created_at>&status=<status>&q=<search>
+```
+
+Cursor pagination, not page numbers: pass the `created_at` of the last row
+of the previous page as `cursor` (`created_at < cursor`). `limit` defaults
+to 100 and is capped at 500. The response is the envelope
+`{ items, next_cursor, total }`, where `next_cursor: null` means the last
+page.
 
 ### Run Status
 ```

@@ -81,7 +81,7 @@ Start with the **Tutorials** in order:
 
 ### If you want to learn by example
 
-Explore the **[Workflow Gallery](./gallery/index.md)** — 10 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:
+Explore the **[Workflow Gallery](./gallery/index.md)** — 16 curated workflows from hello-world to multi-omics integration and applied study designs, each with validation output, DAG visualizations, and scientific context:
 
 1. [Hello World](./gallery/hello-world.md) ⭐ — Minimal rule structure
 2. [File Pipeline](./gallery/file-pipeline.md) ⭐⭐ — Multi-rule dependencies
@@ -93,6 +93,12 @@ Explore the **[Workflow Gallery](./gallery/index.md)** — 10 curated workflows 
 8. [Multi-Omics Integration](./gallery/multiomics.md) ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation
 9. [Single-Cell RNA-seq](./gallery/single-cell-rnaseq.md) ⭐⭐⭐⭐ — scRNA-seq analysis
 10. [Transform Operator](./gallery/transform-operator.md) ⭐⭐⭐ — Unified scatter-gather
+11. [Conditional Execution](./gallery/conditional-workflow.md) ⭐⭐⭐ — `when`-gated WGS/WES branches
+12. [Cohort Analysis](./gallery/cohort-analysis.md) ⭐⭐⭐⭐ — Multi-group cohorts and QC aggregation
+13. [Germline Variant Calling](./gallery/simple-variant-calling.md) ⭐⭐⭐⭐ — Per-sample GATK chain
+14. [Paired Experiment-Control](./gallery/paired-experiment-control.md) ⭐⭐⭐⭐⭐ — Single-pair somatic calling
+15. [Paired Experiment-Control (Pairs)](./gallery/paired-experiment-control-pairs.md) ⭐⭐⭐⭐⭐ — `[[pairs]]`-scaled somatic calling
+16. [16S Amplicon (QIIME2)](./gallery/16s-qiime2.md) ⭐⭐⭐⭐ — Amplicon denoising and diversity
 
 ### If you need to accomplish a specific task
 
@@ -105,7 +111,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 33 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 30 CLI subcommands with usage, options, and examples.
 
 ### If you want the full technical details
 
@@ -169,6 +175,13 @@ oxo-flow run align.oxoflow -j 1
 oxo-flow graph -f dot -o dag.dot align.oxoflow
 dot -Tpng -o dag.png dag.dot
 ```
+
+!!! note "stdout is for machines, stderr is for humans"
+    Progress, warnings, and log lines go to **stderr**; **stdout** is
+    reserved for machine-readable output — `--json`, `graph --format dot`,
+    and every `--format`/`-o` deliverable. That is why the `graph` example
+    above writes the DOT to a file with `-o` (or redirect stdout) instead of
+    mixing it with run logs.
 
 ---
 

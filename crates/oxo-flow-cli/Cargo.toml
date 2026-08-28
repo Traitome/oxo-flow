@@ -54,6 +54,7 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 assert_cmd = "2.2.0"
+predicates = "3.1.4"
 
 # Desktop packaging (cargo-bundle): the single binary doubles as the
 # desktop app — `oxo-flow serve --open` starts the web interface and opens

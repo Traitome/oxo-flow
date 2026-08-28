@@ -36,7 +36,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 🤖 **AI Companion** — Natural language pipeline generation, intelligent refinement, failure diagnosis, and results interpretation. Powered by Claude, OpenAI, DeepSeek, or local Ollama.
 - 🔀 **DAG engine** — Automatic dependency resolution, topological ordering, and parallel execution with resource-aware scheduling (CPU, memory, GPU, disk) across local and cluster backends (SLURM, PBS, SGE, LSF)
 - 📦 **8 environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
-- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in core and web crates
+- ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in every workspace crate
 - 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (React Flow + d3-dag), TOML editor (CodeMirror 6), and AI chat
 - 📊 **Built-in reporting** — HTML/JSON/Markdown/PDF reports with execution summaries, failure diagnosis, resource metrics, and checkpoint-verified file manifests; QC metrics parsed from real tool outputs (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), R-friendly TSV export (`--r-data`), and a JSON report snapshot auto-written after every run
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
@@ -47,7 +47,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 
 | Feature | **oxo-flow** | Snakemake | Nextflow |
 |---------|------------|-----------|----------|
-| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` (core + web) | Python | Groovy/JVM |
+| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` in all four crates | Python | Groovy/JVM |
 | **Performance** | Native binary, instant startup | Python + JIT overhead | JVM startup overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile (Python DSL) | Nextflow DSL (Groovy) |
 | **Environment support** | 8 backends — conda, mamba, pixi, docker, singularity, venv, system, modules — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
@@ -155,11 +155,11 @@ oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/
 # Submit a workflow to a SLURM cluster
 oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
 
-# Check submission status
-oxo-flow cluster status --id <job-id>
+# Check submission status (status needs the backend and at least one job id)
+oxo-flow cluster status --backend slurm <job-id>
 
 # Cancel a submitted job
-oxo-flow cluster cancel --id <job-id>
+oxo-flow cluster cancel --backend slurm <job-id>
 ```
 
 **Supported backends:** `slurm`, `pbs`, `sge`, `lsf`. Cluster submissions are configured inline via `oxo-flow cluster submit` flags.
@@ -278,17 +278,31 @@ oxo-flow/
 `oxo-flow serve` starts the web interface with an embedded REST API and React SPA. Run it without arguments for local experimentation:
 
 ```bash
-# Mode 1: Personal workstation (default) — SQLite, localhost:3000, no auth
+# Mode 1: Personal workstation (default) — SQLite, localhost:8080, no auth
 oxo-flow serve
-# → Open http://127.0.0.1:3000 in your browser
+# → Open http://127.0.0.1:8080 in your browser
 
-# Mode 2: Team server — SQLite/PG, 0.0.0.0, ORCID/GitHub OAuth2
-#   (note: workflow run EXECUTION requires the SQLite backend; PG servers serve library/AI/auth — POST /api/runs returns 503)
-oxo-flow serve --mode team --db postgres://...
+# Mode 2: Team server — multi-user (env-var passwords + optional ORCID/GitHub OAuth2)
+oxo-flow serve --mode team --host 0.0.0.0
 
-# Mode 3: HPC submit panel — Web UI for cluster job submission
-oxo-flow serve --mode hpc --scheduler slurm
+# Mode 3: HPC submit panel — the scheduler (SLURM/PBS/SGE/LSF) is probed at
+#   startup when the server itself runs on a cluster login node
+oxo-flow serve --mode hpc
 ```
+
+Serve flags: `--mode` (`personal` | `team` | `hpc`), `--host` (default
+`127.0.0.1`), `-p`/`--port` (default `8080`), `--base-path`, and `--open`
+(open the browser on startup). Each flag also has an `OXO_FLOW_*`
+environment-variable form, plus a platform config file layer — see
+[Deployment Modes](docs/guide/src/how-to/deploy-modes.md).
+
+**PostgreSQL:** `oxo-flow serve` is SQLite-only (`sqlite://oxo-flow.db` in
+the working directory). The standalone `oxo-flow-web` binary instead reads
+the `DATABASE_URL` environment variable — a `postgres://` URL (on a build
+with the `postgres` feature) enables the PostgreSQL backend for the
+library/AI/auth domains. Run execution stays SQLite-only either way: on a
+PostgreSQL server every `/api/runs*` endpoint answers
+`503 RUNS_REQUIRE_SQLITE`.
 
 ## Documentation
 
@@ -310,23 +324,28 @@ MkDocs source lives under [`docs/guide/src/`](docs/guide/src/).
 
 ```bash
 # Build all workspace crates
-cargo build
+cargo build --workspace
 
 # Run all tests (unit + integration)
-cargo test
+cargo test --workspace
 
-# Run the full CI suite (format + clippy + build + test)
+# Run the full CI suite (fmt + clippy + build + test + schema-drift + audit + frontend lint)
 make ci
 
 # Individual CI steps
-cargo fmt -- --check          # Check formatting
-cargo clippy -- -D warnings   # Lint (zero warnings)
-cargo build                   # Compile
-cargo test                    # Test
+cargo fmt -- --check                             # Check formatting
+cargo clippy --workspace --all-targets -- -D warnings  # Lint (zero warnings)
+cargo build --workspace                          # Compile
+cargo test --workspace                           # Test
 
 # Format code
 cargo fmt
 ```
+
+> A bare `cargo build` at the repo root builds only the root `oxo-flow`
+> library package (the integration-test crate) — not the CLI or web
+> binaries. Pass `--workspace` whenever you want `target/*/oxo-flow` and
+> `target/*/oxo-flow-web`.
 
 ### Tech stack
 

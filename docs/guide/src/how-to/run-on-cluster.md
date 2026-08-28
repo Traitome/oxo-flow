@@ -17,7 +17,7 @@ There are two ways to reach a scheduler, and they suit different jobs:
 
 `run --profile` is the everyday path; it inherits everything `run` does — wildcard expansion, checkpoint/resume, `--samples`, `--rerun`, config-change invalidation. See [Cluster submission](../commands/run.md#cluster-submission) for the `[cluster]` profile block. `cluster submit` remains the escape hatch and is documented below.
 
-**Environment wrapping is applied automatically** — conda, mamba, docker, singularity, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies **one** backend (the first declared in the resolver order), so declaring e.g. both `singularity` and `modules` silently drops `modules`.
+**Environment wrapping is applied automatically** — conda, mamba, docker, singularity/apptainer, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies **one** backend (the first declared in the resolver order mamba → conda → pixi → docker → singularity → venv → modules), so declaring e.g. both `singularity` and `modules` fails loudly instead of silently dropping the module loads.
 
 ---
 
@@ -115,14 +115,17 @@ for the first instance is:
 set -e
 
 mkdir -p logs
-singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 Note: one script is generated per **rule instance**. Wildcards expand before
 the scripts are written, exactly as they do for `run`, so a 3-sample scatter
 produces `align_batch_S1.sh`, `align_batch_S2.sh`, and `align_batch_S3.sh`
 with concrete paths in each. The instance names match the ones `dry-run`
-plans, so a script maps back to a planned rule by name.
+plans, so a script maps back to a planned rule by name. The `sh -c '…' sh
+'<command>'` tail is the bash shim described under
+[Environment Wrapping](#environment-wrapping), and `singularity` is
+substituted when `apptainer` is absent.
 
 ---
 
@@ -138,7 +141,7 @@ plans, so a script maps back to a planned rule by name.
 set -e
 
 mkdir -p logs
-singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---
@@ -157,7 +160,7 @@ singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://bioco
 set -e
 
 mkdir -p logs
-singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
 
 ---
@@ -167,13 +170,30 @@ singularity exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://bioco
 When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:
 
 | Backend | Wrapping |
-|---|---|---|
-| Conda / Mamba | `conda run -n <env> bash -c '<command>'` |
-| Docker | `docker run --rm --user $(id -u):$(id -g) -v .:. -w . <image> sh -c '<command>'` |
-| Singularity | `singularity exec --bind .:. <image> sh -c '<command>'` |
-| Pixi | `pixi run -e <env> <command>` |
+|---|---|
+| Conda | `conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` |
+| Mamba | `<mamba\|micromamba\|conda> run -n <env> bash -c '<command>'` |
+| Docker | `docker run --rm --user $(id -u):$(id -g) -v <workdir>:<workdir> -w <workdir> <image> sh -c '<shim>' sh '<command>'` |
+| Singularity / Apptainer | `<apptainer\|singularity> exec --bind <workdir>:<workdir> <image> sh -c '<shim>' sh '<command>'` |
+| Pixi | `pixi run --manifest-path <pixi.toml> <command>` |
 | Venv | `source <venv>/bin/activate && <command>` |
-| Modules | `module load <mod1> <mod2> && <command>` |
+| Modules | module-init block, then `module load <mod1> <mod2> && <command>` |
+
+Three details worth knowing:
+
+- **Container paths are absolute.** `docker -v` and `singularity --bind`
+  reject relative sources, and a scheduler may start a job from any
+  directory, so oxo-flow renders the resolved workdir. The rule's command is
+  handed to a shim inside the container —
+  `if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi` —
+  because the image's entrypoint shell runs first, and multi-line or
+  `pipefail`-using scripts need bash, which not every image ships.
+- **Paths outside the workdir are bound read-only.** A `[config]` reference
+  genome or index living elsewhere on the shared filesystem is appended to
+  the mount list automatically (`-v /data/ref:/data/ref:ro`), so the rule can
+  read it from inside the container.
+- **`apptainer` wins when both it and `singularity` are installed**, so
+  clusters that renamed the binary keep working without configuration.
 
 ### Environment Examples
 
@@ -213,8 +233,9 @@ memory = "32G"
 ```
 
 Only **one** backend applies per rule, so combining e.g. `singularity` with
-`modules` in the same rule would silently drop `modules` — use the
-module-based example below for module-only setups.
+`modules` in the same rule is rejected outright (the module loads would be
+silently dropped) — use the module-based example below for module-only
+setups.
 
 **Pixi for reproducible environments:**
 
@@ -223,7 +244,7 @@ module-based example below for module-only setups.
 name = "qc_check"
 input = ["{sample}.fastq.gz"]
 output = ["qc/{sample}_fastqc.html"]
-environment = { pixi = "default" }  # environment name, not the pixi.toml path
+environment = { pixi = "envs/pixi.toml" }  # the manifest FILE, not an env name
 shell = "fastqc -t {threads} -o qc/ {input}"
 
 [rules.resources]
@@ -344,6 +365,49 @@ Or use oxo-flow's status command with a checkpoint file:
 ```bash
 oxo-flow status .oxo-flow/checkpoint.json
 ```
+
+`oxo-flow cluster status` and `cluster cancel` take the **backend and the
+scheduler job ids** — there is no "show all my submissions" mode, so keep the
+ids the submit/run step printed:
+
+```bash
+oxo-flow cluster status -b slurm 12345 12346
+oxo-flow cluster cancel -b slurm 12345
+```
+
+---
+
+## Driver Defaults and the `[cluster]` Profile Block
+
+`run --profile` submits and tracks jobs through the backend driver, whose
+built-in defaults are:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `max_submitted` | `50` | Jobs in flight at once (pending + running); submissions top up to this cap as slots free |
+| `max_array_size` | `1001` | The scheduler's array limit; larger scatter groups are chunked into several arrays |
+| `poll_interval` | `5s` | Delay between scheduler polls |
+
+Override them in the profile's `[cluster]` block:
+
+```toml
+[cluster]
+backend       = "slurm"   # required: slurm | pbs | sge | lsf
+partition     = "compute"
+account       = "lab01"
+walltime      = "24h"     # a rule's own time_limit wins
+max_submitted = 100
+max_array_size = 1001
+poll_interval = "30s"     # duration string
+extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim scheduler args
+```
+
+`extra_args` entries are emitted as scheduler directives **verbatim and
+unvalidated** — a typo reaches the scheduler as written (the same applies to
+`cluster submit --extra-arg`). An unknown `--backend` value is rejected
+outright (`unknown cluster backend '…' — expected slurm, pbs, sge, or lsf`);
+nothing falls back to SLURM, so a typo cannot submit into the wrong
+scheduler.
 
 ---
 
