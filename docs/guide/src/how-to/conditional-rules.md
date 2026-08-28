@@ -101,6 +101,20 @@ output = ["bam/{pair_id}.tumor_only.bam"]
 shell  = "mapper --tumor-only {input[0]} -o {output[0]}"
 ```
 
+### Length checks (`len(...)`)
+
+```toml
+when = "len(config.gene_sets) > 0"   # list is non-empty
+when = "len(config.samples) >= 2"    # at least two samples
+when = "len(config.gene_sets)"       # truthy shorthand for len > 0
+```
+
+`len()` counts array items, string characters, or table keys. A missing
+config key has length 0, so `len(config.x) == 0` covers both an empty list
+and an undefined key. Note that a bare `config.gene_sets` is **true even
+for an empty array** (the value exists) — use `len(...) > 0` when emptiness
+must gate the rule.
+
 ### Logical operators
 
 ```toml
