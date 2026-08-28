@@ -979,12 +979,44 @@ pub async fn run_command(
         run_log_path.display()
     );
 
+    // Targeted runs (-t) close over the INSTANTIATED DAG (issue #247):
+    // instances whose `when` evaluates false under the effective config
+    // never enter the execution set, and the closure does not expand
+    // through them. Prefix matching still resolves the entries.
+    let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        let wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
+        config
+            .rules
+            .iter()
+            .filter(|rule| {
+                crate::commands::run_preview::when_condition_false(rule, &config, &wildcard_values)
+            })
+            .map(|rule| rule.name.clone())
+            .collect()
+    };
+
     let mut order = if target.is_empty() {
         dag.execution_order()?
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-        dag.execution_order_for_targets(&target_refs)
-            .with_context(|| "failed to resolve target rules")?
+        let (filtered_order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+            .with_context(|| "failed to resolve target rules")?;
+        for skipped in &skipped_targets {
+            eprintln!(
+                "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
+                "Note:".yellow()
+            );
+        }
+        if filtered_order.is_empty() {
+            emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
+            return Err(anyhow::anyhow!(
+                "all requested targets are when-gated false — nothing to run"
+            ));
+        }
+        filtered_order
     };
     emit_execution_event(oxo_flow_core::executor::ExecutionEvent::WorkflowStarted {
         workflow_name: config.workflow.name.clone(),
@@ -2058,8 +2090,16 @@ pub async fn run_command(
                 dag.execution_order()?
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                dag.execution_order_for_targets(&target_refs)
-                    .with_context(|| "failed to resolve target rules")?
+                let (filtered, skipped_targets) = dag
+                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .with_context(|| "failed to resolve target rules")?;
+                for skipped in &skipped_targets {
+                    eprintln!(
+                        "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
+                        "Note:".yellow()
+                    );
+                }
+                filtered
             };
         }
     }
@@ -2090,8 +2130,16 @@ pub async fn run_command(
                     dag.execution_order()?
                 } else {
                     let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                    dag.execution_order_for_targets(&target_refs)
-                        .with_context(|| "failed to resolve target rules")?
+                    let (filtered, skipped_targets) = dag
+                        .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                        .with_context(|| "failed to resolve target rules")?;
+                    for skipped in &skipped_targets {
+                        eprintln!(
+                            "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
+                            "Note:".yellow()
+                        );
+                    }
+                    filtered
                 };
             }
         }
@@ -3784,6 +3832,27 @@ pub async fn dry_run_command(
             }
         }
     }
+    // Targeted dry-runs close over the INSTANTIATED DAG (issue #247) —
+    // the same when-gate filter `run` applies, so the preview cannot list
+    // instances that would never execute.
+    let dry_wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
+    let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        config
+            .rules
+            .iter()
+            .filter(|rule| {
+                crate::commands::run_preview::when_condition_false(
+                    rule,
+                    &config,
+                    &dry_wildcard_values,
+                )
+            })
+            .map(|rule| rule.name.clone())
+            .collect()
+    };
+
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
     // Independent rules at the same level appear adjacent, so the listing
@@ -3803,8 +3872,16 @@ pub async fn dry_run_command(
         ordered
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-        dag.execution_order_for_targets(&target_refs)
-            .with_context(|| "failed to resolve target rules")?
+        let (filtered, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+            .with_context(|| "failed to resolve target rules")?;
+        for skipped in &skipped_targets {
+            eprintln!(
+                "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
+                "Note:".yellow()
+            );
+        }
+        filtered
     };
 
     eprintln!(
@@ -3912,8 +3989,10 @@ pub async fn dry_run_command(
                 ordered
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
-                dag.execution_order_for_targets(&target_refs)
-                    .with_context(|| "failed to resolve target rules")?
+                let (filtered, _) = dag
+                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .with_context(|| "failed to resolve target rules")?;
+                filtered
             };
             let old_order_len = order.len();
             order = new_order;

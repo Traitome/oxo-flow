@@ -148,6 +148,17 @@ oxo-flow run pipeline.oxoflow -j 8 -r 2
 oxo-flow run pipeline.oxoflow -t align -t sort
 ```
 
+Target names may be prefixes: `-t align` matches every rule whose name
+starts with `align` (including expanded instance names like
+`align_cohort_S1`). The closure walks the **instantiated DAG** — it
+includes each target plus every upstream rule that survives the plan-time
+`when` gating, and skips when-gated variants entirely: a variant whose
+`when` is false under the effective config never enters the execution set,
+its upstream is not pulled in, and consumers of its (never-produced)
+outputs are pruned too. Naming a when-gated-false target explicitly
+reports it and aborts with "nothing to run" instead of planning a run
+that cannot produce output.
+
 ### Set a per-job timeout
 
 ```bash

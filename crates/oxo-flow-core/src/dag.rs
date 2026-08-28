@@ -438,6 +438,135 @@ impl WorkflowDag {
             .collect())
     }
 
+    /// [`Self::execution_order_for_targets`] with a `skip` set: the
+    /// closure traverses the INSTANTIATED DAG (issue #247) — nodes whose
+    /// `when` evaluated false never enter the execution set, and the
+    /// closure does not expand through them (their upstream exists only
+    /// to feed them).
+    ///
+    /// Dead-node propagation: a surviving node with a pruned DAG parent is
+    /// un-runnable (its input comes from a variant that never executes —
+    /// the executor would fail it on the missing file), so it is pruned
+    /// too, transitively to a fixpoint.
+    ///
+    /// - A when-false node that is also an explicit target is REPORTED via
+    ///   the returned `Vec` of skipped target names (the caller warns) and
+    ///   excluded from the order: `-t <name>` on a never-executing variant
+    ///   must say so, not silently plan a run that cannot produce output.
+    /// - A when-false non-target producer is silently pruned together with
+    ///   its upstream — the mutual-exclusion variant that did not match
+    ///   contributes nothing.
+    ///
+    /// Prefix matching resolves entries exactly like the unfiltered method;
+    /// the filter applies AFTER resolution, so an entry that matches only
+    /// pruned variants reports every pruned match by instance name.
+    pub fn execution_order_for_targets_skipping(
+        &self,
+        targets: &[&str],
+        skip: &HashSet<String>,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        if targets.is_empty() {
+            return Ok((self.execution_order()?, Vec::new()));
+        }
+
+        // Resolve targets (same validation + prefix matching as the
+        // unfiltered method).
+        let mut resolved_targets: Vec<String> = Vec::new();
+        for &target in targets {
+            if self.name_to_node.contains_key(target) {
+                resolved_targets.push(target.to_string());
+            } else {
+                let matches: Vec<&String> = self
+                    .name_to_node
+                    .keys()
+                    .filter(|name| name.starts_with(target))
+                    .collect();
+                if matches.is_empty() {
+                    let base_names: Vec<&str> =
+                        self.name_to_node.keys().map(|s| s.as_str()).collect();
+                    return Err(OxoFlowError::RuleNotFound {
+                        name: target.to_string(),
+                        available_rules: base_names.into_iter().map(String::from).collect(),
+                    });
+                }
+                for m in matches {
+                    resolved_targets.push(m.clone());
+                }
+            }
+        }
+
+        // Dead-node propagation to a fixpoint: a node whose parent is
+        // pruned cannot receive its input, so it is pruned as well (the
+        // executor fails such a rule on the missing file — surfacing that
+        // at plan time is the point of the instantiated-DAG closure).
+        let mut pruned: HashSet<String> = skip.clone();
+        loop {
+            let mut grew = false;
+            for idx in self.graph.node_indices() {
+                let name = &self.graph[idx].name;
+                if pruned.contains(name) {
+                    continue;
+                }
+                let has_pruned_parent = self
+                    .graph
+                    .neighbors_directed(idx, petgraph::Direction::Incoming)
+                    .any(|dep| pruned.contains(&self.graph[dep].name));
+                if has_pruned_parent && pruned.insert(name.clone()) {
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+
+        let skipped_targets: Vec<String> = resolved_targets
+            .iter()
+            .filter(|t| pruned.contains(*t))
+            .cloned()
+            .collect();
+
+        // Closure over SURVIVING nodes only: start from the non-pruned
+        // targets, expand incoming edges but do not include or traverse
+        // through pruned nodes.
+        let mut included: HashSet<NodeIndex> = HashSet::new();
+        let mut stack: Vec<NodeIndex> = resolved_targets
+            .iter()
+            .filter(|t| !pruned.contains(*t))
+            .map(|t| self.name_to_node.get(t.as_str()).copied().unwrap())
+            .collect();
+
+        while let Some(node) = stack.pop() {
+            let name = self.graph[node].name.clone();
+            if pruned.contains(&name) {
+                continue;
+            }
+            if included.insert(node) {
+                for dep in self
+                    .graph
+                    .neighbors_directed(node, petgraph::Direction::Incoming)
+                {
+                    if !included.contains(&dep) {
+                        stack.push(dep);
+                    }
+                }
+            }
+        }
+
+        let full_order = self.topological_order()?;
+        let order = full_order
+            .into_iter()
+            .filter(|n| {
+                self.name_to_node
+                    .get(&n.name)
+                    .map(|&idx| included.contains(&idx))
+                    .unwrap_or(false)
+            })
+            .map(|n| n.name.clone())
+            .collect();
+        Ok((order, skipped_targets))
+    }
+
     /// Returns the direct dependencies (upstream rules) for a given rule.
     #[must_use = "querying dependencies returns a Result that must be used"]
     pub fn dependencies(&self, rule_name: &str) -> Result<Vec<String>> {
@@ -1609,6 +1738,78 @@ mod tests {
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let result = dag.execution_order_for_targets(&["nonexistent"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_prunes_when_false_producers() {
+        // Issue #247: the closure traverses the INSTANTIATED DAG — a
+        // when-false producer is pruned, its upstream (which only feeds
+        // it) is not pulled in, and consumers of the pruned variant's
+        // output are dead too (their input can never exist).
+        //
+        // raw -> source -> a.txt -> trim_star (when-false) -.
+        //                \-> b.txt -> trim_hisat (when-true) --> merge
+        let rules = vec![
+            make_rule("raw", vec!["in.txt"], vec!["src.txt"]),
+            make_rule("source", vec!["src.txt"], vec!["a.txt", "b.txt"]),
+            make_rule("trim_star", vec!["a.txt"], vec!["ts.txt"]),
+            make_rule("trim_hisat", vec!["b.txt"], vec!["th.txt"]),
+            make_rule("merge", vec!["ts.txt", "th.txt"], vec!["final.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mut skip = std::collections::HashSet::new();
+        skip.insert("trim_star".to_string());
+
+        // Targeting the surviving variant's chain: raw -> source ->
+        // trim_hisat, nothing from the dead branch.
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["trim_hisat"], &skip)
+            .unwrap();
+        assert!(skipped_targets.is_empty());
+        assert!(!order.contains(&"trim_star".to_string()), "{order:?}");
+        assert!(order.contains(&"trim_hisat".to_string()), "{order:?}");
+        assert!(order.contains(&"source".to_string()), "{order:?}");
+        assert!(order.contains(&"raw".to_string()), "{order:?}");
+
+        // Targeting merge (reads BOTH variants' outputs): the star branch
+        // is dead, so merge can never receive its ts.txt input — it is
+        // dead-propagated and reported as a skipped target.
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["merge"], &skip)
+            .unwrap();
+        assert_eq!(skipped_targets, vec!["merge".to_string()]);
+        assert!(order.is_empty(), "merge cannot run without ts.txt");
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_reports_when_false_target() {
+        // A target that names a never-executing variant is reported (not
+        // silently planned) and excluded together with its upstream.
+        let rules = vec![
+            make_rule("raw", vec!["in.txt"], vec!["src.txt"]),
+            make_rule("trim_star", vec!["src.txt"], vec!["ts.txt"]),
+            make_rule("trim_hisat", vec!["src.txt"], vec!["th.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mut skip = std::collections::HashSet::new();
+        skip.insert("trim_star".to_string());
+
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["trim_star"], &skip)
+            .unwrap();
+        assert_eq!(skipped_targets, vec!["trim_star".to_string()]);
+        assert!(order.is_empty(), "only the skipped target was requested");
+
+        // A prefix that matches both variants keeps only the survivor.
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["trim"], &skip)
+            .unwrap();
+        assert_eq!(skipped_targets, vec!["trim_star".to_string()]);
+        assert!(order.contains(&"trim_hisat".to_string()));
+        assert!(order.contains(&"raw".to_string()));
+        assert!(!order.contains(&"trim_star".to_string()));
     }
 
     #[test]
