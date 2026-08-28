@@ -4544,6 +4544,64 @@ fn values_workflow(tables: &str, rules: &str) -> String {
 }
 
 #[test]
+fn values_from_resolves_fan_out_from_config() {
+    // values_from resolves the fan-out from a config key at expansion time
+    // (issue #18 wave) — CLI --arg / profile driven dimensions.
+    let toml = values_workflow(
+        r#"
+        [config]
+        library_ids = "u1,u2"
+
+        [[values]]
+        name = "assembler"
+        values_from = "config.library_ids"
+        "#,
+        r#"
+        [[rules]]
+        name = "assemble"
+        input = ["reads/{assembler}/in.fq"]
+        output = ["contigs/{assembler}/out.fa"]
+        shell = "{assembler} -o {output[0]} {input[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::parse(&toml).unwrap();
+    config.expand_wildcards().unwrap();
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["assemble_assembler_u1", "assemble_assembler_u2"]
+    );
+
+    // Static values take a back seat to values_from.
+    let toml = toml.replace(
+        "values_from = \"config.library_ids\"",
+        "values_from = \"config.library_ids\"\n        values = [\"ignored\"]",
+    );
+    let mut config = WorkflowConfig::parse(&toml).unwrap();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.rules.len(), 2);
+
+    // A missing/unresolvable key fails validation with the key named.
+    let bad = values_workflow(
+        r#"
+        [[values]]
+        name = "assembler"
+        values_from = "config.missing_key"
+        "#,
+        r#"
+        [[rules]]
+        name = "assemble"
+        input = ["reads/{assembler}/in.fq"]
+        output = ["contigs/{assembler}/out.fa"]
+        shell = "{assembler} -o {output[0]} {input[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::parse(&bad).unwrap();
+    let err = config.expand_wildcards().unwrap_err().to_string();
+    assert!(err.contains("missing_key"), "{err}");
+}
+
+#[test]
 fn values_single_table_fans_out_rule() {
     let toml = values_workflow(
         r#"

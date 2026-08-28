@@ -1510,6 +1510,11 @@ shell = "{assembler} -o {output} {input}"
 
 - Every rule referencing `{assembler}` (bare form) or `{values.assembler}`
   (namespaced form) expands into one instance per value.
+- `values_from = "config.x"` resolves the value list from a config key at
+  expansion time — a comma string (`"u1,u2"`) or array, the same semantics
+  as `expand_inputs` config references. CLI `--arg x=u1,u2` or a profile
+  then drives the fan-out without editing the workflow; takes precedence
+  over a static `values` when both are set.
 - Multiple `[[values]]` tables form a cartesian product with each other
   and with sample groups / pairs (deterministic order: the first table
   varies slowest).

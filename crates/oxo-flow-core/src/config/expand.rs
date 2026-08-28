@@ -321,11 +321,23 @@ impl WorkflowConfig {
                     suggestion: None,
                 });
             }
-            if table.values.is_empty() {
+            let effective_len = match &table.values_from {
+                Some(from) => self.resolve_config_list(from).map(|v| v.len()).unwrap_or(0),
+                None => table.values.len(),
+            };
+            if effective_len == 0 {
+                let hint = if table.values_from.is_some() {
+                    format!(
+                        "values_from '{}' resolved to no values — check the config key exists and is non-empty",
+                        table.values_from.as_deref().unwrap_or("")
+                    )
+                } else {
+                    "add at least one value, or remove the table".to_string()
+                };
                 return Err(OxoFlowError::Validation {
-                    message: format!("[[values]] table '{}' has no values", table.name),
+                    message: format!("[[values]] table '{}' has no values: {hint}", table.name),
                     rule: None,
-                    suggestion: Some("add at least one value, or remove the table".to_string()),
+                    suggestion: Some(hint),
                 });
             }
             if RESERVED_VALUE_NAMES.contains(&table.name.as_str()) {
@@ -677,9 +689,28 @@ impl WorkflowConfig {
             let mut value_combos: Vec<crate::wildcard::WildcardValues> =
                 vec![crate::wildcard::WildcardValues::new()];
             for table in &active_value_tables {
-                let mut next = Vec::with_capacity(value_combos.len() * table.values.len());
+                // values_from resolves the fan-out from a config key at
+                // expansion time (issue #18 wave) — CLI --arg / profile
+                // driven dimensions. Falls back to the static `values`.
+                let effective: Vec<String> = match &table.values_from {
+                    Some(from) => {
+                        self.resolve_config_list(from)
+                            .ok_or_else(|| OxoFlowError::Validation {
+                                message: format!(
+                                    "[[values]] table '{}' values_from '{}' cannot be resolved",
+                                    table.name, from
+                                ),
+                                rule: None,
+                                suggestion: Some(format!(
+                                    "define '{from}' in [config] as a comma string or array"
+                                )),
+                            })?
+                    }
+                    None => table.values.clone(),
+                };
+                let mut next = Vec::with_capacity(value_combos.len() * effective.len());
                 for combo in &value_combos {
-                    for value in &table.values {
+                    for value in &effective {
                         let mut c = combo.clone();
                         c.insert(table.name.clone(), value.clone());
                         next.push(c);

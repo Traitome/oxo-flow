@@ -1186,6 +1186,17 @@ pub struct ValueGroup {
     /// The values to fan out, e.g. `["spades", "megahit"]`.
     #[serde(default)]
     pub values: Vec<String>,
+
+    /// Config-driven value list (issue #18 wave): `values_from = "config.x"`
+    /// resolves the fan-out from a config key at expansion time — a string
+    /// splits on commas (`"u1,u2"` → `["u1", "u2"]`), an array is used
+    /// verbatim (the same semantics as `transform.split.values_from` and
+    /// `expand_inputs.variables` config references). CLI `--arg x=u1,u2`
+    /// or a profile then drives the fan-out without editing the workflow.
+    /// Takes precedence over `values` when both are set; a missing key is a
+    /// validation error naming the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values_from: Option<String>,
 }
 
 /// Instance-name suffix for a `[[values]]` combo: one `_name_value` segment

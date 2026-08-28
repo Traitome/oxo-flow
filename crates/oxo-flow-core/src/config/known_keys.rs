@@ -207,7 +207,7 @@ const PAIR_KEYS: &[&str] = &[
 const SAMPLE_GROUP_KEYS: &[&str] = &["metadata", "name", "samples"];
 
 /// Keys of one `[[values]]` entry.
-const VALUE_KEYS: &[&str] = &["name", "values"];
+const VALUE_KEYS: &[&str] = &["name", "values", "values_from"];
 
 /// Keys of the `[plugins]` table.
 const PLUGINS_KEYS: &[&str] = &["executor", "reports", "rules", "trusted_keys_file"];

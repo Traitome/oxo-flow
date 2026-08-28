@@ -379,6 +379,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "values_from": {
+            "type": "string",
+            "description": "Config-driven value list (comma string or array key) — resolves the fan-out at expansion time, CLI --arg / profile driven"
           }
         }
       }
