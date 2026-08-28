@@ -75,6 +75,24 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
         let Some(shell) = rule.shell.as_deref() else {
             continue;
         };
+        // A rule whose `when` evaluates false under the effective config
+        // will never run — diagnostics about how it would execute are
+        // noise (issue #263: sarek's default-off Mutect2 templates fired
+        // SCI-MUTECT2-TUMOR-ONLY on every dry-run). Baked per-instance
+        // literals and absence-guard idioms re-evaluate identically here;
+        // file_exists() resolves against the workflow root like everywhere
+        // else. Expansion-time instance pruning already removed
+        // non-instantiated instances — this covers template-level gates.
+        if rule.when.as_deref().is_some_and(|when| {
+            !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &config.config,
+                &std::collections::HashMap::new(),
+                config.base_dir(),
+            )
+        }) {
+            continue;
+        }
         let shell_lower = shell.to_lowercase();
 
         if shell_lower.contains("variantrecalibrator") && sample_count < MIN_VQSR_SAMPLES {
@@ -209,6 +227,48 @@ mod tests {
             "gatk Mutect2 -R ref.fa -I tumor.bam -I normal.bam --normal-sample N1 -O out.vcf.gz",
         );
         assert!(analyze_scientific_constraints(&ok).is_empty());
+    }
+
+    #[test]
+    fn when_gated_off_rules_produce_no_preflight_warnings() {
+        // Issue #263: a somatic-caller rule gated off by config (the sarek
+        // port's default) must not flood every dry-run with advice for a
+        // rule that never executes in this run.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [config]
+            call_mutect2 = false
+
+            [[rules]]
+            name = "mutect2_tumor_only"
+            when = "config.call_mutect2"
+            shell = "gatk Mutect2 -R ref.fa -I tumor.bam -O out.vcf.gz"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert!(analyze_scientific_constraints(&config).is_empty());
+
+        // The gate ON: the same rule fires the diagnostic.
+        let on = toml.replace("call_mutect2 = false", "call_mutect2 = true");
+        let config = WorkflowConfig::parse(&on).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "SCI-MUTECT2-TUMOR-ONLY");
+
+        // A true gate with base_dir-resolved file_exists stays evaluated.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("enable.marker"), b"x").unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            "[workflow]
+name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists(\"enable.marker\")'\nshell = \"gatk Mutect2 -R ref.fa -I tumor.bam -O out.vcf.gz\"\n",
+        )
+        .unwrap();
+        let config = WorkflowConfig::from_file(&wf).unwrap();
+        assert_eq!(analyze_scientific_constraints(&config).len(), 1);
     }
 
     #[test]
