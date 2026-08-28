@@ -1513,6 +1513,20 @@ impl WorkflowConfig {
                 }
 
                 let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
+                // A pattern WITH wildcards that contributes zero inputs
+                // means every wildcard lacked a provided value — usually
+                // an author oversight (config key left empty), never a
+                // silent success. Name the pattern so the author can see
+                // which input quietly disappeared (#254 family guard).
+                if expanded.is_empty()
+                    && !crate::wildcard::extract_wildcards(&exp.pattern).is_empty()
+                {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        pattern = %exp.pattern,
+                        "expand_inputs pattern contributed zero inputs — none of its wildcards had provided values (config list empty or key missing?)"
+                    );
+                }
                 // Resolve the `{values.name}` namespace form per instance.
                 if let Some(bindings) = &bindings {
                     for path in &mut expanded {
