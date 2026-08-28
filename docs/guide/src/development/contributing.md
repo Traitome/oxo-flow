@@ -34,6 +34,21 @@ cargo test --test web_role_matrix   # deployment + 3-role simulation matrix (aut
 cargo test --test web_integration   # web API integration tests
 ```
 
+#### Flaky-test policy (issue #249)
+
+CI runs the full suite once; if it fails, ONLY the failed tests are
+re-run a single time — passing then classifies the failure as a
+load-timing flake (the job stays green with a warning annotation),
+failing again is a genuine regression (the job goes red). The cap is
+exactly one re-run: persistent breakage is never masked.
+
+When writing time-sensitive tests, do not assert on wall-clock margins
+that only hold on an idle machine — grant the generous window in the
+test itself (e.g. an explicit long grace for signal handling) so the
+assertion measures the property under test, not machine load. A first
+run that flakes under CI load is a test bug, not an engine bug; fix
+the window before adding retries.
+
 ### Run All CI Checks Locally
 
 ```bash

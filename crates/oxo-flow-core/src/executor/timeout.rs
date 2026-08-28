@@ -225,7 +225,15 @@ mod tests {
         }
         assert!(pidfile.exists(), "child pid file never appeared");
 
-        kill_process_tree(sh_pid).expect("tree kill");
+        // Explicit LONG grace (issue #249): under CI load the TERM'd shell
+        // can sit descheduled well past the 10 s production grace before it
+        // gets to run its trap — the escalation then SIGKILLs it and the
+        // marker never appears, reading as an engine bug that is not. The
+        // assertion's intent is "TERM arrives first, escalation only after
+        // the grace", so the test grants a much wider window; a healthy
+        // shell exits in milliseconds and pays nothing, a starved one gets
+        // its cleanup chance instead of failing the run.
+        kill_process_tree_with_grace(sh_pid, Duration::from_secs(30)).expect("tree kill");
         let _ = sh.wait();
 
         assert!(

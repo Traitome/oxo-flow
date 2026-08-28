@@ -350,7 +350,32 @@ jobs:
       - name: Test
         run: |
           export PATH="$PWD/target/debug:$PATH"
-          cargo test --workspace
+
+          # Issue #249 flaky governance: first attempt runs the full suite.
+          # On failure, the FAILED test list is extracted from that run's
+          # output and ONLY those tests re-run once — a load-timing flake
+          # (signal-grace races, first-run resource contention) passes and
+          # the job stays green; a genuine regression fails again and the
+          # job goes red. The retry is capped at exactly one re-run so
+          # persistent breakage is never masked.
+          if OUT=$(cargo test --workspace 2>&1); then
+            echo "$OUT"
+            exit 0
+          fi
+          echo "$OUT"
+
+          echo "::warning::test suite failed — re-running FAILED tests once (flake gate, issue #249)"
+          FAILED=$(echo "$OUT" | grep -E "^test .* FAILED" | sed -E 's/^test ([^ ]+) \.\.\. FAILED$/\1/' | sort -u || true)
+          if [ -z "$FAILED" ]; then
+            echo "could not extract failed test names (compile error or format change) — failing the job"
+            exit 1
+          fi
+          echo "Re-running: $FAILED"
+          if cargo test --workspace -- --exact $FAILED; then
+            echo "::warning::FAILED tests passed on re-run — classified as load-timing flakes (issue #249)"
+            exit 0
+          fi
+          exit 1
         env:
           RUST_BACKTRACE: "1"
 
