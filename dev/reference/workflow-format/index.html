@@ -6638,6 +6638,11 @@ per combination:</p>
 <ul>
 <li>Every rule referencing <code>{assembler}</code> (bare form) or <code>{values.assembler}</code>
   (namespaced form) expands into one instance per value.</li>
+<li><code>values_from = "config.x"</code> resolves the value list from a config key at
+  expansion time — a comma string (<code>"u1,u2"</code>) or array, the same semantics
+  as <code>expand_inputs</code> config references. CLI <code>--arg x=u1,u2</code> or a profile
+  then drives the fan-out without editing the workflow; takes precedence
+  over a static <code>values</code> when both are set.</li>
 <li>Multiple <code>[[values]]</code> tables form a cartesian product with each other
   and with sample groups / pairs (deterministic order: the first table
   varies slowest).</li>
