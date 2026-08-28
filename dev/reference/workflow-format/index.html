@@ -4820,6 +4820,12 @@ paths, and <code>when</code> conditions:</p>
 <hr />
 <hr />
 <h2 id="references-auto-built-indexes-reference-data"><code>[[references]]</code> — Auto-Built Indexes &amp; Reference Data<a class="headerlink" href="#references-auto-built-indexes-reference-data" title="Permanent link">#</a></h2>
+<p><code>[[references]]</code> is for <strong>external, pre-staged</strong> reference artifacts: the
+engine builds them when missing, before the rule DAG runs. In-workflow
+derivations (e.g. a STAR index produced by an upstream rule) must flow
+through normal rule <code>output</code>/<code>input</code> edges instead — a reference entry
+cannot consume rule outputs because references are built before the DAG
+exists.</p>
 <p>Declare reference artifacts (indexes, data files) that the engine auto-builds
 when missing. Each <code>[[references]]</code> entry specifies a source, output, and build
 command. The engine tracks built state in <code>.oxo-flow/reference-checkpoint.json</code>
@@ -7121,6 +7127,14 @@ can ever bind as a <strong>W027</strong> warning — such rules never run.</p>
 rule's <code>when</code> at expansion time, so the execution-time re-check
 re-evaluates the exact same per-instance verdict; config-only predicates
 continue to gate at execution as before.</p>
+<p><strong><code>wildcard.*</code> is a <code>when</code>-only vocabulary.</strong> The dotted form is not a
+shell placeholder — the engine's placeholder syntax is bare <code>{name}</code>, so
+<code>{wildcard.input_type}</code> in a <code>shell</code> renders literally. Group/pair
+metadata keys reach shells as bare placeholders (<code>{input_type}</code>), baked
+per instance at plan time when the rule fans out on <code>{group}</code>/<code>{sample}</code>;
+a rule that does NOT fan out per sample has no binding to bake, so such
+keys stay literal there (use <code>input_groups</code> or <code>{meta.&lt;column&gt;}</code> for
+those cases).</p>
 <h3 id="metacolumn-truthiness-and-boolean-columns"><code>{meta.&lt;column&gt;}</code> truthiness and boolean columns<a class="headerlink" href="#metacolumn-truthiness-and-boolean-columns" title="Permanent link">#</a></h3>
 <p>In a bare truthiness position (<code>when = "{meta.do_qc}"</code>) a metadata value
 bakes to <code>true</code>/<code>false</code> with shell-style truthiness: <strong>non-empty and not
@@ -7133,7 +7147,9 @@ markdup/nomarkdup pair:</p>
 </span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2" href="#__codelineno-78-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.mark_duplicates || {meta.mark_duplicates} == 'true'"</span>
 </span></code></pre></div>
 <p>A missing row or column renders <code>false</code> in a truthiness position and <code>''</code>
-in a comparison — always a closed gate, never an unbound token.</p>
+in a comparison — always a closed gate, never an unbound token. This makes
+<code>{meta.x} == ''</code> the official <strong>absence guard</strong> idiom: it gates the
+"column present" branch and closes cleanly for rows that lack the column.</p>
 <h3 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a><span class="k">[config]</span>
 </span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2" href="#__codelineno-79-2"></a><span class="n">run_annotation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
