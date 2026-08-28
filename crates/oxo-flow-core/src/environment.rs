@@ -326,8 +326,8 @@ fn escape_for_sh_single_quote(s: &str) -> String {
 /// characters (see [`crate::rule::EnvironmentSpec::shell_risk`]).
 fn ensure_container_spec_safe(spec: &str) -> Result<()> {
     const RISKY: &[char] = &[
-        ';', '&', '|', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n',
-        '\r', '{', '}', '~', '*', '?', '[', ']', '!', '#', ',',
+        ';', '&', '|', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n', '\r', '{',
+        '}', '~', '*', '?', '[', ']', '!', '#', ',',
     ];
     if let Some(c) = spec.chars().find(|c| RISKY.contains(c) || c.is_control()) {
         return Err(OxoFlowError::Config {
@@ -367,8 +367,23 @@ fn absolute_host_path(path: &std::path::Path) -> String {
 /// carry the container's own toolchain (a mount there shadows the very
 /// binaries the wrapper is about to run) or are kernel pseudo-filesystems.
 const PROTECTED_BIND_PREFIXES: &[&str] = &[
-    "/bin", "/sbin", "/usr", "/etc", "/dev", "/proc", "/sys", "/lib", "/lib32",
-    "/lib64", "/run", "/boot", "/snap", "/var", "/tmp", "/root", "/opt/conda",
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/run",
+    "/boot",
+    "/snap",
+    "/var",
+    "/tmp",
+    "/root",
+    "/opt/conda",
 ];
 
 /// Characters that end a word in a rendered shell command line.
@@ -413,8 +428,7 @@ fn external_bind_mounts(command: &str, workdir: &str) -> Vec<String> {
     command
         .split(|c: char| SHELL_WORD_BREAKS.contains(&c))
         .filter(|token| {
-            token.starts_with('/')
-                && is_bindable_host_path(std::path::Path::new(token), workdir)
+            token.starts_with('/') && is_bindable_host_path(std::path::Path::new(token), workdir)
         })
         .map(str::to_string)
         .collect::<std::collections::BTreeSet<_>>()
@@ -514,8 +528,6 @@ fn ensure_no_backend_conflict(env_spec: &EnvironmentSpec) -> Result<()> {
         ),
     })
 }
-
-
 
 /// Mamba / micromamba environment backend.
 ///
@@ -2110,7 +2122,9 @@ mod tests {
         // against quay.io/biocontainers after a docker.io failure.
         let cmd = backend.setup_command("bwa:0.7.19").unwrap();
         assert!(
-            cmd.contains("docker pull 'bwa:0.7.19' || (docker pull 'quay.io/biocontainers/bwa:0.7.19'"),
+            cmd.contains(
+                "docker pull 'bwa:0.7.19' || (docker pull 'quay.io/biocontainers/bwa:0.7.19'"
+            ),
             "bare name must get the quay.io/biocontainers fallback: {cmd}"
         );
     }
@@ -2267,7 +2281,10 @@ mod tests {
                 std::path::Path::new("/tmp/oxo-cpus"),
             )
             .unwrap();
-        assert!(!wrapped.contains("--cpus"), "threads=1 means unset: {wrapped}");
+        assert!(
+            !wrapped.contains("--cpus"),
+            "threads=1 means unset: {wrapped}"
+        );
     }
 
     #[test]
@@ -3301,7 +3318,10 @@ mod tests {
         let wrapped = resolver
             .wrap_command("echo hi", &spec, None, std::path::Path::new("."))
             .unwrap();
-        assert!(wrapped.contains("module load gcc/11.2 cuda/11.7"), "{wrapped}");
+        assert!(
+            wrapped.contains("module load gcc/11.2 cuda/11.7"),
+            "{wrapped}"
+        );
         assert!(resolver.setup_command(&spec).is_ok());
     }
 
@@ -3337,7 +3357,10 @@ mod tests {
         assert!(!cmd.contains("2>/dev/null"), "{cmd}");
         let backend = MambaBackend::new();
         assert!(
-            !backend.setup_command("envs/qc.yaml").unwrap().contains("2>/dev/null"),
+            !backend
+                .setup_command("envs/qc.yaml")
+                .unwrap()
+                .contains("2>/dev/null"),
             "{}",
             backend.setup_command("envs/qc.yaml").unwrap()
         );
@@ -3417,7 +3440,12 @@ mod tests {
     fn dir_glob_input_patterns_are_detected() {
         // These input forms can never match a producer's exact output
         // string, so they form no producer edge — validate should say so.
-        for pattern in ["results/bam/", "*.bam", "data/{sample}/*.fq", "s3://b/prefix/"] {
+        for pattern in [
+            "results/bam/",
+            "*.bam",
+            "data/{sample}/*.fq",
+            "s3://b/prefix/",
+        ] {
             assert!(dir_glob_input_pattern(pattern), "{pattern} has no edge");
         }
         for pattern in [

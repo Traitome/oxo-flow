@@ -383,7 +383,8 @@ impl WorkflowConfig {
                 path: PathBuf::from(&inc.path),
                 message,
             };
-            let raw: toml::Table = toml::from_str(&content).map_err(|e| inc_error(e.to_string()))?;
+            let raw: toml::Table =
+                toml::from_str(&content).map_err(|e| inc_error(e.to_string()))?;
             // Included fragments get the same known-key check as the host
             // file — a typo'd module key would otherwise slip past the host's
             // own E017 pass.

@@ -720,9 +720,10 @@ shell = "true"
             .arg(file.path())
             .assert()
             .success()
-            .stderr(predicates::str::contains("1 rule, 0 dependencies").and(
-                predicates::str::contains("1 rules").not(),
-            ));
+            .stderr(
+                predicates::str::contains("1 rule, 0 dependencies")
+                    .and(predicates::str::contains("1 rules").not()),
+            );
     }
 
     #[test]

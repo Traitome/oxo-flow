@@ -114,7 +114,14 @@ const REPORT_KEYS: &[&str] = &["format", "sections", "template"];
 
 /// Keys of one `[[include]]` entry.
 const INCLUDE_KEYS: &[&str] = &[
-    "inputs", "name", "namespace", "outputs", "params", "path", "ref", "repo",
+    "inputs",
+    "name",
+    "namespace",
+    "outputs",
+    "params",
+    "path",
+    "ref",
+    "repo",
 ];
 
 /// Keys of one `[[execution_group]]` entry.
@@ -138,12 +145,26 @@ const CLUSTER_KEYS: &[&str] = &[
 /// Keys of the declarative inline-table form of a `[config]` entry
 /// (`key = { default = "…", required = true, … }`).
 const CONFIG_DEF_KEYS: &[&str] = &[
-    "choices", "default", "help", "must_exist", "range", "required", "sensitive", "type",
+    "choices",
+    "default",
+    "help",
+    "must_exist",
+    "range",
+    "required",
+    "sensitive",
+    "type",
 ];
 
 /// Keys of one `[[references]]` entry.
 const REFERENCE_KEYS: &[&str] = &[
-    "build", "description", "environment", "memory", "name", "output", "source", "threads",
+    "build",
+    "description",
+    "environment",
+    "memory",
+    "name",
+    "output",
+    "source",
+    "threads",
 ];
 
 /// Keys of the `[resource_budget]` table.
@@ -234,7 +255,14 @@ const RULE_KEYS: &[&str] = &[
 
 /// Keys of the `[resources]` table.
 const RESOURCES_KEYS: &[&str] = &[
-    "disk", "gpu", "gpu_spec", "groups", "memory", "partition", "threads", "time_limit",
+    "disk",
+    "gpu",
+    "gpu_spec",
+    "groups",
+    "memory",
+    "partition",
+    "threads",
+    "time_limit",
 ];
 
 /// Keys of the `[resources.gpu_spec]` table.
@@ -473,7 +501,13 @@ fn walk(
                     let toml::Value::Table(child) = entry else {
                         continue;
                     };
-                    walk(child, child_keys, &format!("{label} #{index}"), child_keys, out);
+                    walk(
+                        child,
+                        child_keys,
+                        &format!("{label} #{index}"),
+                        child_keys,
+                        out,
+                    );
                 }
             }
             Nesting::NamedTables(child_keys) => {
@@ -484,7 +518,13 @@ fn walk(
                     let toml::Value::Table(child) = child else {
                         continue;
                     };
-                    walk(child, child_keys, &format!("{label}.{name}"), child_keys, out);
+                    walk(
+                        child,
+                        child_keys,
+                        &format!("{label}.{name}"),
+                        child_keys,
+                        out,
+                    );
                 }
             }
             Nesting::Config => {
@@ -664,7 +704,8 @@ mod tests {
         "#;
         let errs = errors(toml);
         assert!(
-            errs[0].contains("'samle_pattern'") && errs[0].contains("did you mean 'sample_pattern'?"),
+            errs[0].contains("'samle_pattern'")
+                && errs[0].contains("did you mean 'sample_pattern'?"),
             "{errs:?}"
         );
     }
@@ -964,10 +1005,9 @@ mod tests {
     fn whitelisted_keys_are_in_the_schema() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../oxo-flow-cli/schema/oxoflow-v1.schema.json");
-        let schema: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&path).expect("schema file is readable"),
-        )
-        .expect("schema is valid JSON");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("schema file is readable"))
+                .expect("schema is valid JSON");
 
         let properties = |pointer: &str| -> Vec<String> {
             schema
@@ -980,10 +1020,16 @@ mod tests {
 
         let rule_props = properties("/$defs/rule");
         let workflow_props = properties("/properties/workflow");
-        assert!(!rule_props.is_empty() && !workflow_props.is_empty(), "schema shape changed");
+        assert!(
+            !rule_props.is_empty() && !workflow_props.is_empty(),
+            "schema shape changed"
+        );
 
         for key in RULE_KEYS {
-            assert!(rule_props.iter().any(|p| p == key), "schema $defs/rule omits '{key}'");
+            assert!(
+                rule_props.iter().any(|p| p == key),
+                "schema $defs/rule omits '{key}'"
+            );
         }
         for key in WORKFLOW_KEYS {
             assert!(
@@ -1012,7 +1058,10 @@ mod tests {
             };
             let props = properties(pointer);
             for key in keys {
-                assert!(props.iter().any(|p| p == key), "schema {pointer} omits '{key}'");
+                assert!(
+                    props.iter().any(|p| p == key),
+                    "schema {pointer} omits '{key}'"
+                );
             }
         }
     }

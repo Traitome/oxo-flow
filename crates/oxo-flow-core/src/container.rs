@@ -1166,7 +1166,10 @@ mod tests {
             ..Default::default()
         };
         let compose = generate_compose_file(&workflow, &config).unwrap();
-        assert!(compose.contains("command: [\"rnaseq.oxoflow\"]"), "{compose}");
+        assert!(
+            compose.contains("command: [\"rnaseq.oxoflow\"]"),
+            "{compose}"
+        );
         assert!(
             !compose.contains("workflow.oxoflow"),
             "the hardcoded default name must be gone: {compose}"

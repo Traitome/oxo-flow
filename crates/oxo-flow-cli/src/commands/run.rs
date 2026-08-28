@@ -43,7 +43,9 @@ type SharedRunLog = Arc<std::sync::Mutex<Option<crate::logging::RunLogGuard>>>;
 /// only the console copy is written.
 fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
     eprintln!("{msg}");
-    let mut slot = run_log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut slot = run_log
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(log) = slot.as_mut() {
         let text = strip_ansi(&msg.to_string());
         let line = format!("{}\n", text.trim_start());
@@ -119,7 +121,7 @@ impl InterruptSignal {
 async fn wait_for_termination_signal() -> Option<InterruptSignal> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut sigint = signal(SignalKind::interrupt()).ok()?;
         let mut sigterm = signal(SignalKind::terminate()).ok()?;
         let mut sighup = signal(SignalKind::hangup()).ok()?;
@@ -246,7 +248,8 @@ fn adopt_checkpoint_for_workflow(ck: &mut CheckpointState, workflow: &Path) {
     }
 }
 
-fn print_truncated_list(label: &str, names: &[String]) {    // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
+fn print_truncated_list(label: &str, names: &[String]) {
+    // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
     // expanded rule instances (e.g. step5 × 100 samples).
     let shown: Vec<&str> = names.iter().take(3).map(String::as_str).collect();
     let extra = names.len().saturating_sub(3);

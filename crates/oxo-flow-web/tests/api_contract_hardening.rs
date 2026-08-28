@@ -29,7 +29,12 @@ async fn ensure_db() {
     oxo_flow_web::infra::db::sqlite::init_pool(url).await;
 }
 
-async fn request(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn request(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let builder = Request::builder().method(method).uri(uri);
     let req = match body {
         Some(value) => builder
@@ -85,17 +90,32 @@ async fn save_pipeline_rejects_unparsable_toml() {
     ensure_db().await;
     let app = server::build_router("personal");
 
-    let (status, body) = post(&app, "/api/pipelines", json!({"toml_content": BROKEN_TOML, "name": "broken"})).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "broken TOML must not save: {body}");
+    let (status, body) = post(
+        &app,
+        "/api/pipelines",
+        json!({"toml_content": BROKEN_TOML, "name": "broken"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "broken TOML must not save: {body}"
+    );
     assert_eq!(body["code"], "PARSE_ERROR", "{body}");
-    assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()), "{body}");
+    assert!(
+        body["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "{body}"
+    );
 
     let pool = oxo_flow_web::infra::db::sqlite::pool();
     let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipelines WHERE name = 'broken'")
         .fetch_one(pool)
         .await
         .unwrap();
-    assert_eq!(stored, 0, "the unrunnable definition must not be in the database");
+    assert_eq!(
+        stored, 0,
+        "the unrunnable definition must not be in the database"
+    );
 }
 
 #[tokio::test]
@@ -103,7 +123,12 @@ async fn save_pipeline_still_accepts_a_valid_definition() {
     ensure_db().await;
     let app = server::build_router("personal");
 
-    let (status, body) = post(&app, "/api/pipelines", json!({"toml_content": VALID_TOML, "name": "valid"})).await;
+    let (status, body) = post(
+        &app,
+        "/api/pipelines",
+        json!({"toml_content": VALID_TOML, "name": "valid"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["rules_count"], 1, "{body}");
 }
@@ -113,18 +138,33 @@ async fn update_pipeline_rejects_unparsable_toml_but_allows_a_rename() {
     ensure_db().await;
     let app = server::build_router("personal");
 
-    let (status, body) = post(&app, "/api/pipelines", json!({"toml_content": VALID_TOML, "name": "to-update"})).await;
+    let (status, body) = post(
+        &app,
+        "/api/pipelines",
+        json!({"toml_content": VALID_TOML, "name": "to-update"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let id = body["id"].as_str().expect("pipeline id").to_string();
 
     // New content must parse — otherwise the stale rules_count would mask an
     // unrunnable definition.
-    let (status, body) = put(&app, &format!("/api/pipelines/{id}"), json!({"toml_content": BROKEN_TOML})).await;
+    let (status, body) = put(
+        &app,
+        &format!("/api/pipelines/{id}"),
+        json!({"toml_content": BROKEN_TOML}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "PARSE_ERROR", "{body}");
 
     // A name-only rename does not carry new content and keeps working.
-    let (status, body) = put(&app, &format!("/api/pipelines/{id}"), json!({"name": "renamed"})).await;
+    let (status, body) = put(
+        &app,
+        &format!("/api/pipelines/{id}"),
+        json!({"name": "renamed"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["rules_count"], 1, "{body}");
     assert_eq!(body["name"], "renamed");
@@ -166,8 +206,14 @@ async fn malformed_query_string_answers_in_the_error_envelope() {
     let (status, body) = get(&app, "/api/runs?limit=abc").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "INVALID_QUERY", "{body}");
-    assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()), "{body}");
-    assert!(body["detail"].is_string(), "the offending parameter must be named: {body}");
+    assert!(
+        body["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "{body}"
+    );
+    assert!(
+        body["detail"].is_string(),
+        "the offending parameter must be named: {body}"
+    );
     assert!(body["suggestion"].is_string(), "{body}");
 }
 
@@ -201,7 +247,10 @@ async fn run_endpoints_do_not_expose_the_host_pid() {
     let items = list["items"].as_array().expect("items array");
     assert!(!items.is_empty(), "the seeded run must be listed: {list}");
     for item in items {
-        assert!(item.get("pid").is_none(), "GET /api/runs leaked a host pid: {item}");
+        assert!(
+            item.get("pid").is_none(),
+            "GET /api/runs leaked a host pid: {item}"
+        );
     }
 }
 
@@ -265,7 +314,10 @@ async fn server_ai_config_reports_an_unreadable_credential_as_unconfigured() {
 
     let (status, body) = get(&app, "/api/ai/config/server").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["configured"], false, "an unreadable credential is not a configured AI: {body}");
+    assert_eq!(
+        body["configured"], false,
+        "an unreadable credential is not a configured AI: {body}"
+    );
     assert_eq!(body["requires_reauth"], true, "{body}");
     let message = body["message"].as_str().unwrap_or_default();
     assert!(

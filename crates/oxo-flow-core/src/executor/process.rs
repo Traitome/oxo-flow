@@ -493,11 +493,7 @@ impl LocalExecutor {
     /// wrapper does not forward the host environment, so a substituted
     /// reference would reach the tool empty — the leak there needs the
     /// engine-level `docker -e` / singularity `--env` plumbing instead.
-    fn route_sensitive_values(
-        &self,
-        cmd: &str,
-        rule: &Rule,
-    ) -> (String, HashMap<String, String>) {
+    fn route_sensitive_values(&self, cmd: &str, rule: &Rule) -> (String, HashMap<String, String>) {
         if self.config.sensitive_values.is_empty() {
             return (cmd.to_string(), HashMap::new());
         }
@@ -518,7 +514,8 @@ impl LocalExecutor {
     /// Snapshot of the in-flight child pid per rule (issue #131). The
     /// CLI's abort path signals these process trees before cancelling the
     /// tasks, so a failed run never orphans running rules.
-    pub fn active_pids(&self) -> Vec<(String, u32)> {        self.active_pids
+    pub fn active_pids(&self) -> Vec<(String, u32)> {
+        self.active_pids
             .lock()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
             .unwrap_or_default()
@@ -1293,8 +1290,7 @@ impl LocalExecutor {
         // shell runs references environment variables instead, and the
         // recorded command shows those references — the same masked surface
         // the report, the checkpoint, and `--debug` display.
-        let (base_cmd, sensitive_envs) =
-            self.route_sensitive_values(&base_cmd, &rule);
+        let (base_cmd, sensitive_envs) = self.route_sensitive_values(&base_cmd, &rule);
         let mut rule_envs = rule.envvars.clone();
         for (var, value) in &sensitive_envs {
             rule_envs.insert(var.clone(), value.clone());
@@ -2559,7 +2555,6 @@ fn ends_inside_single_quotes(text: &str) -> bool {
     in_single
 }
 
-
 /// Values shorter than this only mask in plaintext form: their encoded
 /// variants are too collision-prone to redact (a 3-char secret
 /// base64-encodes to a 4-char token that can appear legitimately in a
@@ -2883,9 +2878,7 @@ pub(crate) fn residual_wildcard_token(pattern: &str) -> Option<String> {
                 let is_bare = first
                     .map(|c| c.is_ascii_alphabetic() || c == '_')
                     .unwrap_or(false)
-                    && inner
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
                 if is_bare {
                     return Some(inner.to_string());
                 }
@@ -3349,7 +3342,11 @@ mod tests {
         let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
         assert_eq!(written, "s3cr3t-token-42", "the value must arrive");
         assert!(
-            !record.command.as_deref().unwrap_or_default().contains("s3cr3t-token-42"),
+            !record
+                .command
+                .as_deref()
+                .unwrap_or_default()
+                .contains("s3cr3t-token-42"),
             "the recorded command must not carry the secret: {:?}",
             record.command
         );
@@ -3386,7 +3383,7 @@ mod tests {
             route_sensitive_values_through_env(cmd, &["s3cr3t-token-42".to_string()]);
         assert!(!rewritten.contains("s3cr3t-token-42"), "{rewritten}");
         assert!(
-            rewritten.contains("'\"${" ) && rewritten.contains("}\"'"),
+            rewritten.contains("'\"${") && rewritten.contains("}\"'"),
             "single-quoted occurrences must splice out of the quotes: {rewritten}"
         );
         assert_eq!(

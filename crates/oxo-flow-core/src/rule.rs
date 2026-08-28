@@ -418,14 +418,11 @@ impl EnvironmentSpec {
         /// every expansion form that could inject (`$(...)`, backticks)
         /// is already in this set.
         const HARD: &[char] = &[
-            ';', '&', '|', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t',
-            '\n', '\r',
+            ';', '&', '|', '`', '(', ')', '<', '>', '\'', '"', '\\', ' ', '\t', '\n', '\r',
         ];
         /// Additional characters that are invalid inside image references
         /// and module names but fine inside filesystem paths.
-        const REF_ONLY: &[char] = &[
-            '$', '{', '}', '~', '*', '?', '[', ']', '!', '#', ',',
-        ];
+        const REF_ONLY: &[char] = &['$', '{', '}', '~', '*', '?', '[', ']', '!', '#', ','];
         let scan = |field: &'static str, value: &str, refs: bool| {
             value.chars().find_map(|c| {
                 (HARD.contains(&c) || c.is_control() || (refs && REF_ONLY.contains(&c)))
@@ -445,27 +442,23 @@ impl EnvironmentSpec {
         .into_iter()
         .flatten()
         .find_map(|(field, value)| scan(field, value, true));
-        refs.or_else(|| {
-            self.modules
-                .iter()
-                .find_map(|m| scan("modules", m, true))
-        })
-        .or_else(|| {
-            [
-                self.conda.as_deref().map(|v| ("conda", v)),
-                self.mamba.as_deref().map(|v| ("mamba", v)),
-                self.pixi.as_deref().map(|v| ("pixi", v)),
-                self.venv.as_deref().map(|v| ("venv", v)),
-                self.conda_prefix.as_deref().map(|v| ("conda_prefix", v)),
-                self.mamba_prefix.as_deref().map(|v| ("mamba_prefix", v)),
-                self.venv_requirements
-                    .as_deref()
-                    .map(|v| ("venv_requirements", v)),
-            ]
-            .into_iter()
-            .flatten()
-            .find_map(|(field, value)| scan(field, value, false))
-        })
+        refs.or_else(|| self.modules.iter().find_map(|m| scan("modules", m, true)))
+            .or_else(|| {
+                [
+                    self.conda.as_deref().map(|v| ("conda", v)),
+                    self.mamba.as_deref().map(|v| ("mamba", v)),
+                    self.pixi.as_deref().map(|v| ("pixi", v)),
+                    self.venv.as_deref().map(|v| ("venv", v)),
+                    self.conda_prefix.as_deref().map(|v| ("conda_prefix", v)),
+                    self.mamba_prefix.as_deref().map(|v| ("mamba_prefix", v)),
+                    self.venv_requirements
+                        .as_deref()
+                        .map(|v| ("venv_requirements", v)),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(|(field, value)| scan(field, value, false))
+            })
     }
 }
 

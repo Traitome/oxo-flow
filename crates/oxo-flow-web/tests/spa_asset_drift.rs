@@ -52,7 +52,8 @@ fn spa_index_references_the_built_bundle() {
          Run `npm run build` in frontend/."
     );
     assert!(
-        refs.iter().any(|a| a.starts_with("index-") && a.ends_with(".js")),
+        refs.iter()
+            .any(|a| a.starts_with("index-") && a.ends_with(".js")),
         "static/index.html references no `index-*.js` entry bundle: {refs:?}"
     );
 }

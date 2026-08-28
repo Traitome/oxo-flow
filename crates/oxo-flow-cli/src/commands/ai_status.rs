@@ -24,11 +24,10 @@ fn keep_saved_api_url(
 ) -> Option<String> {
     match new_url {
         Some(url) => Some(url.to_string()),
-        None => saved_kind
-            .filter(|saved| saved.eq_ignore_ascii_case(kind))
-            .and_then(|_| saved_url)
-            .filter(|url| !url.is_empty())
-            .map(String::from),
+        None if saved_kind.is_some_and(|saved| saved.eq_ignore_ascii_case(kind)) => {
+            saved_url.filter(|url| !url.is_empty()).map(String::from)
+        }
+        None => None,
     }
 }
 
