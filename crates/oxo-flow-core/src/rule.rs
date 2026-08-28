@@ -428,13 +428,8 @@ impl EnvironmentSpec {
         ];
         let scan = |field: &'static str, value: &str, refs: bool| {
             value.chars().find_map(|c| {
-                if HARD.contains(&c) || c.is_control() {
-                    Some((field, c))
-                } else if refs && REF_ONLY.contains(&c) {
-                    Some((field, c))
-                } else {
-                    None
-                }
+                (HARD.contains(&c) || c.is_control() || (refs && REF_ONLY.contains(&c)))
+                    .then_some((field, c))
             })
         };
         let refs = [

@@ -364,6 +364,28 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 )),
             });
         }
+
+        // W028: unqualified docker image reference. A bare name is not an
+        // error — docker re-resolves it against docker.io and the engine
+        // adds a single quay.io/biocontainers fallback — but reproducibility
+        // and mirror behavior depend on the full reference, so say so.
+        if let Some(spec) = &rule.environment.docker
+            && crate::environment::is_unqualified_image_spec(spec)
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "environment.docker '{spec}' is not fully qualified — resolves against \
+                     docker.io with one quay.io/biocontainers fallback retry"
+                ),
+                rule: Some(rule.name.clone()),
+                code: "W028".to_string(),
+                suggestion: Some(
+                    "use the fully qualified reference (registry/name:tag) for reproducible pulls"
+                        .to_string(),
+                ),
+            });
+        }
     }
 
     // E013: checkpoint rule without a re-entry manifest (issue #78 P3).
