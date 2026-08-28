@@ -9410,3 +9410,92 @@ shell = "cat {input} > {output}"
     let s2 = fs::read_to_string(dir.path().join("merged/S2_R1.txt")).unwrap();
     assert_eq!(s2, "S2-L001\n");
 }
+
+// ─── Targeted run closes over the instantiated DAG (issue #247) ─────────────
+
+/// `--target` on a workflow with mutually-exclusive `when` variants must
+/// close over the INSTANTIATED DAG: the when-false variant is pruned with
+/// its upstream, a when-false target is reported and excluded, and the
+/// surviving variant runs.
+#[test]
+fn cli_target_prunes_when_gated_variants() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("t.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "t"
+version = "1.0.0"
+
+[config]
+aligner = "hisat2"
+
+[[rules]]
+name = "index"
+input = ["ref.fa"]
+output = ["ref.idx"]
+shell = "echo idx > {output}"
+
+[[rules]]
+name = "trim_hisat2"
+input = ["ref.idx"]
+output = ["trim_hisat2.fq"]
+when = "config.aligner == 'hisat2'"
+shell = "cat {input} > {output}"
+
+[[rules]]
+name = "trim_star"
+input = ["ref.idx"]
+output = ["trim_star.fq"]
+when = "config.aligner == 'star'"
+shell = "cat {input} > {output}"
+
+[[rules]]
+name = "map"
+input = ["trim_hisat2.fq"]
+output = ["map.bam"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("ref.fa"), b"ref").unwrap();
+
+    // Target `map` with aligner=hisat2: closure pulls trim_hisat2 (when-
+    // true) + its producer index. The when-false trim_star variant must
+    // not appear even though the prefix names overlap.
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--target", "map"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "targeted run must succeed: {stderr}");
+    assert!(dir.path().join("map.bam").exists(), "{stderr}");
+    assert!(dir.path().join("trim_hisat2.fq").exists(), "{stderr}");
+    assert!(dir.path().join("ref.idx").exists(), "{stderr}");
+    assert!(
+        !dir.path().join("trim_star.fq").exists(),
+        "when-false variant must not run"
+    );
+
+    // Targeting the when-false variant directly: reported, excluded, and
+    // the run aborts with nothing to run.
+    let dir2 = tempfile::tempdir().unwrap();
+    let wf2 = dir2.path().join("t.oxoflow");
+    fs::write(&wf2, fs::read_to_string(&wf).unwrap()).unwrap();
+    fs::write(dir2.path().join("ref.fa"), b"ref").unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf2.to_str().unwrap(), "--target", "trim_star"])
+        .current_dir(dir2.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "all-when-false targets must fail the run, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("when-gated false"),
+        "must report the skipped target, got: {stderr}"
+    );
+}
