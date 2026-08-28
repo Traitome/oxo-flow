@@ -127,6 +127,22 @@ fn array_key(sr: &ScheduledRule) -> String {
     )
 }
 
+/// Do two instances depend on the same set of rules?
+///
+/// Order-insensitive on purpose: the dependency list is assembled from DAG
+/// edges and `depends_on`, so two instances of one template can carry the
+/// same producers in a different order. Comparing the vectors directly (as
+/// this used to) meant a second-level fan-out — whose deps arrive in
+/// discovery order — silently never grouped into an array.
+fn same_dependencies(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && a.iter().all(|d| b.contains(d))
+}
+
+/// How many polls a job may sit in PENDING before the driver says so again.
+/// With the default 5s poll interval this is one line per minute — enough
+/// to tell a full partition from a hung driver without drowning the log.
+const PENDING_HEARTBEAT_ROUNDS: u32 = 12;
+
 impl BackendDriver {
     pub fn new(backend: Arc<dyn ExecutorBackend>, config: DriverConfig) -> Self {
         Self { backend, config }
@@ -213,6 +229,9 @@ impl BackendDriver {
         // (up-to-date / non-schedulable — may release). Transitive: a rule
         // blocked this round blocks its own dependents next round.
         let mut blocked: HashSet<String> = HashSet::new();
+        // Consecutive polls each job has been seen waiting (PENDING, or not
+        // yet reported by the scheduler) — drives the queue-wait heartbeat.
+        let mut pending_rounds: HashMap<String, u32> = HashMap::new();
 
         loop {
             // 1. Failure propagation: pending rules blocked by a failed dep.
@@ -343,7 +362,10 @@ impl BackendDriver {
                                     && plan.rules.get(*o).is_some_and(|o_sr| {
                                         o_sr.template == sr.template
                                             && array_key(o_sr) == array_key(&sr)
-                                            && o_sr.dependencies == sr.dependencies
+                                            && same_dependencies(
+                                                &o_sr.dependencies,
+                                                &sr.dependencies,
+                                            )
                                     })
                             })
                             .map(|o| (o.clone(), plan.rules[o].clone()))
@@ -351,14 +373,31 @@ impl BackendDriver {
                     };
                     let mut batch: Vec<(String, ScheduledRule)> = vec![(name.clone(), sr.clone())];
                     batch.extend(siblings);
-                    let chunks = batch.chunks(self.config.max_array_size.max(1));
-                    for (chunk_k, chunk) in chunks.enumerate() {
+                    // Chunking walks the batch by hand rather than via
+                    // `slice::chunks`: every array's elements count against
+                    // the in-flight cap, so the LAST chunk of a batch is cut
+                    // to the slots that actually remain (issue #136 H5 fixed
+                    // the per-rule overshoot; a 900-element array under a cap
+                    // of 50 overshot it just the same).
+                    let mut offset = 0usize;
+                    let mut chunk_k = 0usize;
+                    while offset < batch.len() {
                         if inflight.len() >= self.config.max_submitted {
                             // The cap binds per SUBMISSION, not per rule —
                             // a multi-chunk batch must not overshoot it
                             // (issue #136 H5).
                             break;
                         }
+                        let quota = self
+                            .config
+                            .max_submitted
+                            .saturating_sub(inflight.len())
+                            .max(1);
+                        let size = self.config.max_array_size.max(1).min(quota);
+                        let end = (offset + size).min(batch.len());
+                        let chunk = &batch[offset..end];
+                        offset = end;
+                        chunk_k += 1;
                         if chunk.len() > 1 {
                             // Array submission: one script + per-index
                             // command files under a PER-CHUNK job dir —
@@ -369,7 +408,7 @@ impl BackendDriver {
                                 .run_dir
                                 .join("jobs")
                                 .join(sanitize(&sr.template))
-                                .join(format!("chunk-{}", chunk_k + 1));
+                                .join(format!("chunk-{}", chunk_k));
                             std::fs::create_dir_all(&job_dir).map_err(|e| {
                                 OxoFlowError::Config {
                                     message: format!("cannot create {}: {e}", job_dir.display()),
@@ -386,8 +425,16 @@ impl BackendDriver {
                                     }
                                 })?;
                             }
+                            // The array presents itself under the TEMPLATE
+                            // name: naming it after `chunk[0]`'s instance
+                            // made squeue/sacct report a job named after one
+                            // arbitrary sample. The per-index log paths
+                            // follow, so every element shares the template's
+                            // log prefix.
+                            let mut array_rule = chunk[0].1.rule.clone();
+                            array_rule.name = chunk[0].1.template.clone();
                             let script = self.backend.render_array_script(
-                                &sr.rule,
+                                &array_rule,
                                 &job_dir.to_string_lossy(),
                                 chunk.len(),
                             )?;
@@ -636,6 +683,52 @@ impl BackendDriver {
                             }
                         }
                     }
+                }
+                // Queue-wait heartbeat: a job parked in PENDING used to be
+                // completely silent, so a driver facing a full partition was
+                // indistinguishable from a hung one. Every
+                // PENDING_HEARTBEAT_ROUNDS polls each waiting job gets one
+                // line naming the rule, the job id, and how long it has been
+                // waiting. A job that left the queue drops out of the count.
+                for id in inflight.keys() {
+                    let is_waiting = statuses
+                        .get(id)
+                        .is_none_or(|s| *s == BackendJobStatus::Pending);
+                    if is_waiting {
+                        *pending_rounds.entry(id.clone()).or_insert(0) += 1;
+                    } else {
+                        pending_rounds.remove(id);
+                    }
+                }
+                let mut waiting: Vec<(&String, &InFlight, u32)> = inflight
+                    .iter()
+                    .filter(|(id, _)| {
+                        pending_rounds
+                            .get(*id)
+                            .is_some_and(|r| r % PENDING_HEARTBEAT_ROUNDS == 0)
+                    })
+                    .map(|(id, f)| (id, f, pending_rounds[id]))
+                    .collect();
+                waiting.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+                for (id, f, rounds) in waiting {
+                    let waited = (now - f.submitted_at).num_seconds();
+                    tracing::info!(
+                        rule = %f.rule,
+                        job = %id,
+                        pending_polls = rounds,
+                        waited_secs = waited,
+                        "job is still waiting in the queue"
+                    );
+                    // The event stream keeps the wait on record after the run
+                    // ends — `queue_wait_secs` only exists once the job
+                    // settles, and a job killed mid-queue never does.
+                    emit(
+                        &mut events,
+                        "WAITING",
+                        &f.rule,
+                        Some(id),
+                        Some(&format!("pending for {waited}s")),
+                    );
                 }
                 let settled: Vec<(String, InFlight, BackendJobStatus)> = inflight
                     .iter()
@@ -1721,6 +1814,8 @@ shell = "echo asm > out/{assembler}.txt"
         poll_args: Vec<Vec<String>>,
         cancelled: Vec<String>,
         verdict: Option<BackendJobStatus>,
+        /// Element count of every array submission, in submit order.
+        array_sizes: Vec<usize>,
     }
     impl MockBackend {
         fn new(direct: bool, verdict: BackendJobStatus) -> Self {
@@ -1748,8 +1843,9 @@ shell = "echo asm > out/{assembler}.txt"
             &self,
             _rule: &crate::rule::Rule,
             _cmd_dir: &str,
-            _count: usize,
+            count: usize,
         ) -> Result<String> {
+            self.inner.lock().unwrap().array_sizes.push(count);
             Ok("exit 0".to_string())
         }
         async fn submit(&self, _script_path: &Path) -> Result<String> {
@@ -2009,6 +2105,272 @@ shell = "echo asm > out/{assembler}.txt"
             seen.len(),
             2,
             "every accepted job must hit the hook: {seen:?}"
+        );
+    }
+
+    // ─── cluster-path audit findings ───────────────────────────────────────
+
+    #[test]
+    fn same_dependencies_ignores_order() {
+        // The dependency list is assembled from DAG edges + depends_on, so
+        // two instances of one template can carry the same producers in a
+        // different order — and must still group.
+        let a = vec!["prep".to_string(), "qc".to_string()];
+        let b = vec!["qc".to_string(), "prep".to_string()];
+        assert!(same_dependencies(&a, &b));
+        assert!(!same_dependencies(&a, &["prep".to_string()]));
+        assert!(!same_dependencies(
+            &a,
+            &["prep".to_string(), "other".to_string()]
+        ));
+    }
+
+    #[test]
+    fn array_elements_count_against_the_in_flight_cap() {
+        // G8: a single array could blow past max_submitted — 900 elements
+        // under a cap of 50 all left the door in one submission. The chunk
+        // is now cut to the slots that actually remain.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 6);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Running));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 3,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(5),
+                poll_timeout: Some(std::time::Duration::from_millis(300)),
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(err.to_string().contains("poll timeout"));
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert_eq!(
+            st.array_sizes,
+            vec![3],
+            "the array must be trimmed to the remaining in-flight quota"
+        );
+        let submitted = events(&fx).iter().filter(|e| e["t"] == "SUBMITTED").count();
+        assert_eq!(submitted, 3, "never more jobs in flight than the cap");
+    }
+
+    #[test]
+    fn second_level_fanout_still_groups_into_one_array() {
+        // G7: instances whose dependency LISTS differ only in order were
+        // never grouped, so every array below the top level submitted one
+        // job per sample.
+        let fx = setup();
+        let mut plan = sibling_plan(fx.workdir.path(), 2);
+        // Same producers, different discovery order.
+        for (name, deps) in [
+            ("sib_01", vec!["prep", "qc"]),
+            ("sib_02", vec!["qc", "prep"]),
+        ] {
+            plan.rules.get_mut(name).unwrap().dependencies =
+                deps.into_iter().map(String::from).collect();
+        }
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(false, BackendJobStatus::Running));
+        let d = BackendDriver::new(
+            backend.clone(),
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(5),
+                poll_timeout: Some(std::time::Duration::from_millis(200)),
+            },
+        );
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        let st = backend.state();
+        let st = st.lock().unwrap();
+        assert_eq!(st.array_sizes, vec![2], "equal dependency SETS group");
+    }
+
+    #[test]
+    fn pending_jobs_report_a_heartbeat() {
+        // G4: a job parked in PENDING was completely silent — a full
+        // partition was indistinguishable from a hung driver.
+        let fx = setup();
+        let plan = sibling_plan(fx.workdir.path(), 1);
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let backend = Arc::new(MockBackend::new(true, BackendJobStatus::Pending));
+        let d = BackendDriver::new(
+            backend,
+            DriverConfig {
+                max_submitted: 1,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(2),
+                poll_timeout: Some(std::time::Duration::from_millis(200)),
+            },
+        );
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(err.to_string().contains("poll timeout"));
+        let waiting = events(&fx)
+            .iter()
+            .filter(|e| e["t"] == "WAITING")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            !waiting.is_empty(),
+            "a parked job must produce WAITING heartbeats"
+        );
+        assert!(
+            waiting.iter().all(|e| e["rule"] == "sib_01"
+                && e["reason"]
+                    .as_str()
+                    .is_some_and(|r| r.starts_with("pending for "))),
+            "heartbeats name the rule and the wait: {waiting:?}"
+        );
+        // Running jobs stay silent: a job that is working needs no nudge.
+        let running = Arc::new(MockBackend::new(true, BackendJobStatus::Running));
+        let fx2 = setup();
+        let d = BackendDriver::new(
+            running,
+            DriverConfig {
+                max_submitted: 1,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(2),
+                poll_timeout: Some(std::time::Duration::from_millis(120)),
+            },
+        );
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan.clone(),
+                &to_run,
+                DriverOptions {
+                    run_dir: fx2.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            !events(&fx2).iter().any(|e| e["t"] == "WAITING"),
+            "a RUNNING job must not emit WAITING heartbeats"
+        );
+    }
+
+    #[test]
+    fn array_job_is_named_after_the_template() {
+        // P7-12: the array presented itself under whichever instance sorted
+        // first, so squeue/sacct reported a job named after one arbitrary
+        // sample.
+        let fx = setup();
+        let wf_toml = r#"
+[workflow]
+name = "arr"
+version = "1.0.0"
+
+[[values]]
+name = "assembler"
+values = ["spades", "megahit"]
+
+[[rules]]
+name = "asm"
+output = ["out/{assembler}.txt"]
+shell = "echo asm > out/{assembler}.txt"
+"#;
+        let wf = fx.workdir.path().join("arr.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let mut config = WorkflowConfig::from_file(&wf).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let mut plan = ScheduledPlan::build(
+            &config,
+            &dag,
+            fx.workdir.path(),
+            &EnvironmentResolver::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let to_run: HashSet<String> = plan.order.iter().cloned().collect();
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(fixtures_dir())
+                .with_env("MOCK_SCHEDULER_DIR", &fx._state.path().to_string_lossy()),
+        );
+        let d = BackendDriver::new(
+            executor,
+            DriverConfig {
+                max_submitted: 4,
+                max_array_size: 1001,
+                no_arrays: false,
+                poll_interval: std::time::Duration::from_millis(10),
+                poll_timeout: Some(std::time::Duration::from_secs(30)),
+            },
+        );
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(d.run(
+                &mut plan,
+                &to_run,
+                DriverOptions {
+                    run_dir: fx.run_dir.path(),
+                    on_checkpoint: None,
+                    merge: None,
+                    sensitive_values: &[],
+                    on_submit: None,
+                },
+            ))
+            .unwrap();
+        let job_sh =
+            std::fs::read_to_string(fx.run_dir.path().join("jobs/asm/chunk-1/job.sh")).unwrap();
+        assert!(
+            job_sh.contains("#SBATCH --job-name=asm\n"),
+            "the array must be named after the template: {job_sh}"
+        );
+        assert!(
+            !job_sh.contains("--job-name=asm_assembler"),
+            "no instance name may leak into the array job name: {job_sh}"
         );
     }
 }

@@ -35,6 +35,21 @@ pub enum BackendJobStatus {
     Unknown,
 }
 
+impl BackendJobStatus {
+    /// Lower-case name for machine-readable output (the `cluster status`
+    /// table) — the same vocabulary the driver writes into `events.jsonl`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// What a scheduler's accounting store knows about a job that has left the
 /// live queue: the terminal state, plus whatever the store measured.
 ///
