@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::error::{OxoFlowError, Result};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -19,9 +20,15 @@ use std::path::{Path, PathBuf};
 /// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
     /// Parse a workflow configuration from a TOML string.
+    ///
+    /// The raw table is checked against the known-key whitelist first (E017):
+    /// serde would silently drop a misspelled key, so the typo has to be
+    /// caught before the settings are read out of the struct.
     #[must_use = "parsing a config returns a Result that must be used"]
     pub fn parse(content: &str) -> Result<Self> {
-        let mut config: WorkflowConfig = toml::from_str(content)?;
+        let raw: toml::Table = toml::from_str(content)?;
+        known_keys::check(&raw)?;
+        let mut config = Self::deserialize(toml::Value::Table(raw))?;
         config.extract_declarative_config()?;
         config = config.with_reference_builder_templates()?;
         config.validate()?;
@@ -62,13 +69,16 @@ impl WorkflowConfig {
                 }
             }
         })?;
+        // Same order as `parse`: syntax, then the known-key whitelist, then
+        // the struct — a typo is reported as E017, never as a dropped key.
+        let parse_error = |message: String| OxoFlowError::Parse {
+            path: path.to_path_buf(),
+            message,
+        };
+        let raw: toml::Table = toml::from_str(&content).map_err(|e| parse_error(e.to_string()))?;
+        known_keys::check(&raw).map_err(|e| parse_error(e.to_string()))?;
         let mut config: WorkflowConfig =
-            toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
-                path: path.to_path_buf(),
-                message: e.to_string(),
-            })?;
-
-        config.extract_declarative_config()?;
+            Self::deserialize(toml::Value::Table(raw)).map_err(|e| parse_error(e.to_string()))?;
 
         // input_groups patterns resolve against the workflow root — the
         // workflow file's parent, the same root sample_pattern scans.
@@ -369,11 +379,17 @@ impl WorkflowConfig {
                 (text, next_base)
             };
 
+            let inc_error = |message: String| OxoFlowError::Parse {
+                path: PathBuf::from(&inc.path),
+                message,
+            };
+            let raw: toml::Table = toml::from_str(&content).map_err(|e| inc_error(e.to_string()))?;
+            // Included fragments get the same known-key check as the host
+            // file — a typo'd module key would otherwise slip past the host's
+            // own E017 pass.
+            known_keys::check(&raw).map_err(|e| inc_error(e.to_string()))?;
             let mut inc_config: WorkflowConfig =
-                toml::from_str(&content).map_err(|e| OxoFlowError::Parse {
-                    path: PathBuf::from(&inc.path),
-                    message: e.to_string(),
-                })?;
+                Self::deserialize(toml::Value::Table(raw)).map_err(|e| inc_error(e.to_string()))?;
 
             // Declarative `[config]` entries (`key = { default, ... }`)
             // are extracted exactly as they would be standalone, so their

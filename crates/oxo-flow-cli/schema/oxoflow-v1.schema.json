@@ -4,28 +4,107 @@
   "title": "oxo-flow workflow definition",
   "description": "Schema for .oxoflow workflow files (v1.0)",
   "type": "object",
-  "required": ["workflow", "rules"],
+  "required": [
+    "workflow",
+    "rules"
+  ],
   "properties": {
     "workflow": {
       "type": "object",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "type": "string", "description": "Name of the workflow" },
-        "version": { "type": "string", "description": "Version of the workflow (e.g., 1.0.0)", "default": "0.1.0" },
-        "description": { "type": "string", "description": "Description of the workflow" },
-        "author": { "type": "string", "description": "Author name or email" },
-        "min_version": { "type": "string", "description": "Minimum oxo-flow version required" },
-        "format_version": { "type": "string", "description": "Format specification version" },
-        "genome_build": { "type": "string", "description": "Genome build identifier (e.g., GRCh38, hg38)" },
+        "name": {
+          "type": "string",
+          "description": "Name of the workflow"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the workflow (e.g., 1.0.0)",
+          "default": "0.1.0"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the workflow"
+        },
+        "author": {
+          "type": "string",
+          "description": "Author name or email"
+        },
+        "min_version": {
+          "type": "string",
+          "description": "Minimum oxo-flow version required"
+        },
+        "format_version": {
+          "type": "string",
+          "description": "Format specification version"
+        },
+        "genome_build": {
+          "type": "string",
+          "description": "Genome build identifier (e.g., GRCh38, hg38)"
+        },
         "interpreter_map": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Custom interpreter mappings for script file extensions"
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Custom script-extension interpreter mapping"
         },
-        "pairs_file": { "type": "string", "description": "External TSV/CSV/JSON file with experiment-control pairs" },
-        "sample_groups_file": { "type": "string", "description": "External TSV/JSON file with sample groups" },
-        "pairs_pattern": { "type": "string", "description": "File glob for auto-discovering pairs" },
-        "sample_pattern": { "type": "string", "description": "File glob for auto-discovering samples" }
+        "pairs_file": {
+          "type": "string",
+          "description": "External TSV/CSV/JSON file with experiment-control pairs"
+        },
+        "sample_groups_file": {
+          "type": "string",
+          "description": "External TSV/JSON file with sample groups"
+        },
+        "pairs_pattern": {
+          "type": "string",
+          "description": "File glob for auto-discovering pairs"
+        },
+        "sample_pattern": {
+          "type": "string",
+          "description": "File glob for auto-discovering samples"
+        },
+        "on_complete": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Workflow-level terminal hook after a fully successful run"
+        },
+        "on_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Workflow-level terminal hook after any failure"
+        },
+        "metadata_file": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "profile_mode": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
       }
     },
     "config": {
@@ -33,22 +112,66 @@
       "description": "Configuration variables for wildcard expansion. Plain values (key = \"value\") act as defaults; declarative inline tables (key = { default, required, help, sensitive, type, choices, range, must_exist }) declare CLI-overridable parameters",
       "additionalProperties": {
         "oneOf": [
-          { "type": "string" },
-          { "type": "integer" },
-          { "type": "number" },
-          { "type": "boolean" },
-          { "type": "array" },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "array"
+          },
           {
             "type": "object",
             "properties": {
-              "default": { "type": "string", "description": "Default value when not provided via CLI" },
-              "required": { "type": "boolean", "description": "Must be set via CLI, profile, or explicit config" },
-              "help": { "type": "string", "description": "Human-readable help text" },
-              "sensitive": { "type": "boolean", "description": "Mask the value in logs and errors" },
-              "type": { "type": "string", "enum": ["string", "int", "float", "bool", "path"], "description": "Expected value type" },
-              "choices": { "type": "array", "items": { "type": "string" }, "description": "Allowed values" },
-              "range": { "type": "string", "description": "Numeric range \"min..max\"" },
-              "must_exist": { "type": "boolean", "description": "Path must exist on disk" }
+              "default": {
+                "type": "string",
+                "description": "Default value when not provided via CLI"
+              },
+              "required": {
+                "type": "boolean",
+                "description": "Must be set via CLI, profile, or explicit config"
+              },
+              "help": {
+                "type": "string",
+                "description": "Human-readable help text"
+              },
+              "sensitive": {
+                "type": "boolean",
+                "description": "Mask the value in logs and errors"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "int",
+                  "float",
+                  "bool",
+                  "path"
+                ],
+                "description": "Expected value type"
+              },
+              "choices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Allowed values"
+              },
+              "range": {
+                "type": "string",
+                "description": "Numeric range \"min..max\""
+              },
+              "must_exist": {
+                "type": "boolean",
+                "description": "Path must exist on disk"
+              }
             },
             "additionalProperties": false
           }
@@ -60,15 +183,37 @@
       "description": "Auto-built reference artifacts (indexes, data files). Auto-derived from reference_dir if empty.",
       "items": {
         "type": "object",
-        "required": ["name", "output", "build"],
+        "required": [
+          "name",
+          "output",
+          "build"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Unique name for checkpoint tracking" },
-          "source": { "type": "string", "description": "Source file for freshness checks" },
-          "output": { "type": "string", "description": "Path to the built artifact" },
-          "build": { "type": "string", "description": "Shell command to produce output from source" },
-          "threads": { "type": "integer" },
-          "memory": { "type": "string" },
-          "description": { "type": "string" }
+          "name": {
+            "type": "string",
+            "description": "Unique name for checkpoint tracking"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source file for freshness checks"
+          },
+          "output": {
+            "type": "string",
+            "description": "Path to the built artifact"
+          },
+          "build": {
+            "type": "string",
+            "description": "Shell command to produce output from source"
+          },
+          "threads": {
+            "type": "integer"
+          },
+          "memory": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
         }
       }
     },
@@ -76,18 +221,48 @@
       "type": "object",
       "description": "Default settings applied to all rules",
       "properties": {
-        "threads": { "type": "integer" },
-        "memory": { "type": "string" },
-        "environment": { "$ref": "#/$defs/environmentSpec" }
+        "threads": {
+          "type": "integer"
+        },
+        "memory": {
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/environmentSpec"
+        },
+        "shell_prelude": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
       }
     },
     "report": {
       "type": "object",
       "description": "Report configuration",
       "properties": {
-        "template": { "type": "string" },
-        "format": { "type": "array", "items": { "type": "string" } },
-        "sections": { "type": "array", "items": { "type": "string" } }
+        "template": {
+          "type": "string"
+        },
+        "format": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "include": {
@@ -95,10 +270,18 @@
       "description": "Include external workflow files",
       "items": {
         "type": "object",
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "properties": {
-          "path": { "type": "string", "description": "Path to the included .oxoflow file" },
-          "namespace": { "type": "string", "description": "Optional namespace prefix for included rules" }
+          "path": {
+            "type": "string",
+            "description": "Path to the included .oxoflow file"
+          },
+          "namespace": {
+            "type": "string",
+            "description": "Optional namespace prefix for included rules"
+          }
         }
       }
     },
@@ -107,11 +290,27 @@
       "description": "Explicit sequential/parallel rule ordering",
       "items": {
         "type": "object",
-        "required": ["name", "rules"],
+        "required": [
+          "name",
+          "rules"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "rules": { "type": "array", "items": { "type": "string" } },
-          "mode": { "type": "string", "enum": ["sequential", "parallel"] }
+          "name": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sequential",
+              "parallel"
+            ]
+          }
         }
       }
     },
@@ -120,16 +319,42 @@
       "description": "Experiment-control sample pairs",
       "items": {
         "type": "object",
-        "required": ["pair_id", "experiment", "control"],
+        "required": [
+          "pair_id",
+          "experiment",
+          "control"
+        ],
         "properties": {
-          "pair_id": { "type": "string" },
-          "experiment": { "type": "string" },
-          "tumor": { "type": "string", "description": "Alias for experiment" },
-          "control": { "type": "string" },
-          "normal": { "type": "string", "description": "Alias for control" },
-          "experiment_type": { "type": "string" },
-          "tumor_type": { "type": "string", "description": "Alias for experiment_type" },
-          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+          "pair_id": {
+            "type": "string"
+          },
+          "experiment": {
+            "type": "string"
+          },
+          "tumor": {
+            "type": "string",
+            "description": "Alias for experiment"
+          },
+          "control": {
+            "type": "string"
+          },
+          "normal": {
+            "type": "string",
+            "description": "Alias for control"
+          },
+          "experiment_type": {
+            "type": "string"
+          },
+          "tumor_type": {
+            "type": "string",
+            "description": "Alias for experiment_type"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -142,10 +367,19 @@
       "description": "Named value groups bind key/value lists that rules can iterate over (e.g. [[values]] name = \"assembler\", values = [\"spades\", \"megahit\"]), usable as {assembler} wildcards",
       "items": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "values": { "type": "array", "items": { "type": "string" } }
+          "name": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -154,11 +388,26 @@
       "description": "Named sample groups for cohort-level analysis",
       "items": {
         "type": "object",
-        "required": ["name", "samples"],
+        "required": [
+          "name",
+          "samples"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "samples": { "type": "array", "items": { "type": "string" } },
-          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+          "name": {
+            "type": "string"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -166,15 +415,23 @@
       "type": "object",
       "description": "Global resource limits",
       "properties": {
-        "max_threads": { "type": "integer" },
-        "max_memory": { "type": "string" },
-        "max_jobs": { "type": "integer" }
+        "max_threads": {
+          "type": "integer"
+        },
+        "max_memory": {
+          "type": "string"
+        },
+        "max_jobs": {
+          "type": "integer"
+        }
       }
     },
     "env_groups": {
       "type": "object",
       "description": "Named reusable environment specifications",
-      "additionalProperties": { "$ref": "#/$defs/environmentSpec" }
+      "additionalProperties": {
+        "$ref": "#/$defs/environmentSpec"
+      }
     },
     "resource_groups": {
       "type": "object",
@@ -182,8 +439,16 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "max": { "type": "integer" },
-          "wait": { "type": "string", "enum": ["queue", "fail"] }
+          "max": {
+            "type": "integer"
+          },
+          "wait": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "fail"
+            ]
+          }
         }
       }
     },
@@ -192,210 +457,1517 @@
       "description": "Tracked reference database versions",
       "items": {
         "type": "object",
-        "required": ["name", "version"],
+        "required": [
+          "name",
+          "version"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "version": { "type": "string" },
-          "source": { "type": "string" },
-          "checksum": { "type": "string" },
-          "accessed_date": { "type": "string" }
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "accessed_date": {
+            "type": "string"
+          }
         }
       }
     },
     "wildcard_constraints": {
       "type": "object",
       "description": "Regex patterns constraining wildcard values",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "cluster": {
       "type": "object",
       "description": "HPC cluster execution profile",
       "properties": {
-        "backend": { "type": "string", "enum": ["slurm", "pbs", "sge", "lsf"] },
-        "partition": { "type": "string" },
-        "account": { "type": "string" },
-        "extra_args": { "type": "array", "items": { "type": "string" } }
+        "backend": {
+          "type": "string",
+          "enum": [
+            "slurm",
+            "pbs",
+            "sge",
+            "lsf"
+          ]
+        },
+        "partition": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        },
+        "extra_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_array_size": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "max_submitted": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "poll_interval": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "walltime": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
       }
     },
     "citation": {
       "type": "object",
       "description": "Citation metadata for reproducibility",
       "properties": {
-        "doi": { "type": "string" },
-        "url": { "type": "string" },
-        "authors": { "type": "array", "items": { "type": "string" } },
-        "title": { "type": "string" }
+        "doi": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": "string"
+        }
       }
     },
     "plugins": {
       "type": "object",
       "description": "Plugin configuration",
       "properties": {
-        "rules": { "type": "array", "items": { "type": "string" } },
-        "executor": { "type": "string" },
-        "reports": { "type": "array", "items": { "type": "string" } },
-        "trusted_keys_file": { "type": "string" }
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "executor": {
+          "type": "string"
+        },
+        "reports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trusted_keys_file": {
+          "type": "string"
+        }
       }
     },
     "rules": {
       "type": "array",
       "description": "Workflow execution rules",
-      "items": { "$ref": "#/$defs/rule" }
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "metadata": {
+      "type": [
+        "string",
+        "array",
+        "object",
+        "boolean",
+        "number",
+        "integer",
+        "null"
+      ],
+      "description": "Schema synced from config whitelist (see known_keys.rs)"
+    },
+    "properties": {
+      "citation": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "cluster": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "config": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "defaults": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "env_groups": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "execution_group": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "include": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "metadata": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "pairs": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "plugins": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "reference_db": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "reference_dir": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "references": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "report": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "resource_budget": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "resource_groups": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "rules": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "sample_groups": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "values": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "wildcard_constraints": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      },
+      "workflow": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "boolean",
+          "number",
+          "integer",
+          "null"
+        ],
+        "description": "Schema synced from config whitelist (see known_keys.rs)"
+      }
     }
   },
   "$defs": {
     "environmentSpec": {
       "type": "object",
       "properties": {
-        "conda": { "type": "string" },
-        "mamba": { "type": "string", "description": "Mamba/micromamba environment YAML file (same format as conda)" },
-        "pixi": { "type": "string" },
-        "docker": { "type": "string" },
-        "singularity": { "type": "string" },
-        "venv": { "type": "string" },
-        "modules": { "type": "array", "items": { "type": "string" } },
-        "conda_prefix": { "type": "string" },
-        "mamba_prefix": { "type": "string", "description": "Optional project-local prefix for mamba environment" },
-        "venv_requirements": { "type": "string" }
+        "conda": {
+          "type": "string"
+        },
+        "mamba": {
+          "type": "string",
+          "description": "Mamba/micromamba environment YAML file (same format as conda)"
+        },
+        "pixi": {
+          "type": "string"
+        },
+        "docker": {
+          "type": "string"
+        },
+        "singularity": {
+          "type": "string"
+        },
+        "venv": {
+          "type": "string"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conda_prefix": {
+          "type": "string"
+        },
+        "mamba_prefix": {
+          "type": "string",
+          "description": "Optional project-local prefix for mamba environment"
+        },
+        "venv_requirements": {
+          "type": "string"
+        }
       }
     },
     "resources": {
       "type": "object",
       "properties": {
-        "threads": { "type": "integer", "default": 1 },
-        "memory": { "type": "string" },
-        "gpu": { "type": "integer" },
-        "gpu_spec": { "$ref": "#/$defs/gpuSpec" },
-        "disk": { "type": "string" },
-        "time_limit": { "type": "string" },
-        "partition": { "type": "string" },
-        "groups": { "type": "object", "additionalProperties": { "type": "integer" } }
+        "threads": {
+          "type": "integer",
+          "default": 1
+        },
+        "memory": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "integer"
+        },
+        "gpu_spec": {
+          "$ref": "#/$defs/gpuSpec"
+        },
+        "disk": {
+          "type": "string"
+        },
+        "time_limit": {
+          "type": "string"
+        },
+        "partition": {
+          "type": "string"
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        }
       }
     },
     "gpuSpec": {
       "type": "object",
       "properties": {
-        "count": { "type": "integer" },
-        "model": { "type": "string" },
-        "memory_gb": { "type": "integer" },
-        "compute_capability": { "type": "string" }
+        "count": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "memory_gb": {
+          "type": "integer"
+        },
+        "compute_capability": {
+          "type": "string"
+        }
       }
     },
     "scatterConfig": {
       "type": "object",
-      "required": ["variable", "values"],
+      "required": [
+        "variable",
+        "values"
+      ],
       "properties": {
-        "variable": { "type": "string" },
-        "values": { "type": "array", "items": { "type": "string" } },
-        "values_from": { "type": "string" },
-        "gather": { "type": "string" }
+        "variable": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "values_from": {
+          "type": "string"
+        },
+        "gather": {
+          "type": "string"
+        }
       }
     },
     "transformConfig": {
       "type": "object",
-      "required": ["split", "map"],
+      "required": [
+        "split",
+        "map"
+      ],
       "properties": {
         "split": {
           "type": "object",
           "properties": {
-            "by": { "type": "string" },
-            "values": { "type": "array", "items": { "type": "string" } },
-            "values_from": { "type": "string" },
-            "n": { "type": "integer" },
-            "glob": { "type": "string" }
+            "by": {
+              "type": "string"
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "values_from": {
+              "type": "string"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "glob": {
+              "type": "string"
+            }
           }
         },
-        "map": { "type": "string" },
+        "map": {
+          "type": "string"
+        },
         "combine": {
           "type": "object",
           "properties": {
-            "shell": { "type": "string" },
-            "aggregate": { "type": "boolean" },
-            "method": { "type": "string", "enum": ["concat", "json_merge"] },
-            "header": { "type": "string" }
+            "shell": {
+              "type": "string"
+            },
+            "aggregate": {
+              "type": "boolean"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "concat",
+                "json_merge"
+              ]
+            },
+            "header": {
+              "type": "string"
+            }
           }
         },
-        "cleanup": { "type": "boolean" }
+        "cleanup": {
+          "type": "boolean"
+        }
       }
     },
     "resourceHint": {
       "type": "object",
       "properties": {
-        "input_size": { "type": "string", "enum": ["small", "medium", "large"] },
-        "memory_scale": { "type": "number" },
-        "runtime": { "type": "string", "enum": ["fast", "medium", "slow"] },
-        "io_bound": { "type": "boolean" }
+        "input_size": {
+          "type": "string",
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "memory_scale": {
+          "type": "number"
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "medium",
+            "slow"
+          ]
+        },
+        "io_bound": {
+          "type": "boolean"
+        }
       }
     },
     "expandConfig": {
       "type": "object",
       "properties": {
-        "pattern": { "type": "string" },
-        "variables": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
+        "pattern": {
+          "type": "string"
+        },
+        "variables": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       }
     },
     "rule": {
       "type": "object",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "type": "string", "description": "Unique rule identifier" },
-        "description": { "type": "string", "description": "Human-readable description of this rule" },
+        "name": {
+          "type": "string",
+          "description": "Unique rule identifier"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of this rule"
+        },
         "input": {
           "oneOf": [
-            { "type": "array", "items": { "type": "string" } },
-            { "type": "object", "additionalProperties": { "type": "string" } }
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
           ],
           "description": "Input file patterns (list or named map)"
         },
         "output": {
           "oneOf": [
-            { "type": "array", "items": { "type": "string" } },
-            { "type": "object", "additionalProperties": { "type": "string" } }
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
           ],
           "description": "Output file patterns (list or named map)"
         },
-        "shell": { "type": "string", "description": "Shell command template to execute" },
-        "script": { "type": "string", "description": "Path to a script file to execute" },
-        "threads": { "type": "integer", "description": "(Deprecated) Use resources.threads instead" },
-        "memory": { "type": "string", "description": "(Deprecated) Use resources.memory instead" },
-        "resources": { "$ref": "#/$defs/resources" },
-        "environment": { "$ref": "#/$defs/environmentSpec" },
-        "env_group": { "type": "string", "description": "Reference to a named environment in [env_groups]" },
-        "when": { "type": "string", "description": "Conditional expression — skip rule when false" },
-        "envvars": { "type": "object", "additionalProperties": { "type": "string" } },
-        "params": { "type": "object", "additionalProperties": true, "description": "User-defined parameters for shell templates" },
-        "tags": { "type": "array", "items": { "type": "string" }, "description": "Categorization tags" },
-        "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Explicit rule-level dependencies" },
-        "extends": { "type": "string", "description": "Inherit settings from a base rule" },
-        "priority": { "type": "integer", "default": 0, "description": "Execution priority (higher = runs first)" },
-        "target": { "type": "boolean", "default": false, "description": "Mark as default target" },
-        "required": { "type": "boolean", "default": false, "description": "Pipeline fails if this rule fails" },
-        "optional": { "type": "boolean", "default": false, "description": "Skip rule if inputs don't exist" },
-        "localrule": { "type": "boolean", "default": false, "description": "Always run locally" },
-        "checkpoint": { "type": "boolean", "default": false, "description": "Allow DAG rebuild after this rule" },
-        "retries": { "type": "integer", "default": 0, "description": "Number of retry attempts on failure" },
-        "retry_delay": { "type": "string", "description": "Delay between retries (e.g., '5s', '30s')" },
-        "interpreter": { "type": "string", "description": "Explicit interpreter for script execution" },
-        "pre_exec": { "type": "string", "description": "Command to run before the main shell command" },
-        "on_success": { "type": "string", "description": "Command to run after rule succeeds" },
-        "on_failure": { "type": "string", "description": "Command to run after rule fails" },
-        "temp_output": { "type": "array", "items": { "type": "string" }, "description": "Temporary outputs cleaned up after downstream rules complete" },
-        "protected_output": { "type": "array", "items": { "type": "string" }, "description": "Outputs that must never be overwritten" },
-        "shadow": { "type": "string", "enum": ["minimal", "shallow", "full"], "description": "Shadow directory mode" },
-        "ancient": { "type": "array", "items": { "type": "string" }, "description": "Inputs that never trigger re-execution" },
-        "format_hint": { "type": "array", "items": { "type": "string" }, "description": "File format hints (e.g., 'bam', 'vcf')" },
-        "pipe": { "type": "boolean", "default": false, "description": "Enable FIFO streaming mode" },
-        "checksum": { "type": "string", "enum": ["md5", "sha256"], "description": "Output integrity verification algorithm" },
-        "cache_key": { "type": "string", "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)" },
-        "input_function": { "type": "string", "description": "Dynamic input resolver function name" },
-        "benchmark": { "type": "string", "description": "Benchmark output path for performance data" },
-        "log": { "type": "string", "description": "Log file path for execution output" },
-        "group": { "type": "string", "description": "Job group label for cluster submission" },
-        "scatter": { "$ref": "#/$defs/scatterConfig" },
-        "transform": { "$ref": "#/$defs/transformConfig" },
-        "expand_inputs": { "type": "array", "items": { "$ref": "#/$defs/expandConfig" } },
-        "resource_hint": { "$ref": "#/$defs/resourceHint" },
-        "rule_metadata": { "type": "object", "additionalProperties": true, "description": "Arbitrary domain-specific metadata" }
+        "shell": {
+          "type": "string",
+          "description": "Shell command template to execute"
+        },
+        "script": {
+          "type": "string",
+          "description": "Path to a script file to execute"
+        },
+        "threads": {
+          "type": "integer",
+          "description": "(Deprecated) Use resources.threads instead"
+        },
+        "memory": {
+          "type": "string",
+          "description": "(Deprecated) Use resources.memory instead"
+        },
+        "resources": {
+          "$ref": "#/$defs/resources",
+          "properties": {
+            "disk": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "gpu": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "gpu_spec": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)",
+              "properties": {
+                "compute_capability": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "count": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "memory_gb": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                }
+              }
+            },
+            "groups": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "memory": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "partition": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "threads": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "time_limit": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            }
+          }
+        },
+        "environment": {
+          "$ref": "#/$defs/environmentSpec",
+          "properties": {
+            "conda": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "conda_prefix": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "docker": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "mamba": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "mamba_prefix": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "modules": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "pixi": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "singularity": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "venv": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "venv_requirements": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            }
+          }
+        },
+        "env_group": {
+          "type": "string",
+          "description": "Reference to a named environment in [env_groups]"
+        },
+        "when": {
+          "type": "string",
+          "description": "Conditional expression — skip rule when false"
+        },
+        "envvars": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "User-defined parameters for shell templates"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Categorization tags"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit rule-level dependencies"
+        },
+        "extends": {
+          "type": "string",
+          "description": "Inherit settings from a base rule"
+        },
+        "priority": {
+          "type": "integer",
+          "default": 0,
+          "description": "Execution priority (higher = runs first)"
+        },
+        "target": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mark as default target"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pipeline fails if this rule fails"
+        },
+        "optional": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip rule if inputs don't exist"
+        },
+        "localrule": {
+          "type": "boolean",
+          "default": false,
+          "description": "Always run locally"
+        },
+        "checkpoint": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow DAG rebuild after this rule"
+        },
+        "retries": {
+          "type": "integer",
+          "default": 0,
+          "description": "Number of retry attempts on failure"
+        },
+        "retry_delay": {
+          "type": "string",
+          "description": "Delay between retries (e.g., '5s', '30s')"
+        },
+        "interpreter": {
+          "type": "string",
+          "description": "Explicit interpreter for script execution"
+        },
+        "pre_exec": {
+          "type": "string",
+          "description": "Command to run before the main shell command"
+        },
+        "on_success": {
+          "type": "string",
+          "description": "Command to run after rule succeeds"
+        },
+        "on_failure": {
+          "type": "string",
+          "description": "Command to run after rule fails"
+        },
+        "temp_output": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Temporary outputs cleaned up after downstream rules complete"
+        },
+        "protected_output": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Outputs that must never be overwritten"
+        },
+        "shadow": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "shallow",
+            "full"
+          ],
+          "description": "Shadow directory mode"
+        },
+        "ancient": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Inputs that never trigger re-execution"
+        },
+        "format_hint": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "File format hints (e.g., 'bam', 'vcf')"
+        },
+        "pipe": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable FIFO streaming mode"
+        },
+        "checksum": {
+          "type": "string",
+          "enum": [
+            "md5",
+            "sha256"
+          ],
+          "description": "Output integrity verification algorithm"
+        },
+        "cache_key": {
+          "type": "string",
+          "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)"
+        },
+        "input_function": {
+          "type": "string",
+          "description": "Dynamic input resolver function name"
+        },
+        "benchmark": {
+          "type": "string",
+          "description": "Benchmark output path for performance data"
+        },
+        "log": {
+          "type": "string",
+          "description": "Log file path for execution output"
+        },
+        "group": {
+          "type": "string",
+          "description": "Job group label for cluster submission"
+        },
+        "scatter": {
+          "$ref": "#/$defs/scatterConfig",
+          "properties": {
+            "gather": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "values": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "values_from": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "variable": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            }
+          }
+        },
+        "transform": {
+          "$ref": "#/$defs/transformConfig",
+          "properties": {
+            "cleanup": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "combine": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "map": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)"
+            },
+            "split": {
+              "type": [
+                "string",
+                "array",
+                "object",
+                "boolean",
+                "number",
+                "integer",
+                "null"
+              ],
+              "description": "Schema synced from config whitelist (see known_keys.rs)",
+              "properties": {
+                "by": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "glob": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "n": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "values": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                },
+                "values_from": {
+                  "type": [
+                    "string",
+                    "array",
+                    "object",
+                    "boolean",
+                    "number",
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Schema synced from config whitelist (see known_keys.rs)"
+                }
+              }
+            }
+          }
+        },
+        "expand_inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/expandConfig"
+          }
+        },
+        "resource_hint": {
+          "$ref": "#/$defs/resourceHint"
+        },
+        "rule_metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Arbitrary domain-specific metadata"
+        },
+        "checkpoint_manifest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "TOML manifest a checkpoint rule writes at runtime to declare new re-entry values"
+        },
+        "input_groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Per-sample multi-file grouping (pattern/group_by/keep) — issue #231"
+          }
+        },
+        "scratch": {
+          "type": "boolean",
+          "description": "Run the rule in a private scratch directory"
+        },
+        "temporary": {
+          "type": "boolean",
+          "description": "Declare outputs temporary (deleted after the workflow completes)"
+        },
+        "output_pattern": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Rule-level output pattern override"
+        }
+      }
+    },
+    "splitConfig": {
+      "properties": {
+        "by": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "glob": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "n": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "values": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "values_from": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
+      }
+    },
+    "combineConfig": {
+      "properties": {
+        "aggregate": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "header": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "method": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "shell": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
+      }
+    },
+    "inputGroupConfig": {
+      "properties": {
+        "group_by": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "keep": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "pattern": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
       }
     }
   }
