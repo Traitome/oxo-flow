@@ -4769,6 +4769,16 @@ analysis directory instead:</p>
 <h3 id="run-specific-targets">Run specific targets<a class="headerlink" href="#run-specific-targets" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align<span class="w"> </span>-t<span class="w"> </span>sort
 </span></code></pre></div>
+<p>Target names may be prefixes: <code>-t align</code> matches every rule whose name
+starts with <code>align</code> (including expanded instance names like
+<code>align_cohort_S1</code>). The closure walks the <strong>instantiated DAG</strong> — it
+includes each target plus every upstream rule that survives the plan-time
+<code>when</code> gating, and skips when-gated variants entirely: a variant whose
+<code>when</code> is false under the effective config never enters the execution set,
+its upstream is not pulled in, and consumers of its (never-produced)
+outputs are pruned too. Naming a when-gated-false target explicitly
+reports it and aborts with "nothing to run" instead of planning a run
+that cannot produce output.</p>
 <h3 id="set-a-per-job-timeout">Set a per-job timeout<a class="headerlink" href="#set-a-per-job-timeout" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--timeout<span class="w"> </span><span class="m">3600</span>
 </span></code></pre></div>
