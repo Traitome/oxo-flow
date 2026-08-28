@@ -171,14 +171,25 @@ pub fn cartesian_expand(pattern: &str, variables: &HashMap<String, Vec<String>>)
     // Identify which wildcards in the pattern have provided values
     let wildcards = extract_wildcards(pattern);
     let mut active_vars = Vec::new();
-    for name in wildcards {
-        if let Some(vals) = variables.get(&name).filter(|v| !v.is_empty()) {
-            active_vars.push((name, vals));
+    for name in &wildcards {
+        if let Some(vals) = variables.get(name).filter(|v| !v.is_empty()) {
+            active_vars.push((name.clone(), vals));
         }
     }
 
     if active_vars.is_empty() {
-        return vec![pattern.to_string()];
+        // Two very different cases share this branch: a literal pattern
+        // (no wildcards at all) round-trips as-is, but a pattern WITH
+        // wildcards whose values are all empty/missing has an EMPTY
+        // Cartesian product — zero expansions. Returning the raw pattern
+        // for the latter injects literal `{gene_set}` tokens into
+        // {input} (enrichment port finding, the #199/#239 literal-token
+        // family).
+        return if wildcards.is_empty() {
+            vec![pattern.to_string()]
+        } else {
+            Vec::new()
+        };
     }
 
     // Pre-calculate pattern parts to avoid string searching/replacement in loops
@@ -826,6 +837,29 @@ mod tests {
 
         let result = expand_pattern("{sample}_R{read}.fastq.gz", &values).unwrap();
         assert_eq!(result, "TUMOR_R1.fastq.gz");
+    }
+
+    #[test]
+    fn cartesian_expand_empty_values_yield_empty_product() {
+        // A pattern WITH wildcards whose variable lists are all empty has
+        // an EMPTY Cartesian product — zero expansions. Returning the raw
+        // pattern instead injects a literal `{gene_set}` token into
+        // {input} (enrichment port finding, the #199/#239 literal-token
+        // family).
+        let mut variables = HashMap::new();
+        variables.insert("gene_set".to_string(), Vec::new());
+        assert!(
+            cartesian_expand("{gene_set}", &variables).is_empty(),
+            "wildcards with empty values must expand to nothing"
+        );
+
+        // A literal pattern (no wildcards at all) still round-trips as-is.
+        let mut empty = HashMap::new();
+        empty.insert("gene_set".to_string(), Vec::new());
+        assert_eq!(
+            cartesian_expand("output.bam", &empty),
+            vec!["output.bam".to_string()]
+        );
     }
 
     #[test]
