@@ -338,6 +338,13 @@ CLI override > declared `default` > error if `required` and unset.
 
 ## `[[references]]` — Auto-Built Indexes & Reference Data
 
+`[[references]]` is for **external, pre-staged** reference artifacts: the
+engine builds them when missing, before the rule DAG runs. In-workflow
+derivations (e.g. a STAR index produced by an upstream rule) must flow
+through normal rule `output`/`input` edges instead — a reference entry
+cannot consume rule outputs because references are built before the DAG
+exists.
+
 Declare reference artifacts (indexes, data files) that the engine auto-builds
 when missing. Each `[[references]]` entry specifies a source, output, and build
 command. The engine tracks built state in `.oxo-flow/reference-checkpoint.json`
@@ -1951,6 +1958,15 @@ rule's `when` at expansion time, so the execution-time re-check
 re-evaluates the exact same per-instance verdict; config-only predicates
 continue to gate at execution as before.
 
+**`wildcard.*` is a `when`-only vocabulary.** The dotted form is not a
+shell placeholder — the engine's placeholder syntax is bare `{name}`, so
+`{wildcard.input_type}` in a `shell` renders literally. Group/pair
+metadata keys reach shells as bare placeholders (`{input_type}`), baked
+per instance at plan time when the rule fans out on `{group}`/`{sample}`;
+a rule that does NOT fan out per sample has no binding to bake, so such
+keys stay literal there (use `input_groups` or `{meta.<column>}` for
+those cases).
+
 ### `{meta.<column>}` truthiness and boolean columns
 
 In a bare truthiness position (`when = "{meta.do_qc}"`) a metadata value
@@ -1967,7 +1983,9 @@ when = "config.mark_duplicates || {meta.mark_duplicates} == 'true'"
 ```
 
 A missing row or column renders `false` in a truthiness position and `''`
-in a comparison — always a closed gate, never an unbound token.
+in a comparison — always a closed gate, never an unbound token. This makes
+`{meta.x} == ''` the official **absence guard** idiom: it gates the
+"column present" branch and closes cleanly for rows that lack the column.
 
 ### Example
 
