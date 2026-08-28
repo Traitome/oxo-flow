@@ -589,6 +589,39 @@ fn quay_biocontainers_fallback(spec: &str) -> Option<String> {
     }
 }
 
+impl DockerBackend {
+    /// Like [`EnvironmentBackend::wrap_command`], with GPU passthrough:
+    /// `gpus` maps to docker's `--gpus <value>` (e.g. `"all"`, `"0"`),
+    /// requiring nvidia-container-toolkit on the host.
+    fn wrap_command_with_gpus(
+        &self,
+        command: &str,
+        spec: &str,
+        resources: Option<&crate::rule::Resources>,
+        workdir: &std::path::Path,
+        gpus: Option<&str>,
+    ) -> Result<String> {
+        // Docker requires absolute paths for -v/-w: a relative workdir
+        // ("." when running from the workflow dir) is rejected by the
+        // daemon ("the working directory '.' is invalid").
+        let workdir = absolute_host_path(workdir);
+        let escaped_cmd = escape_for_sh_single_quote(command);
+        let spec = mirrored_spec(spec);
+
+        let mut mem_arg = String::new();
+        if let Some(res) = resources
+            && let Some(mem) = &res.memory
+        {
+            mem_arg = format!(" --memory {mem}");
+        }
+        let gpus_arg = gpus.map(|g| format!(" --gpus {g}")).unwrap_or_default();
+
+        Ok(format!(
+            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
+        ))
+    }
+}
+
 impl EnvironmentBackend for DockerBackend {
     fn name(&self) -> &str {
         "docker"
@@ -608,23 +641,7 @@ impl EnvironmentBackend for DockerBackend {
         resources: Option<&crate::rule::Resources>,
         workdir: &std::path::Path,
     ) -> Result<String> {
-        // Docker requires absolute paths for -v/-w: a relative workdir
-        // ("." when running from the workflow dir) is rejected by the
-        // daemon ("the working directory '.' is invalid").
-        let workdir = absolute_host_path(workdir);
-        let escaped_cmd = escape_for_sh_single_quote(command);
-        let spec = mirrored_spec(spec);
-
-        let mut mem_arg = String::new();
-        if let Some(res) = resources
-            && let Some(mem) = &res.memory
-        {
-            mem_arg = format!(" --memory {mem}");
-        }
-
-        Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg} -v {workdir}:{workdir} -w {workdir} {spec} sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
-        ))
+        self.wrap_command_with_gpus(command, spec, resources, workdir, None)
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -1214,9 +1231,13 @@ impl EnvironmentResolver {
             return self.pixi.wrap_command(command, pixi, resources, workdir);
         }
         if let Some(ref docker) = env_spec.docker {
-            return self
-                .docker
-                .wrap_command(command, docker, resources, workdir);
+            return self.docker.wrap_command_with_gpus(
+                command,
+                docker,
+                resources,
+                workdir,
+                env_spec.gpus.as_deref(),
+            );
         }
         if let Some(ref singularity) = env_spec.singularity {
             return self
@@ -1769,6 +1790,27 @@ mod tests {
         assert!(result.contains("docker run"));
         assert!(result.contains("--user $(id -u):$(id -g)"));
         assert!(result.contains("biocontainers/bwa:0.7.17"));
+    }
+
+    #[test]
+    fn docker_wrap_command_with_gpus() {
+        let backend = DockerBackend;
+        let result = backend
+            .wrap_command_with_gpus(
+                "nvidia-smi",
+                "nvidia/cuda:12.6.3-base-ubuntu24.04",
+                None,
+                std::path::Path::new("."),
+                Some("all"),
+            )
+            .unwrap();
+        assert!(result.contains("docker run"));
+        assert!(result.contains("--gpus all"));
+        // No gpus requested → no --gpus flag at all.
+        let plain = backend
+            .wrap_command_with_gpus("echo hi", "alpine:3", None, std::path::Path::new("."), None)
+            .unwrap();
+        assert!(!plain.contains("--gpus"));
     }
 
     #[test]
