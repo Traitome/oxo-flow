@@ -4208,75 +4208,30 @@ endpoints below instead.</p>
 <tr>
 <td><code>GET</code> / <code>POST</code></td>
 <td><code>/api/runs</code></td>
-<td>List / create runs</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}</code></td>
-<td>Run detail</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/status</code></td>
-<td>Real-time status (nodes, timeline, resources)</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/dag-status</code></td>
-<td>DAG JSON + per-node live status</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/diagnostics</code></td>
-<td>Diagnostic engine results (30+ error patterns)</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/logs</code></td>
-<td>Execution logs</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/results</code></td>
-<td>Output files and QC metrics</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/retry</code></td>
-<td>Smart retry (failed + downstream only)</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/cancel</code></td>
-<td>Cancel a running workflow</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/pause</code></td>
-<td>Pause a running workflow</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/resume</code></td>
-<td>Resume a paused workflow</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/runs/{id}/report</code></td>
-<td>Run report</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/report/ask</code></td>
-<td>Ask a question about the report</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/api/runs/{id}/report/visualize</code></td>
-<td>Visualize report data</td>
+<td>List runs (cursor-paginated) / create a run</td>
 </tr>
 </tbody>
 </table>
+<p><code>POST /api/runs</code> builds the run from the <code>toml_content</code> you send; the other
+fields are optional: <code>max_jobs</code> (default 4, becomes <code>-j</code>), <code>dry_run</code>,
+<code>keep_going</code> (<code>-k</code>), <code>pipeline_id</code> (associate the run with a saved pipeline
+and reuse its persistent workdir), and <code>cluster_id</code> (execute on a configured
+SSH cluster). <code>GET /api/runs</code> is paginated by <strong>cursor</strong> — the <code>created_at</code>
+of the previous page's last row — and returns <code>{ items, next_cursor, total }</code>,
+not numbered pages. See the <a href="../../reference/web-api/#create-run">Web API reference</a>.
+| <code>GET</code> | <code>/api/runs/{id}</code> | Run detail |
+| <code>GET</code> | <code>/api/runs/{id}/status</code> | Real-time status (nodes, timeline, resources) |
+| <code>GET</code> | <code>/api/runs/{id}/dag-status</code> | DAG JSON + per-node live status |
+| <code>GET</code> | <code>/api/runs/{id}/diagnostics</code> | Diagnostic engine results (30+ error patterns) |
+| <code>GET</code> | <code>/api/runs/{id}/logs</code> | Execution logs |
+| <code>GET</code> | <code>/api/runs/{id}/results</code> | Output files and QC metrics |
+| <code>POST</code> | <code>/api/runs/{id}/retry</code> | Smart retry (failed + downstream only) |
+| <code>POST</code> | <code>/api/runs/{id}/cancel</code> | Cancel a running workflow |
+| <code>POST</code> | <code>/api/runs/{id}/pause</code> | Pause a running workflow |
+| <code>POST</code> | <code>/api/runs/{id}/resume</code> | Resume a paused workflow |
+| <code>GET</code> | <code>/api/runs/{id}/report</code> | Run report |
+| <code>POST</code> | <code>/api/runs/{id}/report/ask</code> | Ask a question about the report |
+| <code>POST</code> | <code>/api/runs/{id}/report/visualize</code> | Visualize report data |</p>
 <h3 id="other-routes">Other routes<a class="headerlink" href="#other-routes" title="Permanent link">#</a></h3>
 <table>
 <thead>

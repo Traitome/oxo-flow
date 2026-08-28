@@ -4114,7 +4114,7 @@ and community submissions.</p>
 <li><a href="tutorials/environment-management/">Environment Management</a> — conda, mamba, pixi, docker, singularity, venv, system, HPC modules</li>
 </ol>
 <h3 id="if-you-want-to-learn-by-example">If you want to learn by example<a class="headerlink" href="#if-you-want-to-learn-by-example" title="Permanent link">#</a></h3>
-<p>Explore the <strong><a href="gallery/">Workflow Gallery</a></strong> — 10 curated workflows from hello-world to multi-omics integration, each with validation output, DAG visualizations, and scientific context:</p>
+<p>Explore the <strong><a href="gallery/">Workflow Gallery</a></strong> — 16 curated workflows from hello-world to multi-omics integration and applied study designs, each with validation output, DAG visualizations, and scientific context:</p>
 <ol>
 <li><a href="gallery/hello-world/">Hello World</a> ⭐ — Minimal rule structure</li>
 <li><a href="gallery/file-pipeline/">File Pipeline</a> ⭐⭐ — Multi-rule dependencies</li>
@@ -4126,6 +4126,12 @@ and community submissions.</p>
 <li><a href="gallery/multiomics/">Multi-Omics Integration</a> ⭐⭐⭐⭐⭐ — WGS + RNA-seq + Methylation</li>
 <li><a href="gallery/single-cell-rnaseq/">Single-Cell RNA-seq</a> ⭐⭐⭐⭐ — scRNA-seq analysis</li>
 <li><a href="gallery/transform-operator/">Transform Operator</a> ⭐⭐⭐ — Unified scatter-gather</li>
+<li><a href="gallery/conditional-workflow/">Conditional Execution</a> ⭐⭐⭐ — <code>when</code>-gated WGS/WES branches</li>
+<li><a href="gallery/cohort-analysis/">Cohort Analysis</a> ⭐⭐⭐⭐ — Multi-group cohorts and QC aggregation</li>
+<li><a href="gallery/simple-variant-calling/">Germline Variant Calling</a> ⭐⭐⭐⭐ — Per-sample GATK chain</li>
+<li><a href="gallery/paired-experiment-control/">Paired Experiment-Control</a> ⭐⭐⭐⭐⭐ — Single-pair somatic calling</li>
+<li><a href="gallery/paired-experiment-control-pairs/">Paired Experiment-Control (Pairs)</a> ⭐⭐⭐⭐⭐ — <code>[[pairs]]</code>-scaled somatic calling</li>
+<li><a href="gallery/16s-qiime2/">16S Amplicon (QIIME2)</a> ⭐⭐⭐⭐ — Amplicon denoising and diversity</li>
 </ol>
 <h3 id="if-you-need-to-accomplish-a-specific-task">If you need to accomplish a specific task<a class="headerlink" href="#if-you-need-to-accomplish-a-specific-task" title="Permanent link">#</a></h3>
 <p>Jump to the <strong>How-to Guides</strong>:</p>
@@ -4136,7 +4142,7 @@ and community submissions.</p>
 <li><a href="how-to/generate-reports/">Generate Reports</a></li>
 </ul>
 <h3 id="if-you-need-exact-syntax-and-options">If you need exact syntax and options<a class="headerlink" href="#if-you-need-exact-syntax-and-options" title="Permanent link">#</a></h3>
-<p>See the <strong>Command Reference</strong> for all 33 CLI subcommands with usage, options, and examples.</p>
+<p>See the <strong>Command Reference</strong> for all 30 CLI subcommands with usage, options, and examples.</p>
 <h3 id="if-you-want-the-full-technical-details">If you want the full technical details<a class="headerlink" href="#if-you-want-the-full-technical-details" title="Permanent link">#</a></h3>
 <p>See <strong>Architecture &amp; Design</strong> for in-depth documentation of the DAG engine, environment system, <code>.oxoflow</code> format specification, and web API.</p>
 <hr />
@@ -4189,6 +4195,14 @@ and community submissions.</p>
 </span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span>-o<span class="w"> </span>dag.dot<span class="w"> </span>align.oxoflow
 </span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>dot<span class="w"> </span>-Tpng<span class="w"> </span>-o<span class="w"> </span>dag.png<span class="w"> </span>dag.dot
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">stdout is for machines, stderr is for humans</p>
+<p>Progress, warnings, and log lines go to <strong>stderr</strong>; <strong>stdout</strong> is
+reserved for machine-readable output — <code>--json</code>, <code>graph --format dot</code>,
+and every <code>--format</code>/<code>-o</code> deliverable. That is why the <code>graph</code> example
+above writes the DOT to a file with <code>-o</code> (or redirect stdout) instead of
+mixing it with run logs.</p>
+</div>
 <hr />
 <h2 id="key-concepts">Key Concepts<a class="headerlink" href="#key-concepts" title="Permanent link">#</a></h2>
 <p>If you are new to pipeline engines, here are the three core concepts used in oxo-flow:</p>

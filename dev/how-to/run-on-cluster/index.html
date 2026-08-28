@@ -1532,6 +1532,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#driver-defaults-and-the-cluster-profile-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Driver Defaults and the [cluster] Profile Block
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4004,6 +4015,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#driver-defaults-and-the-cluster-profile-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Driver Defaults and the [cluster] Profile Block
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4078,7 +4100,7 @@
 </tbody>
 </table>
 <p><code>run --profile</code> is the everyday path; it inherits everything <code>run</code> does — wildcard expansion, checkpoint/resume, <code>--samples</code>, <code>--rerun</code>, config-change invalidation. See <a href="../../commands/run/#cluster-submission">Cluster submission</a> for the <code>[cluster]</code> profile block. <code>cluster submit</code> remains the escape hatch and is documented below.</p>
-<p><strong>Environment wrapping is applied automatically</strong> — conda, mamba, docker, singularity, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies <strong>one</strong> backend (the first declared in the resolver order), so declaring e.g. both <code>singularity</code> and <code>modules</code> silently drops <code>modules</code>.</p>
+<p><strong>Environment wrapping is applied automatically</strong> — conda, mamba, docker, singularity/apptainer, pixi, venv, and modules environments are wrapped in the generated scripts. Each rule applies <strong>one</strong> backend (the first declared in the resolver order mamba → conda → pixi → docker → singularity → venv → modules), so declaring e.g. both <code>singularity</code> and <code>modules</code> fails loudly instead of silently dropping the module loads.</p>
 <hr />
 <h2 id="supported-schedulers">Supported Schedulers<a class="headerlink" href="#supported-schedulers" title="Permanent link">#</a></h2>
 <table>
@@ -4242,13 +4264,16 @@ for the first instance is:</p>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="nb">set</span><span class="w"> </span>-e
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
 </span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>singularity<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
 </span></code></pre></div>
 <p>Note: one script is generated per <strong>rule instance</strong>. Wildcards expand before
 the scripts are written, exactly as they do for <code>run</code>, so a 3-sample scatter
 produces <code>align_batch_S1.sh</code>, <code>align_batch_S2.sh</code>, and <code>align_batch_S3.sh</code>
 with concrete paths in each. The instance names match the ones <code>dry-run</code>
-plans, so a script maps back to a planned rule by name.</p>
+plans, so a script maps back to a planned rule by name. The <code>sh -c '…' sh
+'&lt;command&gt;'</code> tail is the bash shim described under
+<a href="#environment-wrapping">Environment Wrapping</a>, and <code>singularity</code> is
+substituted when <code>apptainer</code> is absent.</p>
 <hr />
 <h2 id="pbs-example">PBS Example<a class="headerlink" href="#pbs-example" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="ch">#!/bin/bash</span>
@@ -4260,7 +4285,7 @@ plans, so a script maps back to a planned rule by name.</p>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nb">set</span><span class="w"> </span>-e
 </span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
 </span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>singularity<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
 </span></code></pre></div>
 <hr />
 <h2 id="sge-example">SGE Example<a class="headerlink" href="#sge-example" title="Permanent link">#</a></h2>
@@ -4275,19 +4300,65 @@ plans, so a script maps back to a planned rule by name.</p>
 </span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="nb">set</span><span class="w"> </span>-e
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>singularity<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
 </span></code></pre></div>
 <hr />
 <h2 id="environment-wrapping">Environment Wrapping<a class="headerlink" href="#environment-wrapping" title="Permanent link">#</a></h2>
 <p>When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:</p>
-<p>| Backend | Wrapping |
-|---|---|---|
-| Conda / Mamba | <code>conda run -n &lt;env&gt; bash -c '&lt;command&gt;'</code> |
-| Docker | <code>docker run --rm --user $(id -u):$(id -g) -v .:. -w . &lt;image&gt; sh -c '&lt;command&gt;'</code> |
-| Singularity | <code>singularity exec --bind .:. &lt;image&gt; sh -c '&lt;command&gt;'</code> |
-| Pixi | <code>pixi run -e &lt;env&gt; &lt;command&gt;</code> |
-| Venv | <code>source &lt;venv&gt;/bin/activate &amp;&amp; &lt;command&gt;</code> |
-| Modules | <code>module load &lt;mod1&gt; &lt;mod2&gt; &amp;&amp; &lt;command&gt;</code> |</p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Wrapping</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Conda</td>
+<td><code>conda run --no-capture-output -n &lt;env&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code></td>
+</tr>
+<tr>
+<td>Mamba</td>
+<td><code>&lt;mamba\|micromamba\|conda&gt; run -n &lt;env&gt; bash -c '&lt;command&gt;'</code></td>
+</tr>
+<tr>
+<td>Docker</td>
+<td><code>docker run --rm --user $(id -u):$(id -g) -v &lt;workdir&gt;:&lt;workdir&gt; -w &lt;workdir&gt; &lt;image&gt; sh -c '&lt;shim&gt;' sh '&lt;command&gt;'</code></td>
+</tr>
+<tr>
+<td>Singularity / Apptainer</td>
+<td><code>&lt;apptainer\|singularity&gt; exec --bind &lt;workdir&gt;:&lt;workdir&gt; &lt;image&gt; sh -c '&lt;shim&gt;' sh '&lt;command&gt;'</code></td>
+</tr>
+<tr>
+<td>Pixi</td>
+<td><code>pixi run --manifest-path &lt;pixi.toml&gt; &lt;command&gt;</code></td>
+</tr>
+<tr>
+<td>Venv</td>
+<td><code>source &lt;venv&gt;/bin/activate &amp;&amp; &lt;command&gt;</code></td>
+</tr>
+<tr>
+<td>Modules</td>
+<td>module-init block, then <code>module load &lt;mod1&gt; &lt;mod2&gt; &amp;&amp; &lt;command&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Three details worth knowing:</p>
+<ul>
+<li><strong>Container paths are absolute.</strong> <code>docker -v</code> and <code>singularity --bind</code>
+  reject relative sources, and a scheduler may start a job from any
+  directory, so oxo-flow renders the resolved workdir. The rule's command is
+  handed to a shim inside the container —
+  <code>if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi</code> —
+  because the image's entrypoint shell runs first, and multi-line or
+  <code>pipefail</code>-using scripts need bash, which not every image ships.</li>
+<li><strong>Paths outside the workdir are bound read-only.</strong> A <code>[config]</code> reference
+  genome or index living elsewhere on the shared filesystem is appended to
+  the mount list automatically (<code>-v /data/ref:/data/ref:ro</code>), so the rule can
+  read it from inside the container.</li>
+<li><strong><code>apptainer</code> wins when both it and <code>singularity</code> are installed</strong>, so
+  clusters that renamed the binary keep working without configuration.</li>
+</ul>
 <h3 id="environment-examples">Environment Examples<a class="headerlink" href="#environment-examples" title="Permanent link">#</a></h3>
 <p><strong>Conda with GPU for deep learning:</strong></p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">[[rules]]</span>
@@ -4318,14 +4389,15 @@ plans, so a script maps back to a planned rule by name.</p>
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
 </span></code></pre></div>
 <p>Only <strong>one</strong> backend applies per rule, so combining e.g. <code>singularity</code> with
-<code>modules</code> in the same rule would silently drop <code>modules</code> — use the
-module-based example below for module-only setups.</p>
+<code>modules</code> in the same rule is rejected outright (the module loads would be
+silently dropped) — use the module-based example below for module-only
+setups.</p>
 <p><strong>Pixi for reproducible environments:</strong></p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc_check"</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{sample}.fastq.gz"</span><span class="p">]</span>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/{sample}_fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"default"</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1"># environment name, not the pixi.toml path</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/pixi.toml"</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1"># the manifest FILE, not an env name</span>
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc -t {threads} -o qc/ {input}"</span>
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
 </span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="k">[rules.resources]</span>
@@ -4431,6 +4503,59 @@ credentials); every run remains owned by the acting user.</p>
 <p>Or use oxo-flow's status command with a checkpoint file:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/checkpoint.json
 </span></code></pre></div>
+<p><code>oxo-flow cluster status</code> and <code>cluster cancel</code> take the <strong>backend and the
+scheduler job ids</strong> — there is no "show all my submissions" mode, so keep the
+ids the submit/run step printed:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span>
+</span></code></pre></div>
+<hr />
+<h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>
+<p><code>run --profile</code> submits and tracks jobs through the backend driver, whose
+built-in defaults are:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_submitted</code></td>
+<td><code>50</code></td>
+<td>Jobs in flight at once (pending + running); submissions top up to this cap as slots free</td>
+</tr>
+<tr>
+<td><code>max_array_size</code></td>
+<td><code>1001</code></td>
+<td>The scheduler's array limit; larger scatter groups are chunked into several arrays</td>
+</tr>
+<tr>
+<td><code>poll_interval</code></td>
+<td><code>5s</code></td>
+<td>Delay between scheduler polls</td>
+</tr>
+</tbody>
+</table>
+<p>Override them in the profile's <code>[cluster]</code> block:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
+</span></code></pre></div>
+<p><code>extra_args</code> entries are emitted as scheduler directives <strong>verbatim and
+unvalidated</strong> — a typo reaches the scheduler as written (the same applies to
+<code>cluster submit --extra-arg</code>). An unknown <code>--backend</code> value is rejected
+outright (<code>unknown cluster backend '…' — expected slurm, pbs, sge, or lsf</code>);
+nothing falls back to SLURM, so a typo cannot submit into the wrong
+scheduler.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>

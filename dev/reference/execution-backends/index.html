@@ -3815,6 +3815,47 @@ dry-run preview uses). The driver:</p>
   dynamically discovered instances execute in the same run (see
   <a href="#checkpoint-re-entry">Checkpoint re-entry</a> below).</li>
 </ul>
+<p><code>DriverConfig</code> supplies the knobs, with these defaults:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_submitted</code></td>
+<td><code>50</code></td>
+<td>In-flight jobs (pending + running) before submissions top up as slots free</td>
+</tr>
+<tr>
+<td><code>max_array_size</code></td>
+<td><code>1001</code></td>
+<td>Scheduler array limit — larger groups are chunked into several arrays</td>
+</tr>
+<tr>
+<td><code>no_arrays</code></td>
+<td><code>false</code></td>
+<td>Set to submit every instance as its own job</td>
+</tr>
+<tr>
+<td><code>poll_interval</code></td>
+<td><code>5s</code></td>
+<td>Delay between scheduler polls</td>
+</tr>
+<tr>
+<td><code>poll_timeout</code></td>
+<td><code>None</code></td>
+<td>Overall wall-clock budget; unset means run until terminal states</td>
+</tr>
+</tbody>
+</table>
+<p>A <code>[cluster]</code> profile block overrides <code>max_submitted</code>, <code>max_array_size</code>, and
+<code>poll_interval</code> (see
+<a href="../../commands/run/#cluster-submission">Cluster submission</a>); <code>no_arrays</code>,
+<code>poll_timeout</code>, and the defaults themselves are driver-internal.</p>
 <h2 id="testing-without-a-cluster">Testing without a cluster<a class="headerlink" href="#testing-without-a-cluster" title="Permanent link">#</a></h2>
 <p>The workspace ships a <strong>mock SLURM scheduler</strong> at
 <code>tests/fixtures/mock-scheduler/</code> — shell shims (<code>sbatch</code>, <code>squeue</code>, <code>scancel</code>,

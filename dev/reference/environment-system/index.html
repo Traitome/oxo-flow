@@ -3066,6 +3066,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#resolver-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolver Order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-specification" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4037,6 +4048,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#resolver-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolver Order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-specification" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4226,38 +4248,48 @@
 <ul>
 <li><strong>Detection</strong>: Checks for <code>conda</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses YAML environment file</li>
-<li><strong>Activation</strong>: Runs <code>conda run -n &lt;env_name&gt; bash -c '&lt;command&gt;'</code></li>
+<li><strong>Activation</strong>: Runs <code>conda run --no-capture-output -n &lt;env_name&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code> — <code>--no-capture-output</code> (conda ≥ 4.13) keeps stdout/stderr live, and the <code>PATH</code> prefix makes the rule see the env's own tools first</li>
 <li><strong>Caching</strong>: Environments are created once and reused across rules that share the same YAML file</li>
 </ul>
 <h3 id="mamba">Mamba<a class="headerlink" href="#mamba" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>mamba</code>, then <code>micromamba</code>, then falls back to <code>conda</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses YAML environment file (same format as conda)</li>
-<li><strong>Activation</strong>: Runs <code>mamba run -n &lt;env_name&gt; bash -c '&lt;command&gt;'</code></li>
+<li><strong>Activation</strong>: Runs <code>&lt;mamba|micromamba|conda&gt; run -n &lt;env_name&gt; bash -c '&lt;command&gt;'</code> (mamba has no <code>--no-capture-output</code> flag, so it is not added)</li>
 <li><strong>Caching</strong>: Environments are created once and reused across rules that share the same YAML file</li>
 <li><strong>Usage</strong>: Set <code>environment.mamba = "envs/qc.yaml"</code> in the rule. Uses the same YAML format as conda but with the mamba/micromamba binary for faster solving.</li>
 </ul>
 <h3 id="pixi">Pixi<a class="headerlink" href="#pixi" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>pixi</code> on <code>$PATH</code></li>
-<li><strong>Resolution</strong>: Parses <code>pixi.toml</code> project file</li>
-<li><strong>Activation</strong>: Uses <code>pixi run</code> to execute within the environment</li>
+<li><strong>Resolution</strong>: Parses the <code>pixi.toml</code> manifest the rule names</li>
+<li><strong>Activation</strong>: Runs <code>pixi run --manifest-path &lt;pixi.toml&gt; &lt;command&gt;</code> — the spec is a <strong>manifest path</strong>, not an environment name (<code>-e</code> would only search the current directory for a discoverable manifest)</li>
 <li><strong>Lockfile</strong>: Pixi's native lockfile ensures reproducible resolution</li>
 </ul>
 <h3 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">#</a></h3>
 <ul>
-<li><strong>Detection</strong>: Checks for <code>docker</code> on <code>$PATH</code> and daemon availability</li>
+<li><strong>Detection</strong>: Checks for <code>docker</code> on <code>$PATH</code> (the daemon itself is only
+  contacted when a rule runs)</li>
 <li><strong>Resolution</strong>: Parses image reference (registry/image:tag)</li>
-<li><strong>Execution</strong>: Wraps shell command in <code>docker run --rm -v $(pwd):$(pwd) -w $(pwd) &lt;image&gt; &lt;cmd&gt;</code></li>
+<li><strong>Execution</strong>: Wraps the command in <code>docker run --rm --user $(id -u):$(id -g) -v &lt;workdir&gt;:&lt;workdir&gt; -w &lt;workdir&gt; &lt;image&gt; sh -c '&lt;bash shim&gt;' sh '&lt;command&gt;'</code>; absolute host paths referenced by the rule but living outside the workdir are added as extra <strong>read-only</strong> binds (<code>-v /data/ref:/data/ref:ro</code>)</li>
 <li><strong>Pull policy</strong>: Images are pulled on first use if not locally available</li>
 </ul>
 <h3 id="singularity-apptainer">Singularity / Apptainer<a class="headerlink" href="#singularity-apptainer" title="Permanent link">#</a></h3>
 <ul>
-<li><strong>Detection</strong>: Checks for <code>singularity</code> or <code>apptainer</code> on <code>$PATH</code></li>
+<li><strong>Detection</strong>: Prefers <code>apptainer</code> over <code>singularity</code>, whichever is found first on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses image reference (can be <code>docker://</code>, <code>.sif</code> file, or library URI)</li>
-<li><strong>Execution</strong>: Wraps shell command in <code>singularity exec &lt;image&gt; &lt;cmd&gt;</code></li>
-<li><strong>Binding</strong>: Working directory is automatically bound into the container</li>
+<li><strong>Execution</strong>: Wraps the command in <code>&lt;apptainer|singularity&gt; exec --bind &lt;workdir&gt;:&lt;workdir&gt; &lt;image&gt; sh -c '&lt;bash shim&gt;' sh '&lt;command&gt;'</code></li>
+<li><strong>Binding</strong>: The working directory is bound into the container with an <strong>absolute</strong> path (<code>--bind</code> rejects relative sources), plus read-only binds for host paths the rule references</li>
 </ul>
+<div class="admonition note">
+<p class="admonition-title">The container <code>&lt;bash shim&gt;</code></p>
+<p>Both container backends hand the rule's command to the image's shell as
+<code>sh -c 'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else
+exec sh -c "$1"; fi' sh '&lt;command&gt;'</code>. The image's entrypoint shell runs
+first, and it is often a minimal <code>sh</code> that cannot execute multi-line or
+<code>pipefail</code>-using scripts — the shim re-execs bash whenever the image
+ships it, and falls back to <code>sh</code> when it does not.</p>
+</div>
 <h3 id="python-venv">Python venv<a class="headerlink" href="#python-venv" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>python3</code> on <code>$PATH</code></li>
@@ -4279,6 +4311,13 @@
 <li><strong>Activation</strong>: No-op — the command runs directly in the current shell environment</li>
 <li><strong>Usage</strong>: This is the default backend for rules without an <code>environment</code> field</li>
 </ul>
+<hr />
+<h2 id="resolver-order">Resolver Order<a class="headerlink" href="#resolver-order" title="Permanent link">#</a></h2>
+<p>A rule resolves at most <strong>one</strong> backend, checked in this order:</p>
+<p><code>mamba</code> → <code>conda</code> → <code>pixi</code> → <code>docker</code> → <code>singularity</code> → <code>venv</code> → <code>modules</code>.</p>
+<p>Declaring <code>modules</code> alongside any other backend is a hard error rather than a
+silent drop — a container has no module system, so the <code>module load</code>s could
+only ever be lost.</p>
 <hr />
 <h2 id="environment-specification">Environment Specification<a class="headerlink" href="#environment-specification" title="Permanent link">#</a></h2>
 <p>The <code>EnvironmentSpec</code> struct supports one backend per rule:</p>

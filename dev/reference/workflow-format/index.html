@@ -7072,9 +7072,14 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <td>Numeric comparison (<code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code>)</td>
 </tr>
 <tr>
+<td><code>len(config.&lt;key&gt;)</code></td>
+<td><code>len(config.gene_sets) &gt; 0</code></td>
+<td>Element count comparison: array items, string characters, or table keys, compared against a whole number (<code>==</code>, <code>!=</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&lt;</code>). A missing key counts as 0. Bare <code>len(config.&lt;key&gt;)</code> is truthy when non-empty. Note a bare <code>config.&lt;key&gt;</code> array is truthy even when empty — <code>len(...) &gt; 0</code> is the "list is non-empty" gate. Comparing against a non-numeric literal is a lint warning (W029) and always evaluates false</td>
+</tr>
+<tr>
 <td><code>file_exists("path")</code></td>
 <td><code>file_exists("panel.bed")</code></td>
-<td>File existence test. In per-instance predicates (<code>wildcard.&lt;key&gt;</code> / <code>{meta.&lt;column&gt;}</code>) it is evaluated at <strong>plan time</strong> — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with <code>{meta.*}</code> (plan-time bakeable) or an execution-time <code>config</code> gate instead</td>
+<td>File existence test. Relative paths resolve against the <strong>workflow root</strong> (the workflow file's directory), not the process working directory, and every evaluation site (plan time, execution re-check, config-change analysis) resolves the same way. In per-instance predicates (<code>wildcard.&lt;key&gt;</code> / <code>{meta.&lt;column&gt;}</code>) it is evaluated at <strong>plan time</strong> — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with <code>{meta.*}</code> (plan-time bakeable) or an execution-time <code>config</code> gate instead</td>
 </tr>
 <tr>
 <td><code>wildcard.&lt;key&gt; == "value"</code></td>
