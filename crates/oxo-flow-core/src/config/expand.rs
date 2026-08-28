@@ -1764,14 +1764,62 @@ impl WorkflowConfig {
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let pattern = expand_config_vars_in_path(&decl.pattern, &self.config);
-        let pattern_re = crate::wildcard::pattern_to_regex(&pattern)?;
+        // Glob face (issue #246): a bare `*` outside `{wildcard}` spans
+        // matches within a path segment — `raw/{sample}_*.fq` groups every
+        // fq of a sample, the CAT_FASTQ shape. Star-free patterns compile
+        // to exactly the strict matcher, so nothing else changes.
+        let has_glob_star = pattern.contains('*') && !pattern.contains("**");
+        let pattern_re = if has_glob_star {
+            crate::wildcard::pattern_to_regex_glob(&pattern)?
+        } else {
+            crate::wildcard::pattern_to_regex(&pattern)?
+        };
+
+        // Star capture names in pattern order, for glob round-trips.
+        let star_names: Vec<String> = if has_glob_star {
+            pattern_re
+                .capture_names()
+                .flatten()
+                .filter(|n| n.starts_with("__star"))
+                .map(String::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let round_trip_ok = |captures: &regex::Captures,
+                             combo: &crate::wildcard::WildcardValues,
+                             output: &str|
+         -> bool {
+            if has_glob_star {
+                let stars: Vec<String> = star_names
+                    .iter()
+                    .filter_map(|n| captures.name(n).map(|m| m.as_str().to_string()))
+                    .collect();
+                crate::wildcard::expand_pattern_with_glob(&pattern, combo, &stars)
+                    .is_ok_and(|expanded| expanded == output)
+            } else {
+                crate::wildcard::expand_pattern(&pattern, combo)
+                    .is_ok_and(|expanded| expanded.as_str() == output)
+            }
+        };
 
         // Source 1: files already on disk under the workflow root.
         let mut candidates: Vec<(String, crate::wildcard::WildcardValues)> = Vec::new();
-        for combo in crate::wildcard::discover_wildcards_from_pattern_tree(&base, &pattern)? {
-            let path = crate::wildcard::expand_pattern(&pattern, &combo)
-                .unwrap_or_else(|_| pattern.clone());
-            candidates.push((path, combo));
+        if has_glob_star {
+            // Glob face: the walker returns each matched file's concrete
+            // relative path (the star text is unbound — it cannot be
+            // re-rendered from the combo).
+            for (path, combo) in
+                crate::wildcard::discover_wildcards_from_pattern_tree_glob(&base, &pattern)?
+            {
+                candidates.push((path, combo));
+            }
+        } else {
+            for combo in crate::wildcard::discover_wildcards_from_pattern_tree(&base, &pattern)? {
+                let path = crate::wildcard::expand_pattern(&pattern, &combo)
+                    .unwrap_or_else(|_| pattern.clone());
+                candidates.push((path, combo));
+            }
         }
 
         // Source 2: literal outputs of producers already materialized —
@@ -1798,9 +1846,7 @@ impl WorkflowConfig {
             // regex groups may capture a value different from the named
             // one, so a combo that re-expands to a path other than the
             // matched output can only come from such a mismatch.
-            if crate::wildcard::expand_pattern(&pattern, &combo)
-                .is_ok_and(|expanded| expanded.as_str() != output.as_str())
-            {
+            if !round_trip_ok(&captures, &combo, output) {
                 continue;
             }
             candidates.push((output.clone(), combo));

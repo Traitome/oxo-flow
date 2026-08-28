@@ -147,6 +147,138 @@ pub fn pattern_to_regex(pattern: &str) -> Result<Regex> {
     })
 }
 
+/// Glob semantics for discovery patterns (issue #246): identical to
+/// [`pattern_to_regex`] except that a bare `*` outside `{wildcard}` spans
+/// matches any run of non-separator characters (`[^/]*`), like a shell
+/// glob — `raw/{sample}_*.fq` groups "every fq under this sample". The
+/// captured star text is unnamed (callers reconstruct matched paths with
+/// [`expand_pattern_with_glob`]); `**` is rejected — cross-segment globs
+/// are out of scope for v1.
+///
+/// Only discovery-facing callers (input_groups) use this; rule
+/// input/output patterns keep the strict literal-`*` matcher so a
+/// literally-named `*` file still round-trips exactly.
+pub fn pattern_to_regex_glob(pattern: &str) -> Result<Regex> {
+    if pattern.contains("**") {
+        return Err(OxoFlowError::Wildcard {
+            rule: String::new(),
+            message: "pattern contains '**' — cross-segment globs are not supported; use per-segment '*' or {wildcard} placeholders".to_string(),
+        });
+    }
+    let mut regex_str = String::from("^");
+    let mut last_end = 0;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut star_index = 0usize;
+
+    for mat in WILDCARD_RE.find_iter(pattern) {
+        let literal = &pattern[last_end..mat.start()];
+        push_glob_literal(&mut regex_str, literal, &mut star_index);
+
+        let cap = WILDCARD_RE
+            .captures(&pattern[mat.start()..mat.end()])
+            .ok_or_else(|| OxoFlowError::Wildcard {
+                rule: String::new(),
+                message: format!(
+                    "internal error: wildcard regex match failed to capture on pattern part '{}'",
+                    &pattern[mat.start()..mat.end()]
+                ),
+            })?;
+        let name = &cap[1];
+        if seen.insert(name.to_string()) {
+            regex_str.push_str(&format!("(?P<{}>\\S+)", name));
+        } else {
+            regex_str.push_str("(?:\\S+)");
+        }
+
+        last_end = mat.end();
+    }
+
+    let remaining = &pattern[last_end..];
+    push_glob_literal(&mut regex_str, remaining, &mut star_index);
+    regex_str.push('$');
+
+    Regex::new(&regex_str).map_err(|e| OxoFlowError::Wildcard {
+        rule: String::new(),
+        message: format!("failed to compile pattern regex: {}", e),
+    })
+}
+
+/// Escape a literal pattern segment for the glob regex, turning each bare
+/// `*` into a segment-local anonymous match. Names are `__star<N>` so
+/// callers can reconstruct the matched path.
+fn push_glob_literal(regex_str: &mut String, literal: &str, star_index: &mut usize) {
+    let mut piece_start = 0;
+    let bytes = literal.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'*' {
+            regex_str.push_str(&regex::escape(&literal[piece_start..i]));
+            regex_str.push_str(&format!("(?P<__star{}>[^/]*)", star_index));
+            *star_index += 1;
+            piece_start = i + 1;
+        }
+        i += 1;
+    }
+    regex_str.push_str(&regex::escape(&literal[piece_start..]));
+}
+
+/// Reconstruct the concrete path a glob pattern matched: `{wildcard}`
+/// spans render their combo values, each `*` renders the text its
+/// `__star<N>` capture matched. Mirrors [`expand_pattern`] for
+/// glob-bearing discovery patterns (issue #246).
+pub fn expand_pattern_with_glob(
+    pattern: &str,
+    combo: &WildcardValues,
+    star_values: &[String],
+) -> Result<String> {
+    let mut out = String::new();
+    let mut last_end = 0;
+    let mut star_index = 0usize;
+
+    for mat in WILDCARD_RE.find_iter(pattern) {
+        out.push_str(&pattern[last_end..mat.start()]);
+        let cap = WILDCARD_RE
+            .captures(&pattern[mat.start()..mat.end()])
+            .ok_or_else(|| OxoFlowError::Wildcard {
+                rule: String::new(),
+                message: "internal error: wildcard regex match failed".to_string(),
+            })?;
+        let name = &cap[1];
+        match combo.get(name) {
+            Some(v) => out.push_str(v),
+            None => {
+                return Err(OxoFlowError::Wildcard {
+                    rule: String::new(),
+                    message: format!("missing value for wildcard '{name}'"),
+                });
+            }
+        }
+        last_end = mat.end();
+    }
+
+    let remaining = &pattern[last_end..];
+    let bytes = remaining.as_bytes();
+    let mut piece_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'*' {
+            out.push_str(&remaining[piece_start..i]);
+            let value = star_values
+                .get(star_index)
+                .ok_or_else(|| OxoFlowError::Wildcard {
+                    rule: String::new(),
+                    message: format!("missing value for glob star #{star_index}"),
+                })?;
+            out.push_str(value);
+            star_index += 1;
+            piece_start = i + 1;
+        }
+        i += 1;
+    }
+    out.push_str(&remaining[piece_start..]);
+    Ok(out)
+}
+
 /// Expands a pattern into a list of strings by taking the Cartesian product
 /// of provided variable values.
 ///
@@ -334,6 +466,18 @@ pub fn discover_wildcards_from_pattern_tree(
         return discover_wildcards_from_pattern(dir, pattern);
     }
     let re = pattern_to_regex(pattern)?;
+    discover_wildcards_from_pattern_tree_with(dir, pattern, &re)
+}
+
+/// [`Self::discover_wildcards_from_pattern_tree`] with a caller-built
+/// matcher — the glob-aware input_groups face (issue #246) passes
+/// [`pattern_to_regex_glob`] here and re-verifies matches with
+/// [`expand_pattern_with_glob`].
+pub fn discover_wildcards_from_pattern_tree_with(
+    dir: &std::path::Path,
+    pattern: &str,
+    re: &Regex,
+) -> Result<WildcardCombinations> {
     let wildcard_names = extract_wildcards(pattern);
     let mut results = Vec::new();
     let mut seen = HashSet::new();
@@ -391,11 +535,81 @@ pub fn discover_wildcards_from_pattern_tree(
         dir,
         dir,
         pattern,
-        &re,
+        re,
         &wildcard_names,
         &mut seen,
         &mut results,
     );
+
+    Ok(results)
+}
+
+/// Glob-aware tree discovery for input_groups (issue #246): a bare `*` in
+/// the pattern matches within a path segment, and the round-trip guard
+/// reconstructs the matched path via [`expand_pattern_with_glob`] so the
+/// star text is verified rather than dropped. Returns each matched file's
+/// relative path alongside its wildcard combo — the concrete path cannot
+/// be re-rendered from the combo alone (the star text is unbound).
+pub fn discover_wildcards_from_pattern_tree_glob(
+    dir: &std::path::Path,
+    pattern: &str,
+) -> Result<Vec<(String, WildcardValues)>> {
+    let re = pattern_to_regex_glob(pattern)?;
+    let wildcard_names = extract_wildcards(pattern);
+    let mut results: Vec<(String, WildcardValues)> = Vec::new();
+
+    fn walk(
+        dir: &std::path::Path,
+        base: &std::path::Path,
+        pattern: &str,
+        re: &Regex,
+        wildcard_names: &[String],
+        results: &mut Vec<(String, WildcardValues)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = entry.file_type().ok();
+            if file_type.is_some_and(|t| t.is_dir()) {
+                walk(&path, base, pattern, re, wildcard_names, results);
+            } else if file_type.is_none_or(|t| t.is_file() || t.is_symlink()) {
+                let rel = match path.strip_prefix(base) {
+                    Ok(rel) => rel,
+                    Err(_) => continue,
+                };
+                let rel_str = rel
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                if let Some(captures) = re.captures(&rel_str) {
+                    let mut values = WildcardValues::new();
+                    for name in wildcard_names {
+                        if let Some(m) = captures.name(name) {
+                            values.insert(name.clone(), m.as_str().to_string());
+                        }
+                    }
+                    // Star text in capture order — reconstructed by the
+                    // round-trip check below.
+                    let stars: Vec<String> = re
+                        .capture_names()
+                        .flatten()
+                        .filter(|n| n.starts_with("__star"))
+                        .filter_map(|n| captures.name(n).map(|m| m.as_str().to_string()))
+                        .collect();
+                    let is_real = expand_pattern_with_glob(pattern, &values, &stars)
+                        .is_ok_and(|expanded| expanded == rel_str);
+                    // No combo dedup: grouping many files under one combo
+                    // is the POINT of glob input_groups (CAT_FASTQ) —
+                    // every matched file must reach the group.
+                    if !values.is_empty() && is_real {
+                        results.push((rel_str, values));
+                    }
+                }
+            }
+        }
+    }
+    walk(dir, dir, pattern, &re, &wildcard_names, &mut results);
 
     Ok(results)
 }
@@ -1013,6 +1227,68 @@ mod tests {
         let caps = re.captures("TUMOR_01_R1.fastq.gz").unwrap();
         assert_eq!(&caps["sample"], "TUMOR_01");
         assert_eq!(&caps["read"], "1");
+    }
+
+    #[test]
+    fn pattern_to_regex_glob_star_matches_within_segment() {
+        // Issue #246: a bare `*` is a segment-local glob —
+        // `raw/{sample}_*.fq` matches any lane-named fq of a sample.
+        let re = pattern_to_regex_glob("raw/{sample}_*.fq").unwrap();
+        assert!(re.is_match("raw/S1_L001.fq"));
+        assert!(re.is_match("raw/S1_x.fq"));
+        assert!(!re.is_match("raw/S1/sub/file.fq"), "star never crosses '/'");
+        assert!(!re.is_match("raw/other.fq"));
+
+        let caps = re.captures("raw/S1_L001.fq").unwrap();
+        assert_eq!(&caps["sample"], "S1");
+
+        // Round-trip: reconstruct the concrete path from combo + star text.
+        let combo = WildcardValues::new();
+        let mut combo = combo;
+        combo.insert("sample".to_string(), "S1".to_string());
+        let stars = vec!["L001".to_string()];
+        assert_eq!(
+            expand_pattern_with_glob("raw/{sample}_*.fq", &combo, &stars).unwrap(),
+            "raw/S1_L001.fq"
+        );
+
+        // Repeated wildcards: the regex captures anonymously after the
+        // first occurrence; equality is the round-trip guard's job (same
+        // as the strict matcher - expand_pattern_with_glob reconstructs
+        // and mismatched combos fail it).
+        let re2 = pattern_to_regex_glob("{sample}_{sample}_*.fq").unwrap();
+        assert!(
+            re2.is_match("A_B_x.fq"),
+            "regex matches; round-trip filters"
+        );
+        let make = |s: &str, stars: &[&str]| {
+            let mut c = WildcardValues::new();
+            c.insert("sample".to_string(), s.to_string());
+            let stars: Vec<String> = stars.iter().map(|x| x.to_string()).collect();
+            expand_pattern_with_glob("{sample}_{sample}_*.fq", &c, &stars).unwrap()
+        };
+        assert_eq!(make("A", &["x"]), "A_A_x.fq");
+        assert_ne!(make("A", &["x"]), "A_B_x.fq");
+    }
+
+    #[test]
+    fn pattern_to_regex_glob_rejects_double_star() {
+        assert!(pattern_to_regex_glob("data/**/{sample}.fq").is_err());
+    }
+
+    #[test]
+    fn pattern_to_regex_glob_matches_star_free_like_strict() {
+        // A star-free pattern compiles to the strict matcher's behavior
+        // (both use backslash-S-plus for wildcard spans - a wildcard may
+        // span a separator by design; only the bare star is segment-local).
+        let strict = pattern_to_regex("raw/{sample}.fq").unwrap();
+        let glob = pattern_to_regex_glob("raw/{sample}.fq").unwrap();
+        assert_eq!(strict.is_match("raw/S1.fq"), glob.is_match("raw/S1.fq"));
+        assert_eq!(strict.is_match("raw/S1/x.fq"), glob.is_match("raw/S1/x.fq"));
+        // But a star IS segment-local: it never crosses a separator.
+        let star_re = pattern_to_regex_glob("raw/*_sorted.fq").unwrap();
+        assert!(star_re.is_match("raw/lanes1_sorted.fq"));
+        assert!(!star_re.is_match("raw/a/b_sorted.fq"));
     }
 
     #[test]
