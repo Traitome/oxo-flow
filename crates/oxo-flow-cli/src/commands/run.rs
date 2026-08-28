@@ -1032,6 +1032,75 @@ pub async fn run_command(
     adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs);
     let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
 
+    // Sensitive keys are needed by the snapshot-drift warning below and by
+    // config-change detection.
+    let sensitive_keys: std::collections::HashSet<String> = config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect();
+
+    // ── Snapshot drift warning (issue #243) ──────────────────────────────
+    // The checkpoint records the EFFECTIVE config of the original run
+    // (workflow defaults + its CLI overrides). This invocation re-parsed
+    // the workflow with THIS invocation's overrides — `resume` passes none,
+    // so plan-time gates (pair/instance `when`, `{meta.*}` baking) re-judge
+    // on defaults and the instance set can drift from the original run
+    // before any invalidation machinery sees it. Invalidation (below)
+    // covers shell interpolation and gate flips; it cannot resurrect
+    // instances expansion already dropped. Warn loudly, naming every key
+    // that differs — the operator decides whether to re-pass the overrides.
+    {
+        let ck = checkpoint.lock().await;
+        let drifted: Vec<String> = ck
+            .config_snapshot
+            .keys()
+            .filter(|key| {
+                !oxo_flow_core::config_impact::is_engine_injected_key(key)
+                    && match config.config.get(key.as_str()) {
+                        Some(value) => {
+                            let new = oxo_flow_core::config_impact::snapshot_value(
+                                value,
+                                sensitive_keys.contains(key.as_str()),
+                            );
+                            &new != ck.config_snapshot.get(*key).unwrap()
+                        }
+                        None => true,
+                    }
+            })
+            .cloned()
+            .collect();
+        if !drifted.is_empty() && !ck.completed_rules.is_empty() {
+            eprintln!(
+                "{} effective config differs from the original run's snapshot — \
+                 plan-time gated instances (pair/sample `when`, `{{meta.*}}`) may \
+                 drift from the recorded run. Re-pass the original overrides to \
+                 resume the same instance set:",
+                "Config drift:".bold().yellow()
+            );
+            for key in &drifted {
+                match config.config.get(key.as_str()) {
+                    Some(value) => {
+                        let new = oxo_flow_core::config_impact::snapshot_value(
+                            value,
+                            sensitive_keys.contains(key.as_str()),
+                        );
+                        let old = ck.config_snapshot.get(key.as_str()).unwrap();
+                        let (old, new) = if old.starts_with("sha256:") || new.starts_with("sha256:")
+                        {
+                            ("****".to_string(), "****".to_string())
+                        } else {
+                            (old.clone(), new)
+                        };
+                        eprintln!("  {key}: {old} → {new}");
+                    }
+                    None => eprintln!("  {key}: (removed from this invocation)"),
+                }
+            }
+        }
+    }
+
     // Store workflow path and working directory in the checkpoint so
     // `resume` re-runs from the same place (issue #68). Both are made
     // absolute — a raw relative path would only resolve from the original
@@ -1051,12 +1120,6 @@ pub async fn run_command(
     // are invalidated; edited rule definitions are caught by fingerprints.
     // Engine-injected keys (samples_list, samples_<group>) are excluded:
     // their --samples churn must not invalidate everything.
-    let sensitive_keys: std::collections::HashSet<String> = config
-        .config_meta
-        .iter()
-        .filter(|(_, def)| def.sensitive)
-        .map(|(key, _)| key.clone())
-        .collect();
     let old_snapshot = {
         let ck = checkpoint.lock().await;
         ck.config_snapshot.clone()

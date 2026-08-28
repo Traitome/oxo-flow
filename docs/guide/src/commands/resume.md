@@ -35,6 +35,15 @@ inputs are compared against the recorded manifests, and changed inputs
 re-execute the affected rules (see
 [Input changes and manifest invalidation](run.md#input-changes-and-manifest-invalidation)).
 
+`resume` passes no CLI config overrides, so the effective config is the
+workflow's defaults. When the original run carried overrides (its recorded
+config snapshot differs), the resumed run prints a **Config drift** warning
+naming every key that changed and its old → new values — plan-time gated
+instances (pair/sample `when`, `{meta.*}` baking) re-judge on the defaults
+and may drift from the recorded instance set. Re-pass the original
+overrides with `oxo-flow run` (which auto-resumes) to reproduce the
+recorded instance set exactly.
+
 ## Options
 
 | Option | Description |
