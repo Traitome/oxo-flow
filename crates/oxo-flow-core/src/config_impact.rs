@@ -23,7 +23,7 @@
 use crate::config::ReferenceDef;
 use crate::dag::WorkflowDag;
 use crate::executor::checkpoint::CheckpointState;
-use crate::executor::process::evaluate_condition_with_wildcards;
+use crate::executor::process::evaluate_condition_with_wildcards_and_base_dir;
 use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -444,6 +444,7 @@ pub struct ConfigChangeReport {
 ///   excluded, sensitive keys hashed);
 /// - `rule_fingerprints` is updated for every rule in `rules` (bootstrap for
 ///   legacy checkpoints and rules entering a run for the first time).
+#[allow(clippy::too_many_arguments)]
 pub fn detect_config_changes(
     checkpoint: &mut CheckpointState,
     rules: &[Rule],
@@ -452,6 +453,7 @@ pub fn detect_config_changes(
     sensitive_keys: &HashSet<String>,
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
+    base_dir: Option<&Path>,
 ) -> ConfigChangeReport {
     // A checkpoint with neither snapshot nor fingerprints predates config
     // tracking: bootstrap only (no invalidation) — documented one-time window.
@@ -544,7 +546,12 @@ pub fn detect_config_changes(
             rule.when.as_ref().map(|condition| {
                 (
                     rule.name.clone(),
-                    evaluate_condition_with_wildcards(condition, current, &HashMap::new()),
+                    evaluate_condition_with_wildcards_and_base_dir(
+                        condition,
+                        current,
+                        &HashMap::new(),
+                        base_dir,
+                    ),
                 )
             })
         })
@@ -1213,6 +1220,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1223,6 +1231,7 @@ mod tests {
             &cfg(&[("min_quality", "30")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
 
@@ -1269,6 +1278,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1279,6 +1289,7 @@ mod tests {
             &cfg(&[("new_key", "y")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(report.added_keys, vec!["new_key"]);
@@ -1314,6 +1325,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1324,6 +1336,7 @@ mod tests {
             &cfg(&[("min_quality", "20")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(report.invalidated.is_empty());
@@ -1357,6 +1370,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1367,6 +1381,7 @@ mod tests {
             &cfg(&[("samples_list", "S3,S4")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(report.changed_keys.is_empty());
@@ -1384,6 +1399,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
         let report = detect_config_changes(
@@ -1393,6 +1409,7 @@ mod tests {
             &cfg(&[("pairs_list", "P2,P3")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(report.changed_keys.is_empty());
@@ -1414,6 +1431,7 @@ mod tests {
             &sensitive,
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
         let stored = checkpoint.config_snapshot.get("api_token").unwrap();
@@ -1428,6 +1446,7 @@ mod tests {
             &cfg(&[("api_token", "hunter3")]),
             &sensitive,
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(report.changed_keys, vec!["api_token"]);
@@ -1460,6 +1479,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1474,6 +1494,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(report.fingerprint_mismatches.contains(&"c".to_string()));
@@ -1512,6 +1533,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         assert!(report.is_legacy);
         assert!(report.invalidated.is_empty());
@@ -1547,6 +1569,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         let report = detect_config_changes(
             &mut checkpoint,
@@ -1555,6 +1578,7 @@ mod tests {
             &cfg(&[("min_quality", "30")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(!report.is_legacy);
@@ -1592,6 +1616,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
         checkpoint.rule_fingerprints.remove("b");
@@ -1603,6 +1628,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(report.fingerprint_mismatches.is_empty());
@@ -1640,6 +1666,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1650,6 +1677,7 @@ mod tests {
             &cfg(&[("k", "2")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(report.invalidated, vec!["orphan".to_string()]);
@@ -1701,6 +1729,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1712,6 +1741,7 @@ mod tests {
             &cfg(&[("enabled_a", "false"), ("enabled_b", "true")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
 
@@ -1739,6 +1769,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1752,6 +1783,7 @@ mod tests {
             &cfg(&[("enabled_a", "false")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(
@@ -1783,6 +1815,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1795,6 +1828,7 @@ mod tests {
             &cfg(&[("enabled_a", "true")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(
@@ -1832,6 +1866,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1844,6 +1879,7 @@ mod tests {
             &cfg(&[("make_extra", "true")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert!(
@@ -1875,6 +1911,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1885,6 +1922,7 @@ mod tests {
             &cfg(&[("k", "30"), ("gate", "true")]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         let invalidated: HashSet<&String> = report.invalidated.iter().collect();
@@ -1917,6 +1955,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         assert_eq!(
             report.when_flip_invalidated,
@@ -1947,6 +1986,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         assert_eq!(report.when_gate_exempt, vec!["b".to_string()]);
         assert!(report.invalidated.is_empty());
@@ -1970,6 +2010,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             None,
+            None,
         );
         checkpoint = cp;
 
@@ -1980,6 +2021,7 @@ mod tests {
             &typed_cfg(&[("min_qual", toml::Value::Integer(10))]),
             &HashSet::new(),
             &HashMap::new(),
+            None,
             None,
         );
         assert_eq!(report.when_flip_invalidated, vec!["b".to_string()]);

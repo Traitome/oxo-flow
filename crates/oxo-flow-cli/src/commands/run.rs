@@ -1071,6 +1071,7 @@ pub async fn run_command(
             &sensitive_keys,
             &config.workflow.interpreter_map,
             config.defaults.shell_prelude.as_deref(),
+            Some(&workflow_dir),
         );
         let force_rules: std::collections::HashSet<String> =
             report.invalidated.iter().cloned().collect();
@@ -1423,6 +1424,9 @@ pub async fn run_command(
         // Unconstrained wildcards fall back to the safe default charset
         // inside validate_wildcard_injection (issue #203).
         wildcard_constraints: config.wildcard_constraints.clone(),
+        // `file_exists(...)` in `when` conditions resolves relative paths
+        // against the workflow root (issue #241) — same as plan time.
+        base_dir: Some(workflow_dir.clone()),
         // Shared with the manifest snapshot resolver so staging and
         // invalidation always see the same backends (issue #80 item 2).
         storage_resolver: crate::commands::run_preview::storage_resolver(),

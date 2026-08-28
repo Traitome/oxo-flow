@@ -302,6 +302,11 @@ pub struct ExecutorConfig {
     /// safe default charset inside `validate_wildcard_injection`, while a
     /// declared constraint here governs that wildcard instead.
     pub wildcard_constraints: HashMap<String, String>,
+    /// The workflow file's parent directory (issue #241): `when` conditions
+    /// with `file_exists(...)` resolve relative paths against this root at
+    /// execution time, matching plan-time and every other engine path
+    /// semantic. `None` keeps the historical process-cwd behavior (tests).
+    pub base_dir: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -326,6 +331,7 @@ impl Default for ExecutorConfig {
             shell_prelude: None,
             checkpoint: None,
             wildcard_constraints: HashMap::new(),
+            base_dir: None,
         }
     }
 }
@@ -1194,7 +1200,12 @@ impl LocalExecutor {
             // instance's bindings into its `when`, so an unbound key here
             // genuinely cannot be met (false — rule skipped), never a
             // kept instance's veto.
-            if !evaluate_condition_with_wildcards(condition, &config_values, wildcard_values) {
+            if !evaluate_condition_with_wildcards_and_base_dir(
+                condition,
+                &config_values,
+                wildcard_values,
+                self.config.base_dir.as_deref(),
+            ) {
                 record.status = JobStatus::Skipped;
                 record.skip_reason = Some("condition evaluated to false".to_string());
                 record.finished_at = Some(Utc::now());
@@ -2949,13 +2960,30 @@ pub fn evaluate_condition_with_wildcards(
     config_values: &HashMap<String, toml::Value>,
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
-    evaluate_condition_inner(condition.trim(), config_values, wildcard_values)
+    evaluate_condition_with_wildcards_and_base_dir(condition, config_values, wildcard_values, None)
+}
+
+/// Condition evaluation with an explicit base directory for
+/// `file_exists(...)` (issue #241). Relative paths resolve against
+/// `base_dir` — the workflow file's parent, the same root every other
+/// engine path resolves against — instead of the engine process's current
+/// working directory. Absolute paths pass through unchanged; `None` keeps
+/// the historical cwd-relative behavior (tests, callers without a workflow
+/// root).
+pub fn evaluate_condition_with_wildcards_and_base_dir(
+    condition: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+    base_dir: Option<&std::path::Path>,
+) -> bool {
+    evaluate_condition_inner(condition.trim(), config_values, wildcard_values, base_dir)
 }
 
 fn evaluate_condition_inner(
     s: &str,
     config_values: &HashMap<String, toml::Value>,
     wildcard_values: &HashMap<String, String>,
+    base_dir: Option<&std::path::Path>,
 ) -> bool {
     let s = s.trim();
     if s.is_empty() || s == "true" {
@@ -2965,18 +2993,23 @@ fn evaluate_condition_inner(
         return false;
     }
     if s.starts_with('(') && s.ends_with(')') && balanced_parens(s) {
-        return evaluate_condition_inner(&s[1..s.len() - 1], config_values, wildcard_values);
+        return evaluate_condition_inner(
+            &s[1..s.len() - 1],
+            config_values,
+            wildcard_values,
+            base_dir,
+        );
     }
     if let Some(idx) = find_top_level_op(s, "||") {
-        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values)
-            || evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values);
+        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values, base_dir)
+            || evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values, base_dir);
     }
     if let Some(idx) = find_top_level_op(s, "&&") {
-        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values)
-            && evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values);
+        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values, base_dir)
+            && evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values, base_dir);
     }
     if let Some(rest) = s.strip_prefix('!') {
-        return !evaluate_condition_inner(rest.trim(), config_values, wildcard_values);
+        return !evaluate_condition_inner(rest.trim(), config_values, wildcard_values, base_dir);
     }
     // `len(...)` — cardinality of a config value (issue #252): array length,
     // string char count, table key count. An absent key has length 0 (nothing
@@ -3032,7 +3065,10 @@ fn evaluate_condition_inner(
         .and_then(|s| s.strip_suffix(')'))
     {
         let path = inner.trim().trim_matches('"').trim_matches('\'');
-        return Path::new(path).exists();
+        return match base_dir {
+            Some(root) if !Path::new(path).is_absolute() => root.join(path).exists(),
+            _ => Path::new(path).exists(),
+        };
     }
     for op in &["==", "!=", ">=", "<=", ">", "<"] {
         if let Some(idx) = find_top_level_op(s, op) {
