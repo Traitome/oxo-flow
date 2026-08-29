@@ -42,7 +42,10 @@ Events are serialized in snake_case. You can subscribe by listing them in the `e
 | `rule_completed` | Fired when an individual rule completes. |
 | `rule_failed` | Fired when an individual rule fails. |
 
-There is no `WorkflowCancelled`, `RuleStarted`, or `RuleSkipped` event in the webhook module.
+There is no `RuleStarted` or `RuleSkipped` event in the webhook module. (The
+`ExecutionEvent` log stream in the core executor likewise has no
+`workflow_cancelled` variant — an interruption surfaces as `rule_failed`
+records with an `interrupted by <signal>` skip reason.)
 
 If the `events` array is omitted, the default subscription is `["workflow_completed"]` only.
 

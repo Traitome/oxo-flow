@@ -2980,7 +2980,6 @@ dependencies = [
  "filetime",
  "fs2",
  "glob",
- "globset",
  "hex",
  "hmac 0.12.1",
  "md-5 0.10.6",

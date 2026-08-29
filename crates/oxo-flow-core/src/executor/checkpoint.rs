@@ -1045,20 +1045,8 @@ pub fn optional_inputs_missing(
     any_mode
 }
 
-/// Check if a rule should be skipped based on output freshness.
-///
-/// Returns true if all outputs exist and are newer than all inputs.
-/// Config variable placeholders (e.g. `{config.sample}`) are expanded using
-/// `wildcard_values` before the path existence check.
-pub fn should_skip_rule(
-    rule: &Rule,
-    workdir: &Path,
-    wildcard_values: &HashMap<String, String>,
-) -> bool {
-    should_skip_rule_with_checksums(rule, workdir, wildcard_values, None)
-}
-
-/// [`should_skip_rule`] with provenance checksums (issue #194 B2).
+/// Check if a rule should be skipped based on output freshness, optionally
+/// consulting recorded provenance checksums (issue #194 B2).
 ///
 /// When `checksums` holds a recorded content hash for EVERY expanded output
 /// of the rule, freshness requires the CURRENT content to match — mtime
@@ -1393,7 +1381,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            !should_skip_rule(&rule, dir.path(), &HashMap::new()),
+            !should_skip_rule_with_checksums(&rule, dir.path(), &HashMap::new(), None),
             "a char-device output must be re-executed, never skipped as up to date"
         );
         // A regular output under the same inputs stays skippable: the gate is
@@ -1423,7 +1411,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            should_skip_rule(&regular, dir.path(), &HashMap::new()),
+            should_skip_rule_with_checksums(&regular, dir.path(), &HashMap::new(), None),
             "a regular file output with fresh mtime must still skip"
         );
     }

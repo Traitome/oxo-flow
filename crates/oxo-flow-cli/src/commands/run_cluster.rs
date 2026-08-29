@@ -433,7 +433,6 @@ pub(crate) async fn run_on_cluster(
                 stderr: None,
                 command: None,
                 retries: 0,
-                timeout: None,
                 skip_reason: None,
                 max_rss_mb: None,
                 cpu_seconds: None,
