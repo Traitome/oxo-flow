@@ -4811,6 +4811,70 @@ fn values_sanitized_instance_names() {
 }
 
 #[test]
+fn values_referenced_only_from_expand_inputs_still_fans_out() {
+    // Issue #268 item 1: a consumer referencing a values table ONLY through
+    // an expand_inputs pattern (no input/output/shell/when reference) must
+    // still fan out per value — and each instance's expand pattern must
+    // resolve to its own producer's file so the execution DAG gets the
+    // aggregator -> producer edges.
+    let toml = values_workflow(
+        r#"
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+        "#,
+        r#"
+        [[rules]]
+        name = "assemble"
+        input = ["reads/in.fq"]
+        output = ["contigs/{assembler}/out.fa"]
+        shell = "echo {assembler} > {output[0]}"
+
+        [[rules]]
+        name = "merge"
+        input = []
+        expand_inputs = [
+            { pattern = "contigs/{assembler}/out.fa", variables = { } }
+        ]
+        output = ["contigs/merged.fa"]
+        shell = "cat {input} > {output[0]}"
+        "#,
+    );
+    let mut config = WorkflowConfig::parse(&toml).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "assemble_assembler_spades",
+            "assemble_assembler_megahit",
+            "merge_assembler_spades",
+            "merge_assembler_megahit",
+        ]
+    );
+    assert_eq!(
+        config.rules[2].input.to_vec(),
+        vec!["contigs/spades/out.fa"]
+    );
+    assert_eq!(
+        config.rules[3].input.to_vec(),
+        vec!["contigs/megahit/out.fa"]
+    );
+
+    // The point of the fix: the execution DAG carries the edges.
+    let dag = crate::dag::WorkflowDag::from_rules(&config.rules).unwrap();
+    assert_eq!(
+        dag.dependencies("merge_assembler_spades").unwrap(),
+        vec!["assemble_assembler_spades"]
+    );
+    assert_eq!(
+        dag.dependencies("merge_assembler_megahit").unwrap(),
+        vec!["assemble_assembler_megahit"]
+    );
+}
+
+#[test]
 fn values_referenced_from_expand_inputs_binds_per_instance() {
     // The spades instance only ever sees spades outputs — no cross
     // fan-out between instances.
