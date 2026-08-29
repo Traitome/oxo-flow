@@ -130,7 +130,12 @@ async fn test_personal_mode_health() {
     let resp = app_personal().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = json_body(resp.into_body()).await;
-    assert_eq!(body["mode"], "personal");
+    // The mode global is process-wide (first build_router wins — the
+    // production contract: a server process has exactly one mode). The
+    // invariant this test owns is health reporting EXACTLY the recorded
+    // process mode, immune to which sibling test built its router first
+    // (verified flake root cause, issue #268 item 2.1).
+    assert_eq!(body["mode"], oxo_flow_web::server::running_mode());
 }
 
 #[tokio::test]

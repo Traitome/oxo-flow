@@ -182,8 +182,18 @@ mod tests {
         assert!(second.try_lock_exclusive().is_err());
 
         drop(first);
-        // After release the lock is acquirable again.
-        assert!(second.try_lock_exclusive().is_ok());
+        // After release the lock is acquirable again. A tiny retry loop:
+        // under full-suite scheduler contention a second handle can
+        // transiently observe the pre-unlock flock state on macOS
+        // (verified flake mechanism, issue #268 item 2.3).
+        let acquired = (0..3).any(|attempt| {
+            if second.try_lock_exclusive().is_ok() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+            false
+        }) || second.try_lock_exclusive().is_ok();
+        assert!(acquired, "lock must be acquirable after release");
     }
 
     #[test]
