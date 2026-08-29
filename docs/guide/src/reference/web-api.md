@@ -144,7 +144,6 @@ Upload a commercial license file for validation and activation.
 
 ### Users (admin)
 ```
-GET    /api/runs/{id}/preview   # Instance-level dry-run plan (will_run/will_skip + expanded rule instances)
 GET    /api/users          # List users (admin only)
 POST   /api/users          # Create user
 DELETE /api/users/{id}     # Delete user
@@ -318,6 +317,48 @@ GET /api/runs/{id}/diagnostics
 ```
 Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint.
 
+### Run Detail
+```
+GET /api/runs/{id}
+```
+The full run row: `{ id, status, workflow_name, workdir, created_at, max_jobs, owner_id, pipeline_id?, cluster_id?, exit_code?, finished_at? }` — the identity other run endpoints key off.
+
+### Run Preview
+```
+GET /api/runs/{id}/preview
+```
+The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one.
+
+### AI Status
+```
+GET /api/runs/{id}/ai-status
+```
+Node-level execution statuses pulled from the run's checkpoint — the input the AI endpoints (explain/interpret) consume.
+
+### Run Report
+```
+GET /api/runs/{id}/report
+```
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`.
+
+### Report Q&A
+```
+POST /api/runs/{id}/report/ask
+Content-Type: application/json
+
+{"question": "which rules failed and why"}
+```
+Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string.
+
+### Report Visualization
+```
+POST /api/runs/{id}/report/visualize
+Content-Type: application/json
+
+{"type": "files" | "durations" | "volcano"}
+```
+Chart data built from real sources: `files` maps the run's file tree (`{name, size_bytes}`), everything else maps per-rule durations from the checkpoint. No canned rows.
+
 ### Smart Retry
 ```
 POST /api/runs/{id}/retry
@@ -411,6 +452,30 @@ Content-Type: application/json
 ```
 Finds installed reference genome components and reports missing ones with download commands.
 
+### Reference Status
+```
+GET /api/data/reference/status
+```
+Which common reference genomes (hg38, mm10, …) have their expected components (fasta, STAR index, GTF) installed at the standard `/data/references/` locations. Returns `{ genome: { components: { component: present } } }` per entry — the deterministic counterpart to the POST discovery above.
+
+### Data Perception
+```
+POST /api/data/perceive
+Content-Type: application/json
+
+{"paths": ["/data/"], "description": "RNA-seq paired-end human samples"}
+```
+Data-profiling report built from paths (the same scanner as `/api/data/analyze`) or from a natural-language description. Powers the "what data do I have" panel.
+
+### Samplesheet Parsing
+```
+POST /api/data/samplesheet/parse
+Content-Type: application/json
+
+{"content": "sample,fastq_r1,fastq_r2,condition\nS1,a_R1.fastq.gz,a_R2.fastq.gz,ctrl"}
+```
+Parses pasted CSV/TSV samplesheet content into the standard column structure (`sample`, `fastq_r1`, `fastq_r2`, `condition`). Returns `{ format, samples: [...] }` — the bridge from a spreadsheet to `[[sample_groups]]`.
+
 ---
 
 ## Templates
@@ -449,9 +514,44 @@ POST /api/ai/optimize           # Optimize pipeline parameters
 GET  /api/ai/config             # Get AI provider configuration (public)
 POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
 POST /api/ai/test               # Test the provider (admin-only outside personal mode)
+GET  /api/ai/config/user        # The acting user's private provider config
+PUT  /api/ai/config/user        # Set the acting user's private provider config
+GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
+PUT  /api/ai/config/server      # Set the server-level provider config
+GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
+GET  /api/knowledge/tools       # Tool catalog the AI can call
+GET  /api/knowledge/skills      # Skill catalog the AI can follow
 ```
 
+The config endpoints form a three-level resolution chain: a user's private
+provider overrides the server-wide one, which overrides environment
+variables. `GET /api/ai/config/effective` shows the resolved result and
+which level supplied each field. API keys are stored encrypted at rest
+(#205) and never echoed back — responses mark `key_set` instead.
+
 See [AI Translation Layer](ai-translation.md) for details.
+
+---
+
+## Chat (v0.8 AI Companion)
+
+```
+POST /api/chat/send        # Streamed chat over SSE
+POST /api/chat/send/json   # Same, single JSON response
+GET  /api/chat/sessions    # The acting user's chat sessions
+```
+
+---
+
+## OAuth
+
+```
+POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
+POST /api/auth/oauth/callback    # Provider callback → session token
+```
+
+The redirect URI is `OAUTH_REDIRECT_URI` when set, derived from the
+request host otherwise (see the environment table in `AGENTS.md`).
 
 ---
 
