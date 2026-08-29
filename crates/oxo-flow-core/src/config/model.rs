@@ -8,7 +8,6 @@
 //! The `.oxoflow` format is TOML-based with workflow metadata, configuration
 //! variables, default settings, and a list of rules.
 
-pub use crate::clinical::*;
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use regex::Regex;

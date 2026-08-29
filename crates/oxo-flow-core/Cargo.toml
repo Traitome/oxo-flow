@@ -29,7 +29,6 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 petgraph = { workspace = true }
-globset = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
 tera = { workspace = true }

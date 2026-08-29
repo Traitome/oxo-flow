@@ -101,7 +101,6 @@ fn simulate_100(c: &mut Criterion) {
                         stderr: None,
                         command: None,
                         retries: 0,
-                        timeout: None,
                         skip_reason: None,
                         max_rss_mb: None,
                         cpu_seconds: None,

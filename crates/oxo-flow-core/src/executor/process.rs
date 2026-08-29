@@ -97,7 +97,6 @@ pub enum JobStatus {
     Success,
     Failed,
     Skipped,
-    Queued,
     Cancelled,
     TimedOut,
 }
@@ -110,7 +109,6 @@ impl std::fmt::Display for JobStatus {
             Self::Success => write!(f, "success"),
             Self::Failed => write!(f, "failed"),
             Self::Skipped => write!(f, "skipped"),
-            Self::Queued => write!(f, "queued"),
             Self::Cancelled => write!(f, "cancelled"),
             Self::TimedOut => write!(f, "timed_out"),
         }
@@ -142,10 +140,6 @@ pub enum ExecutionEvent {
         succeeded: usize,
         failed: usize,
         skipped: usize,
-    },
-    // R10: Add WorkflowCancelled event
-    WorkflowCancelled {
-        workflow_name: String,
     },
 }
 
@@ -207,12 +201,6 @@ impl ExecutionEvent {
                 "skipped": skipped
             })
             .to_string(),
-            ExecutionEvent::WorkflowCancelled { workflow_name } => serde_json::json!({
-                "timestamp": timestamp,
-                "event": "workflow_cancelled",
-                "workflow": workflow_name
-            })
-            .to_string(),
         }
     }
 
@@ -223,7 +211,6 @@ impl ExecutionEvent {
             ExecutionEvent::RuleCompleted { .. } => "rule_completed",
             ExecutionEvent::RuleSkipped { .. } => "rule_skipped",
             ExecutionEvent::WorkflowCompleted { .. } => "workflow_completed",
-            ExecutionEvent::WorkflowCancelled { .. } => "workflow_cancelled",
         }
     }
 }
@@ -241,8 +228,6 @@ pub struct JobRecord {
     pub command: Option<String>,
     #[serde(default)]
     pub retries: u32,
-    #[serde(skip)]
-    pub timeout: Option<std::time::Duration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<String>,
     /// Sampled peak RSS of the rule's process subtree in MiB
@@ -1173,7 +1158,6 @@ impl LocalExecutor {
             stderr: None,
             command: None,
             retries: 0,
-            timeout,
             skip_reason: None,
             max_rss_mb: None,
             cpu_seconds: None,
@@ -2087,7 +2071,6 @@ impl LocalExecutor {
                     stderr: None,
                     command: wrapped.or(command),
                     retries: 0,
-                    timeout: self.get_timeout(rule),
                     skip_reason: None,
                     max_rss_mb: None,
                     cpu_seconds: None,
@@ -3320,87 +3303,6 @@ fn strip_quotes(s: &str) -> Option<&str> {
     match (first, last) {
         (b'\'', b'\'') | (b'"', b'"') if s.len() >= 2 => Some(&s[1..s.len() - 1]),
         _ => None,
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionStats {
-    pub total_rules: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub skipped: usize,
-    pub total_duration_secs: f64,
-    pub rule_durations: HashMap<String, f64>,
-    pub max_rule_duration_secs: f64,
-    pub bottleneck_rule: Option<String>,
-}
-
-impl ExecutionStats {}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionProvenance {
-    pub oxo_flow_version: String,
-    pub config_checksum: String,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub hostname: String,
-    pub workdir: String,
-    #[serde(default)]
-    pub operator_id: Option<String>,
-    #[serde(default)]
-    pub instrument_id: Option<String>,
-    #[serde(default)]
-    pub reagent_lot: Option<String>,
-    #[serde(default)]
-    pub specimen_id: Option<String>,
-    #[serde(default)]
-    pub parent_run_id: Option<String>,
-    #[serde(default)]
-    pub input_checksums: HashMap<String, String>,
-    #[serde(default)]
-    pub output_checksums: HashMap<String, String>,
-    #[serde(default)]
-    pub software_versions: HashMap<String, String>,
-}
-
-impl ExecutionProvenance {
-    pub fn new(config_checksum: &str, workdir: &Path) -> Self {
-        Self {
-            oxo_flow_version: env!("CARGO_PKG_VERSION").to_string(),
-            config_checksum: config_checksum.to_string(),
-            started_at: Utc::now(),
-            finished_at: None,
-            hostname: hostname(),
-            workdir: workdir.display().to_string(),
-            operator_id: None,
-            instrument_id: None,
-            reagent_lot: None,
-            specimen_id: None,
-            parent_run_id: None,
-            input_checksums: HashMap::new(),
-            output_checksums: HashMap::new(),
-            software_versions: HashMap::new(),
-        }
-    }
-    pub fn finish(&mut self) {
-        self.finished_at = Some(Utc::now());
-    }
-    pub fn persist(&self, workdir: &Path) -> Result<()> {
-        let provenance_dir = workdir.join(".oxo-flow");
-        std::fs::create_dir_all(&provenance_dir).map_err(|e| OxoFlowError::Execution {
-            rule: String::new(),
-            message: format!("failed to create provenance directory: {e}"),
-        })?;
-        let provenance_file = provenance_dir.join("provenance.json");
-        let json = serde_json::to_string_pretty(self).map_err(|e| OxoFlowError::Execution {
-            rule: String::new(),
-            message: format!("failed to serialize provenance: {e}"),
-        })?;
-        std::fs::write(&provenance_file, json).map_err(|e| OxoFlowError::Execution {
-            rule: String::new(),
-            message: format!("failed to write provenance file: {e}"),
-        })?;
-        Ok(())
     }
 }
 

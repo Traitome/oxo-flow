@@ -872,52 +872,6 @@ fn validate_sample_sheet_duplicates() {
 }
 
 #[test]
-fn variant_classification_display() {
-    assert_eq!(VariantClassification::TierI.to_string(), "Tier I");
-    assert_eq!(VariantClassification::Vus.to_string(), "VUS");
-    assert_eq!(VariantClassification::Benign.to_string(), "Benign");
-}
-
-#[test]
-fn biomarker_result_display() {
-    let br = BiomarkerResult {
-        name: "TMB".to_string(),
-        value: 12.5,
-        unit: "mutations/Mb".to_string(),
-        classification: Some("TMB-High".to_string()),
-        threshold: Some(10.0),
-    };
-    let s = br.to_string();
-    assert!(s.contains("TMB"));
-    assert!(s.contains("12.50"));
-    assert!(s.contains("TMB-High"));
-}
-
-#[test]
-fn qc_threshold_passes() {
-    let t = QcThreshold {
-        metric: "coverage".to_string(),
-        min: Some(30.0),
-        max: Some(1000.0),
-        description: None,
-    };
-    assert!(t.passes(50.0));
-    assert!(!t.passes(10.0));
-    assert!(!t.passes(2000.0));
-}
-
-#[test]
-fn gene_panel_display() {
-    let gp = GenePanel {
-        name: "Test Panel".to_string(),
-        version: Some("1.0".to_string()),
-        genes: vec!["BRCA1".to_string(), "BRCA2".to_string()],
-        bed_file: None,
-    };
-    assert_eq!(gp.to_string(), "Test Panel (2 genes) v1.0");
-}
-
-#[test]
 fn rule_name_newtype() {
     let rn = RuleName::from("align");
     assert_eq!(rn.to_string(), "align");
@@ -946,18 +900,6 @@ fn genome_build_in_workflow_meta() {
     "#;
     let config = WorkflowConfig::parse(toml).unwrap();
     assert_eq!(config.workflow.genome_build.as_deref(), Some("GRCh38"));
-}
-
-#[test]
-fn clinical_report_section_display() {
-    assert_eq!(
-        ClinicalReportSection::SpecimenInfo.to_string(),
-        "Specimen Information"
-    );
-    assert_eq!(
-        ClinicalReportSection::Methodology.to_string(),
-        "Methodology"
-    );
 }
 
 #[test]

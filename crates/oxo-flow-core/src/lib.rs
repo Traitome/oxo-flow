@@ -40,7 +40,6 @@
 //! ```
 
 pub mod backend;
-pub mod clinical;
 #[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod config;
@@ -74,10 +73,6 @@ pub mod webhook;
 pub mod wildcard;
 
 // Re-export key types at the crate root for convenience.
-pub use clinical::{
-    ActionabilityAnnotation, BiomarkerResult, ClinicalReportSection, ComplianceEvent, FilterChain,
-    GenePanel, QcThreshold, TumorSampleMeta, VariantClassification,
-};
 pub use config::WorkflowConfig;
 pub use config::{
     ExperimentControlPair, Parsed, Ready, ReferenceDatabase, RuleName, SampleGroup,
@@ -85,9 +80,7 @@ pub use config::{
 };
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
-pub use executor::{
-    CheckpointState, ExecutionEvent, ExecutionProvenance, ExecutionStats, JobStatus,
-};
+pub use executor::{CheckpointState, ExecutionEvent, JobStatus};
 #[cfg(feature = "webhook")]
 // Re-export result types
 pub use result::{

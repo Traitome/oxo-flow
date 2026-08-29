@@ -968,11 +968,6 @@ impl WorkflowDag {
         edges
     }
 
-    /// Returns whether a given output pattern is produced by any rule.
-    pub fn has_producer(&self, output: &str) -> bool {
-        self.output_to_node.contains_key(output)
-    }
-
     /// Returns the name of the first rule producing an output pattern, if
     /// any. (Shared output strings may have several producers — see
     /// `producers_of`.)
@@ -982,27 +977,6 @@ impl WorkflowDag {
             .get(output)
             .and_then(|nodes| nodes.first())
             .map(|&node| self.graph[node].name.as_str())
-    }
-
-    /// Returns rules that have no edges (neither produce outputs consumed by others
-    /// nor consume outputs of others). These are isolated in the graph.
-    #[must_use]
-    pub fn orphan_rules(&self) -> Vec<&str> {
-        self.graph
-            .node_indices()
-            .filter(|&n| {
-                self.graph
-                    .neighbors_directed(n, petgraph::Direction::Incoming)
-                    .next()
-                    .is_none()
-                    && self
-                        .graph
-                        .neighbors_directed(n, petgraph::Direction::Outgoing)
-                        .next()
-                        .is_none()
-            })
-            .map(|n| self.graph[n].name.as_str())
-            .collect()
     }
 
     /// Returns groups of rule names that can execute in parallel.
@@ -1835,15 +1809,6 @@ mod tests {
     }
 
     #[test]
-    fn has_producer() {
-        let rules = vec![make_rule("a", vec!["in.txt"], vec!["out.txt"])];
-
-        let dag = WorkflowDag::from_rules(&rules).unwrap();
-        assert!(dag.has_producer("out.txt"));
-        assert!(!dag.has_producer("nonexistent.txt"));
-    }
-
-    #[test]
     fn rule_not_found() {
         let rules = vec![make_rule("a", vec![], vec!["out.txt"])];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
@@ -1922,39 +1887,6 @@ mod tests {
         assert_eq!(m.node_count, 3);
         assert_eq!(m.max_depth, 1);
         assert_eq!(m.max_width, 3);
-    }
-
-    #[test]
-    fn orphan_rules_all_independent() {
-        let rules = vec![
-            make_rule("a", vec!["x.txt"], vec!["a.txt"]),
-            make_rule("b", vec!["y.txt"], vec!["b.txt"]),
-        ];
-        let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mut orphans = dag.orphan_rules();
-        orphans.sort();
-        assert_eq!(orphans, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn orphan_rules_none_when_connected() {
-        let rules = vec![
-            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
-            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
-        ];
-        let dag = WorkflowDag::from_rules(&rules).unwrap();
-        assert!(dag.orphan_rules().is_empty());
-    }
-
-    #[test]
-    fn orphan_rules_mixed() {
-        let rules = vec![
-            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
-            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
-            make_rule("orphan", vec!["external.txt"], vec!["standalone.txt"]),
-        ];
-        let dag = WorkflowDag::from_rules(&rules).unwrap();
-        assert_eq!(dag.orphan_rules(), vec!["orphan"]);
     }
 
     #[test]
@@ -2262,8 +2194,7 @@ mod tests {
         let mut deps = dag.dependencies("seqkit").unwrap();
         deps.sort();
         assert_eq!(deps, vec!["metabat2_megahit", "metabat2_spades"]);
-        // has_producer stays true; producer_of returns one of the two.
-        assert!(dag.has_producer("{config.out_dir}/bins"));
+        // producer_of returns one of the two.
         assert!(
             dag.producer_of("{config.out_dir}/bins") == Some("metabat2_megahit")
                 || dag.producer_of("{config.out_dir}/bins") == Some("metabat2_spades")

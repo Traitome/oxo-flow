@@ -66,7 +66,6 @@ async fn execute_echo() {
         workdir: std::env::temp_dir(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -111,7 +110,6 @@ async fn execute_dry_run() {
         workdir: std::env::temp_dir(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -173,7 +171,6 @@ async fn execute_failing_command() {
         workdir: std::env::temp_dir(),
         keep_going: true,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -194,7 +191,6 @@ async fn execute_shell_exits_zero_but_outputs_missing() {
         workdir: tmp.clone(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -231,7 +227,6 @@ async fn execute_shell_creates_outputs_succeeds() {
         workdir: tmp.clone(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -258,7 +253,6 @@ async fn execute_wildcard_expansion() {
         workdir: std::env::temp_dir(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -454,7 +448,6 @@ async fn execute_output_index_expansion() {
         workdir: tmp.clone(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -553,7 +546,6 @@ fn checkpoint_record_run_persists_diagnostics() {
         stderr: Some("gatk: command not found".to_string()),
         command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
         retries: 0,
-        timeout: None,
         skip_reason: None,
         max_rss_mb: None,
         cpu_seconds: None,
@@ -587,7 +579,6 @@ fn checkpoint_stderr_tail_is_bounded() {
         stderr: Some(long),
         command: None,
         retries: 0,
-        timeout: None,
         skip_reason: None,
         max_rss_mb: None,
         cpu_seconds: None,
@@ -1721,7 +1712,6 @@ async fn execute_creates_log_parent_dir() {
         workdir: workdir.clone(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
@@ -1752,7 +1742,6 @@ async fn execute_bash_only_syntax_process_substitution() {
         workdir: std::env::temp_dir(),
         keep_going: false,
         retry_count: 0,
-        timeout: None,
         ..Default::default()
     };
     let executor = LocalExecutor::new(config);
