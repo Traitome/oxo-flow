@@ -156,6 +156,43 @@ fn apply_defaults_propagates() {
 }
 
 #[test]
+fn apply_defaults_time_limit_flows_into_resources() {
+    // defaults.time_limit fills every rule's resources.time_limit when the
+    // rule doesn't declare one (catalog sweep 2026-08-29: eager/auto-sra
+    // declared this key historically; the E017 whitelist used to reject it).
+    let toml_str = r#"
+        [workflow]
+        name = "test"
+
+        [defaults]
+        time_limit = "48h"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hello"
+
+        [[rules]]
+        name = "step2"
+        shell = "echo world"
+
+        [rules.resources]
+        time_limit = "4h"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml_str).unwrap();
+    config.apply_defaults();
+
+    let step1 = config.get_rule("step1").unwrap();
+    assert_eq!(step1.resources.time_limit.as_deref(), Some("48h"));
+    let step2 = config.get_rule("step2").unwrap();
+    assert_eq!(
+        step2.resources.time_limit.as_deref(),
+        Some("4h"),
+        "rule-level resources.time_limit wins over the default"
+    );
+}
+
+#[test]
 fn apply_defaults_respects_resources_field() {
     // resources.threads / resources.memory (non-deprecated style) must
     // take precedence over [defaults]. A rule that declares only

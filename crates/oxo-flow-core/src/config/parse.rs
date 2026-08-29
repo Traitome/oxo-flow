@@ -699,6 +699,14 @@ impl WorkflowConfig {
             {
                 rule.environment = env.clone();
             }
+            // Apply default wall-time limit when the rule's resources don't
+            // declare one (catalog sweep 2026-08-29: eager/auto-sra declared
+            // defaults.time_limit historically; the key now actually works).
+            if rule.resources.time_limit.is_none()
+                && let Some(ref tl) = self.defaults.time_limit
+            {
+                rule.resources.time_limit = Some(tl.clone());
+            }
         }
     }
 

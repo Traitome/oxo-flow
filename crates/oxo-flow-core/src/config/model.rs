@@ -70,7 +70,7 @@ pub(crate) fn pair_when_unknown_config_keys<'a>(
 }
 
 pub(crate) fn is_defaults_empty(d: &Defaults) -> bool {
-    d.threads.is_none() && d.memory.is_none() && d.environment.is_none()
+    d.threads.is_none() && d.memory.is_none() && d.environment.is_none() && d.time_limit.is_none()
 }
 
 /// Maximum depth for nested include directives to prevent infinite recursion.
@@ -356,6 +356,15 @@ pub struct Defaults {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_prelude: Option<String>,
+
+    /// Default wall-time limit (e.g. `"48h"`) applied to every rule whose
+    /// `resources.time_limit` is unset — the cluster-pathSBATCH `-t` value.
+    /// Catalog repos declared it here historically (eager, auto-sra); the
+    /// E017 whitelist previously rejected the key, so this makes the
+    /// documented intent real (catalog sweep 2026-08-29).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_limit: Option<String>,
 }
 
 /// Prepend a shell prelude to a command on its own line (issue #92).
