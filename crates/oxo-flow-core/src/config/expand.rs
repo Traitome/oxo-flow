@@ -581,7 +581,17 @@ impl WorkflowConfig {
                 .collect();
             let mut active_value_tables: Vec<&ValueGroup> = Vec::new();
             for table in &self.values {
-                let referenced = trigger_text.iter().any(|t| {
+                // Scan `expand_texts` (all_text + expand_inputs patterns),
+                // not just `trigger_text` (issue #268 item 1): a consumer
+                // that references a values table ONLY through an
+                // expand_inputs pattern (an aggregator gathering one file
+                // per table value) must still fan out per value — otherwise
+                // it keeps an empty `input` and, worse, loses the
+                // execution-DAG edges to its producers (the template graph
+                // infers them from the raw pattern). Per-value input
+                // selection continues to work below: each instance gathers
+                // the files matching its own binding of the pattern.
+                let referenced = expand_texts.iter().any(|t| {
                     t.contains(&format!("{{{}}}", table.name))
                         || t.contains(&format!("{{values.{}}}", table.name))
                 });
