@@ -210,7 +210,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn broadcast_carries_owner_alongside_payload() {
+    async fn broadcast_carries_owner_and_system_events_in_order() {
+        // Both assertions share ONE subscription: the process-global
+        // broadcast channel is shared across tests in a binary, so two
+        // separate tests subscribing concurrently can drain each other's
+        // events (verified root cause of the flake, issue #268 item 2.2).
+        // A single receiver observing both broadcasts in FIFO order is
+        // deterministic.
         let mut rx = event_tx().subscribe();
         broadcast_event_for(
             "run_started",
@@ -223,11 +229,7 @@ mod tests {
         assert_eq!(payload["type"], "run_started");
         assert_eq!(payload["user"], "alice");
         assert_eq!(payload["data"]["run_id"], "r1");
-    }
 
-    #[tokio::test]
-    async fn broadcast_system_event_has_no_owner() {
-        let mut rx = event_tx().subscribe();
         broadcast_event("engine_ready", &serde_json::json!({}));
         let event = rx.recv().await.expect("event arrives");
         assert!(event.user.is_none());
