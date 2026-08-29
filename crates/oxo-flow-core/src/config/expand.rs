@@ -253,6 +253,16 @@ impl WorkflowConfig {
         let pair_combos = wildcard_combinations_from_pairs(&active_pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
 
+        // `config_values` is loop-invariant across every per-instance `when`
+        // filter below (it mirrors `self.config`, which never changes during
+        // expansion) — hoisted here so a large `[config]` table is cloned
+        // once per workflow, not once per wildcard combination (#268 item 4).
+        let config_values: HashMap<String, toml::Value> = self
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
         // Rebuild expansion provenance from scratch — this method may run on a
         // config that was expanded before.
         self.expansion_samples.clear();
@@ -758,11 +768,6 @@ impl WorkflowConfig {
                         if let Some(ref when) = rule.when
                             && (when.contains("wildcard.") || when.contains("{meta."))
                         {
-                            let config_values: HashMap<String, toml::Value> = self
-                                .config
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
                             let combo_values = Self::expansion_when_context(&combo);
                             // Bake BOTH per-instance namespaces before
                             // evaluation: a raw `{meta.<col>}` token hits
@@ -894,11 +899,6 @@ impl WorkflowConfig {
                         if let Some(ref when) = rule.when
                             && (when.contains("wildcard.") || when.contains("{meta."))
                         {
-                            let config_values: HashMap<String, toml::Value> = self
-                                .config
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
                             let combo_values = Self::expansion_when_context(&merged);
                             let baked = Self::bake_wildcard_when(when, &merged);
                             let baked = Self::bake_meta_when(&baked, &self.metadata, &merged);
@@ -1057,11 +1057,6 @@ impl WorkflowConfig {
                     if let Some(ref when) = rule.when
                         && when.contains("wildcard.")
                     {
-                        let config_values: HashMap<String, toml::Value> = self
-                            .config
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
                         let combo_values = Self::expansion_when_context(combo);
                         if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
                             when,
