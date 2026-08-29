@@ -241,6 +241,10 @@
             "null"
           ],
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "time_limit": {
+          "type": "string",
+          "description": "Default wall-time limit (e.g. 48h) applied to every rule whose resources.time_limit is unset"
         }
       }
     },

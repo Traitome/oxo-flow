@@ -108,7 +108,13 @@ const WORKFLOW_KEYS: &[&str] = &[
 ];
 
 /// Keys of the `[defaults]` table.
-const DEFAULTS_KEYS: &[&str] = &["environment", "memory", "shell_prelude", "threads"];
+const DEFAULTS_KEYS: &[&str] = &[
+    "environment",
+    "memory",
+    "shell_prelude",
+    "threads",
+    "time_limit",
+];
 
 /// Keys of the `[report]` table.
 const REPORT_KEYS: &[&str] = &["format", "sections", "template"];
