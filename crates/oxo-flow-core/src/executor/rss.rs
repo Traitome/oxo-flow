@@ -115,6 +115,21 @@ impl RssSampler {
                                 guard.iter().map(|(pid, tp)| (*pid, tp.clone())).collect()
                             };
                             system.refresh_processes(ProcessesToUpdate::All, true);
+                            // One shared parent→children map per tick (built
+                            // once, O(P)), plus one shared subtree walk per
+                            // root. The old shape called `subtree_rss_bytes`
+                            // per tracked child, each re-scanning the whole
+                            // process table in a fixpoint loop —
+                            // O(ticks × rules × passes × P) (#268 item 4).
+                            let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
+                            for (pid, proc) in system.processes() {
+                                if let Some(parent) = proc.parent() {
+                                    children_of
+                                        .entry(parent.as_u32())
+                                        .or_default()
+                                        .push(pid.as_u32());
+                                }
+                            }
                             for (pid, tp) in &snapshot {
                                 // CPU accumulates only while the process is
                                 // alive: a dead-but-retained entry or a
@@ -143,8 +158,10 @@ impl RssSampler {
                                     tp.cpu_micros.fetch_add(micros, Ordering::SeqCst);
                                     tp.seen.store(true, Ordering::SeqCst);
                                 }
-                                tp.peak
-                                    .fetch_max(subtree_rss_bytes(&system, *pid), Ordering::Relaxed);
+                                tp.peak.fetch_max(
+                                    subtree_rss_bytes(&children_of, &system, *pid),
+                                    Ordering::Relaxed,
+                                );
                             }
                         }
                     });
@@ -237,32 +254,32 @@ impl Drop for RssHandle {
 }
 
 /// Summed RSS (bytes) of `root` and all its live descendants.
-fn subtree_rss_bytes(system: &sysinfo::System, root: u32) -> u64 {
-    let mut targets = vec![root];
-    // Expand outward: anything whose parent is already in the set.
-    loop {
-        let mut found = false;
-        for (child_pid, proc) in system.processes() {
-            let child = child_pid.as_u32();
-            if targets.contains(&child) {
-                continue;
-            }
-            if let Some(parent) = proc.parent()
-                && targets.contains(&parent.as_u32())
-            {
-                targets.push(child);
-                found = true;
-            }
+///
+/// `children_of` is the parent→children map over the CURRENT process table,
+/// built once per tick by the caller and shared by every tracked root: the
+/// walk is then O(subtree) instead of a full-table fixpoint per rule.
+fn subtree_rss_bytes(
+    children_of: &HashMap<u32, Vec<u32>>,
+    system: &sysinfo::System,
+    root: u32,
+) -> u64 {
+    // Iterate the descendant closure over an explicit stack (a recursive
+    // visit would need the same map anyway).
+    let mut total = 0u64;
+    let mut stack = vec![root];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !visited.insert(pid) {
+            continue;
         }
-        if !found {
-            break;
+        if let Some(proc) = system.process(sysinfo::Pid::from_u32(pid)) {
+            total += proc.memory();
+        }
+        if let Some(children) = children_of.get(&pid) {
+            stack.extend_from_slice(children);
         }
     }
-    targets
-        .iter()
-        .filter_map(|pid| system.process(sysinfo::Pid::from_u32(*pid)))
-        .map(|p| p.memory())
-        .sum()
+    total
 }
 
 #[cfg(test)]
