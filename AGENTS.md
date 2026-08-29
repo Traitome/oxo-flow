@@ -119,6 +119,15 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
+| `OXO_FLOW_PORT` | No | `3000` | Web server port (also settable via `--port`) |
+| `OXO_FLOW_ADMIN_PASSWORD` | Team/HPC | — | Admin sign-in password. Without at least one of ADMIN/USER/VIEWER_PASSWORD in team/hpc mode the server refuses weak setups (see below) |
+| `OXO_FLOW_USER_PASSWORD` | Team/HPC | — | Standard-user sign-in password |
+| `OXO_FLOW_VIEWER_PASSWORD` | Team/HPC | — | Read-only sign-in password |
+| `OXO_FLOW_DEV_MODE` | No | unset | `"1"` accepts `password == username` logins for any user (local development only); the server refuses to start on a non-loopback bind with it set |
+| `OXO_FLOW_DISABLE_RATE_LIMIT` | No | unset | `"1"` disables the login/API rate limiter (tests only) |
+| `OXO_FLOW_OAUTH_REDIRECT_URI` | No | `http://localhost:3000/api/auth/oauth/callback` | Redirect URI registered with the OAuth provider (ORCID); set when running behind a proxy or non-default port |
+| `OXO_FLOW_PULL_MAX_BYTES` | No | `1073741824` (1 GiB) | Upper bound for `pull`/bundle downloads (buffered before checksum verify); raise for larger bundles |
+| `OXO_FLOW_AI_FETCH_ALLOW` | No | — | Comma-separated hostnames/IP literals exempted from the AI fetch SSRF guard (#204); use only for trusted internal endpoints |
 | `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
 | `OXO_FLOW_RUNS_RATE_LIMIT` | No | `5` | Run-creation allowance per identity per minute on POST /api/runs (#213); `0` disables the dedicated limiter |
 
