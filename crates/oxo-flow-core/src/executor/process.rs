@@ -1310,8 +1310,32 @@ impl LocalExecutor {
         // cached upload stage is not proof the cloud still has the file.
         // Recorded provenance checksums tighten the gate (issue #194 B2):
         // content identity wins over mtime when digests are available.
-        let freshness_checksums = match &self.config.checkpoint {
-            Some(ck) => Some(ck.lock().await.checksums.clone()),
+        // The map is only ever queried (`contains_key`/`get` on the few
+        // expanded outputs), so we clone just those lookups' worth of data
+        // instead of deep-copying every recorded checksum per rule (#268
+        // item 4). Consistency across the handful of queries below is all
+        // that matters, and the small view is enough.
+        let freshness_checksums: Option<HashMap<String, String>> = match &self.config.checkpoint {
+            Some(ck) => {
+                let guard = ck.lock().await;
+                let expanded: Vec<String> = rule
+                    .output
+                    .iter()
+                    .map(|o| super::checkpoint::expand_config_in_path(o, wildcard_values))
+                    .collect();
+                if expanded.iter().all(|o| guard.checksums.contains_key(o)) {
+                    Some(
+                        expanded
+                            .iter()
+                            .filter_map(|o| guard.checksums.get(o).map(|v| (o.clone(), v.clone())))
+                            .collect(),
+                    )
+                } else {
+                    // Not every output has a recorded hash — the gate
+                    // degrades to the mtime path either way.
+                    None
+                }
+            }
             None => None,
         };
         if !self.config.force_rerun
