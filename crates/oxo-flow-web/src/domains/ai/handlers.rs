@@ -186,21 +186,26 @@ pub async fn explain(
             .unwrap_or(None);
 
         if let Some(run) = run {
-            // Node status comes from the engine's checkpoint state.
-            let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
-                std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-                run.status == "running",
-            );
-
-            let log = run
-                .workdir
-                .as_ref()
-                .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
-                .unwrap_or_default();
-
-            let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
-                std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
-            );
+            // Node status comes from the engine's checkpoint state. The
+            // checkpoint/log reads are synchronous file I/O — run the
+            // combined block on the blocking pool (#268 item 4, web minor).
+            let workdir = run.workdir.clone();
+            let running = run.status == "running";
+            let (node_items, log, benchmarks) = tokio::task::spawn_blocking(move || {
+                let wd = workdir.as_deref().unwrap_or("");
+                let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
+                    std::path::Path::new(wd),
+                    running,
+                );
+                let log =
+                    std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default();
+                let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
+                    std::path::Path::new(wd),
+                );
+                (node_items, log, benchmarks)
+            })
+            .await
+            .unwrap_or_default();
             let diagnostics =
                 crate::domains::execution::service::diagnose_run(&node_items, &log, &benchmarks);
             (diagnostics, log)
@@ -265,21 +270,27 @@ pub async fn interpret(
 
         run.and_then(|r| {
             r.workdir.as_ref().and_then(|wd| {
-                // Read result files for summary
-                let mut summary = String::new();
-                if let Ok(entries) = std::fs::read_dir(wd) {
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        if let Ok(meta) = entry.metadata() {
-                            summary.push_str(&format!("{} ({} bytes)\n", name, meta.len()));
+                // Read result files for summary — synchronous directory
+                // walk, kept off the async runtime (#268 item 4, web
+                // minor). The blocking-pool hop is only worth it when a
+                // workdir exists; otherwise stay on the cheap path.
+                let wd = wd.to_string();
+                tokio::task::block_in_place(|| {
+                    let mut summary = String::new();
+                    if let Ok(entries) = std::fs::read_dir(&wd) {
+                        for entry in entries.filter_map(|e| e.ok()) {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if let Ok(meta) = entry.metadata() {
+                                summary.push_str(&format!("{} ({} bytes)\n", name, meta.len()));
+                            }
                         }
                     }
-                }
-                if summary.is_empty() {
-                    None
-                } else {
-                    Some(summary)
-                }
+                    if summary.is_empty() {
+                        None
+                    } else {
+                        Some(summary)
+                    }
+                })
             })
         })
         .unwrap_or_default()

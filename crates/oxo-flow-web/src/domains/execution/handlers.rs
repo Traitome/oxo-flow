@@ -346,9 +346,10 @@ pub async fn create_run(
         }
 
         // Save pipeline TOML to the working directory so the executor (CLI
-        // subprocess) can read it.
+        // subprocess) can read it. `tokio::fs` keeps the small write off
+        // the async runtime's blocking threads (#268 item 4, web minor).
         let workflow_path = run_dir.join("workflow.oxoflow");
-        if let Err(e) = std::fs::write(&workflow_path, toml) {
+        if let Err(e) = tokio::fs::write(&workflow_path, toml).await {
             tracing::error!("Failed to write workflow to {:?}: {e}", workflow_path);
         } else {
             tracing::info!("Saved workflow to {:?}", workflow_path);
@@ -1040,24 +1041,30 @@ pub async fn get_run_results(
     let run = load_owned_run(pool, &user, &id).await?;
 
     // List files in the workdir recursively so nested products (e.g.
-    // results/sample1/peaks.bed) are visible (issue #79 P1-08).
-    let results: Vec<serde_json::Value> = run
-        .workdir
-        .as_ref()
-        .map(|wd| {
-            service::list_files_recursive(std::path::Path::new(wd))
-                .into_iter()
-                .map(|f| {
-                    serde_json::json!({
-                        "name": f.name,
-                        "path": f.path,
-                        "size_bytes": f.size_bytes,
-                        "is_dir": f.is_dir,
-                    })
+    // results/sample1/peaks.bed) are visible (issue #79 P1-08). The walk
+    // is bounded (500 entries / depth 4) but still synchronous — run it
+    // on the blocking pool (#268 item 4, web minor).
+    let results: Vec<serde_json::Value> = match run.workdir.as_ref() {
+        Some(wd) => {
+            let wd = wd.clone();
+            tokio::task::spawn_blocking(move || {
+                service::list_files_recursive(std::path::Path::new(&wd))
+            })
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| {
+                serde_json::json!({
+                    "name": f.name,
+                    "path": f.path,
+                    "size_bytes": f.size_bytes,
+                    "is_dir": f.is_dir,
                 })
-                .collect()
-        })
-        .unwrap_or_default();
+            })
+            .collect()
+        }
+        None => Vec::new(),
+    };
 
     Ok(Json(results))
 }
@@ -1657,22 +1664,27 @@ async fn build_report_for_run(
 
     // Recursive listing: nested products must reach the report page and the
     // AI narrative (issue #79 P1-08 — the narrative claimed "4 output files"
-    // while the real products lived in subdirectories).
-    let files: Vec<ReportFile> = run
-        .workdir
-        .as_ref()
-        .map(|wd| {
-            service::list_files_recursive(std::path::Path::new(wd))
-                .into_iter()
-                .map(|f| ReportFile {
-                    path: f.path,
-                    name: f.name,
-                    size_bytes: f.size_bytes,
-                    is_dir: f.is_dir,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // while the real products lived in subdirectories). Synchronous but
+    // bounded walk → blocking pool (#268 item 4, web minor).
+    let files: Vec<ReportFile> = match run.workdir.as_ref() {
+        Some(wd) => {
+            let wd = wd.clone();
+            tokio::task::spawn_blocking(move || {
+                service::list_files_recursive(std::path::Path::new(&wd))
+            })
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| ReportFile {
+                path: f.path,
+                name: f.name,
+                size_bytes: f.size_bytes,
+                is_dir: f.is_dir,
+            })
+            .collect()
+        }
+        None => Vec::new(),
+    };
 
     let log_summary = match run.workdir.as_ref() {
         Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
