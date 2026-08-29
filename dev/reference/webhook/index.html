@@ -3876,7 +3876,10 @@
 </tr>
 </tbody>
 </table>
-<p>There is no <code>WorkflowCancelled</code>, <code>RuleStarted</code>, or <code>RuleSkipped</code> event in the webhook module.</p>
+<p>There is no <code>RuleStarted</code> or <code>RuleSkipped</code> event in the webhook module. (The
+<code>ExecutionEvent</code> log stream in the core executor likewise has no
+<code>workflow_cancelled</code> variant — an interruption surfaces as <code>rule_failed</code>
+records with an <code>interrupted by &lt;signal&gt;</code> skip reason.)</p>
 <p>If the <code>events</code> array is omitted, the default subscription is <code>["workflow_completed"]</code> only.</p>
 <h2 id="payload">Payload<a class="headerlink" href="#payload" title="Permanent link">#</a></h2>
 <p>The <code>json</code> payload is a standard HTTP POST request with <code>Content-Type: application/json</code>. The body is a <code>WebhookPayload</code>:</p>
