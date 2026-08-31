@@ -16,7 +16,10 @@ COPY src/lib.rs src/
 COPY crates/ ./crates/
 # -p is required: the workspace root's default package (oxo-flow) has no bin
 # targets, so `--bin oxo-flow-web` aborts with "no bin target named".
-RUN cargo build --release -p oxo-flow-web
+# oxo-flow-cli provides the `oxo-flow` binary: web-triggered runs shell out to
+# it (executor.rs find_oxo_flow_binary falls back to PATH), and it keeps the
+# CLI usable inside the image.
+RUN cargo build --release -p oxo-flow-web -p oxo-flow-cli
 
 # ===== Runtime =====
 # Must match the builder's Debian release: rust:1.98-slim is trixie-based
@@ -30,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/target/release/oxo-flow-web /app/oxo-flow-web
+COPY --from=backend-builder /app/target/release/oxo-flow /app/oxo-flow
 # vite emits to ../crates/oxo-flow-web/static (vite.config.ts outDir),
 # NOT frontend/dist — copy from there.
 COPY --from=frontend-builder /app/crates/oxo-flow-web/static /app/frontend/dist
@@ -38,6 +42,12 @@ RUN mkdir -p /app/data && \
     chown -R 1000:1000 /app
 
 USER 1000:1000
+
+# Both entrypoints default their SQLite DB to ./oxo-flow.db in the CWD
+# (the standalone binary honors DATABASE_URL, but `serve` hardcodes the
+# relative path) — so run from /app/data: state lands on the mounted
+# volume and survives container restarts. Binary paths stay absolute.
+WORKDIR /app/data
 
 ENV OXO_FLOW_FRONTEND_DIR=/app/frontend/dist \
     OXO_FLOW_MODE=team

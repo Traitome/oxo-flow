@@ -102,6 +102,24 @@ cargo install oxo-flow-cli
 conda install -c bioconda oxo-flow-cli
 ```
 
+### Run with Docker
+
+Pre-built images are published to GitHub Container Registry on every release (and every push to `main`):
+
+```bash
+# Web UI at http://localhost:3000 (CLI is inside the same image)
+docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
+
+# Pin a release
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
+
+# CLI one-shot usage (workflow files mounted from the host)
+docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
+  oxo-flow run my-pipeline.oxoflow
+```
+
+Health endpoint: `GET /api/health` returns `"status":"ok"` when the database is reachable.
+
 ### Build from source
 
 ```bash
