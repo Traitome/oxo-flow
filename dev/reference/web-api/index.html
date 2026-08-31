@@ -5407,12 +5407,18 @@ Generates Dockerfile or Singularity definition.</p>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/runs
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>Content-Type: application/json
 </span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;"}
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;", "samples": ["S1", "S2"], "targets": ["rule_name"]}
 </span></code></pre></div>
 <code>toml_content</code> is the workflow source (required — the run is created from
 it, not from a saved pipeline); <code>max_jobs</code>, <code>dry_run</code>, <code>keep_going</code>,
-<code>pipeline_id</code>, and <code>cluster_id</code> are top-level fields (not nested under a
-<code>config</code> object). Returns <code>{ run_id, status: "queued", estimated_resources, execution_plan }</code>.</p>
+<code>pipeline_id</code>, <code>cluster_id</code>, <code>samples</code>, and <code>targets</code> are top-level fields
+(not nested under a <code>config</code> object). Returns
+<code>{ run_id, status: "queued", estimated_resources, execution_plan }</code>.</p>
+<p>Before spawning the executor the run stages the acting user's uploaded
+files (<code>POST /api/files</code> → <code>workspace/users/&lt;user&gt;/inputs/</code>) into the run's
+working directory, so <code>metadata_file</code> and relative input paths resolve the
+same way they do on the CLI. Files already present in the workdir are never
+overwritten.</p>
 <p><code>pipeline_id</code> (optional) only <em>associates</em> the run with a saved pipeline —
 the TOML still comes from <code>toml_content</code>. It makes the run execute in the
 pipeline's <strong>persistent working directory</strong> (<code>workspace/users/&lt;user&gt;/pipelines/&lt;id&gt;</code>),
@@ -5430,6 +5436,8 @@ Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</c
   defaults to 1): an omitted <code>max_jobs</code> still spawns the CLI with <code>-j 4</code>,
   which is also the value the resource estimate assumes.</li>
 <li><code>keep_going: true</code> maps to <code>-k</code>.</li>
+<li><code>samples</code> (array of strings, optional) maps to <code>--samples</code> (comma-joined).</li>
+<li><code>targets</code> (array of strings, optional) maps to <code>-t</code> per entry.</li>
 <li><code>cluster_id</code> (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   <a href="#cluster-connections--remote-execution">Cluster Connections</a>).</li>
@@ -5609,6 +5617,9 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 </span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14" href="#__codelineno-49-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
 </span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15" href="#__codelineno-49-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
 </span></code></pre></div>
+<p>The translate endpoints take <code>{ "intent": "&lt;natural-language description&gt;",
+"context": { "data_analysis_id": "&lt;uuid&gt;" } }</code> — <code>intent</code> is REQUIRED (sending
+only a <code>prompt</code> field fails deserialization); <code>context</code> is optional.</p>
 <p>The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment
 variables. <code>GET /api/ai/config/effective</code> shows the resolved result and
