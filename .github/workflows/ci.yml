@@ -1009,7 +1009,7 @@ jobs:
         run: |
           docker run -d --name oxo-flow-ci -p 3000:3000 oxo-flow:ci
           for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"healthy"'; then
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
               echo "container healthy"
               docker rm -f oxo-flow-ci > /dev/null
               exit 0
