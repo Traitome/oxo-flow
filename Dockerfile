@@ -7,7 +7,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ===== Backend builder =====
-FROM rust:1.92-slim AS backend-builder
+FROM rust:1.98-slim AS backend-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/

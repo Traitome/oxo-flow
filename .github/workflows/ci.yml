@@ -986,6 +986,41 @@ jobs:
             cargo publish -p oxo-flow-cli
           fi
 
+  # ─── Docker: the shipped Dockerfile must actually build ───────────────────
+  # Issue #276: rust:1.92-slim < MSRV 1.98 broke `docker build .` for every
+  # user and nothing in CI noticed. This gate keeps the container image
+  # buildable on every push to main / PR.
+  docker-build:
+    name: Docker (build)
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always() && needs.test.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      - name: Build the image
+        run: docker build -t oxo-flow:ci .
+
+      - name: Smoke-test the container (health endpoint)
+        run: |
+          docker run -d --name oxo-flow-ci -p 3000:3000 oxo-flow:ci
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"healthy"'; then
+              echo "container healthy"
+              docker rm -f oxo-flow-ci > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::container did not become healthy"
+          docker logs oxo-flow-ci || true
+          docker rm -f oxo-flow-ci > /dev/null || true
+          exit 1
+
   # ─── Frontend: build + e2e (Playwright against the real server) ──────────
   frontend:
     name: Frontend (build + e2e)
