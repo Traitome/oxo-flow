@@ -986,6 +986,130 @@ jobs:
             cargo publish -p oxo-flow-cli
           fi
 
+  # ─── Docker: the shipped Dockerfile must actually build ───────────────────
+  # Issue #276: rust:1.92-slim < MSRV 1.98 broke `docker build .` for every
+  # user and nothing in CI noticed. This gate keeps the container image
+  # buildable on every push to main / PR.
+  docker-build:
+    name: Docker (build)
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always() && needs.test.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      - name: Build the image
+        run: docker build -t oxo-flow:ci .
+
+      - name: Smoke-test the container (health endpoint)
+        run: |
+          docker run -d --name oxo-flow-ci -p 3000:3000 oxo-flow:ci
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "container healthy"
+              docker rm -f oxo-flow-ci > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::container did not become healthy"
+          docker logs oxo-flow-ci || true
+          docker rm -f oxo-flow-ci > /dev/null || true
+          exit 1
+
+  # ─── Docker: publish the image to ghcr.io (GitHub Packages) ───────────────
+  # Reuses the docker-build leg's build + smoke test, then pushes. Triggers:
+  #   - every release tag / dispatch release  → ghcr.io/traitome/oxo-flow:<version> + :latest
+  #   - pushes to main                        → ghcr.io/traitome/oxo-flow:main
+  # so users can `docker run ghcr.io/traitome/oxo-flow` without building.
+  docker-publish:
+    name: Docker (publish to ghcr.io)
+    runs-on: ubuntu-latest
+    needs: [sync-version, test, docker-build]
+    if: >-
+      always() &&
+      needs.docker-build.result == 'success' &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.tag != '') ||
+       github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/oxo-flow
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          # Release legs use the synced version; main pushes get a moving
+          # :main tag instead of a misleading :latest.
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '') }}" == "true" ]]; then
+            VERSION="${{ needs.sync-version.outputs.version }}"
+            TAGS="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:latest"
+          else
+            TAGS="${IMAGE}:main"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing tags:"
+          echo "$TAGS"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the pushed image (health endpoint)
+        run: |
+          # Pick whichever tag this run published and verify it serves.
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '') }}" == "true" ]]; then
+            PUBLISHED_TAG="latest"
+          else
+            PUBLISHED_TAG="main"
+          fi
+          docker pull "${IMAGE}:${PUBLISHED_TAG}"
+          docker run -d --name oxo-flow-pub -p 3000:3000 "${IMAGE}:${PUBLISHED_TAG}"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "published image healthy"
+              docker rm -f oxo-flow-pub > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::published image did not become healthy"
+          docker logs oxo-flow-pub || true
+          docker rm -f oxo-flow-pub > /dev/null || true
+          exit 1
+
   # ─── Frontend: build + e2e (Playwright against the real server) ──────────
   frontend:
     name: Frontend (build + e2e)

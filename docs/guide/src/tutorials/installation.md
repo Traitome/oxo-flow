@@ -120,6 +120,30 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 
 ---
 
+## Option 4 — Run with Docker
+
+Images are published to GitHub Container Registry automatically on every release and every push to `main`:
+
+```bash
+# Web UI at http://localhost:3000
+docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
+
+# Pin a specific release
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
+
+# CLI one-shot usage — mount your workflow directory
+docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
+  oxo-flow run my-pipeline.oxoflow
+```
+
+!!! note "Data persistence"
+    The server stores its database in `/app/data` inside the container. Mount a
+    volume to keep it across restarts: `-v oxo-flow-data:/app/data`. The image
+    runs as UID 1000 — make sure the mounted host directory is writable by that
+    user.
+
+---
+
 ## Optional Dependencies
 
 ### Graphviz (for Visualization)
