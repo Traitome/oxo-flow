@@ -10,6 +10,9 @@ RUN npm run build
 FROM rust:1.98-slim AS backend-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
+# The root manifest is both workspace and package: without its src/lib.rs
+# cargo rejects the manifest ("no targets specified") inside the container.
+COPY src/lib.rs src/
 COPY crates/ ./crates/
 RUN cargo build --bin oxo-flow-web --release
 
