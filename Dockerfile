@@ -14,7 +14,9 @@ COPY Cargo.toml Cargo.lock ./
 # cargo rejects the manifest ("no targets specified") inside the container.
 COPY src/lib.rs src/
 COPY crates/ ./crates/
-RUN cargo build --bin oxo-flow-web --release
+# -p is required: the workspace root's default package (oxo-flow) has no bin
+# targets, so `--bin oxo-flow-web` aborts with "no bin target named".
+RUN cargo build --release -p oxo-flow-web
 
 # ===== Runtime =====
 FROM debian:bookworm-slim
