@@ -19,7 +19,10 @@ COPY crates/ ./crates/
 RUN cargo build --release -p oxo-flow-web
 
 # ===== Runtime =====
-FROM debian:bookworm-slim
+# Must match the builder's Debian release: rust:1.98-slim is trixie-based
+# (glibc 2.41); a bookworm runtime (glibc 2.36) aborts with
+# "GLIBC_2.39 not found" (issue #276 docker-build gate).
+FROM debian:trixie-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
