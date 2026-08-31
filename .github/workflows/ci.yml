@@ -1041,12 +1041,15 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/oxo-flow
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      # repository_owner is "Traitome" (uppercase) but ghcr requires lowercase
+      # image paths — force it down (${VAR,,} bash lowercase).
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
 
       - name: Compute image tags
         id: tags
