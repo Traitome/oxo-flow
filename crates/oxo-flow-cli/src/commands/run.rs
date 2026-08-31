@@ -1594,6 +1594,10 @@ pub async fn run_command(
     let executor = Arc::new(LocalExecutor::new(exec_config));
     let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Checksums recorded under --provenance across the whole run: when the
+    // flag was set but nothing landed, the summary must say so loudly
+    // instead of leaving `provenance verify` to puzzle the user (issue #276).
+    let provenance_recorded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // Failures of `required = false` rules (issue #99 B2): counted
     // separately, surfaced in the summary, but exempt from failing the run.
     let non_required_fail_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2361,6 +2365,12 @@ pub async fn run_command(
             let Some(rule) = config.get_rule(rule_name).cloned() else {
                 anyhow::bail!("rule '{rule_name}' not found in workflow");
             };
+            // Per-instance wildcard bindings for the substitution floor
+            // (issue #276): sample names / [[values]] / pair metadata are
+            // baked into the instance's shell text at expansion time and
+            // never travel in the `config.*` map — hand them to the
+            // executor explicitly. Empty for non-fan-out rules.
+            let instance_bindings = config.instance_bindings(rule_name);
             let rule_name = rule_name.clone();
             let executor = executor.clone();
             let checkpoint = checkpoint.clone();
@@ -2374,6 +2384,7 @@ pub async fn run_command(
             let sensitive_values = sensitive_values.clone();
             let skipped_count = skipped_count.clone();
             let wildcard_values = wildcard_values.clone();
+            let provenance_recorded = provenance_recorded.clone();
             let workdir_actual = workdir_actual.clone();
             let semaphore = semaphore.clone();
             let progress = progress.clone();
@@ -2391,6 +2402,7 @@ pub async fn run_command(
             });
 
             let typed_config = config.config.clone();
+            let instance_bindings = instance_bindings.clone();
             // Register the task name BEFORE the spawn: the closure moves
             // `rule_name` in, so the id→name map needs its own clone.
             let task_rule_name = rule_name.clone();
@@ -2415,7 +2427,7 @@ pub async fn run_command(
                 .flatten();
 
                 let result = executor
-                    .execute_rule_with_config(&rule, &wildcard_values, &typed_config)
+                    .execute_rule_with_bindings(&rule, &wildcard_values, &typed_config, &instance_bindings)
                     .await;
 
                 match result {
@@ -2518,15 +2530,31 @@ pub async fn run_command(
                                 ck.record_input_manifest(&rule_name, manifest.clone());
                             }
                             if provenance {
+                                // Expand `{config.*}` (and wildcards) exactly
+                                // like the output-verification pass does —
+                                // recording the UNEXPANDED template stored a
+                                // path that never existed, so `--provenance`
+                                // silently recorded nothing on the default
+                                // `init` scaffold and any templated-output
+                                // workflow (issue #276). Keys stay consistent
+                                // with `should_skip_rule_with_checksums`,
+                                // which looks up EXPANDED paths.
+                                let mut recorded_here = 0usize;
                                 for output in &rule.output {
-                                    let output_path = workdir_actual.join(output);
+                                    let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(output, &wildcard_values);
+                                    if expanded.contains('{') {
+                                        continue; // per-instance wildcard: resolved only at fan-out
+                                    }
+                                    let output_path = workdir_actual.join(&expanded);
                                     if output_path.exists()
                                         && let Ok(checksum) =
                                             oxo_flow_core::executor::checkpoint::compute_file_checksum(&output_path)
                                     {
-                                        ck.record_checksum(output, checksum);
+                                        ck.record_checksum(&expanded, checksum);
+                                        recorded_here += 1;
                                     }
                                 }
+                                provenance_recorded.fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
                             }
                             if let Err(e) = ck.save_to_file(&checkpoint_path) {
                                 tracing::warn!("Failed to save checkpoint: {e}");
@@ -2611,6 +2639,18 @@ pub async fn run_command(
                                 }
                                 if reason.is_empty() {
                                     reason.push_str("failed");
+                                }
+                                // Retry visibility (audit #276 P4-3): the
+                                // executor retries silently by design, but the
+                                // failure summary must say the rule was
+                                // retried N times so automation and humans can
+                                // distinguish flaky from immediate failures.
+                                if record.retries > 0 {
+                                    reason.push_str(&format!(
+                                        " (after {} retr{})",
+                                        record.retries,
+                                        if record.retries == 1 { "y" } else { "ies" }
+                                    ));
                                 }
                                 if !rule.required {
                                     reason.push_str(" (non-required)");
@@ -3265,6 +3305,22 @@ pub async fn run_command(
             crate::commands::output::snapshot_report(&workflow, &workdir_actual, &checkpoint)
     {
         eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
+    }
+
+    // --provenance recorded nothing: say so loudly. The historical failure
+    // mode was silent — the user asked for tracking, got an empty checksum
+    // map, and `provenance verify` later reported "Run with --provenance"
+    // after they had done exactly that (issue #276).
+    if provenance {
+        let recorded = provenance_recorded.load(std::sync::atomic::Ordering::Relaxed);
+        if recorded == 0 {
+            eprintln!(
+                "  {} --provenance recorded 0 checksums — no literal outputs completed \
+                 (templated or wildcard outputs are tracked per instance only after fan-out); \
+                 'provenance verify' will find nothing to check",
+                "⚠".yellow()
+            );
+        }
     }
 
     // Workflow-level terminal hooks (issue #227 item 1): on_complete /
@@ -5098,13 +5154,28 @@ pub async fn resume_command(
     print_banner();
 
     // Load checkpoint state
-    let state = CheckpointState::load_from_file(&checkpoint).with_context(|| {
-        format!(
-            "failed to load checkpoint from '{}'.\n  \
+    let state = CheckpointState::load_from_file(&checkpoint)
+        .with_context(|| {
+            format!(
+                "failed to load checkpoint from '{}'.\n  \
              Check that the file exists and is a valid checkpoint (JSON format).",
-            checkpoint.display()
-        )
-    })?;
+                checkpoint.display()
+            )
+        })
+        .map_err(|e| {
+            // Same friendly hint `status` gives for the identical mistake
+            // (audit #276 P4-4): passing a workflow file where a checkpoint
+            // belongs should name the confusion, not just the JSON parse error.
+            if checkpoint.extension().is_some_and(|ext| ext == "oxoflow") {
+                anyhow::anyhow!(
+                    "{e}\n  '{}' appears to be a workflow file, not a checkpoint.\n  \
+                 The 'resume' command expects a checkpoint file (e.g., .oxo-flow/checkpoint.json).",
+                    checkpoint.display()
+                )
+            } else {
+                e
+            }
+        })?;
 
     // Get workflow path from checkpoint
     let workflow_path = match &state.workflow_path {

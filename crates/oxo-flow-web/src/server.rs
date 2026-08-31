@@ -49,24 +49,44 @@ pub async fn spa_index() -> impl IntoResponse {
 /// Read index.html from disk and inject the `<base>` tag +
 /// `window.__OXO_BASE__` script. Runs exactly once, on the first request
 /// (see [`spa_index`]).
+///
+/// A source checkout ships a tracked `index.html` but NOT the built
+/// `assets/` directory (gitignored build output) — serving that shell
+/// yields a blank page whose hashed asset URLs all 404, with no hint
+/// (issue #276). When the referenced assets directory is missing, fall
+/// back to the actionable "SPA not built" page instead.
 fn load_spa_index_html() -> String {
     let fallback = r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
+
+    let read_index = |dir: &std::path::Path| -> Option<String> {
+        let html = std::fs::read_to_string(dir.join("index.html")).ok()?;
+        // A built SPA emits its scripts/links under `assets/` next to
+        // index.html; if that directory is absent the page cannot load —
+        // report the actionable fallback instead of a blank shell.
+        if !dir.join("assets").is_dir() {
+            tracing::warn!(
+                "SPA index found at {} but its assets/ directory is missing — \
+                 run `make frontend-build` (or `cd frontend && npm run build`) first",
+                dir.display()
+            );
+            return None;
+        }
+        Some(html)
+    };
 
     let html = std::env::var("OXO_FLOW_FRONTEND_DIR")
         .ok()
         .or_else(|| std::env::var("FRONTEND_DIR").ok())
         .map(|dir| {
-            let path = std::path::PathBuf::from(&dir).join("index.html");
-            std::fs::read_to_string(&path).unwrap_or_else(|_| {
-                tracing::warn!("SPA index not found at {}, using fallback", path.display());
+            read_index(std::path::Path::new(&dir)).unwrap_or_else(|| {
+                tracing::warn!("SPA index not found at {dir}, using fallback");
                 fallback.to_string()
             })
         })
         .unwrap_or_else(|| {
             // Same resolution chain as the asset serving (frontend_dir()):
             // env override → bundle-relative → compile-time.
-            std::fs::read_to_string(frontend_dir().join("index.html"))
-                .unwrap_or_else(|_| fallback.to_string())
+            read_index(&frontend_dir()).unwrap_or_else(|| fallback.to_string())
         });
 
     // Always inject a <base> so the SPA's relative asset URLs resolve

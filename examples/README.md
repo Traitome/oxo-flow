@@ -2,8 +2,8 @@
 
 All example workflows live in one numbered progression:
 
-- **`examples/gallery/*.oxoflow`** — 15 progressive workflows
-  (01 hello world → 15 paired experiment-control), each with a dedicated
+- **`examples/gallery/*.oxoflow`** — 16 progressive workflows
+  (01 hello world → 16 16S amplicon), each with a dedicated
   documentation page in `docs/guide/src/gallery/`. Start at 01; the
   numbering follows the learning curve from minimal rules to full
   production pipelines.

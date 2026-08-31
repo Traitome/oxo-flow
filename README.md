@@ -10,7 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/Traitome/oxo-flow?label=release&style=flat-square)](https://github.com/Traitome/oxo-flow/releases)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core?label=crates.io&style=flat-square)](https://crates.io/crates/oxo-flow-core)
 [![bioconda](https://anaconda.org/bioconda/oxo-flow-cli/badges/version.svg)](https://bioconda.github.io/recipes/oxo-flow-cli/README.html)
-[![MSRV](https://img.shields.io/badge/MSRV-1.97.1-orange?style=flat-square)](rust-toolchain.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.98.0-orange?style=flat-square)](rust-toolchain.toml)
 [![Docs](https://img.shields.io/badge/docs-guide-blue?style=flat-square)](https://traitome.github.io/oxo-flow/latest/)
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%7C%20Dual-blue?style=flat-square)](#license)
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange?style=flat-square)](https://doc.rust-lang.org/edition-guide/)

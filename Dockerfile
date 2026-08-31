@@ -56,7 +56,7 @@ EXPOSE 3000
 
 LABEL org.opencontainers.image.title="oxo-flow" \
       org.opencontainers.image.description="Bioinformatics pipeline engine" \
-      org.opencontainers.image.version="0.9.2" \
+      org.opencontainers.image.version="0.16.0" \
       org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-OxoFlow-Commercial" \
       org.opencontainers.image.vendor="Traitome" \
       org.opencontainers.image.authors="Shixiang Wang <w_shixiang@163.com>"
