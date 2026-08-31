@@ -258,12 +258,19 @@ POST   /api/pipelines/search       # Search by name, tags, content
 POST /api/runs
 Content-Type: application/json
 
-{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>", "cluster_id": "<cluster-id>"}
+{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>", "cluster_id": "<cluster-id>", "samples": ["S1", "S2"], "targets": ["rule_name"]}
 ```
 `toml_content` is the workflow source (required — the run is created from
 it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
-`pipeline_id`, and `cluster_id` are top-level fields (not nested under a
-`config` object). Returns `{ run_id, status: "queued", estimated_resources, execution_plan }`.
+`pipeline_id`, `cluster_id`, `samples`, and `targets` are top-level fields
+(not nested under a `config` object). Returns
+`{ run_id, status: "queued", estimated_resources, execution_plan }`.
+
+Before spawning the executor the run stages the acting user's uploaded
+files (`POST /api/files` → `workspace/users/<user>/inputs/`) into the run's
+working directory, so `metadata_file` and relative input paths resolve the
+same way they do on the CLI. Files already present in the workdir are never
+overwritten.
 
 `pipeline_id` (optional) only *associates* the run with a saved pipeline —
 the TOML still comes from `toml_content`. It makes the run execute in the
@@ -283,6 +290,8 @@ Execution flags are forwarded to the CLI executor:
   defaults to 1): an omitted `max_jobs` still spawns the CLI with `-j 4`,
   which is also the value the resource estimate assumes.
 - `keep_going: true` maps to `-k`.
+- `samples` (array of strings, optional) maps to `--samples` (comma-joined).
+- `targets` (array of strings, optional) maps to `-t` per entry.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections--remote-execution)).
@@ -522,6 +531,10 @@ GET  /api/ai/config/effective   # The config a run would use: user → server �
 GET  /api/knowledge/tools       # Tool catalog the AI can call
 GET  /api/knowledge/skills      # Skill catalog the AI can follow
 ```
+
+The translate endpoints take `{ "intent": "<natural-language description>",
+"context": { "data_analysis_id": "<uuid>" } }` — `intent` is REQUIRED (sending
+only a `prompt` field fails deserialization); `context` is optional.
 
 The config endpoints form a three-level resolution chain: a user's private
 provider overrides the server-wide one, which overrides environment

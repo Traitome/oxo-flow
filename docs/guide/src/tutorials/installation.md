@@ -8,7 +8,7 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 
 - **Operating system**: Linux (x86_64, aarch64) or macOS (Apple Silicon, Intel)
 - **Disk space**: ~23 MB for the binary
-- **Optional**: Rust toolchain (1.85+) if building from source
+- **Optional**: Rust toolchain (1.98+) if building from source
 
 !!! note "Runtime dependencies"
     oxo-flow itself has no runtime dependencies — it is a single static binary. However, the *tools your workflows call* (e.g., `bwa`, `samtools`, `GATK`) must be available either on your `$PATH` or through an environment manager (conda, docker, etc.) declared in your `.oxoflow` file.

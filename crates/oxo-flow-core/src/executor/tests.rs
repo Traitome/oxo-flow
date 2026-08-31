@@ -1474,6 +1474,54 @@ fn validate_wildcard_injection_blocks_subshell_in_value() {
 }
 
 #[tokio::test]
+async fn execute_rule_rejects_substitution_in_baked_instance_value() {
+    // Issue #276: per-instance wildcard values (sample names from a
+    // samplesheet) are BAKED into the expanded shell at expansion time and
+    // never travel in the `config.*` map the value-level guard sees. The
+    // rendered-command check must reject the rule before the shell spawns.
+    let dir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // A rule whose shell was already expanded (as expand_wildcards does):
+    // the sample value is spliced into the command text.
+    let rule = make_rule("baked", "echo x$(touch pwned276.txt)y > out.txt");
+    let mut values = HashMap::new();
+    values.insert("sample".to_string(), "x$(touch pwned276.txt)y".to_string());
+    let err = executor
+        .execute_rule(&rule, &values)
+        .await
+        .expect_err("injected sample value must fail the rule");
+    assert!(
+        err.to_string().contains("injection"),
+        "error must name the injection: {err}"
+    );
+    assert!(
+        !dir.path().join("pwned276.txt").exists(),
+        "the shell must never have run"
+    );
+}
+
+#[tokio::test]
+async fn execute_rule_allows_template_substitution_with_clean_values() {
+    // The same floor must NOT veto an author's own `$(date …)` in the shell
+    // template when every bound value is clean.
+    let dir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = make_rule("clean", "echo \"$(date +%Y)\" > out.txt");
+    let mut values = HashMap::new();
+    values.insert("sample".to_string(), "S1".to_string());
+    let record = executor.execute_rule(&rule, &values).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success, "{:?}", record.stderr);
+}
+
+#[tokio::test]
 async fn check_resources_fails_fast_when_group_exceeds_declared_capacity() {
     let config = ExecutorConfig {
         workdir: std::env::temp_dir(),

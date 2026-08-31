@@ -16,6 +16,9 @@ directories, and produces a single `.tar.zst` archive containing:
 
 - The workflow file
 - All referenced environment files (conda, mamba, pixi, venv)
+- The `[workflow]` data files the workflow cannot parse without —
+  `metadata_file`, `pairs_file`, and `sample_groups_file` (kept at their
+  declared relative path inside the bundle)
 - `scripts/` and `bin/` directories (Nextflow-style auto-PATH convention)
 - `manifest.json` with per-file SHA-256 checksums and container image references
 
@@ -135,6 +138,11 @@ worth being explicit about the limits:
 - **Containers do not normalise resources.** An image that runs fine on the
   publisher's machine can be OOM-killed on a smaller host, and thread counts vary
   with the available CPUs.
+- **Sample DATA is not bundled.** The engine-owned data files the workflow
+  declares (`metadata_file`, `pairs_file`, `sample_groups_file`) travel in the
+  bundle; raw analysis inputs (FASTQs, BAMs, …) do not. Consumers supply those
+  at their own paths — via the same relative layout, `--workdir`, or config
+  overrides.
 
 None of these are specific to oxo-flow — they apply to Snakemake and Nextflow
 bundles equally. The goal is honest reproducibility, not a guarantee we cannot

@@ -228,20 +228,28 @@ static DEFAULT_WILDCARD_RE: LazyLock<regex::Regex> =
 
 /// Validate wildcard VALUES before they are substituted into shell commands.
 ///
-/// Two independent layers:
+/// Two independent layers, per key:
 ///
-/// 1. **Hard floor (always enforced)** — no `$(`, no backticks. This blocks
-///    direct command substitution regardless of configuration.
-/// 2. **Default charset (issue #203)** — values for wildcards WITHOUT an
+/// 1. **Default charset (issue #203)** — values for wildcards WITHOUT an
 ///    explicit `wildcard_constraints` entry must match
 ///    [`DEFAULT_WILDCARD_PATTERN`]. Pipelines that legitimately need other
 ///    characters declare a constraint for that wildcard (the pre-existing
 ///    mechanism), or set `OXO_FLOW_UNSAFE_WILDCARDS=1` to relax the charset
-///    layer for the process — a one-time warning is logged and the
-///    `$(`/backtick floor still applies.
+///    layer for the process — a one-time warning is logged.
+/// 2. **Substitution floor (always enforced, after the charset skip)** — no
+///    `$(`, no backticks, for EVERY non-`config.*` value, including
+///    constrained wildcards and unsafe-mode runs. The floor sits after the
+///    constraint/unsafe-mode `continue` so a per-wildcard constraint can
+///    widen the character set without re-enabling command substitution
+///    (issue #276: the floor previously sat before the skip, so a
+///    `sample = "^.+$"` constraint silently disabled it).
 ///
-/// Values from `config.*` keys come from the trusted .oxoflow file itself
-/// and skip both layers, as before.
+/// `config.*` keys come from the trusted .oxoflow file (and the operator's
+/// own `--arg` overrides) and skip both layers, as before. Per-instance
+/// wildcard values (sample names, `[[values]]` fan-out, group metadata —
+/// anything a collaborator-supplied samplesheet or auto-discovered filename
+/// can carry) MUST reach this function; the caller merges them alongside
+/// the `config.*` map.
 #[must_use = "wildcard injection validation returns a Result that must be checked"]
 pub fn validate_wildcard_injection(
     wildcard_values: &HashMap<String, String>,
@@ -270,6 +278,30 @@ fn validate_wildcard_injection_inner(
         if key.starts_with("config.") {
             continue;
         }
+        // Charset layer only applies to unconstrained wildcards.
+        if declared_constraints.contains_key(key) || unsafe_mode {
+            // The substitution floor is UNCONDITIONAL for non-config values
+            // (docs: "rejected unconditionally — including for constrained
+            // wildcards"). It must run even when the charset layer is
+            // skipped — hence after this `continue`, not before it.
+            for (pattern, desc) in &injection_patterns {
+                if value.contains(pattern) {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "Wildcard injection detected: {} pattern in value '{}' for key '{}'",
+                            desc, value, key
+                        ),
+                        rule: None,
+                        suggestion: Some(
+                            "Sample names and other wildcard values must not contain \
+                             shell command substitution; rename the value or file."
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
         for (pattern, desc) in &injection_patterns {
             if value.contains(pattern) {
                 return Err(OxoFlowError::Validation {
@@ -284,10 +316,6 @@ fn validate_wildcard_injection_inner(
                     ),
                 });
             }
-        }
-        // Charset layer only applies to unconstrained wildcards.
-        if declared_constraints.contains_key(key) || unsafe_mode {
-            continue;
         }
         if !DEFAULT_WILDCARD_RE.is_match(value) {
             return Err(OxoFlowError::Validation {
@@ -408,5 +436,35 @@ mod wildcard_default_tests {
         assert!(validate_wildcard_injection_inner(&relaxed, &HashMap::new(), true).is_ok());
         let hostile = v(&[("sample", "$(id)")]);
         assert!(validate_wildcard_injection_inner(&hostile, &HashMap::new(), true).is_err());
+    }
+
+    #[test]
+    fn constrained_wildcard_still_hits_the_substitution_floor() {
+        // Issue #276 Repro A: the doc promises "rejected unconditionally —
+        // including for constrained wildcards", but the floor used to sit
+        // BEFORE the constraint skip, so a declared `sample = "^.+$"`
+        // constraint silently disabled it.
+        let mut constraints = HashMap::new();
+        constraints.insert("sample".to_string(), "^.+$".to_string());
+        for hostile in ["x$(touch pwned.txt)", "a`touch pwned`b"] {
+            let vals = v(&[("sample", hostile)]);
+            let err = validate_wildcard_injection_inner(&vals, &constraints, false)
+                .err()
+                .unwrap_or_else(|| panic!("'{hostile}' must be rejected under a constraint"));
+            assert!(err.to_string().contains("injection"), "{err}");
+        }
+    }
+
+    #[test]
+    fn substitution_floor_holds_in_unsafe_mode() {
+        // Issue #276: OXO_FLOW_UNSAFE_WILDCARDS=1 relaxes the CHARSET layer
+        // only — the floor must still reject command substitution.
+        for hostile in ["x$(touch pwned.txt)", "`touch pwned`"] {
+            let vals = v(&[("sample", hostile)]);
+            let err = validate_wildcard_injection_inner(&vals, &HashMap::new(), true)
+                .err()
+                .unwrap_or_else(|| panic!("'{hostile}' must be rejected in unsafe mode"));
+            assert!(err.to_string().contains("injection"), "{err}");
+        }
     }
 }

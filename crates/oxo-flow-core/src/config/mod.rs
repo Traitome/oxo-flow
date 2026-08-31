@@ -126,7 +126,13 @@ impl WorkflowConfig {
     /// Per-instance wildcard bindings: the union of the `[[values]]`
     /// table bindings and the `[[pairs]]` bindings for this instance
     /// name (runtime-discovered fan-out reconstruction, issue #227 item 5).
-    pub(crate) fn instance_bindings(&self, name: &str) -> crate::wildcard::WildcardValues {
+    ///
+    /// Public so the CLI/web run loop can hand each expanded instance's
+    /// bindings to the executor's substitution-floor check (issue #276):
+    /// these are exactly the values a samplesheet or discovered filename
+    /// can carry, and they are baked into the instance's shell text at
+    /// expansion time rather than travelling in the `config.*` map.
+    pub fn instance_bindings(&self, name: &str) -> crate::wildcard::WildcardValues {
         let mut bindings = crate::wildcard::WildcardValues::new();
         if let Some(values) = self.expansion_values.get(name) {
             bindings.extend(values.clone());
