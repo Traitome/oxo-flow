@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/target/release/oxo-flow-web /app/oxo-flow-web
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+# vite emits to ../crates/oxo-flow-web/static (vite.config.ts outDir),
+# NOT frontend/dist — copy from there.
+COPY --from=frontend-builder /app/crates/oxo-flow-web/static /app/frontend/dist
 
 RUN mkdir -p /app/data && \
     chown -R 1000:1000 /app
