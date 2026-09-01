@@ -3978,7 +3978,9 @@ Desktop users may prefer the <code>.deb</code> / <code>.rpm</code> / <code>.AppI
 <code>.dmg</code> bundles — see <a href="../../how-to/desktop-app/">Desktop App Packaging</a>.</p>
 <hr />
 <h2 id="option-4-run-with-docker">Option 4 — Run with Docker<a class="headerlink" href="#option-4-run-with-docker" title="Permanent link">#</a></h2>
-<p>Images are published to GitHub Container Registry automatically on every release and every push to <code>main</code>:</p>
+<p>Images are published to GitHub Container Registry automatically on every release and every push to <code>main</code>.
+Release images are multi-arch (<code>linux/amd64</code> + <code>linux/arm64</code>) and are assembled from the
+SHA256-verified release binaries; <code>:main</code> is amd64-only and compiled from source:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Web UI at http://localhost:3000</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>oxo-flow<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>:3000<span class="w"> </span>ghcr.io/traitome/oxo-flow:latest
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
