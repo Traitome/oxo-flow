@@ -691,6 +691,6 @@ mod tests {
         let registry = crate::report::SectionRegistry::with_defaults();
         let names: Vec<_> = registry.sections().into_iter().map(|(n, _)| n).collect();
         assert!(names.contains(&"software-versions"));
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 15);
     }
 }

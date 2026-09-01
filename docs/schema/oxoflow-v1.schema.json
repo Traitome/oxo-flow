@@ -1876,6 +1876,18 @@
             "null"
           ],
           "description": "Rule-level output pattern override"
+        },
+        "report": {
+          "type": [
+            "string",
+            "array",
+            "object",
+            "boolean",
+            "number",
+            "integer",
+            "null"
+          ],
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
         }
       }
     },

@@ -504,7 +504,7 @@ sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 |---|---|---|
 | `template` | String | Report template: the built-in name `"report.html"`, or a template file path (workflow directory first, then cwd). Applies to HTML output only; a render failure warns and falls back to the default renderer |
 | `format` | Array | Parsed but **not supported yet** — setting it makes `report` warn (or fail under `--strict`); select the output format with `-f` instead |
-| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary` |
+| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`, `software-versions`, `rule-captions`, `aggregate-metrics` (run `oxo-flow report --list-sections` for the live list) |
 
 ### How Sections Work
 
@@ -519,8 +519,41 @@ Each section ID maps to a registered `ReportSectionGenerator`:
 | `environment` | Available backends and oxo-flow version | Always |
 | `clinical-compliance` | ACMG/AMP classification, audit trail, biomarkers | Always |
 | `execution-status` | Per-rule execution status and benchmark metrics | Only with checkpoint |
+| `software-versions` | Tool/version table parsed from known version-reporting files (`*version*` filenames) | When version files are found |
+| `rule-captions` | Per-rule `report` annotations rendered as markdown — see [Rule Captions](#rule-captions) | When any rule declares `report` |
+| `aggregate-metrics` | MultiQC-style sample × metric matrix across tools, plus `*_mqc.json` custom content | When metric or custom-content files are found |
 
 The domain (DNA-seq, RNA-seq, epigenomics, or generic) is auto-detected from tool names in the workflow. Custom generators can be registered programmatically.
+
+### Rule Captions
+
+A rule can carry a `report` annotation — caption text rendered in the report's `rule-captions` section (the Snakemake `report()` equivalent). Two TOML forms:
+
+```toml
+[[rules]]
+name = "qc"
+shell = "fastp -i {sample}.fq"
+# Inline caption (markdown allowed):
+report = """
+# QC summary
+Reads trimmed with fastp; per-sample Q30 below.
+"""
+
+[[rules]]
+name = "align"
+shell = "bwa mem -t {threads} {input} > {output}"
+# Structured form: a markdown/text file relative to the workdir,
+# and/or an inline caption (at least one of the two):
+report = { file = "notes/alignment.md", caption = "Alignment QC" }
+```
+
+At render time each executed rule instance contributes one markdown subsection, ordered by rule declaration order:
+
+- The checkpoint's execution-time caption wins — it is what the run actually read (`report.file` content is captured when the rule completes, so a later edit to the file does not silently change a finished report).
+- Without an execution record (dry run, or a checkpoint from before this feature), the declared annotation is resolved at report time: inline caption first, then `report.file` relative to the workdir.
+- A missing or unreadable `report.file` never fails the report — the rule simply contributes no caption.
+
+Captions are text/markdown only; embedding figures is not supported in v1.
 
 ---
 
@@ -554,6 +587,7 @@ memory = "32G"
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |
+| `report` | String or Table | No | Report annotation rendered by the `rule-captions` report section. Inline text: `report = "# QC summary\nReads trimmed with fastp."` (markdown allowed). Or a table: `report = { file = "notes/qc.md", caption = "Alignment QC" }` where `file` is a markdown/text file resolved relative to the workdir (at least one of `file`/`caption` required) — see [Rule Captions](#rule-captions) |
 | `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
