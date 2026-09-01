@@ -57,7 +57,7 @@
         },
         "sample_groups_file": {
           "type": "string",
-          "description": "External TSV/JSON file with sample groups"
+          "description": "External TSV/CSV/JSON file with sample groups; extra columns become group metadata (e.g. reads_layout)"
         },
         "pairs_pattern": {
           "type": "string",

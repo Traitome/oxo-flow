@@ -1297,6 +1297,10 @@ pub struct SampleGroup {
     pub samples: Vec<String>,
 
     /// Arbitrary key-value metadata for the group; each key is a wildcard.
+    ///
+    /// Sheet files (TSV/CSV) map every column other than `name`/`samples`
+    /// into this table, so a `reads_layout` column fans out as `{reads_layout}`
+    /// in paths/shell and `wildcard.reads_layout` in `when` (issue #283).
     #[serde(default)]
     pub metadata: HashMap<String, String>,
 }
@@ -1306,18 +1310,18 @@ impl SampleGroup {
     ///
     /// # File format
     ///
-    /// **TSV**:
+    /// **TSV** (extra columns become group metadata wildcards — issue #283):
     /// ```text
-    /// name    samples
-    /// control    CTRL_001,CTRL_002,CTRL_003
-    /// case    S001,S002,S003
+    /// name    samples                 reads_layout
+    /// control    CTRL_001,CTRL_002,CTRL_003    pe
+    /// case    S001,S002,S003    ont
     /// ```
     ///
     /// **JSON**:
     /// ```json
     /// [
-    ///   {"name": "control", "samples": ["CTRL_001", "CTRL_002"]},
-    ///   {"name": "case", "samples": ["S001", "S002"]}
+    ///   {"name": "control", "samples": ["CTRL_001", "CTRL_002"], "reads_layout": "pe"},
+    ///   {"name": "case", "samples": ["S001", "S002"], "reads_layout": "ont"}
     /// ]
     /// ```
     pub fn load_from_file(path: &Path) -> Result<Vec<Self>> {
@@ -1400,6 +1404,32 @@ impl SampleGroup {
                 message: "sample_groups file missing 'samples' column".to_string(),
             })?;
 
+        // Reserved names must not reappear as sheet columns: the fan-out
+        // inserts `group`/`sample` bindings first and metadata keys LAST,
+        // so a `sample` column would silently override `{sample}` for every
+        // row in the group (issue #283).
+        for reserved in ["name", "samples", "group", "sample"] {
+            if col_index.contains_key(reserved) && reserved != "name" && reserved != "samples" {
+                return Err(OxoFlowError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "sample_groups file column '{reserved}' is reserved \
+                         (it would shadow the {reserved} wildcard); rename it"
+                    ),
+                });
+            }
+        }
+
+        // Every other column becomes group metadata: it fans out per
+        // (group, sample) as bare `{key}` wildcards in paths/shell and
+        // `wildcard.<key>` in `when` (issue #283 long-read dimension).
+        let metadata_cols: Vec<(&str, usize)> = headers
+            .iter()
+            .enumerate()
+            .filter(|(i, h)| *i != *name_col && *i != *samples_col && !h.is_empty())
+            .map(|(i, h)| (h, i))
+            .collect();
+
         let mut groups = Vec::new();
         for (row_idx, result) in reader.records().enumerate() {
             let record = result.map_err(|e| OxoFlowError::Parse {
@@ -1416,10 +1446,29 @@ impl SampleGroup {
                 .filter(|s| !s.is_empty())
                 .collect();
 
+            // Multi-file cells: a metadata value may carry several paths
+            // (one FASTQ per flowcell) separated by whitespace or `;` —
+            // normalized to space-joined so shell `cat {key}` splices
+            // correctly and render_wildcard_value keeps them one token list.
+            let mut metadata = HashMap::new();
+            for (col, idx) in &metadata_cols {
+                let raw = record.get(*idx).unwrap_or("").trim();
+                if raw.is_empty() {
+                    continue;
+                }
+                let normalized = raw
+                    .split([';', '\t'])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                metadata.insert((*col).to_string(), normalized);
+            }
+
             let group = Self {
                 name: record.get(*name_col).unwrap_or("").to_string(),
                 samples,
-                metadata: HashMap::new(),
+                metadata,
             };
             groups.push(group);
         }

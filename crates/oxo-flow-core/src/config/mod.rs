@@ -107,6 +107,38 @@ impl WorkflowConfig {
             }
         }
 
+        self.validate_sample_group_metadata()?;
+
+        Ok(())
+    }
+
+    /// Validate the group-level metadata vocabulary (issue #283).
+    ///
+    /// `reads_layout` is the documented second read dimension: sheet rows
+    /// declare `pe`, `single`, or `interleaved` for short reads and `ont` /
+    /// `pacbio` for long reads, so assembly/binning rules can gate on
+    /// `wildcard.reads_layout`. An unrecognized value is almost always a
+    /// typo that would silently close every `when` gate built on it — fail
+    /// at plan time with the accepted set named. Other metadata keys stay
+    /// free-form.
+    fn validate_sample_group_metadata(&self) -> Result<()> {
+        const READS_LAYOUT_VALUES: &[&str] = &["pe", "single", "interleaved", "ont", "pacbio"];
+        for group in &self.sample_groups {
+            if let Some(layout) = group.metadata.get("reads_layout") {
+                let value = layout.trim();
+                if !READS_LAYOUT_VALUES.contains(&value) {
+                    return Err(OxoFlowError::Config {
+                        message: format!(
+                            "sample group '{}' has reads_layout = '{}' — accepted values: {}. \
+                             Use the metadata_file table for free-form per-sample values.",
+                            group.name,
+                            value,
+                            READS_LAYOUT_VALUES.join("|")
+                        ),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 

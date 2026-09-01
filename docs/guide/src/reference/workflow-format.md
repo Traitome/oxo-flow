@@ -1692,6 +1692,9 @@ Any rule that references `{sample}` or `{group}` is expanded once per `(group, s
 
 **Expanded rule naming:** `{rule_name}_{group}_{sample}` (e.g., `align_control_CTRL_001`).
 
+When groups are loaded from a TSV/CSV sheet, extra columns become metadata
+keys automatically — see [Sheet columns as group metadata](#sheet-columns-as-group-metadata).
+
 ### Loading groups from external file
 
 For large cohorts, use `sample_groups_file` in `[workflow]`:
@@ -1705,10 +1708,9 @@ sample_groups_file = "metadata/groups.tsv"  # or .csv, .json
 **TSV format** (samples can be comma-separated within the field):
 
 ```text
-name       samples
-control    CTRL_001,CTRL_002,CTRL_003
-case       CASE_001,CASE_002,CASE_003
-treatment  TX_001,TX_002
+name       samples                reads_layout    long_reads
+short      CTRL_001,CTRL_002      pe
+long       LR_001                 ont             reads/flowcell1.fq.gz;reads/flowcell2.fq.gz
 ```
 
 **JSON format**:
@@ -1719,6 +1721,55 @@ treatment  TX_001,TX_002
   {"name": "case", "samples": ["CASE_001", "CASE_002"]}
 ]
 ```
+
+### Sheet columns as group metadata
+
+In TSV/CSV sheets, **every column other than `name` and `samples` becomes
+group metadata**: it fans out per `(group, sample)` pair as a bare
+`{key}` wildcard in paths/shell/log and as `wildcard.<key>` in `when`
+conditions — the same vocabulary as the inline
+`metadata` table. This is how a cohort declares a second read
+dimension (issue #283):
+
+```toml
+[[rules]]
+name   = "assemble"
+input  = ["{long_reads}"]
+output = ["asm/{group}_{sample}/assembly.fa"]
+when   = "wildcard.reads_layout == 'ont' || wildcard.reads_layout == 'pacbio'"
+shell  = "flye --nano-raw {input} --out-dir {output[0]}"
+
+[[rules]]
+name   = "qc"
+input  = ["raw/{sample}_R1.fastq.gz"]
+output = ["qc/{sample}.txt"]
+when   = "wildcard.reads_layout != 'ont' && wildcard.reads_layout != 'pacbio'"
+shell  = "fastqc {input} -o {output[0]}"
+```
+
+Short-read rows gate `assemble` closed and `qc` open; long-read rows the
+reverse — one rule template per branch, expanded per sample.
+
+**`reads_layout` vocabulary** — the column is validated at plan time;
+accepted values are `pe`, `single`, `interleaved` (short reads) and `ont`,
+`pacbio` (long reads). Any other value fails the workflow with the accepted
+set named, because a typo would silently close every `when` gate built on
+it. Other metadata columns stay free-form — use the
+[`metadata_file`](#sample-metadata-metadata_file) table for per-sample
+free-form values.
+
+**Multi-file cells** — a metadata cell may carry several paths (e.g. one
+FASTQ per flowcell) separated by whitespace or `;`. They are normalized to
+a single space-joined value that splices **verbatim** into the input list
+as one element; shell rendering joins input-list elements, so
+`flye --nano-raw {input}` receives all paths as separate shell tokens
+(the `oxo-flow-varlo` `target_regions` multi-file pattern).
+
+**Reserved column names** — `group` and `sample` cannot be used as sheet
+columns: the fan-out binds `{group}`/`{sample}` first and metadata keys
+last, so such a column would shadow the engine's binding for every row in
+the group. A sheet carrying them is rejected at parse time — rename the
+column (e.g. `sample_id`).
 
 ### Example
 
