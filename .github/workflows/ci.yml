@@ -1069,7 +1069,8 @@ jobs:
             --file Dockerfile.release \
             --build-arg VERSION="$VERSION" \
             --platform linux/amd64,linux/arm64 \
-            --load oxo-flow-release:ci .
+            -t oxo-flow-release:ci \
+            --load .
         env:
           TAG: ${{ inputs.tag }}
 
