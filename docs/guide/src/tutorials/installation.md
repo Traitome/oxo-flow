@@ -122,7 +122,9 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 
 ## Option 4 — Run with Docker
 
-Images are published to GitHub Container Registry automatically on every release and every push to `main`:
+Images are published to GitHub Container Registry automatically on every release and every push to `main`.
+Release images are multi-arch (`linux/amd64` + `linux/arm64`) and are assembled from the
+SHA256-verified release binaries; `:main` is amd64-only and compiled from source:
 
 ```bash
 # Web UI at http://localhost:3000
