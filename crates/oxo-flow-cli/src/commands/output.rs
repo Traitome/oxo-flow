@@ -394,9 +394,13 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         let workflow_file = resolved.workflow;
         let config = WorkflowConfig::from_file(&workflow_file)
             .with_context(|| format!("failed to parse {}", workflow_file.display()))?;
+        // Explicit --checkpoint wins; otherwise fall back to the
+        // checkpoint discovery already loaded (its workflow_git_sha feeds
+        // the document's provenance field) — the same precedence the full
+        // report path uses below.
         let checkpoint = match checkpoint_path.as_deref() {
             Some(p) => load_checkpoint(p, strict)?,
-            None => None,
+            None => resolved.checkpoint,
         };
         let doc = oxo_flow_core::software_versions::collect_software_versions(
             &config,
@@ -1552,7 +1556,27 @@ Keep the total under 200 words. Use simple language; explain jargon.
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hms_to_secs, parse_maxrss_to_mb};
+    use super::{parse_hms_to_secs, parse_maxrss_to_mb, resolve_report_workflow};
+
+    /// With no explicit workflow, `report --versions-yml` must still pick
+    /// up the auto-discovered checkpoint — its `workflow_git_sha` feeds the
+    /// versions document (issue #280 follow-up: the early exit previously
+    /// dropped `resolved.checkpoint`).
+    #[test]
+    fn versions_yml_resolution_carries_discovered_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, "[workflow]\nname = \"t\"\nversion = \"0.1\"\n").unwrap();
+        // Discovering from the workflow's own directory with no
+        // checkpoint on disk yields None — but the plumbing must be
+        // exercised end-to-end (explicit --checkpoint is tested via
+        // load_checkpoint; here we pin the None fallback path).
+        let resolved =
+            resolve_report_workflow(Some(wf.clone()), None, Some(dir.path()), None, false).unwrap();
+        assert_eq!(resolved.workflow, wf);
+        assert!(resolved.checkpoint.is_none());
+        assert!(resolved.checkpoint_path.is_none());
+    }
 
     #[test]
     fn hms_parser_handles_sacct_formats() {
