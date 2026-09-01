@@ -559,7 +559,7 @@ memory = "32G"
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
 | `environment` | Table | No | Environment specification |
 | `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
-| `when` | String | No | Conditional expression — skip rule when `false` |
+| `when` | String | No | Conditional expression — skip rule when `false`. May call read-only runtime functions (`reads_count`, `wc_lines`, `file_size`, `file_exists`) that inspect files in the run workdir; see [Data-Dependent `when` Gates](#data-dependent-when-gates) |
 | `envvars` | Table | No | Dictionary of environment variables to inject |
 | `params` | Table | No | User-defined parameters for shell templates |
 | `pre_exec` | String | No | Command to run *before* the main shell command |
@@ -1945,12 +1945,47 @@ shell = "fastqc {input[0]} -o qc/"
 | `config.<key> > N` | `config.min_cov >= 20` | Numeric comparison (`>`, `>=`, `<`, `<=`) |
 | `len(config.<key>)` | `len(config.gene_sets) > 0` | Element count comparison: array items, string characters, or table keys, compared against a whole number (`==`, `!=`, `>=`, `<=`, `>`, `<`). A missing key counts as 0. Bare `len(config.<key>)` is truthy when non-empty. Note a bare `config.<key>` array is truthy even when empty — `len(...) > 0` is the "list is non-empty" gate. Comparing against a non-numeric literal is a lint warning (W029) and always evaluates false |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test. Relative paths resolve against the **workflow root** (the workflow file's directory), not the process working directory, and every evaluation site (plan time, execution re-check, config-change analysis) resolves the same way. In per-instance predicates (`wildcard.<key>` / `{meta.<column>}`) it is evaluated at **plan time** — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with `{meta.*}` (plan-time bakeable) or an execution-time `config` gate instead |
+| `reads_count("path")` / `wc_lines("path")` / `file_size("path")` | `reads_count('trimmed/{sample}.fq.gz') > config.min_reads` | Data-dependent gates — count FASTQ records (4-line records, plain or `.gz`), text lines (plain or `.gz`), or file bytes in the **run workdir** at execution time. See [Data-Dependent `when` Gates](#data-dependent-when-gates) |
 | `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `{meta.<column>} == "value"` | `{meta.endedness} == 'SE'` | Per-instance sample-metadata comparison (see [Sample Metadata](#sample-metadata-metadata_file)) — baked and evaluated per instance at plan time; instances whose gate evaluates false never enter the DAG. A missing row or column renders `''` in a comparison (a closed gate) |
 | `!<expr>` | `!config.skip` | Logical NOT |
 | `<expr> && <expr>` | `config.run_qc && config.min_cov >= 20` | Logical AND |
 | `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
 | `(<expr>)` | `(config.a && config.b) \|\| config.c` | Grouping |
+
+### Data-Dependent `when` Gates
+
+The runtime functions `reads_count(path)`, `wc_lines(path)`, and
+`file_size(path)` let a `when` gate inspect files produced earlier in the
+same run (issue #282) — e.g. skip a variant caller on samples whose
+trimmed FASTQ has too few records:
+
+```toml
+[[rules]]
+name  = "call_variants"
+when  = "reads_count('trimmed/{sample}.fq.gz') > config.min_reads"
+input = ["trimmed/{sample}.fq.gz"]
+output = ["variants/{sample}.vcf.gz"]
+shell = "caller --input {input[0]} --output {output[0]}"
+```
+
+- **Path resolution** — relative paths join against the run **workdir**;
+  absolute paths pass through. `{sample}` and other wildcards expand from
+  the instance context before the read.
+- **Phase semantics** — at *plan time* a missing file defers (`true`, the
+  rule stays in the plan because its producer may not have run); at
+  *execution time* a missing or unreadable file fails closed (`false`, the
+  rule is skipped). `oxo-flow dry-run` never prunes on these gates.
+- **Formats** — `reads_count` counts 4-line FASTQ records in plain or
+  gzip files; `wc_lines` streams lines of plain or gzip text; `file_size`
+  returns the byte length. BAM/BGZF indexing is planned for a future
+  release.
+- **Change tracking** — recorded verdicts participate in config-change
+  replay: changing a threshold referenced by such a gate (e.g.
+  `config.min_reads`) re-evaluates only the instances whose verdict
+  actually flipped, keeping completed unchanged instances exempt.
+- **Scope** — only `when` strings may call these functions; `shell`,
+  `input`, and `output` cannot read the filesystem at plan time.
 
 ### Unbound wildcard keys evaluate false
 

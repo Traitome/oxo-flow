@@ -1152,6 +1152,10 @@ pub async fn run_command(
         }
         ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
     }
+    // Same absolutized run workdir, reused by the config-change replay below
+    // (issue #282): runtime file functions in `when` resolve their relative
+    // paths against it so threshold changes get real verdicts.
+    let run_workdir = absolutize(workdir.as_deref().unwrap_or(&workdir_default))?;
 
     // Changed config keys → only rules referencing them (plus DAG downstream)
     // are invalidated; edited rule definitions are caught by fingerprints.
@@ -1163,7 +1167,7 @@ pub async fn run_command(
     };
     let (change_report, mut force_rules, completed_in_run) = {
         let mut ck = checkpoint.lock().await;
-        let report = oxo_flow_core::config_impact::detect_config_changes(
+        let report = oxo_flow_core::config_impact::detect_config_changes_with_replay(
             &mut ck,
             &config.rules,
             &dag,
@@ -1172,6 +1176,8 @@ pub async fn run_command(
             &config.workflow.interpreter_map,
             config.defaults.shell_prelude.as_deref(),
             Some(&workflow_dir),
+            Some(&run_workdir),
+            Some(&config),
         );
         let force_rules: std::collections::HashSet<String> =
             report.invalidated.iter().cloned().collect();

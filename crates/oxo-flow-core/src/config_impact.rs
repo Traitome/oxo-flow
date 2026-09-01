@@ -23,7 +23,7 @@
 use crate::config::ReferenceDef;
 use crate::dag::WorkflowDag;
 use crate::executor::checkpoint::CheckpointState;
-use crate::executor::process::evaluate_condition_with_wildcards_and_base_dir;
+use crate::executor::process::evaluate_condition_with_workdir_and_base_dir;
 use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -455,6 +455,45 @@ pub fn detect_config_changes(
     shell_prelude: Option<&str>,
     base_dir: Option<&Path>,
 ) -> ConfigChangeReport {
+    detect_config_changes_with_replay(
+        checkpoint,
+        rules,
+        dag,
+        current,
+        sensitive_keys,
+        interpreter_map,
+        shell_prelude,
+        base_dir,
+        None,
+        None,
+    )
+}
+
+/// [`detect_config_changes`] with runtime-gate replay (issue #282).
+///
+/// `workdir` is the run's working directory: runtime file functions in
+/// `when` strings (`reads_count` / `wc_lines` / `file_size`) resolve their
+/// relative paths against it, so a *threshold* change (e.g.
+/// `config.min_reads`) re-evaluates each instance's gate on the files the
+/// previous run produced and flips/keeps the verdict like any other gate —
+/// instead of being vacuously true and needing `--force`. `config` supplies
+/// the per-instance wildcard bindings (`[[values]]` / `[[pairs]]`) that the
+/// executor will merge into the gate's wildcard context, so replay sees
+/// exactly the paths the executor will see. `None` workdir / no config
+/// keeps the plan-time semantics (missing file → deferred-true).
+#[allow(clippy::too_many_arguments)] // replay needs plan+run context; all optional except checkpoint/rules
+pub fn detect_config_changes_with_replay(
+    checkpoint: &mut CheckpointState,
+    rules: &[Rule],
+    dag: &WorkflowDag,
+    current: &HashMap<String, toml::Value>,
+    sensitive_keys: &HashSet<String>,
+    interpreter_map: &HashMap<String, String>,
+    shell_prelude: Option<&str>,
+    base_dir: Option<&Path>,
+    workdir: Option<&Path>,
+    config: Option<&crate::config::WorkflowConfig>,
+) -> ConfigChangeReport {
     // A checkpoint with neither snapshot nor fingerprints predates config
     // tracking: bootstrap only (no invalidation) — documented one-time window.
     let is_legacy =
@@ -540,16 +579,30 @@ pub fn detect_config_changes(
     // The same evaluator the executor uses at execution time, with an empty
     // wildcard context: expansion bakes kept instances' bindings into their
     // `when` as literals, which this evaluator resolves identically.
+    //
+    // Runtime file functions (issue #282): with a run workdir, per-instance
+    // bindings are merged into the wildcard context (exactly what
+    // `execute_rule_with_bindings` hands the executor) so path arguments
+    // like `'{sample}/trimmed/{sample}.fq.gz'` expand, and the evaluator
+    // runs with the workdir — a produced file yields its real verdict, so a
+    // threshold change flips the gate and invalidates just the boundary
+    // samples. Rules with no stored runtime verdict (never run / older
+    // checkpoint) defer at plan time (missing file → true) and stay in the
+    // conservative one-time adoption window below.
     let current_verdicts: HashMap<String, bool> = rules
         .iter()
         .filter_map(|rule| {
             rule.when.as_ref().map(|condition| {
+                let wildcard_values: HashMap<String, String> = config
+                    .map(|cfg| cfg.instance_bindings(&rule.name))
+                    .unwrap_or_default();
                 (
                     rule.name.clone(),
-                    evaluate_condition_with_wildcards_and_base_dir(
+                    evaluate_condition_with_workdir_and_base_dir(
                         condition,
                         current,
-                        &HashMap::new(),
+                        &wildcard_values,
+                        workdir,
                         base_dir,
                     ),
                 )
@@ -1991,6 +2044,238 @@ mod tests {
         assert_eq!(report.when_gate_exempt, vec!["b".to_string()]);
         assert!(report.invalidated.is_empty());
         assert!(checkpoint.is_completed("b"));
+    }
+
+    #[test]
+    fn runtime_file_gate_replay_flips_at_threshold_boundary() {
+        // Issue #282: a runtime `when` gate (`reads_count(...) >
+        // config.min_reads`) gets REAL verdicts during config-change replay —
+        // per-instance bindings expand `{sample}` in the path, the file is
+        // read from the run workdir, and a threshold change flips only the
+        // samples whose verdict actually changed. Completed samples whose
+        // verdict is unchanged stay exempt; downstream invalidation follows
+        // the flip.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("trimmed")).unwrap();
+        // S1 = 2 records (below old threshold, above new one); S2 = 10
+        // records (above both) — only S1's gate flips. Both fixtures are
+        // real gzip streams: the counter sniffs the .gz extension and a
+        // plain-text body would fail to decode (fail-closed → false).
+        let mut gz1 = flate2::write::GzEncoder::new(
+            std::fs::File::create(dir.path().join("trimmed/S1.fq.gz")).unwrap(),
+            flate2::Compression::default(),
+        );
+        std::io::Write::write_all(&mut gz1, b"@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nIIII\n").unwrap();
+        gz1.finish().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(
+            std::fs::File::create(dir.path().join("trimmed/S2.fq.gz")).unwrap(),
+            flate2::Compression::default(),
+        );
+        for rec in ["@r", "ACGT\n", "+\n", "IIII\n"] {
+            for i in 0..10 {
+                std::io::Write::write_all(&mut gz, format!("{rec}{i}\n").as_bytes()).unwrap();
+            }
+        }
+        gz.finish().unwrap();
+
+        let workflow_path = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "gate"
+
+            [config]
+            min_reads = 5
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "filter"
+            input = []
+            output = ["trimmed/{sample}.fq.gz"]
+            when = "reads_count('trimmed/{sample}.fq.gz') > config.min_reads"
+            shell = "touch {output[0]}"
+            "#,
+        )
+        .unwrap();
+        let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let rules = config.rules.clone();
+
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let workdir = dir.path();
+
+        // Run 1 (bootstrap): empty checkpoint records verdicts — S1 false
+        // (2 <= 5), S2 true (10 > 5) — without invalidating anything.
+        let mut checkpoint = CheckpointState::new();
+        let report = detect_config_changes_with_replay(
+            &mut checkpoint,
+            &rules,
+            &dag,
+            &typed_cfg(&[("min_reads", toml::Value::Integer(5))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+            None,
+            Some(workdir),
+            Some(&config),
+        );
+        assert!(report.is_legacy, "first run must bootstrap");
+        assert_eq!(
+            checkpoint.when_verdicts.get("filter_cohort_S1"),
+            Some(&false)
+        );
+        assert_eq!(
+            checkpoint.when_verdicts.get("filter_cohort_S2"),
+            Some(&true)
+        );
+
+        for name in ["filter_cohort_S1", "filter_cohort_S2"] {
+            checkpoint.mark_completed(
+                name,
+                super::super::executor::checkpoint::BenchmarkRecord {
+                    rule: name.to_string(),
+                    wall_time_secs: 1.0,
+                    max_memory_mb: None,
+                    memory_limit_mb: None,
+                    cpu_seconds: None,
+                    retries: 0,
+                },
+            );
+        }
+
+        // Run 2: threshold drops 5 → 1. S1 flips false→true (its output was
+        // wrongly withheld) — flip-invalidate; S2's verdict is unchanged
+        // (true) — exempt from re-run.
+        let report = detect_config_changes_with_replay(
+            &mut checkpoint,
+            &rules,
+            &dag,
+            &typed_cfg(&[("min_reads", toml::Value::Integer(1))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+            None,
+            Some(workdir),
+            Some(&config),
+        );
+        assert_eq!(
+            report.when_flip_invalidated,
+            vec!["filter_cohort_S1".to_string()]
+        );
+        assert_eq!(
+            report.when_gate_exempt,
+            vec!["filter_cohort_S2".to_string()]
+        );
+        assert!(!checkpoint.is_completed("filter_cohort_S1"));
+        assert!(checkpoint.is_completed("filter_cohort_S2"));
+        // The updated verdicts are persisted for the next diff.
+        assert_eq!(
+            checkpoint.when_verdicts.get("filter_cohort_S1"),
+            Some(&true)
+        );
+    }
+
+    #[test]
+    fn runtime_file_gate_replay_fails_closed_when_output_missing() {
+        // No trimmed/ outputs on disk: replay must not defer (that is plan-
+        // time behavior) — it fails closed, so both instances record false
+        // during bootstrap. A later threshold change replays to false again;
+        // since the verdict is unchanged the completions stay exempt from
+        // this channel (a missing-output producer's consumers are still
+        // invalidated through the ordinary output-fingerprint path).
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("wf.oxoflow");
+        std::fs::write(
+            &workflow_path,
+            r#"
+            [workflow]
+            name = "gate"
+
+            [config]
+            min_reads = 5
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "filter"
+            input = []
+            output = ["trimmed/{sample}.fq.gz"]
+            when = "reads_count('trimmed/{sample}.fq.gz') > config.min_reads"
+            shell = "touch {output[0]}"
+            "#,
+        )
+        .unwrap();
+        let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+        config.expand_wildcards().unwrap();
+
+        let rules = config.rules.clone();
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mut checkpoint = CheckpointState::new();
+        let report = detect_config_changes_with_replay(
+            &mut checkpoint,
+            &rules,
+            &dag,
+            &typed_cfg(&[("min_reads", toml::Value::Integer(5))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+            None,
+            Some(dir.path()),
+            Some(&config),
+        );
+        assert!(report.is_legacy);
+        assert_eq!(
+            checkpoint.when_verdicts.get("filter_cohort_S1"),
+            Some(&false)
+        );
+        assert_eq!(
+            checkpoint.when_verdicts.get("filter_cohort_S2"),
+            Some(&false)
+        );
+
+        for name in ["filter_cohort_S1", "filter_cohort_S2"] {
+            checkpoint.mark_completed(
+                name,
+                super::super::executor::checkpoint::BenchmarkRecord {
+                    rule: name.to_string(),
+                    wall_time_secs: 1.0,
+                    max_memory_mb: None,
+                    memory_limit_mb: None,
+                    cpu_seconds: None,
+                    retries: 0,
+                },
+            );
+        }
+
+        // Threshold change with files still missing: both instances replay
+        // to false again — verdict unchanged → exempt (no invalidation from
+        // the flip channel).
+        let report = detect_config_changes_with_replay(
+            &mut checkpoint,
+            &rules,
+            &dag,
+            &typed_cfg(&[("min_reads", toml::Value::Integer(1))]),
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+            None,
+            Some(dir.path()),
+            Some(&config),
+        );
+        assert!(
+            report.when_flip_invalidated.is_empty(),
+            "{:?}",
+            report.when_flip_invalidated
+        );
+        assert_eq!(report.when_gate_exempt.len(), 2);
     }
 
     #[test]

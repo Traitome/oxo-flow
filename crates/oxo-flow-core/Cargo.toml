@@ -39,6 +39,8 @@ reqwest = { workspace = true, features = ["blocking"] }
 hex = { workspace = true }
 tempfile = { workspace = true }
 csv = "1.4.0"
+# FASTQ gzip decompression for `reads_count()` runtime `when` gates (#282)
+flate2 = "1.0"
 async-trait = { workspace = true }
 aws-sdk-s3 = { version = "1", optional = true }
 aws-config = { version = "1", optional = true }

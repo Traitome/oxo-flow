@@ -55,6 +55,51 @@ directory) — the same root every other engine path uses — so the gate reads
 the same no matter which directory you launch `oxo-flow` from. Absolute
 paths pass through unchanged.
 
+### Data-dependent gates (runtime functions)
+
+`when` can also inspect files produced earlier in the same run — the gate
+becomes data-dependent (issue #282). Three read-only functions are
+available in `when` strings:
+
+| Function | Reads | Returns |
+|---|---|---|
+| `reads_count(path)` | FASTQ (plain or `.gz`) | record count (lines ÷ 4) |
+| `wc_lines(path)` | any text file (plain or `.gz`) | line count |
+| `file_size(path)` | any file | size in bytes |
+| `file_exists(path)` | — | 1/0 existence probe |
+
+```toml
+[[rules]]
+name  = "downsample_qc"
+when  = "reads_count('trimmed/{sample}.fq.gz') > config.min_reads"
+input = ["trimmed/{sample}.fq.gz"]
+output = ["qc/downsample_report.txt"]
+shell = "seqkit stats {input[0]} > {output[0]}"
+```
+
+**Phase semantics.** The file is resolved against the run workdir (absolute
+paths pass through; `{sample}` and other wildcards expand from the
+instance context). Because a gate may reference a file its producer has
+not written yet, the two phases behave differently:
+
+- **Planning** (`oxo-flow dry-run`, DAG build): a missing file makes the
+  condition evaluate to `true`, so the rule stays in the plan and is
+  judged later — a plan-time gate never prunes a rule whose producer
+  simply has not run.
+- **Execution**: a missing or unreadable file makes the condition
+  evaluate to `false` (fail-closed) — a gate that cannot count what it
+  was asked to count does not run the rule.
+
+Verdicts are recorded in the checkpoint; when a threshold like
+`config.min_reads` changes between runs, only instances whose recorded
+verdict actually flipped are invalidated (see "Resume & checkpoints").
+
+**Scope limits.** These functions are intentionally restricted to pure
+file reads — no shell, no globbing beyond `{wildcard}` expansion, and
+`reads_count` assumes 4-line FASTQ records (BAM/BGZF support is planned
+for a future release). Only `when` strings may call them; `shell`, `input`,
+and `output` still cannot read the filesystem at plan time.
+
 ### Wildcard-scoped conditions (`wildcard.<key>`)
 
 Conditions can reference the pair/group expansion context through the

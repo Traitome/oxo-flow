@@ -206,7 +206,7 @@ pub fn preview_run_plan(
     // 1. Config-impact invalidation (issue #62) — on the clone only.
     // `file_exists(...)` in `when` resolves against the workflow root
     // (issue #241) — same root as run and plan-time expansion.
-    let config_report = oxo_flow_core::config_impact::detect_config_changes(
+    let config_report = oxo_flow_core::config_impact::detect_config_changes_with_replay(
         &mut clone,
         &config.rules,
         dag,
@@ -215,6 +215,8 @@ pub fn preview_run_plan(
         interpreter_map,
         config.defaults.shell_prelude.as_deref(),
         config.base_dir(),
+        Some(workdir),
+        Some(config),
     );
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
     // Issue #142 M1: rules whose fingerprint differed only in the

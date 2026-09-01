@@ -2978,6 +2978,7 @@ dependencies = [
  "criterion",
  "csv",
  "filetime",
+ "flate2",
  "fs2",
  "glob",
  "hex",
