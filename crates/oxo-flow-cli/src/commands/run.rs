@@ -187,6 +187,7 @@ async fn terminate_on_signal(
             skip_reason: Some(format!("interrupted by {}", signal.name)),
             max_rss_mb: None,
             cpu_seconds: None,
+            caption: None,
         };
         ck.record_run(&record);
         ck.mark_failed(rule);
@@ -2216,6 +2217,12 @@ pub async fn run_command(
                         skip_reason: None,
                         max_rss_mb: None,
                         cpu_seconds: None,
+                        caption: config.get_rule(&rule_name).and_then(|r| {
+                            oxo_flow_core::executor::process::rule_report_caption(
+                                r,
+                                workdir_actual.as_ref(),
+                            )
+                        }),
                     });
                     skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if !is_tty {
@@ -2345,6 +2352,12 @@ pub async fn run_command(
                     ),
                     max_rss_mb: None,
                     cpu_seconds: None,
+                    caption: config.get_rule(&rule_name).and_then(|r| {
+                        oxo_flow_core::executor::process::rule_report_caption(
+                            r,
+                            workdir_actual.as_ref(),
+                        )
+                    }),
                 });
                 if !is_tty {
                     eprintln!(
@@ -2402,6 +2415,12 @@ pub async fn run_command(
             });
 
             let typed_config = config.config.clone();
+            // Resolve the rule's report caption BEFORE the spawn: the closure
+            // must not capture `config` (owned by this loop), only the already
+            // resolved value (issue #281).
+            let rule_caption = config.get_rule(&rule_name).and_then(|r| {
+                oxo_flow_core::executor::process::rule_report_caption(r, workdir_actual.as_ref())
+            });
             let instance_bindings = instance_bindings.clone();
             // Register the task name BEFORE the spawn: the closure moves
             // `rule_name` in, so the id→name map needs its own clone.
@@ -2698,6 +2717,7 @@ pub async fn run_command(
                             skip_reason: None,
                             max_rss_mb: None,
                             cpu_seconds: None,
+                            caption: rule_caption,
                         };
                         emit_execution_event(oxo_flow_core::executor::ExecutionEvent::RuleCompleted {
                             rule: rule_name.clone(),
@@ -2847,6 +2867,12 @@ pub async fn run_command(
                     skip_reason: None,
                     max_rss_mb: None,
                     cpu_seconds: None,
+                    caption: config.get_rule(&rule_name).and_then(|r| {
+                        oxo_flow_core::executor::process::rule_report_caption(
+                            r,
+                            workdir_actual.as_ref(),
+                        )
+                    }),
                 };
                 let mut ck = checkpoint.lock().await;
                 ck.record_run(&record);
@@ -2904,6 +2930,12 @@ pub async fn run_command(
                 skip_reason: Some(format!("re-entry manifest: {e}")),
                 max_rss_mb: None,
                 cpu_seconds: None,
+                caption: config.get_rule(&completed_rule).and_then(|r| {
+                    oxo_flow_core::executor::process::rule_report_caption(
+                        r,
+                        workdir_actual.as_ref(),
+                    )
+                }),
             };
             {
                 let mut frs = failed_rules_set.lock().await;
@@ -2972,6 +3004,12 @@ pub async fn run_command(
                 skip_reason: Some(format!("output_pattern discovery: {e}")),
                 max_rss_mb: None,
                 cpu_seconds: None,
+                caption: config.get_rule(&completed_rule).and_then(|r| {
+                    oxo_flow_core::executor::process::rule_report_caption(
+                        r,
+                        workdir_actual.as_ref(),
+                    )
+                }),
             };
             {
                 let mut frs = failed_rules_set.lock().await;
@@ -3192,6 +3230,12 @@ pub async fn run_command(
                     skip_reason: Some("blocked by failed upstream dependency".into()),
                     max_rss_mb: None,
                     cpu_seconds: None,
+                    caption: config.get_rule(name).and_then(|r| {
+                        oxo_flow_core::executor::process::rule_report_caption(
+                            r,
+                            workdir_actual.as_ref(),
+                        )
+                    }),
                 });
                 progress.inc(1);
                 if !is_tty {

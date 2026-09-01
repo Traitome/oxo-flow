@@ -436,6 +436,7 @@ pub(crate) async fn run_on_cluster(
                 skip_reason: None,
                 max_rss_mb: None,
                 cpu_seconds: None,
+                caption: None,
             });
             ck.save_to_file(&path)
         })

@@ -286,6 +286,9 @@ impl BackendDriver {
                         skip_reason: Some("blocked by failed upstream dependency".into()),
                         max_rss_mb: None,
                         cpu_seconds: None,
+                        caption: plan.rules.get(&name).and_then(|sr| {
+                            crate::executor::process::rule_report_caption(&sr.rule, &sr.workdir)
+                        }),
                     });
                     done.insert(name.clone(), JobStatus::Skipped);
                     emit(
@@ -333,7 +336,9 @@ impl BackendDriver {
                     }
                     if !plan.rules.contains_key(&name) {
                         // Not schedulable (no shell/script) — mirror the local
-                        // executor's skip.
+                        // executor's skip. The rule has no plan entry to read
+                        // a declared caption from, so the record's caption is
+                        // always None here.
                         records.push(JobRecord {
                             rule: name.clone(),
                             status: JobStatus::Skipped,
@@ -347,6 +352,7 @@ impl BackendDriver {
                             skip_reason: Some("no shell or script defined".into()),
                             max_rss_mb: None,
                             cpu_seconds: None,
+                            caption: None,
                         });
                         done.insert(name.clone(), JobStatus::Skipped);
                         emit(
@@ -913,6 +919,10 @@ impl BackendDriver {
                                 skip_reason: None,
                                 max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                                 cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                                caption: crate::executor::process::rule_report_caption(
+                                    &plan.rules[&f.rule].rule,
+                                    &plan.rules[&f.rule].workdir,
+                                ),
                             }
                         }
                         BackendJobStatus::Failed => {
@@ -943,6 +953,10 @@ impl BackendDriver {
                                 skip_reason: None,
                                 max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                                 cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                                caption: crate::executor::process::rule_report_caption(
+                                    &plan.rules[&f.rule].rule,
+                                    &plan.rules[&f.rule].workdir,
+                                ),
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
@@ -961,6 +975,10 @@ impl BackendDriver {
                             skip_reason: Some("cancelled".into()),
                             max_rss_mb: acct.and_then(|a| a.max_rss_mb),
                             cpu_seconds: acct.and_then(|a| a.cpu_seconds).map(|s| s as f64),
+                            caption: crate::executor::process::rule_report_caption(
+                                &plan.rules[&f.rule].rule,
+                                &plan.rules[&f.rule].workdir,
+                            ),
                         },
                         _ => unreachable!("non-terminal states filtered above"),
                     };
@@ -1158,6 +1176,7 @@ fn return_record_failure(
         skip_reason: Some(format!("re-entry manifest: {e}")),
         max_rss_mb: None,
         cpu_seconds: None,
+        caption: None,
     });
     done.insert(f.rule.clone(), JobStatus::Failed);
 }

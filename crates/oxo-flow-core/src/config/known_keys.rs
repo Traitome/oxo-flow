@@ -253,6 +253,7 @@ const RULE_KEYS: &[&str] = &[
     "pre_exec",
     "priority",
     "protected_output",
+    "report",
     "required",
     "resource_hint",
     "resources",
@@ -466,12 +467,29 @@ enum Nesting {
     Config,
 }
 
+/// Keys of a rule-level `report = { file, caption }` annotation (issue #281).
+const RULE_REPORT_KEYS: &[&str] = &["caption", "file"];
+
 /// How the value stored under `key` nests.
 fn nesting(key: &str, value: &toml::Value) -> Nesting {
     match value {
         toml::Value::Table(_) if key == "config" => Nesting::Config,
         toml::Value::Table(_) => match nested_table(key) {
-            Some(keys) => Nesting::Table(keys),
+            Some(keys) => {
+                // `report` is ambiguous without location context: the
+                // top-level `[report]` table (format/sections/template) vs a
+                // rule-level `report = { file, caption }` annotation (issue
+                // #281). The key sets are disjoint, so affinity decides.
+                let is_rule_report = key == "report"
+                    && value
+                        .as_table()
+                        .is_some_and(|t| t.contains_key("file") || t.contains_key("caption"));
+                if is_rule_report {
+                    Nesting::Table(RULE_REPORT_KEYS)
+                } else {
+                    Nesting::Table(keys)
+                }
+            }
             None => Nesting::None,
         },
         toml::Value::Array(_) => {
@@ -958,6 +976,7 @@ mod tests {
             rule_metadata = { assay = "rna" }
             cache_key = "k"
             interpreter = "python"
+            report = { file = "notes/report.md", caption = "Alignment QC" }
         "#;
         let rule: crate::rule::Rule = toml::from_str(toml).expect("probe rule deserializes");
         let written = toml::to_string(&rule)

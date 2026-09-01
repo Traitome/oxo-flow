@@ -1690,7 +1690,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
 
 use crate::config::WorkflowConfig;
 use crate::executor::CheckpointState;
-use crate::report_metrics::{MetricsScanner, ParsedMetrics};
+use crate::report_metrics::{CustomContent, CustomValue, MetricsScanner, ParsedMetrics};
 
 /// Classifies a workflow into a broad domain for report tailoring.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1795,6 +1795,8 @@ impl SectionRegistry {
         registry.register(Box::new(SampleMatrixGenerator));
         registry.register(Box::new(ProvenanceGenerator));
         registry.register(Box::new(TaskSummaryGenerator));
+        registry.register(Box::new(RuleCaptionsGenerator));
+        registry.register(Box::new(AggregateMetricsGenerator));
         registry
     }
 
@@ -2216,6 +2218,124 @@ impl ReportSectionGenerator for CommandManifestGenerator {
     }
 }
 
+/// Per-rule report captions (issue #281, the Snakemake `report()`
+/// equivalent): each rule's `report` annotation rendered as a markdown
+/// subsection, ordered by rule declaration order with one entry per
+/// executed instance. Caption resolution mirrors the execution-time capture
+/// in `rule_report_caption`: the checkpoint's stored caption wins (what the
+/// run actually read), then the declared inline caption, then the declared
+/// `report.file` re-read from the workdir — so reports also work without a
+/// checkpoint (or with a legacy one that never captured captions). Read
+/// failures degrade to a note; a caption never fails the report.
+struct RuleCaptionsGenerator;
+impl ReportSectionGenerator for RuleCaptionsGenerator {
+    fn name(&self) -> &str {
+        "rule-captions"
+    }
+    fn description(&self) -> &str {
+        "Rule-attached report captions (the `report` annotation, markdown)"
+    }
+    fn applicable(&self, ctx: &ReportContext) -> bool {
+        ctx.config.rules.iter().any(|r| r.report.is_some())
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let workdir = report_workdir(ctx);
+        let mut subsections = Vec::new();
+        for rule in &ctx.config.rules {
+            let Some(report) = rule.report.as_ref() else {
+                continue;
+            };
+            // Same instance-matching convention as CommandManifestGenerator:
+            // the rule name itself plus every expanded `{rule}_...` instance.
+            let mut runs: Vec<(&String, &crate::executor::checkpoint::RuleRunRecord)> = ctx
+                .checkpoint
+                .map(|c| {
+                    c.rule_runs
+                        .iter()
+                        .filter(|(name, _)| {
+                            *name == &rule.name || name.starts_with(&format!("{}_", rule.name))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            runs.sort_by(|a, b| a.0.cmp(b.0));
+
+            if runs.is_empty() {
+                // No execution record: fall back to the declared annotation
+                // so the section still shows what the author wrote.
+                let Some(caption) = Self::declared_caption(report, workdir.as_deref()) else {
+                    continue;
+                };
+                subsections.push(ReportSection {
+                    title: rule.name.clone(),
+                    id: sanitize_id(&format!("rule-captions-{}", rule.name)),
+                    content: ReportContent::Markdown { markdown: caption },
+                    subsections: vec![],
+                });
+                continue;
+            }
+            for (instance, run) in runs {
+                // Execution-time capture first — it is what the run saw.
+                let caption = match &run.caption {
+                    Some(text) => text.clone(),
+                    None => {
+                        // Legacy checkpoint (no captured caption): resolve
+                        // the declared annotation now, exactly like the
+                        // executor would have.
+                        match Self::declared_caption(report, workdir.as_deref()) {
+                            Some(text) => text,
+                            None => continue,
+                        }
+                    }
+                };
+                let title = if *instance == rule.name {
+                    rule.name.clone()
+                } else {
+                    instance.clone()
+                };
+                subsections.push(ReportSection {
+                    title,
+                    id: sanitize_id(&format!("rule-captions-{instance}")),
+                    content: ReportContent::Markdown { markdown: caption },
+                    subsections: vec![],
+                });
+            }
+        }
+        if subsections.is_empty() {
+            return Vec::new();
+        }
+        vec![ReportSection {
+            title: "Rule Captions".to_string(),
+            id: "rule-captions".to_string(),
+            content: ReportContent::Text {
+                text: "Per-rule report annotations captured from the workflow (markdown)."
+                    .to_string(),
+            },
+            subsections,
+        }]
+    }
+}
+
+impl RuleCaptionsGenerator {
+    /// Resolve the declared annotation (inline caption first, then
+    /// `report.file` relative to the workdir). Read failures yield `None` —
+    /// a missing caption file degrades to a note, never an error.
+    fn declared_caption(
+        report: &crate::rule::RuleReport,
+        workdir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        if let Some(text) = report.caption() {
+            return Some(text.to_string());
+        }
+        let file = report.file()?;
+        let path = match workdir {
+            Some(wd) => wd.join(file),
+            None => std::path::PathBuf::from(file),
+        };
+        std::fs::read_to_string(&path).ok()
+    }
+}
+
 struct IoManifestGenerator;
 impl ReportSectionGenerator for IoManifestGenerator {
     fn name(&self) -> &str {
@@ -2563,6 +2683,183 @@ impl ReportSectionGenerator for MetricsGenerator {
             id: "metrics".to_string(),
             content: ReportContent::Text {
                 text: "QC metrics parsed from tool output files in the working directory."
+                    .to_string(),
+            },
+            subsections,
+        }]
+    }
+}
+
+/// MultiQC-style aggregate collector (issue #281): one sample × metric
+/// matrix across all parsed tools, plus any `*_mqc.json` custom content
+/// found in the scan. The per-(tool × sample) detail tables stay in the
+/// `metrics` section; this section is the cross-tool view that makes the
+/// report a credible MultiQC replacement for ported repos.
+struct AggregateMetricsGenerator;
+impl ReportSectionGenerator for AggregateMetricsGenerator {
+    fn name(&self) -> &str {
+        "aggregate-metrics"
+    }
+    fn description(&self) -> &str {
+        "Sample × metric matrix across tools, plus *_mqc.json custom content (MultiQC-style)"
+    }
+    fn applicable(&self, _ctx: &ReportContext) -> bool {
+        true
+    }
+    fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
+        let Some(workdir) = report_workdir(ctx) else {
+            return Vec::new();
+        };
+        let stats = MetricsScanner::new().scan_with_stats(&workdir);
+        // Skipped-only scans still surface their Scan Notes subsection —
+        // a scanner that hit files it could not parse must say so instead
+        // of hiding the section entirely (issue #83 P1-5 honesty rule).
+        if stats.parsed.is_empty() && stats.custom.is_empty() && stats.skipped == 0 {
+            return Vec::new();
+        }
+
+        let mut subsections = Vec::new();
+
+        // Sample × metric matrix across tools. Column keys are
+        // `tool.metric` (or `tool.metric[sample-suffix]` when multiple
+        // files contributed the same tool.metric for one sample — e.g.
+        // paired-end fastp runs); rows are samples, sorted.
+        let mut samples: std::collections::BTreeMap<
+            String,
+            Vec<(String, String, Option<QcStatusLevel>)>,
+        > = std::collections::BTreeMap::new();
+        for parsed in &stats.parsed {
+            let Some(sample) = parsed.sample.as_deref() else {
+                // Files without a sample prefix have no place in a
+                // sample-keyed matrix; their detail stays in `metrics`.
+                continue;
+            };
+            for metric in &parsed.metrics {
+                let column = format!("{}.{}", parsed.tool, metric.name);
+                samples.entry(sample.to_string()).or_default().push((
+                    column,
+                    format_metric_value(metric.value),
+                    metric.flag.clone(),
+                ));
+            }
+        }
+        if !samples.is_empty() {
+            // Disambiguate repeated (sample, column) pairs first: a second
+            // contribution to the same cell gets a numbered suffix
+            // (`tool.metric[2]`, e.g. `S1.flagstat` + `S1.flagstat.txt`) so
+            // both values stay visible instead of one clobbering the other.
+            // Column collection must run after this so the renamed cells
+            // line up with the headers.
+            for cells in samples.values_mut() {
+                let mut counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for (column, _, _) in cells.iter_mut() {
+                    let count = counts.entry(column.clone()).or_insert(0);
+                    *count += 1;
+                    if *count > 1 {
+                        *column = format!("{column}[{count}]");
+                    }
+                }
+            }
+            // Column order: first-seen order (the scan is deterministic, so
+            // this is byte-stable) — tools group naturally, mirroring how
+            // MultiQC lays out its matrix.
+            let mut columns: Vec<String> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for cells in samples.values() {
+                for (column, _, _) in cells {
+                    if seen.insert(column.clone()) {
+                        columns.push(column.clone());
+                    }
+                }
+            }
+            let mut headers = vec!["Sample".to_string()];
+            headers.extend(columns.iter().cloned());
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for (sample, cells) in &samples {
+                let mut row = vec![sample.clone()];
+                for column in &columns {
+                    let value = cells
+                        .iter()
+                        .find(|(c, _, _)| c == column)
+                        .map(|(_, v, _)| v.clone())
+                        .unwrap_or_else(|| "-".to_string());
+                    row.push(value);
+                }
+                rows.push(row);
+            }
+            subsections.push(ReportSection {
+                title: "Sample Matrix".to_string(),
+                id: "aggregate-sample-matrix".to_string(),
+                content: ReportContent::Table { headers, rows },
+                subsections: vec![],
+            });
+        }
+
+        // Custom content: one subsection per `*_mqc.json` file, in scan
+        // (sorted) order. Scalar-per-sample data already arrives as a
+        // single `value` column from the parser.
+        for content in &stats.custom {
+            let CustomContent { title, data } = content;
+            let mut metric_names: Vec<String> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for (_, pairs) in data {
+                for (metric, _) in pairs {
+                    if seen.insert(metric.clone()) {
+                        metric_names.push(metric.clone());
+                    }
+                }
+            }
+            let mut headers = vec!["Sample".to_string()];
+            headers.extend(metric_names.iter().cloned());
+            let rows: Vec<Vec<String>> = data
+                .iter()
+                .map(|(sample, pairs)| {
+                    let mut row = vec![sample.clone()];
+                    for metric in &metric_names {
+                        let cell = pairs
+                            .iter()
+                            .find(|(m, _)| m == metric)
+                            .map(|(_, v)| match v {
+                                CustomValue::Number(n) => format_metric_value(*n),
+                                CustomValue::Text(t) => t.clone(),
+                            })
+                            .unwrap_or_else(|| "-".to_string());
+                        row.push(cell);
+                    }
+                    row
+                })
+                .collect();
+            subsections.push(ReportSection {
+                title: title.clone(),
+                id: sanitize_id(&format!("mqc-{title}")),
+                content: ReportContent::Table { headers, rows },
+                subsections: vec![],
+            });
+        }
+
+        if stats.skipped > 0 {
+            subsections.push(ReportSection {
+                title: "Scan Notes".to_string(),
+                id: "aggregate-scan-notes".to_string(),
+                content: ReportContent::Text {
+                    text: format!(
+                        "{} file(s) matched known tool patterns but failed to parse",
+                        stats.skipped
+                    ),
+                },
+                subsections: vec![],
+            });
+        }
+
+        if subsections.is_empty() {
+            return Vec::new();
+        }
+        vec![ReportSection {
+            title: "Aggregate Metrics".to_string(),
+            id: "aggregate-metrics".to_string(),
+            content: ReportContent::Text {
+                text: "Cross-tool sample matrix and custom content from the working directory."
                     .to_string(),
             },
             subsections,
@@ -2949,6 +3246,7 @@ fn task_summary_section(rules: &[crate::rule::Rule]) -> ReportSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::checkpoint::RuleRunRecord;
 
     #[test]
     fn report_workflow_git_sha_provenance_roundtrip() {
@@ -3031,6 +3329,7 @@ mod tests {
                 skip_reason: None,
                 max_rss_mb: None,
                 cpu_seconds: None,
+                caption: None,
             },
         );
 
@@ -3411,6 +3710,7 @@ mod tests {
                 skip_reason: None,
                 max_rss_mb: None,
                 cpu_seconds: None,
+                caption: None,
             },
         );
         let section = execution_time_chart(&records);
@@ -3460,6 +3760,7 @@ mod tests {
                 exit_code: Some(127),
                 command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
                 stderr_tail: Some("gatk: command not found".to_string()),
+                caption: None,
             },
         );
         cp.checksums
@@ -3681,6 +3982,7 @@ input = ["out.bam"]
                 exit_code: Some(137),
                 command: None,
                 stderr_tail: Some("Killed".to_string()),
+                caption: None,
             },
         );
         let ctx = ctx_for(&config, Some(&cp), None);
@@ -3851,6 +4153,355 @@ shell = "echo hi"
         // Real table rendering, not a dead promise (issue #83 P1-10).
         assert!(!html.contains("interactive"));
         assert!(html.contains("<table>"));
+    }
+
+    // ── Issue #281: rule captions + aggregate metrics ─────────────────────
+
+    #[test]
+    fn rule_captions_inline_caption() {
+        let config = workflow_config(
+            r##"[[rules]]
+name = "qc"
+shell = "fastp -i in.fq"
+report = "# QC summary\nReads trimmed with fastp."
+"##,
+        );
+        let ctx = ctx_for(&config, None, None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let captions = sections.iter().find(|s| s.id == "rule-captions").unwrap();
+        assert_eq!(captions.title, "Rule Captions");
+        assert_eq!(captions.subsections.len(), 1);
+        assert_eq!(captions.subsections[0].title, "qc");
+        match &captions.subsections[0].content {
+            ReportContent::Markdown { markdown } => {
+                assert!(markdown.contains("fastp"));
+            }
+            _ => panic!("expected markdown content"),
+        }
+    }
+
+    #[test]
+    fn rule_captions_file_resolved_relative_to_workdir() {
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workdir.path().join("qc_note.md"),
+            "Alignment summary: 95% mapped.",
+        )
+        .unwrap();
+        let config = workflow_config(
+            r#"[[rules]]
+name = "align"
+shell = "bwa mem"
+report = { file = "qc_note.md" }
+"#,
+        );
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let captions = sections.iter().find(|s| s.id == "rule-captions").unwrap();
+        match &captions.subsections[0].content {
+            ReportContent::Markdown { markdown } => {
+                assert_eq!(markdown, "Alignment summary: 95% mapped.");
+            }
+            _ => panic!("expected markdown content"),
+        }
+    }
+
+    #[test]
+    fn rule_captions_render_per_executed_instance() {
+        let config = workflow_config(
+            r#"[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "qc"
+shell = "fastp -i {sample}.fq"
+report = "Per-sample QC."
+"#,
+        );
+        let mut cp = fixture_checkpoint();
+        // The engine records expanded instances as `{rule}_{group}_{sample}`
+        // with the caption captured at execution time.
+        cp.rule_runs.insert(
+            "qc_cohort_S1".to_string(),
+            RuleRunRecord {
+                exit_code: Some(0),
+                command: Some("fastp -i S1.fq".to_string()),
+                stderr_tail: None,
+                caption: Some("S1: 1M reads, Q30 0.95.".to_string()),
+            },
+        );
+        cp.rule_runs.insert(
+            "qc_cohort_S2".to_string(),
+            RuleRunRecord {
+                exit_code: Some(0),
+                command: Some("fastp -i S2.fq".to_string()),
+                stderr_tail: None,
+                caption: None, // falls back to the declared annotation
+            },
+        );
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let captions = sections.iter().find(|s| s.id == "rule-captions").unwrap();
+        assert_eq!(captions.subsections.len(), 2);
+        assert_eq!(captions.subsections[0].title, "qc_cohort_S1");
+        assert_eq!(captions.subsections[1].title, "qc_cohort_S2");
+        match &captions.subsections[0].content {
+            ReportContent::Markdown { markdown } => {
+                assert!(markdown.contains("Q30 0.95"));
+            }
+            _ => panic!("expected markdown content"),
+        }
+        // The instance without a captured caption falls back to the
+        // declared inline annotation.
+        match &captions.subsections[1].content {
+            ReportContent::Markdown { markdown } => {
+                assert_eq!(markdown, "Per-sample QC.");
+            }
+            _ => panic!("expected markdown content"),
+        }
+    }
+
+    #[test]
+    fn rule_captions_without_runs_use_declared_annotation() {
+        // Checkpoint exists, but the rule never ran (or a legacy checkpoint
+        // recorded no rule_runs at all): the declared annotation still shows.
+        let config = workflow_config(
+            r#"[[rules]]
+name = "qc"
+shell = "fastp -i in.fq"
+report = "Per-sample QC for a rule with no execution record."
+"#,
+        );
+        let cp = fixture_checkpoint(); // rule_runs has only "call"
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let captions = sections.iter().find(|s| s.id == "rule-captions").unwrap();
+        assert_eq!(captions.subsections.len(), 1);
+        assert_eq!(captions.subsections[0].title, "qc");
+        match &captions.subsections[0].content {
+            ReportContent::Markdown { markdown } => {
+                assert!(markdown.contains("no execution record"));
+            }
+            _ => panic!("expected markdown content"),
+        }
+    }
+
+    #[test]
+    fn rule_captions_hidden_when_no_rule_has_report() {
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "rule-captions"));
+    }
+
+    #[test]
+    fn rule_captions_missing_file_degrades_to_hidden() {
+        // A `report.file` pointing at a nonexistent file must not fail the
+        // report — the rule simply contributes no caption subsection.
+        let config = workflow_config(
+            r#"[[rules]]
+name = "qc"
+shell = "fastp"
+report = { file = "does_not_exist.md" }
+"#,
+        );
+        let ctx = ctx_for(&config, None, None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "rule-captions"));
+    }
+
+    #[test]
+    fn aggregate_metrics_matrix_across_tools() {
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(workdir.path().join("S1.fastp.json"), fastp_fixture(1234)).unwrap();
+        std::fs::write(
+            workdir.path().join("S1.flagstat"),
+            "100 + 0 in total (QC-passed reads + QC-failed reads)\n90 + 0 mapped (90.00% : N/A)\n",
+        )
+        .unwrap();
+        std::fs::write(workdir.path().join("S2.fastp.json"), fastp_fixture(5678)).unwrap();
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let agg = sections
+            .iter()
+            .find(|s| s.id == "aggregate-metrics")
+            .unwrap();
+        assert_eq!(agg.title, "Aggregate Metrics");
+        let matrix = &agg.subsections[0];
+        assert_eq!(matrix.title, "Sample Matrix");
+        assert_eq!(matrix.id, "aggregate-sample-matrix");
+        match &matrix.content {
+            ReportContent::Table { headers, rows } => {
+                // First-seen column order: S1's fastp metrics, then S1's
+                // flagstat — tools group naturally.
+                assert_eq!(
+                    headers,
+                    &[
+                        "Sample",
+                        "fastp.total_reads",
+                        "fastp.q30_rate",
+                        "fastp.gc_content",
+                        "fastp.duplication_rate",
+                        "flagstat.total_reads",
+                        "flagstat.mapped_rate",
+                    ]
+                );
+                assert_eq!(rows.len(), 2);
+                let s1 = &rows[0];
+                assert_eq!(s1[0], "S1");
+                assert_eq!(s1[1], "1234");
+                assert_eq!(s1[2], "0.92");
+                assert_eq!(s1[5], "100");
+                assert_eq!(s1[6], "0.90");
+                let s2 = &rows[1];
+                assert_eq!(s2[0], "S2");
+                assert_eq!(s2[1], "5678");
+                // S2 has no flagstat file → honest gap, not a fabricated 0.
+                assert_eq!(s2[5], "-");
+            }
+            _ => panic!("expected matrix table"),
+        }
+
+        // Deterministic output.
+        let sections_b = SectionRegistry::with_defaults().generate(&ctx, None);
+        let json = |sections: &[ReportSection]| {
+            let mut r = Report::new("T", "w", "0.1");
+            r.generated_at = None;
+            for section in sections {
+                r.add_section(section.clone());
+            }
+            r.to_json().unwrap()
+        };
+        assert_eq!(json(&sections), json(&sections_b));
+    }
+
+    #[test]
+    fn aggregate_metrics_includes_mqc_custom_content() {
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workdir.path().join("summary_mqc.json"),
+            r#"{"title": "Assembly summary", "data": {"S1": {"n50": 12000, "busco": "95%"}, "S2": {"n50": 8000, "busco": "91%"}}}"#,
+        )
+        .unwrap();
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let agg = sections
+            .iter()
+            .find(|s| s.id == "aggregate-metrics")
+            .unwrap();
+        assert_eq!(agg.subsections.len(), 1);
+        let custom = &agg.subsections[0];
+        assert_eq!(custom.title, "Assembly summary");
+        assert_eq!(custom.id, "mqc-Assembly-summary");
+        match &custom.content {
+            ReportContent::Table { headers, rows } => {
+                // Metrics sorted per row; rows sorted by sample.
+                assert_eq!(headers, &["Sample", "busco", "n50"]);
+                assert_eq!(rows[0], &["S1", "95%", "12000"]);
+                assert_eq!(rows[1], &["S2", "91%", "8000"]);
+            }
+            _ => panic!("expected custom-content table"),
+        }
+    }
+
+    #[test]
+    fn aggregate_metrics_yml_counts_as_skipped_with_scan_notes() {
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workdir.path().join("notes_mqc.yml"),
+            "id: notes\ndata: {S1: 1}\n",
+        )
+        .unwrap();
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        // Only the Scan Notes subsection — the YAML file itself is skipped
+        // (no YAML parser in the workspace), but not silently.
+        let agg = sections
+            .iter()
+            .find(|s| s.id == "aggregate-metrics")
+            .unwrap();
+        assert_eq!(agg.subsections.len(), 1);
+        assert_eq!(agg.subsections[0].title, "Scan Notes");
+        match &agg.subsections[0].content {
+            ReportContent::Text { text } => {
+                assert!(text.contains("1 file(s) matched known tool patterns"));
+            }
+            _ => panic!("expected text subsection"),
+        }
+    }
+
+    #[test]
+    fn aggregate_metrics_hidden_without_workdir_or_content() {
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+
+        // (a) No workdir resolvable → hidden.
+        let cp = fixture_checkpoint();
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "aggregate-metrics"));
+
+        // (b) Workdir exists but nothing parsed → hidden, never an empty
+        // table.
+        let empty = tempfile::tempdir().unwrap();
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(empty.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        assert!(!sections.iter().any(|s| s.id == "aggregate-metrics"));
+    }
+
+    #[test]
+    fn aggregate_metrics_disambiguates_duplicate_sample_cells() {
+        // `S1.flagstat` and `S1.flagstat.txt` both classify as flagstat for
+        // sample S1 — the second contribution to `flagstat.total_reads` gets
+        // a numbered suffix instead of clobbering the first.
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workdir.path().join("S1.flagstat"),
+            "100 + 0 in total (QC-passed reads + QC-failed reads)\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workdir.path().join("S1.flagstat.txt"),
+            "200 + 0 in total (QC-passed reads + QC-failed reads)\n",
+        )
+        .unwrap();
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+        let agg = sections
+            .iter()
+            .find(|s| s.id == "aggregate-metrics")
+            .unwrap();
+        match &agg.subsections[0].content {
+            ReportContent::Table { headers, rows } => {
+                assert_eq!(
+                    headers,
+                    &["Sample", "flagstat.total_reads", "flagstat.total_reads[2]"]
+                );
+                assert_eq!(rows[0], &["S1", "100", "200"]);
+            }
+            _ => panic!("expected matrix table"),
+        }
     }
 
     // ── Issue #83 P1-5: metrics adapters + sample matrix ─────────────────
@@ -4154,6 +4805,7 @@ shell = "bwa mem"
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S1".to_string()),
                 stderr_tail: None,
+                caption: None,
             },
         );
         ck.rule_runs.insert(
@@ -4162,6 +4814,7 @@ shell = "bwa mem"
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S2".to_string()),
                 stderr_tail: None,
+                caption: None,
             },
         );
         let ctx = ctx_for(&config, Some(&ck), None);
