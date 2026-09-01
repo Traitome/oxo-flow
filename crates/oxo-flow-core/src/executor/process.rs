@@ -6,6 +6,7 @@ use crate::storage::StorageResolver;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1236,16 +1237,47 @@ impl LocalExecutor {
             // instance's bindings into its `when`, so an unbound key here
             // genuinely cannot be met (false — rule skipped), never a
             // kept instance's veto.
-            if !evaluate_condition_with_wildcards_and_base_dir(
+            //
+            // The workdir-aware entry (issue #282) lets runtime file
+            // functions (`reads_count` / `wc_lines` / `file_size`) resolve
+            // relative paths against the run's workdir and decide on real
+            // file contents; missing files fail closed here instead of
+            // deferring like they do at plan time.
+            let verdict = evaluate_condition_with_workdir_and_base_dir(
                 condition,
                 &config_values,
                 wildcard_values,
+                Some(&self.config.workdir),
                 self.config.base_dir.as_deref(),
-            ) {
+            );
+            if !verdict {
                 record.status = JobStatus::Skipped;
                 record.skip_reason = Some("condition evaluated to false".to_string());
                 record.finished_at = Some(Utc::now());
+                // Issue #282: persist the runtime verdict so config-change
+                // replay compares real gates (real-vs-real) instead of the
+                // plan-time deferral. Dry runs must not pollute the
+                // checkpoint — they decide nothing (the gate here runs
+                // before the dry-run return below).
+                if !self.config.dry_run
+                    && let Some(ck) = &self.config.checkpoint
+                {
+                    ck.lock()
+                        .await
+                        .when_verdicts
+                        .insert(rule.name.clone(), false);
+                }
                 return Ok(record);
+            }
+            // Verdict true: record it too, so a later threshold change that
+            // flips this gate invalidates the completed output (issue #282).
+            if !self.config.dry_run
+                && let Some(ck) = &self.config.checkpoint
+            {
+                ck.lock()
+                    .await
+                    .when_verdicts
+                    .insert(rule.name.clone(), true);
             }
         }
 
@@ -3112,7 +3144,113 @@ pub fn evaluate_condition_with_wildcards_and_base_dir(
     wildcard_values: &HashMap<String, String>,
     base_dir: Option<&std::path::Path>,
 ) -> bool {
-    evaluate_condition_inner(condition.trim(), config_values, wildcard_values, base_dir)
+    evaluate_condition_inner(
+        condition.trim(),
+        config_values,
+        wildcard_values,
+        base_dir,
+        None,
+        None,
+    )
+    .into_bool()
+}
+
+/// Plan-time evaluation with the run's **pending outputs** (issue #282
+/// review): `pending_outputs` holds the output paths/patterns of every
+/// rule in the workflow. A runtime file-function atom that references one
+/// of them defers even when a file already exists on disk — a previous
+/// run's leftover that this run's producer will overwrite — so the stale
+/// value cannot decide the gate at plan time. The caller decides the
+/// run-root for relative pending paths by passing patterns the way they
+/// appear in the config; atom paths expand the same way.
+pub fn evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+    condition: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+    base_dir: Option<&std::path::Path>,
+    pending_outputs: &[String],
+) -> bool {
+    evaluate_condition_inner(
+        condition.trim(),
+        config_values,
+        wildcard_values,
+        base_dir,
+        None,
+        Some(pending_outputs),
+    )
+    .into_bool()
+}
+
+/// Condition evaluation in the **execution-time phase** (issue #282):
+/// runtime file-reading functions (`reads_count` / `wc_lines` /
+/// `file_size`) resolve relative paths against `workdir` — the run's
+/// working directory, the same root every shell command runs in — and a
+/// referenced file that does not exist evaluates **false**: the gate
+/// decides the instance here (its producer already ran, so a missing file
+/// means the gate's precondition is not met). Callers without a workdir
+/// (plan contexts) get the deferred semantics of
+/// [`evaluate_condition_with_wildcards_and_base_dir`] instead: a missing
+/// file leaves the atom **true** so instances survive expansion and the
+/// verdict is made at execution time.
+pub fn evaluate_condition_with_workdir_and_base_dir(
+    condition: &str,
+    config_values: &HashMap<String, toml::Value>,
+    wildcard_values: &HashMap<String, String>,
+    workdir: Option<&std::path::Path>,
+    base_dir: Option<&std::path::Path>,
+) -> bool {
+    evaluate_condition_inner(
+        condition.trim(),
+        config_values,
+        wildcard_values,
+        base_dir,
+        workdir,
+        None,
+    )
+    .into_bool()
+}
+
+/// Does a concrete path match an output pattern? `{name}` tokens are
+/// wildcard slots (same grammar the DAG uses to match producer outputs —
+/// see `pattern_to_regex`); a literal pattern matches itself.
+fn path_matches_output(path: &str, pattern: &str) -> bool {
+    if pattern == path {
+        return true;
+    }
+    crate::wildcard::pattern_to_regex(pattern)
+        .ok()
+        .is_some_and(|re| re.is_match(path))
+}
+
+/// Tri-state verdict for a `when` condition (issue #282 review). `Yes`/`No`
+/// are decided. `Deferred` means a runtime file-function atom referenced a
+/// file that cannot be read yet in the plan-time phase — the verdict
+/// belongs to the execution-time re-check. Composition is Kleene-style so
+/// deferral survives `!`, `&&`, and `||` (a negated or chained deferred
+/// atom must not collapse to a plan-time decision that prunes instances);
+/// the bool-returning wrappers collapse `Deferred` to `true`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConditionVerdict {
+    Yes,
+    No,
+    Deferred,
+}
+
+impl ConditionVerdict {
+    fn decided(value: bool) -> Self {
+        if value {
+            ConditionVerdict::Yes
+        } else {
+            ConditionVerdict::No
+        }
+    }
+
+    fn into_bool(self) -> bool {
+        match self {
+            ConditionVerdict::Yes | ConditionVerdict::Deferred => true,
+            ConditionVerdict::No => false,
+        }
+    }
 }
 
 fn evaluate_condition_inner(
@@ -3120,13 +3258,15 @@ fn evaluate_condition_inner(
     config_values: &HashMap<String, toml::Value>,
     wildcard_values: &HashMap<String, String>,
     base_dir: Option<&std::path::Path>,
-) -> bool {
+    workdir: Option<&std::path::Path>,
+    pending_outputs: Option<&[String]>,
+) -> ConditionVerdict {
     let s = s.trim();
     if s.is_empty() || s == "true" {
-        return true;
+        return ConditionVerdict::Yes;
     }
     if s == "false" {
-        return false;
+        return ConditionVerdict::No;
     }
     if s.starts_with('(') && s.ends_with(')') && balanced_parens(s) {
         return evaluate_condition_inner(
@@ -3134,18 +3274,77 @@ fn evaluate_condition_inner(
             config_values,
             wildcard_values,
             base_dir,
+            workdir,
+            pending_outputs,
         );
     }
     if let Some(idx) = find_top_level_op(s, "||") {
-        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values, base_dir)
-            || evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values, base_dir);
+        let lhs = evaluate_condition_inner(
+            &s[..idx],
+            config_values,
+            wildcard_values,
+            base_dir,
+            workdir,
+            pending_outputs,
+        );
+        // Kleene OR: a decided Yes short-circuits; otherwise a Deferred on
+        // either side defers the whole disjunction.
+        if lhs == ConditionVerdict::Yes {
+            return ConditionVerdict::Yes;
+        }
+        return match evaluate_condition_inner(
+            &s[idx + 2..],
+            config_values,
+            wildcard_values,
+            base_dir,
+            workdir,
+            pending_outputs,
+        ) {
+            ConditionVerdict::Yes => ConditionVerdict::Yes,
+            ConditionVerdict::Deferred => ConditionVerdict::Deferred,
+            ConditionVerdict::No => lhs,
+        };
     }
     if let Some(idx) = find_top_level_op(s, "&&") {
-        return evaluate_condition_inner(&s[..idx], config_values, wildcard_values, base_dir)
-            && evaluate_condition_inner(&s[idx + 2..], config_values, wildcard_values, base_dir);
+        let lhs = evaluate_condition_inner(
+            &s[..idx],
+            config_values,
+            wildcard_values,
+            base_dir,
+            workdir,
+            pending_outputs,
+        );
+        // Kleene AND: a decided No short-circuits; otherwise a Deferred on
+        // either side defers the whole conjunction.
+        if lhs == ConditionVerdict::No {
+            return ConditionVerdict::No;
+        }
+        return match evaluate_condition_inner(
+            &s[idx + 2..],
+            config_values,
+            wildcard_values,
+            base_dir,
+            workdir,
+            pending_outputs,
+        ) {
+            ConditionVerdict::No => ConditionVerdict::No,
+            ConditionVerdict::Deferred => ConditionVerdict::Deferred,
+            ConditionVerdict::Yes => lhs,
+        };
     }
     if let Some(rest) = s.strip_prefix('!') {
-        return !evaluate_condition_inner(rest.trim(), config_values, wildcard_values, base_dir);
+        return match evaluate_condition_inner(
+            rest.trim(),
+            config_values,
+            wildcard_values,
+            base_dir,
+            workdir,
+            pending_outputs,
+        ) {
+            ConditionVerdict::Yes => ConditionVerdict::No,
+            ConditionVerdict::No => ConditionVerdict::Yes,
+            ConditionVerdict::Deferred => ConditionVerdict::Deferred,
+        };
     }
     // `len(...)` — cardinality of a config value (issue #252): array length,
     // string char count, table key count. An absent key has length 0 (nothing
@@ -3178,12 +3377,12 @@ fn evaluate_condition_inner(
         if after.is_empty() {
             // Bare `len(config.x)` — true when the value exists and is
             // non-empty.
-            return n.is_some_and(|n| n > 0);
+            return ConditionVerdict::decided(n.is_some_and(|n| n > 0));
         }
         for op in &["==", "!=", ">=", "<=", ">", "<"] {
             if let Some(rhs) = after.strip_prefix(op) {
                 let rhs_num = rhs.trim().parse::<i64>().unwrap_or(i64::MIN);
-                return match *op {
+                return ConditionVerdict::decided(match *op {
                     "==" => n == Some(rhs_num),
                     "!=" => n != Some(rhs_num),
                     ">=" => n.is_some_and(|n| n >= rhs_num),
@@ -3191,30 +3390,138 @@ fn evaluate_condition_inner(
                     ">" => n.is_some_and(|n| n > rhs_num),
                     "<" => n.is_some_and(|n| n < rhs_num),
                     _ => false,
-                };
+                });
             }
         }
-        return false;
+        return ConditionVerdict::No;
     }
     if let Some(inner) = s
         .strip_prefix("file_exists(")
         .and_then(|s| s.strip_suffix(')'))
     {
         let path = inner.trim().trim_matches('"').trim_matches('\'');
-        return match base_dir {
+        return ConditionVerdict::decided(match base_dir {
             Some(root) if !Path::new(path).is_absolute() => root.join(path).exists(),
             _ => Path::new(path).exists(),
+        });
+    }
+    // Runtime file-reading functions (issue #282): `reads_count(path)`,
+    // `wc_lines(path)`, `file_size(path)` — a small pure-read stdlib so
+    // `when` can gate on runtime-produced values, e.g.
+    // `reads_count('{sample}/trimmed/{sample}.fq.gz') > config.min_reads`.
+    // Only these three names are recognized, only `when` strings reach this
+    // evaluator, and each function just opens a file and counts — no shell,
+    // no arbitrary code. `{wildcard}` tokens in the path expand against the
+    // caller's wildcard context (unbound tokens cannot exist on disk and
+    // fall into the missing-file semantics below). Relative paths resolve
+    // against `workdir` when one is supplied (execution time and
+    // config-change replay): a missing file there means the producer has
+    // not delivered it, so the atom fails closed. Without a workdir (plan
+    // time) a file the run has not produced yet leaves the atom
+    // **Deferred** — the verdict is made at the execution-time re-check and
+    // expansion must not drop the instance. Composition is Kleene-style
+    // (`!`/`&&`/`||` propagate the deferral; see [`ConditionVerdict`]), so
+    // negated or chained forms are equally safe at plan time. A file that
+    // exists and is not an output of the run evaluates to its real value in
+    // both phases (a prior run's own output being overwritten this run
+    // counts as pending via `pending_outputs`).
+    for name in ["reads_count", "wc_lines", "file_size"] {
+        let Some(rest) = s.strip_prefix(name) else {
+            continue;
         };
+        if !rest.starts_with('(') {
+            continue;
+        }
+        let Some(close) = find_matching_paren(&rest[1..]) else {
+            continue;
+        };
+        let arg = rest[1..1 + close].trim();
+        let after = rest[close + 2..].trim();
+        let raw_path = arg.trim_matches('"').trim_matches('\'');
+        let expanded = crate::wildcard::expand_pattern(raw_path, wildcard_values)
+            .unwrap_or_else(|_| raw_path.to_string());
+        let candidate = if Path::new(&expanded).is_absolute() {
+            PathBuf::from(&expanded)
+        } else {
+            workdir.map_or_else(|| PathBuf::from(&expanded), |root| root.join(&expanded))
+        };
+        // Plan-time deferral: the referenced output cannot exist yet, or it
+        // exists only as a previous run's leftover that this run's producer
+        // will overwrite (`pending_outputs`).
+        let exists = candidate.exists();
+        if workdir.is_none()
+            && (!exists
+                || pending_outputs.is_some_and(|pending| {
+                    pending.iter().any(|p| path_matches_output(p, &expanded))
+                }))
+        {
+            return ConditionVerdict::Deferred;
+        }
+        let n = match name {
+            "file_size" => std::fs::metadata(&candidate).ok().map(|md| md.len() as i64),
+            "reads_count" => count_fastq_records(&candidate),
+            _ => count_text_lines(&candidate),
+        };
+        let Some(n) = n else {
+            // Missing or unreadable at the deciding phase: the producer has
+            // not delivered the file — fail closed.
+            return ConditionVerdict::No;
+        };
+        if after.is_empty() {
+            // Bare `reads_count('x')` — true when a non-empty value was
+            // read (consistent with bare `len(config.x)`).
+            return ConditionVerdict::decided(n > 0);
+        }
+        for op in &["==", "!=", ">=", "<=", ">", "<"] {
+            if let Some(rhs_text) = after.strip_prefix(op) {
+                let rhs_text = rhs_text.trim();
+                // The threshold is a number literal or a `config.*`
+                // reference (`> config.min_reads`) — typed config values
+                // are read directly, string values (e.g. merged from
+                // wildcard bindings) parse.
+                let rhs_num = if let Some(key) = rhs_text.strip_prefix("config.") {
+                    config_values
+                        .get(key.trim())
+                        .and_then(runtime_threshold_as_i64)
+                } else {
+                    rhs_text.parse::<i64>().ok()
+                };
+                let Some(rhs_num) = rhs_num else {
+                    // Unresolvable threshold (absent config key,
+                    // non-numeric): the gate cannot be established — the
+                    // same absent-key behavior as `compare_config_value`.
+                    return ConditionVerdict::No;
+                };
+                return ConditionVerdict::decided(match *op {
+                    "==" => n == rhs_num,
+                    "!=" => n != rhs_num,
+                    ">=" => n >= rhs_num,
+                    "<=" => n <= rhs_num,
+                    ">" => n > rhs_num,
+                    "<" => n < rhs_num,
+                    _ => false,
+                });
+            }
+        }
+        return ConditionVerdict::No;
     }
     for op in &["==", "!=", ">=", "<=", ">", "<"] {
         if let Some(idx) = find_top_level_op(s, op) {
             let lhs = s[..idx].trim();
             let rhs = s[idx + op.len()..].trim();
             if let Some(key) = lhs.strip_prefix("config.") {
-                return compare_config_value(config_values.get(key), op, rhs);
+                return ConditionVerdict::decided(compare_config_value(
+                    config_values.get(key),
+                    op,
+                    rhs,
+                ));
             }
             if let Some(key) = lhs.strip_prefix("wildcard.") {
-                return compare_wildcard_value(wildcard_values.get(key), op, rhs);
+                return ConditionVerdict::decided(compare_wildcard_value(
+                    wildcard_values.get(key),
+                    op,
+                    rhs,
+                ));
             }
             // Literal-vs-literal comparison: produced by expansion-time
             // when baking (per-instance wildcard values substituted into
@@ -3223,19 +3530,19 @@ fn evaluate_condition_inner(
             if let Some(l) = strip_quotes(lhs)
                 && let Some(r) = strip_quotes(rhs)
             {
-                return compare_strings(l, r, op);
+                return ConditionVerdict::decided(compare_strings(l, r, op));
             }
         }
     }
     if let Some(key) = s.strip_prefix("config.") {
-        return match config_values.get(key) {
+        return ConditionVerdict::decided(match config_values.get(key) {
             Some(toml::Value::Boolean(b)) => *b,
             Some(toml::Value::String(sv)) => !sv.is_empty() && sv != "false" && sv != "0",
             Some(toml::Value::Integer(i)) => *i != 0,
             Some(toml::Value::Float(f)) => *f != 0.0,
             Some(_) => true,
             None => false,
-        };
+        });
     }
     if let Some(key) = s.strip_prefix("wildcard.") {
         // Truthiness of a wildcard binding. An absent key is false — an
@@ -3244,12 +3551,12 @@ fn evaluate_condition_inner(
         // expansion kept are baked with their per-instance values, so this
         // strict rule only vetoes rules whose wildcard reference is
         // genuinely unresolvable.
-        return match wildcard_values.get(key) {
+        return ConditionVerdict::decided(match wildcard_values.get(key) {
             Some(v) => !v.is_empty() && v != "false" && v != "0",
             None => false,
-        };
+        });
     }
-    true
+    ConditionVerdict::Yes
 }
 
 /// Element count of a config/wildcard value for `len(...)` (issue #252).
@@ -3261,6 +3568,68 @@ fn len_of_value(val: Option<&toml::Value>) -> Option<i64> {
         Some(toml::Value::Array(items)) => Some(items.len() as i64),
         Some(toml::Value::String(s)) => Some(s.chars().count() as i64),
         Some(toml::Value::Table(t)) => Some(t.len() as i64),
+        _ => None,
+    }
+}
+
+/// FASTQ record count for `reads_count(path)` (issue #282): every 4 lines
+/// are one record. Plain and gzip-compressed (`.gz`, streamed through
+/// `MultiGzDecoder`) files are supported; BAM/CRAM is out of scope for v1
+/// (documented — needs a BGZF parser, not line arithmetic). The count is
+/// the streamed line total divided by 4 — every line counts, including
+/// blank ones.
+fn count_fastq_records(path: &Path) -> Option<i64> {
+    const RECORD_LINES: i64 = 4;
+    let lines = count_lines_streamed(
+        path,
+        path.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gz")),
+    )?;
+    Some(lines / RECORD_LINES)
+}
+
+/// Total line count for `wc_lines(path)` (issue #282): plain and
+/// gzip-compressed (`.gz`, same detection as `reads_count`) text files —
+/// the line count of the *decompressed* content.
+fn count_text_lines(path: &Path) -> Option<i64> {
+    count_lines_streamed(
+        path,
+        path.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gz")),
+    )
+}
+
+/// Stream a file line by line, decompressing on the fly when `gzip` is set
+/// (`MultiGzDecoder` handles concatenated gzip members, the form
+/// chunked FASTQ pipelines produce). Returns `None` when the file cannot
+/// be opened or read — the caller's missing-file semantics.
+fn count_lines_streamed(path: &Path, gzip: bool) -> Option<i64> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut lines = 0i64;
+    if gzip {
+        let reader = std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file));
+        for line in reader.lines() {
+            line.ok()?;
+            lines += 1;
+        }
+    } else {
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            line.ok()?;
+            lines += 1;
+        }
+    }
+    Some(lines)
+}
+
+/// Numeric threshold for a runtime file-function comparison: typed config
+/// integers/floats read directly, strings parsed (values merged from
+/// wildcard bindings arrive as strings).
+fn runtime_threshold_as_i64(value: &toml::Value) -> Option<i64> {
+    match value {
+        toml::Value::Integer(i) => Some(*i),
+        toml::Value::Float(f) => Some(*f as i64),
+        toml::Value::String(s) => s.trim().parse::<i64>().ok(),
         _ => None,
     }
 }

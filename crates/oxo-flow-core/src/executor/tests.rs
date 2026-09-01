@@ -926,6 +926,310 @@ fn file_exists_resolves_against_base_dir_not_cwd() {
 }
 
 #[test]
+fn runtime_when_functions_count_real_files() {
+    // Issue #282: `reads_count` / `wc_lines` / `file_size` evaluate against
+    // real files in the run's workdir — data-dependent gating on files a
+    // previous rule produced during this run.
+    use super::process::evaluate_condition_with_workdir_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+
+    // Plain FASTQ: 2 records (8 lines).
+    let fq = dir.path().join("sample.fq");
+    std::fs::write(&fq, "@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nIIII\n").unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq') == 2",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq') > 2",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Gzipped FASTQ counts identically (flate2 MultiGzDecoder).
+    let fq_gz = dir.path().join("sample.fq.gz");
+    let gz_file = std::fs::File::create(&fq_gz).unwrap();
+    let mut enc = flate2::write::GzEncoder::new(gz_file, flate2::Compression::default());
+    std::io::Write::write_all(
+        &mut enc,
+        b"@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nIIII\n@r3\nAAAA\n+\nIIII\n",
+    )
+    .unwrap();
+    enc.finish().unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq.gz') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Bare call: truthiness = records > 0.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq')",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // wc_lines counts plain text lines; file_size reads the file length.
+    std::fs::write(dir.path().join("list.txt"), "a\nb\nc\n").unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "wc_lines('list.txt') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    let size = std::fs::metadata(dir.path().join("list.txt"))
+        .unwrap()
+        .len();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        &format!("file_size('list.txt') == {size}"),
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // The full operator set works against `config.` thresholds (2 records
+    // vs. a threshold of 1: three comparisons pass, three fail).
+    let mut typed = HashMap::new();
+    typed.insert("min_reads".to_string(), toml::Value::Integer(1));
+    for (expr, expected) in [
+        ("reads_count('sample.fq') > config.min_reads", true),
+        ("reads_count('sample.fq') >= config.min_reads", true),
+        ("reads_count('sample.fq') < config.min_reads", false),
+        ("reads_count('sample.fq') <= config.min_reads", false),
+        ("reads_count('sample.fq') == config.min_reads", false),
+        ("reads_count('sample.fq') != config.min_reads", true),
+    ] {
+        assert_eq!(
+            evaluate_condition_with_workdir_and_base_dir(
+                expr,
+                &typed,
+                &empty,
+                Some(dir.path()),
+                None
+            ),
+            expected,
+            "operator check failed for: {expr}"
+        );
+    }
+
+    // String-valued config thresholds parse as numbers too.
+    let mut str_cfg = HashMap::new();
+    str_cfg.insert(
+        "min_reads".to_string(),
+        toml::Value::String("2".to_string()),
+    );
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq') >= config.min_reads",
+        &str_cfg,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Absolute paths bypass workdir joining.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        &format!("wc_lines('{}') == 3", dir.path().join("list.txt").display()),
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Unknown file at EXECUTION time fails closed (verdict false).
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('missing.fq') > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // The same unknown file at PLAN time defers (verdict true) — the
+    // rule's producer has not run yet, so the gate must not prune it.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('missing.fq') > 0",
+        &config,
+        &empty,
+        None,
+        None
+    ));
+
+    // `{wildcard}` tokens in the path expand against the wildcard map.
+    let mut wildcards = HashMap::new();
+    wildcards.insert("sample".to_string(), "sample".to_string());
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('{sample}.fq') == 2",
+        &config,
+        &wildcards,
+        Some(dir.path()),
+        None
+    ));
+
+    // Malformed comparisons (missing/unparseable threshold) fail closed.
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "reads_count('sample.fq') > config.nope",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
+fn wc_lines_decompresses_gzip_like_reads_count() {
+    // Issue #282 review: `wc_lines` must decompress `.gz` inputs the same
+    // way `reads_count` does — the count is of the decompressed content.
+    use super::process::evaluate_condition_with_workdir_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gz = dir.path().join("list.txt.gz");
+    let mut enc = flate2::write::GzEncoder::new(
+        std::fs::File::create(&gz).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut enc, b"a\nb\nc\n").unwrap();
+    enc.finish().unwrap();
+
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "wc_lines('list.txt.gz') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
+fn runtime_when_defer_survives_negation_and_chaining() {
+    // Issue #282 review: plan-time deferral is Kleene — `!`, `&&`, `||`
+    // over a deferred atom must stay deferred (collapsed to true by the
+    // wrapper), never collapse to a plan-time decision that prunes.
+    use super::process::evaluate_condition_with_wildcards_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+
+    // At plan time (no workdir) the file does not exist: the atom defers,
+    // and its negation stays deferred too (collapsed to true by the
+    // wrapper) — the pre-Kleene bug inverted it to a decided false that
+    // pruned the instance.
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        "!reads_count('trimmed/out.fq') > 0",
+        &config,
+        &empty,
+        None
+    ));
+    assert!(!evaluate_condition_with_wildcards_and_base_dir(
+        "reads_count('trimmed/out.fq') > 0 && config.enabled",
+        &HashMap::from([("enabled".to_string(), toml::Value::Boolean(false))]),
+        &empty,
+        None
+    ));
+    // Deferred || No stays deferred (true), while No || No is false.
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        "reads_count('trimmed/out.fq') > 0 || config.enabled",
+        &HashMap::from([("enabled".to_string(), toml::Value::Boolean(false))]),
+        &empty,
+        None
+    ));
+    assert!(!evaluate_condition_with_wildcards_and_base_dir(
+        "config.off || config.also_off",
+        &HashMap::from([
+            ("off".to_string(), toml::Value::Boolean(false)),
+            ("also_off".to_string(), toml::Value::Boolean(false))
+        ]),
+        &empty,
+        None
+    ));
+    // Execution time (workdir set, file still missing) is decided, not
+    // deferred: fail closed, and the negation is a real negation there
+    // (atom false → !atom true).
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "!reads_count('trimmed/out.fq') > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
+fn runtime_when_defers_on_pending_outputs_even_if_file_exists() {
+    // Issue #282 review: at plan time, a file that is an output of this
+    // run's rules is *pending* even when it exists on disk (a previous
+    // run's leftover that the producer will overwrite) — the stale value
+    // must not decide the gate.
+    use super::process::evaluate_condition_with_wildcards_base_dir_and_pending_outputs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir.path().join("stale.txt");
+    std::fs::write(&stale, "x\n").unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    // Plan time resolves atom paths against the process cwd; the test uses
+    // absolute paths so the tempdir file is the one being read.
+    let stale = stale.display().to_string();
+
+    // Stale leftover matching a pending output pattern defers (true), even
+    // though the file exists and its real value is 1.
+    assert!(
+        evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 1"),
+            &config,
+            &empty,
+            None,
+            &["results/{name}.txt".to_string()]
+        )
+    );
+    // A concrete pending path defers too.
+    assert!(
+        evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 1"),
+            &config,
+            &empty,
+            None,
+            std::slice::from_ref(&stale)
+        )
+    );
+    // The same file with NO pending match reads its real value.
+    assert!(
+        !evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 3"),
+            &config,
+            &empty,
+            None,
+            &["other/{name}.txt".to_string()]
+        )
+    );
+    // Execution time ignores pending outputs entirely (workdir set): the
+    // real value decides.
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "wc_lines('stale.txt') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
 fn evaluate_condition_literal_comparisons_compare_for_real() {
     use super::process::evaluate_condition_with_wildcards;
 
@@ -2187,6 +2491,129 @@ async fn scratch_rule_pre_exec_runs_in_scratch_with_absolute_inputs() {
     assert!(scratch_entries(workdir.path()).is_empty());
 }
 
+#[tokio::test]
+async fn runtime_when_gate_consumes_producer_output() {
+    // Issue #282 end-to-end: a consumer's data-dependent `when` gate reads
+    // files its producer wrote earlier in THIS run's workdir. Planning
+    // defers on the missing files (both consumer instances kept); execution
+    // judges real content — S1 (2 records) clears a threshold of 1, S2
+    // (10 records) fails one of 50 — and every verdict lands in the
+    // checkpoint for later config-change replay.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+    std::fs::write(
+        dir.path().join("raw/S1.fq"),
+        "@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nIIII\n",
+    )
+    .unwrap();
+    let mut s2 = String::new();
+    for i in 0..10 {
+        s2.push_str(&format!("@r{i}\nACGT\n+\nIIII\n"));
+    }
+    std::fs::write(dir.path().join("raw/S2.fq"), s2).unwrap();
+    let workflow_path = dir.path().join("gate.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gate"
+
+        [config]
+        min_reads = 5
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "trim"
+        input = ["raw/{sample}.fq"]
+        output = ["trimmed/{sample}.fq"]
+        shell = "cp {input[0]} {output[0]}"
+
+        [[rules]]
+        name = "filter"
+        input = ["trimmed/{sample}.fq"]
+        output = ["filtered/{sample}.fq"]
+        when = "reads_count('trimmed/{sample}.fq') > config.min_reads"
+        shell = "cp {input[0]} {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    // Plan time: trimmed/ outputs do not exist yet, so the gate defers and
+    // BOTH consumer instances survive planning.
+    for name in ["filter_cohort_S1", "filter_cohort_S2"] {
+        assert!(
+            config.rules.iter().any(|r| r.name == name),
+            "{name} must survive planning (deferred gate)"
+        );
+    }
+
+    let checkpoint = std::sync::Arc::new(tokio::sync::Mutex::new(CheckpointState::new()));
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        checkpoint: Some(checkpoint.clone()),
+        dry_run: false,
+        ..Default::default()
+    });
+
+    // Producers run first — plain copies, no gate.
+    for sample in ["S1", "S2"] {
+        let instance = config
+            .rules
+            .iter()
+            .find(|r| r.name == format!("trim_cohort_{sample}"))
+            .unwrap();
+        let wildcards = HashMap::from([("sample".to_string(), sample.to_string())]);
+        let record = executor
+            .execute_rule_with_config(instance, &wildcards, &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(record.status, JobStatus::Success, "trim {sample}");
+        assert!(dir.path().join(format!("trimmed/{sample}.fq")).exists());
+    }
+
+    // S1: 2 records clear the threshold of 1 → the consumer executes.
+    let mut loose = HashMap::new();
+    loose.insert("min_reads".to_string(), toml::Value::Integer(1));
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "filter_cohort_S1")
+        .unwrap();
+    let wildcards_s1 = HashMap::from([("sample".to_string(), "S1".to_string())]);
+    let record = executor
+        .execute_rule_with_config(s1, &wildcards_s1, &loose)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Success, "filter S1 passes gate");
+    assert!(dir.path().join("filtered/S1.fq").exists());
+
+    // S2: 10 records vs a threshold of 50 → the gate prunes at execution
+    // time (Skipped, no output produced).
+    let mut strict = HashMap::new();
+    strict.insert("min_reads".to_string(), toml::Value::Integer(50));
+    let s2 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "filter_cohort_S2")
+        .unwrap();
+    let wildcards_s2 = HashMap::from([("sample".to_string(), "S2".to_string())]);
+    let record = executor
+        .execute_rule_with_config(s2, &wildcards_s2, &strict)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped, "filter S2 fails gate");
+    assert!(!dir.path().join("filtered/S2.fq").exists());
+
+    // Both verdicts are recorded for config-change replay.
+    let ck = checkpoint.lock().await;
+    assert_eq!(ck.when_verdicts.get("filter_cohort_S1"), Some(&true));
+    assert_eq!(ck.when_verdicts.get("filter_cohort_S2"), Some(&false));
+}
 #[tokio::test]
 async fn meta_when_gate_runs_se_and_skips_pe_instances() {
     // methylseq-style endedness gate driven by the sample metadata table

@@ -206,7 +206,7 @@ pub fn preview_run_plan(
     // 1. Config-impact invalidation (issue #62) — on the clone only.
     // `file_exists(...)` in `when` resolves against the workflow root
     // (issue #241) — same root as run and plan-time expansion.
-    let config_report = oxo_flow_core::config_impact::detect_config_changes(
+    let config_report = oxo_flow_core::config_impact::detect_config_changes_with_replay(
         &mut clone,
         &config.rules,
         dag,
@@ -215,6 +215,8 @@ pub fn preview_run_plan(
         interpreter_map,
         config.defaults.shell_prelude.as_deref(),
         config.base_dir(),
+        Some(workdir),
+        Some(config),
     );
     let config_invalidated: HashSet<String> = config_report.invalidated.iter().cloned().collect();
     // Issue #142 M1: rules whose fingerprint differed only in the
@@ -782,11 +784,28 @@ pub(crate) fn when_condition_false(
                 .or_insert_with(|| toml::Value::String(v.clone()));
         }
     }
-    !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+    // Every rule output of this run is pending at plan time: an existing
+    // file at one of those paths is a previous run's leftover that the
+    // producer will overwrite, so its stale value must not decide the
+    // gate here (issue #282 review). The verdict is deferred (true) and
+    // re-checked at execution time.
+    let pending_outputs: Vec<String> = config
+        .rules
+        .iter()
+        .flat_map(|r| {
+            let mut outs = r.output.to_vec();
+            if let Some(p) = &r.output_pattern {
+                outs.push(p.clone());
+            }
+            outs
+        })
+        .collect();
+    !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
         condition,
         &config_values,
         &HashMap::new(),
         config.base_dir(),
+        &pending_outputs,
     )
 }
 
