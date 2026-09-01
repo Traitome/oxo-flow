@@ -1064,13 +1064,16 @@ jobs:
         run: |
           # Version comes straight from the tag input (sync-version is skipped
           # in publish_images_only mode and cannot run for an existing tag).
+          # No --load: a multi-platform build produces a manifest list, which
+          # the docker exporter cannot load; validation happens in the build
+          # itself (both platforms must assemble successfully).
           VERSION="${TAG#v}"
           docker buildx build \
             --file Dockerfile.release \
             --build-arg VERSION="$VERSION" \
             --platform linux/amd64,linux/arm64 \
             -t oxo-flow-release:ci \
-            --load .
+            .
         env:
           TAG: ${{ inputs.tag }}
 
