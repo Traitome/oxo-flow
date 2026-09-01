@@ -2765,6 +2765,7 @@ name = "oxo-flow-desktop"
 version = "0.16.0"
 dependencies = [
  "anyhow",
+ "fs2",
  "oxo-flow-web",
  "tao",
  "tokio",

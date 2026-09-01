@@ -7,28 +7,48 @@
 //! 1. moves the working directory to `$HOME` when launched with `cwd=/`
 //!    (Finder launches `.app` bundles with `cwd=/`, where the server cannot
 //!    create its SQLite database),
-//! 2. starts the axum server (personal mode, loopback) on a free port,
-//! 3. waits for the listener to accept connections, then
-//! 4. opens a native webview window pointed at the server URL.
+//! 2. takes an exclusive single-instance lock,
+//! 3. starts the axum server (personal mode, loopback) on a free port,
+//! 4. waits for the listener to accept connections, then
+//! 5. opens a native webview window pointed at the server URL.
 //!
 //! Rendering happens in the OS webview (WKWebView on macOS, WebView2 on
 //! Windows, WebKitGTK on Linux) — no bundled browser, no Electron. Closing
 //! the window shuts the server down and exits.
 //!
+//! The main loop idles in `ControlFlow::Wait` (true sleep, no CPU spin), so
+//! lifecycle events arrive through an [`tao::event_loop::EventLoopProxy`]: a
+//! watchdog task on the tokio runtime races the server future against
+//! SIGINT/SIGTERM and forwards the outcome as a `ShellEvent`. This covers
+//! server crashes (exit non-zero), `kill <pid>` (graceful exit), and Ctrl-C.
+//!
 //! External links (anything off the loopback origin, e.g. the GitHub docs
 //! links in the UI) open in the system browser instead of navigating the
-//! app window away from the interface.
+//! app window away from the interface — for both plain navigations and
+//! new-window requests (`target="_blank"`, `window.open`).
+
+#[cfg(target_os = "linux")]
+use tao::platform::unix::WindowExtUnix;
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use tao::dpi::LogicalSize;
-use tao::event::{Event, StartCause, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop};
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::{Window, WindowBuilder};
-use wry::WebViewBuilder;
+use wry::{NewWindowResponse, WebViewBuilder};
 
 /// Loopback host the server binds to. `personal` mode enforces loopback
 /// anyway (see `effective_bind_host`), this keeps the window URL in sync.
 const HOST: &str = "127.0.0.1";
+
+/// Events forwarded from the tokio runtime into the tao main loop.
+enum ShellEvent {
+    /// The embedded server future completed (normally or with an error).
+    ServerFinished(Result<()>),
+    /// SIGINT or SIGTERM was received; shut down gracefully.
+    Signalled,
+}
 
 fn main() {
     if let Err(e) = run() {
@@ -61,6 +81,11 @@ fn run() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // One shell per data directory: two instances in the same cwd would run
+    // two servers against the same oxo-flow.db. The advisory lock releases
+    // automatically when the process dies (no stale-lock cleanup needed).
+    let instance_lock = take_instance_lock().context("another oxo-flow desktop instance is already running in this directory")?;
+
     // Grab an ephemeral port, then start the embedded server on a tokio
     // runtime that outlives the event loop below.
     let port = pick_free_port()?;
@@ -70,15 +95,16 @@ fn run() -> Result<()> {
         .enable_all()
         .build()
         .context("failed to build tokio runtime")?;
-    let mut server_task = runtime.spawn(oxo_flow_web::start_server_with_mode(
+    let server_task = runtime.spawn(oxo_flow_web::start_server_with_mode(
         "personal", HOST, port, "",
     ));
 
-    // tao 0.37: EventLoop::new() returns EventLoop<()>, not a Result —
-    // construction failures panic inside tao with a platform-specific
-    // message (no display / missing Xcode SDK), so there is nothing to
-    // map into anyhow here.
-    let event_loop = EventLoop::new();
+    // tao 0.37: EventLoopBuilder::build() returns EventLoop<T> directly, not
+    // a Result — construction failures panic inside tao with a platform-
+    // specific message (no display / missing Xcode SDK), so there is nothing
+    // to map into anyhow here.
+    let event_loop = EventLoopBuilder::<ShellEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
         .with_title("oxo-flow")
         .with_inner_size(LogicalSize::new(1440.0, 900.0))
@@ -91,25 +117,69 @@ fn run() -> Result<()> {
     // (SQLite init, first-run migrations) on slow disks.
     wait_for_server(&server_url).context("the embedded web server did not become ready in time")?;
 
-    let webview = build_webview(&window, &server_url).context("failed to create webview")?;
+    let webview = build_webview(&window, &server_url, port)
+        .context("failed to create webview")?;
     let _ = webview; // kept alive by wry's internal association with the window
+
+    // Watchdog: the main loop idles in ControlFlow::Wait, where neither
+    // platform emits NewEvents(Poll) we could poll JoinHandles from — so the
+    // runtime pushes lifecycle events through the proxy instead (both
+    // backends wake the loop for proxy events even under Wait). Race the
+    // server against SIGINT/SIGTERM so `kill` shuts the app down cleanly.
+    runtime.spawn(async move {
+        #[cfg(unix)]
+        let interrupted = async {
+            use tokio::signal::unix::{signal, SignalKind as TkSignalKind};
+            let mut term = signal(TkSignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+        };
+        #[cfg(not(unix))]
+        let interrupted = async {
+            let _ = tokio::signal::ctrl_c().await;
+        };
+
+        tokio::select! {
+            res = server_task => {
+                let result = match res {
+                    Ok(inner) => inner,
+                    Err(join) => Err(anyhow::anyhow!("server task failed: {join}")),
+                };
+                let _ = proxy.send_event(ShellEvent::ServerFinished(result));
+            }
+            _ = interrupted => {
+                let _ = proxy.send_event(ShellEvent::Signalled);
+            }
+        }
+    });
 
     // The runtime is owned by the event-loop closure (tao's `run` never
     // returns — it has signature `-> !` — so all teardown happens inside
     // the handler). The Option lets the FnMut closure consume it once.
     let mut runtime = Some(runtime);
+    // Dropping the lock file handle releases the single-instance lock; keep
+    // it alive for the whole run (this closure outlives the loop).
+    let _instance_lock = instance_lock;
 
     let mut exiting = false;
+    let mut server_result: Option<Result<()>> = None;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
-            // Poll the server task so a server crash surfaces as an exit
-            // instead of a frozen window silently showing the last page.
-            Event::NewEvents(StartCause::Poll) => {
-                if server_task.is_finished() {
-                    exiting = true;
-                }
+            // The runtime told us the server ended (crash or clean exit):
+            // record the outcome and leave, instead of freezing on a stale
+            // page that can no longer reach its server.
+            Event::UserEvent(ShellEvent::ServerFinished(result)) => {
+                server_result = Some(result);
+                exiting = true;
+            }
+            Event::UserEvent(ShellEvent::Signalled) => {
+                server_result = Some(Ok(()));
+                exiting = true;
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -119,20 +189,15 @@ fn run() -> Result<()> {
             }
             Event::MainEventsCleared => {
                 if exiting {
-                    // A server failure is only readable once we decide to
-                    // quit; drain it and turn it into the process exit code
-                    // (tao's macOS backend checks should_exit right after
+                    // A server failure becomes the process exit code (tao's
+                    // macOS backend checks should_exit right after
                     // MainEventsCleared, so ExitWithCode here is honored).
-                    let code = if server_task.is_finished() {
-                        match blocking_recv(&mut server_task) {
-                            Some(Err(e)) => {
-                                eprintln!("oxo-flow web server exited with an error: {e:#}");
-                                1
-                            }
-                            _ => 0,
+                    let code = match &server_result {
+                        Some(Err(e)) => {
+                            eprintln!("oxo-flow web server exited with an error: {e:#}");
+                            1
                         }
-                    } else {
-                        0
+                        _ => 0,
                     };
                     if let Some(rt) = runtime.take() {
                         rt.shutdown_timeout(std::time::Duration::from_secs(3));
@@ -152,47 +217,50 @@ fn run() -> Result<()> {
     });
 }
 
-/// Receive a finished JoinHandle's result without blocking: the caller has
-/// checked `is_finished()`, so the future is ready and a single poll with
-/// a no-op waker resolves it (we are off the tokio runtime here — the
-/// event loop thread — so `blocking_recv`/`now_or_never` would panic).
-/// JoinErrors are dropped (the task is finished; a cancelled handle never
-/// resolves to Ready), surfacing only the server's own result.
-fn blocking_recv(
-    handle: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
-) -> Option<anyhow::Result<()>> {
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-    // The task is finished, so the waker is never actually invoked; a
-    // no-op waker is enough to drive the one poll.
-    static NOOP_VTABLE: RawWakerVTable = RawWakerVTable::new(
-        |_| RawWaker::new(std::ptr::null(), &NOOP_VTABLE),
-        |_| {},
-        |_| {},
-        |_| {},
-    );
-    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &NOOP_VTABLE)) };
-    let mut cx = Context::from_waker(&waker);
-    match std::pin::Pin::new(handle).poll(&mut cx) {
-        Poll::Ready(Ok(res)) => Some(res),
-        _ => None,
-    }
+/// Take an exclusive advisory lock on `oxo-flow.desktop.lock` in the current
+/// directory. The OS releases it automatically when the process exits, so a
+/// crash cannot leave a stale lock behind.
+fn take_instance_lock() -> Result<std::fs::File> {
+    let path = std::path::Path::new("oxo-flow.desktop.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    file.try_lock_exclusive().with_context(|| {
+        format!(
+            "failed to lock {} (is another instance running?)",
+            path.display()
+        )
+    })?;
+    Ok(file)
 }
 
 /// Build the webview for the current platform. Linux needs the GTK path
 /// (WebKitGTK) so both X11 and Wayland work; macOS/Windows build against
 /// the tao window directly.
-fn build_webview(window: &Window, url: &str) -> Result<wry::WebView> {
+fn build_webview(window: &Window, url: &str, port: u16) -> Result<wry::WebView> {
     let builder = WebViewBuilder::new()
         .with_url(url)
         // Links to other origins (docs, GitHub, help pages) open in the
         // user's browser; same-origin navigations keep flowing in-app.
-        .with_navigation_handler(|uri| {
-            if is_app_origin(&uri) {
+        .with_navigation_handler(move |uri| {
+            if is_app_origin(&uri, port) {
                 true
             } else {
                 let _ = open_external(&uri);
                 false
             }
+        })
+        // New-window requests (`target="_blank"`, `window.open`) bypass the
+        // navigation handler entirely: without a handler here the OS default
+        // is to deny them silently (verified in wry 0.56.1 — macOS returns
+        // None from createWebViewWith..., Linux never connects create).
+        // Route them to the system browser like other external links.
+        .with_new_window_req_handler(|uri, _| {
+            let _ = open_external(&uri);
+            NewWindowResponse::Deny
         });
 
     #[cfg(not(target_os = "linux"))]
@@ -203,10 +271,15 @@ fn build_webview(window: &Window, url: &str) -> Result<wry::WebView> {
 }
 
 /// Whether `uri` belongs to the app's own loopback origin.
-fn is_app_origin(uri: &str) -> bool {
-    // The server only ever serves from http://127.0.0.1:<port>; anything
-    // else (https, file:, other hosts) is external.
-    uri.starts_with(&format!("http://{HOST}:"))
+fn is_app_origin(uri: &str, port: u16) -> bool {
+    // Strict scheme://host:port match. String-prefix matching would accept
+    // lookalikes like `http://127.0.0.1:9999.evil.com/` or userinfo tricks
+    // (`http://127.0.0.1:PORT@evil.com/`), so parse the authority instead.
+    let Some(rest) = uri.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    authority == format!("{HOST}:{port}")
 }
 
 /// Open a URI in the system browser (best-effort; failures are ignored —
@@ -266,4 +339,39 @@ fn wait_for_server(url: &str) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     anyhow::bail!("server at {url} did not start listening")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_origin_is_app() {
+        assert!(is_app_origin("http://127.0.0.1:4173/", 4173));
+        assert!(is_app_origin("http://127.0.0.1:4173/api/health", 4173));
+        assert!(is_app_origin("http://127.0.0.1:4173/api/runs?x=1#frag", 4173));
+    }
+
+    #[test]
+    fn different_port_is_external() {
+        assert!(!is_app_origin("http://127.0.0.1:9999/", 4173));
+        // Prefix matching would wrongly accept this one.
+        assert!(!is_app_origin("http://127.0.0.1:41739/", 4173));
+    }
+
+    #[test]
+    fn other_schemes_are_external() {
+        assert!(!is_app_origin("https://127.0.0.1:4173/", 4173));
+        assert!(!is_app_origin("file:///etc/passwd", 4173));
+        assert!(!is_app_origin("about:blank", 4173));
+    }
+
+    #[test]
+    fn lookalike_hosts_are_external() {
+        assert!(!is_app_origin("http://127.0.0.1.evil.com:4173/", 4173));
+        assert!(!is_app_origin("http://localhost:4173/", 4173));
+        assert!(!is_app_origin("http://[::1]:4173/", 4173));
+        // Userinfo trick: the host is evil.com, not the app.
+        assert!(!is_app_origin("http://127.0.0.1:4173@evil.com/", 4173));
+    }
 }
