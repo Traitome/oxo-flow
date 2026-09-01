@@ -77,6 +77,7 @@ pub struct ReportArgs {
     pub r_data: Option<PathBuf>,
     pub diff: Option<PathBuf>,
     pub acct: Option<PathBuf>,
+    pub versions_yml: Option<PathBuf>,
 }
 
 /// Auto-discover a workflow file for `report` (issue #83 WS5).
@@ -337,6 +338,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         r_data,
         diff,
         acct,
+        versions_yml,
     } = args;
 
     print_banner();
@@ -375,6 +377,39 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         }
         std::fs::write(path, oxo_flow_core::report::builtin_template())?;
         println!("{}", path.display());
+        return Ok(());
+    }
+
+    // --versions-yml: export the static software-versions document (issue
+    // #280) and exit — a CI diffing artifact, so it needs no full report.
+    // Still requires a workflow (the versions come from its rules).
+    if let Some(path) = versions_yml {
+        let resolved = resolve_report_workflow(
+            workflow,
+            run_dir.as_deref(),
+            workdir.as_deref(),
+            checkpoint_path.as_deref(),
+            plan,
+        )?;
+        let workflow_file = resolved.workflow;
+        let config = WorkflowConfig::from_file(&workflow_file)
+            .with_context(|| format!("failed to parse {}", workflow_file.display()))?;
+        let checkpoint = match checkpoint_path.as_deref() {
+            Some(p) => load_checkpoint(p, strict)?,
+            None => None,
+        };
+        let doc = oxo_flow_core::software_versions::collect_software_versions(
+            &config,
+            checkpoint.as_ref(),
+            Some(&workflow_file),
+        );
+        let yaml = doc.to_yaml();
+        if path == Path::new("-") {
+            print!("{yaml}");
+        } else {
+            std::fs::write(&path, yaml)?;
+            println!("{}", path.display());
+        }
         return Ok(());
     }
 
