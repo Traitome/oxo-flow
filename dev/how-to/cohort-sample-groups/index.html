@@ -4082,11 +4082,14 @@
 <p>Supported formats:</p>
 <h3 id="tsv-format">TSV Format<a class="headerlink" href="#tsv-format" title="Permanent link">#</a></h3>
 <p>One row per group; the <code>samples</code> column is comma-separated. The same
-layout works for CSV (with <code>,</code> as delimiter):</p>
+layout works for CSV (with <code>,</code> as delimiter). Every row must supply a
+cell for every column — a short row fails the sheet parse:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>name    samples
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>healthy H001,H002
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>disease D001,D002
 </span></code></pre></div>
+<p>Extra columns beyond <code>name</code> and <code>samples</code> become group metadata — see
+<a href="../../reference/workflow-format/#sheet-columns-as-group-metadata">Sheet columns as group metadata</a>.</p>
 <p>For groups with metadata, use JSON format.</p>
 <h3 id="json-format">JSON Format<a class="headerlink" href="#json-format" title="Permanent link">#</a></h3>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">[</span>
