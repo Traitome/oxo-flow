@@ -4,10 +4,13 @@
 //! engine, web server, and SPA frontend ship inside it (via `oxo-flow-web`).
 //! On launch it
 //!
-//! 1. moves the working directory to `$HOME` when launched with `cwd=/`
-//!    (Finder launches `.app` bundles with `cwd=/`, where the server cannot
-//!    create its SQLite database),
-//! 2. takes an exclusive single-instance lock,
+//! 1. moves the working directory to a stable data directory
+//!    (`~/.oxo-flow/desktop`, the same convention as the CLI's `~/.oxo-flow`
+//!    locks/plugins) so the SQLite database, logs, and workspace files land
+//!    in one predictable place no matter how the app was launched — Finder
+//!    starts `.app` bundles in `/`, terminals in whatever directory the user
+//!    was in,
+//! 2. takes an exclusive single-instance lock in that directory,
 //! 3. starts the axum server (personal mode, loopback) on a free port,
 //! 4. waits for the listener to accept connections, then
 //! 5. opens a native webview window pointed at the server URL.
@@ -60,18 +63,16 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // macOS Finder launches .app bundles with cwd=/, where the server's
-    // SQLite open fails (read-only root) and serve exits. The launcher
-    // script used to `cd $HOME`; the desktop binary does the same natively.
-    if std::env::current_dir()
-        .map(|d| d == std::path::Path::new("/"))
-        .unwrap_or(false)
-    {
-        let home = std::env::var("HOME")
-            .context("launched with cwd=/ and no $HOME set — cannot pick a working directory")?;
-        std::env::set_current_dir(&home)
-            .with_context(|| format!("failed to change working directory to {home}"))?;
-    }
+    // All server state (SQLite db, logs/, workspace/) is created relative to
+    // the process working directory, so anchor it to a stable data directory
+    // before anything else starts. Finder launches .app bundles with cwd=/
+    // (where the SQLite open fails) and terminals launch with the user's
+    // current directory (where state would silently scatter across folders).
+    let data_dir = app_data_dir().context("failed to locate a home directory for app data")?;
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("failed to create data directory {}", data_dir.display()))?;
+    std::env::set_current_dir(&data_dir)
+        .with_context(|| format!("failed to change working directory to {}", data_dir.display()))?;
 
     // The embedded server writes logs/, oxo-flow.db, and serves the SPA —
     // mirror the CLI's tracing setup (human-readable, env-filterable).
@@ -83,10 +84,12 @@ fn run() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // One shell per data directory: two instances in the same cwd would run
-    // two servers against the same oxo-flow.db. The advisory lock releases
-    // automatically when the process dies (no stale-lock cleanup needed).
-    let instance_lock = take_instance_lock().context("another oxo-flow desktop instance is already running in this directory")?;
+    // One shell per data directory: two instances would run two servers
+    // against the same oxo-flow.db. The advisory lock releases automatically
+    // when the process dies (no stale-lock cleanup needed).
+    let instance_lock = take_instance_lock().context(
+        "another oxo-flow desktop instance is already running for this user account",
+    )?;
 
     // Grab an ephemeral port, then start the embedded server on a tokio
     // runtime that outlives the event loop below.
@@ -187,7 +190,15 @@ fn run() -> Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
+                // Ask the server to shut down gracefully (flush audit logs,
+                // finish in-flight responses) rather than relying on the 3s
+                // runtime timeout below, which cancels tasks mid-flight.
+                // SIGTERM is already wired through the watchdog above —
+                // `Signalled` records a clean result and both the watchdog
+                // and `oxo-flow-web`'s own `shutdown_signal()` handle it.
                 exiting = true;
+                #[cfg(unix)]
+                request_graceful_shutdown();
             }
             Event::MainEventsCleared => {
                 if exiting {
@@ -237,6 +248,48 @@ fn take_instance_lock() -> Result<std::fs::File> {
         )
     })?;
     Ok(file)
+}
+
+/// Stable per-user data directory the desktop server runs in.
+///
+/// Everything the embedded server touches is cwd-relative (`oxo-flow.db`,
+/// `logs/`, `workspace/`) — plus our own `oxo-flow.desktop.lock` — so
+/// anchoring the cwd here keeps all state in one predictable place.
+/// Follows the CLI's `~/.oxo-flow` convention (locks, plugins).
+fn app_data_dir() -> Result<std::path::PathBuf> {
+    // Same env-var lookup as oxo-flow-core's env_create_lock: no external
+    // home-dir dependency for one path.
+    #[cfg(unix)]
+    let home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(any(unix, windows)))]
+    let home: Option<std::ffi::OsString> = None;
+
+    let mut dir = std::path::PathBuf::from(home.ok_or_else(|| {
+        anyhow::anyhow!("$HOME is not set (launched from a context without a user session)")
+    })?);
+    dir.push(".oxo-flow");
+    dir.push("desktop");
+    Ok(dir)
+}
+
+/// Ask this process to shut down gracefully via SIGTERM (unix only).
+///
+/// The watchdog task already listens for SIGTERM and forwards it as
+/// `ShellEvent::Signalled`, and `oxo-flow-web`'s `shutdown_signal()` uses
+/// the same signal to run axum's graceful shutdown — one signal wakes both.
+/// Other platforms keep the plain timeout path (runtime.shutdown_timeout).
+#[cfg(unix)]
+fn request_graceful_shutdown() {
+    // SAFETY: kill with signal 0 semantics — the target is our own pid, so
+    // the call cannot fail for permission reasons.
+    let pid = std::process::id() as libc::pid_t;
+    let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if rc != 0 {
+        // Last resort is the 3s timeout in MainEventsCleared; log only.
+        eprintln!("oxo-flow desktop: failed to self-signal SIGTERM for graceful shutdown");
+    }
 }
 
 /// Build the webview for the current platform. Linux needs the GTK path
