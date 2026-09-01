@@ -29,6 +29,8 @@
 
 #[cfg(target_os = "linux")]
 use tao::platform::unix::WindowExtUnix;
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
