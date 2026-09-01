@@ -224,8 +224,10 @@ oxo-flow report pipeline.oxoflow --versions-yml versions.yml
 Emits an nf-core-style `versions.yml` (also rendered as the report's
 `software-versions` section): for every rule, what the workflow
 **declares** — docker `image:tag` (registry kept as its own field), module
-`(tool, version)`, conda/mamba/pixi/venv env files with sha256 content
-hashes. The engine never executes anything to produce this data, so
+`(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
+files with sha256 content hashes (a bare `venv` directory path is
+recorded as declared, without a hash — there is no file to hash). The
+engine never executes anything to produce this data, so
 resolved runtime package versions are **not** recorded — every entry
 carries that caveat. Environment resolution follows the usual precedence
 (env_group > rule.environment > defaults.environment).
@@ -367,8 +369,10 @@ The `software-versions` section is a static declaration extracted from
 the workflow definition — the engine never executes anything to produce
 it. Per rule it lists the declared backend: docker `image:tag` (registry
 kept as its own field), module `(tool, version)` with a note when no
-version segment exists, conda/mamba/pixi/venv env files with **sha256
-content hashes**, or a "system environment" note when no environment is
+version segment exists, conda/mamba/pixi env files and
+`venv_requirements` files with **sha256 content hashes** (a bare `venv`
+directory path is recorded as declared, without a hash), or a "system
+environment" note when no environment is
 declared. Resolved runtime package versions depend on the execution
 environment and are deliberately **not** recorded — every entry carries
 that caveat. Export a machine-readable copy with

@@ -53,8 +53,10 @@ oxo-flow report pipeline.oxoflow --versions-yml versions.yml
 ```
 
 Each rule records its declared backend — docker `image:tag`, module
-`(tool, version)`, conda/mamba/pixi/venv env files with sha256 content
-hashes. This is a static declaration (the engine never executes
+`(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
+files with sha256 content hashes (a bare `venv` directory path is
+recorded as declared, without a hash). This is a static declaration (the
+engine never executes
 anything to collect it), so resolved runtime package versions are not
 included; every entry carries that caveat. `-` writes the YAML to
 stdout.
