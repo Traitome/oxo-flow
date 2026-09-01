@@ -35,9 +35,10 @@
 {"n":"acidbase","v":"0.1.0","t":"Base functions for Acid Genomics packages.","p":"?"}
 {"n":"acidgenomes","v":"0.2.0","t":"Toolkit for downloading and processing genome annotations.","p":"?"}
 {"n":"acidplyr","v":"0.1.0","t":"A pandas-based grammar for data frame manipulation.","p":"?"}
-{"n":"acinetoscope","v":"1.3.1","t":"AcinetoScope: Comprehensive A. baumannii genomic typing pipeline with parallel execution","p":"?"}
+{"n":"acinetoscope","v":"1.3.2","t":"AcinetoScope: Comprehensive A. baumannii genomic typing pipeline with parallel execution","p":"?"}
 {"n":"acms","v":"1.3.0","t":"Ambivalent Covariance Models (aCMs) are our prototypic suggestion to extend CMs with more than one consensus structure.","p":"L"}
 {"n":"actc","v":"0.6.1","t":"PacBio utility to align clr to ccs reads","p":"L"}
+{"n":"acvirus","v":"1.4","t":"Genomic sequence-based annotation of viral contigs within ICTV taxonomies","p":"?"}
 {"n":"adam","v":"1.0.1","t":"Genomics analysis platform built on Apache Avro, Apache Spark, and Apache Parquet","p":"LM"}
 {"n":"adapt","v":"1.6.0","t":"A package to efficiently design activity-informed nucleic acid diagnostics for viruses.","p":"?"}
 {"n":"adapterremoval","v":"3.0.2","t":"The AdapterRemoval v2 tool for merging and clipping reads.","p":"LM"}
@@ -80,7 +81,7 @@
 {"n":"alen","v":"0.3.4","t":"Simple terminal sequence alignment viewer.","p":"LM"}
 {"n":"alerax","v":"1.4.0","t":"Probabilistic gene tree and species tree reconciliation tool.","p":"LM"}
 {"n":"aletsch","v":"1.1.3","t":"Aletsch is an accurate, versatile assembler for multiple RNA-seq samples.","p":"LM"}
-{"n":"alevin-fry","v":"0.18.0","t":"alevin-fry is a tool for the efficient processing of single-cell data based on RAD files produced by alevin","p":"LM"}
+{"n":"alevin-fry","v":"0.18.1","t":"alevin-fry is a tool for the efficient processing of single-cell data based on RAD files produced by alevin","p":"LM"}
 {"n":"alfa","v":"1.1.1","t":"A simple software to get a quick overview of features composing NGS dataset(s).","p":"?"}
 {"n":"alfred","v":"0.6.2","t":"BAM alignment statistics, feature counting and feature annotation","p":"LM"}
 {"n":"aliceasm","v":"0.7.14","t":"Efficient HiFi genome assembler producing haplotype-separated assemblies.","p":"LM"}
@@ -112,7 +113,7 @@
 {"n":"amaranth-assembler","v":"0.1.0","t":"Amaranth is a reference-based transcriptome assembler for single-cell RNA-seq.","p":"LM"}
 {"n":"amas","v":"1.0","t":"Calculate various summary statistics on a multiple sequence alignment","p":"?"}
 {"n":"amdirt","v":"1.7.1","t":"amdirt: AncientMetagenomeDir Toolkit","p":"?"}
-{"n":"amiga","v":"3.0.4","t":"Analysis of Microbial Growth Assays.","p":"LM"}
+{"n":"amiga","v":"3.0.4","t":"Analysis of Microbial Growth Assays","p":"LM"}
 {"n":"aminoextract","v":"0.4.1","t":"Extract amino acid sequences from a fasta file based on a GFF","p":"?"}
 {"n":"amira","v":"0.11.0","t":"A tool to detect acquired AMR genes directly from long read sequencing data.","p":"?"}
 {"n":"amos","v":"3.1.0","t":"A Modular, Open-Source whole genome assembler","p":"L"}
@@ -201,11 +202,11 @@
 {"n":"arem","v":"1.0.1","t":"Aligning Reads by Expectation-Maximization.\\nBased on MACS (Model Based Analysis for ChIP-Seq data)","p":"LM"}
 {"n":"argh","v":"0.26.1","t":"","p":"LM"}
 {"n":"argnorm","v":"1.1.0","t":"Normalize antibiotic resistance genes (ARGs) abundance tables (e.g., from metagenomics) by using the ARO ontology (developed by CARD).","p":"?"}
-{"n":"argo","v":"0.2.2","t":"Argo: species-resolved profiling of antibiotic resistance genes in complex metagenomes through long-read overlapping","p":"?"}
+{"n":"argo","v":"0.2.3","t":"Argo: species-resolved profiling of antibiotic resistance genes in complex metagenomes through long-read overlapping","p":"?"}
 {"n":"argparse","v":"1.4.0","t":"Python command-line parsing library","p":"LM"}
 {"n":"argparse-tui","v":"0.3.1","t":"Present your Argparse CLI as a Textual UI (TUI).","p":"?"}
 {"n":"argparse2tool","v":"0.5.2","t":"Instrument for forming Galaxy XML and CWL tool descriptions from argparse arguments","p":"?"}
-{"n":"args_oap","v":"3.2.4","t":"ARGs-OAP: Online Analysis Pipeline for Antibiotic Resistance Genes Detection from Metagenomic Data Using an Integrated Structured ARG Database","p":"?"}
+{"n":"args_oap","v":"4.0.0","t":"ARGs-OAP: Online Analysis Pipeline for Antibiotic Resistance Genes Detection from Metagenomic Data Using an Integrated Structured ARG Database","p":"?"}
 {"n":"argutils","v":"0.3.2","t":"Functions to build matched argument parsers and config files","p":"LM"}
 {"n":"aria2","v":"1.34.0","t":"aria2 is a lightweight multi-protocol & multi-source, cross platform download utility operated in command-line. It supports HTTP/HTTPS, FTP, SFTP, BitTorrent and Metalink.","p":"LM"}
 {"n":"ariba","v":"2.14.7","t":"ARIBA: Antibiotic Resistance Identification By Assembly.","p":"LM"}
@@ -217,7 +218,7 @@
 {"n":"art_modern-openmpi","v":"1.5.1","t":"Modernized ART simulator of diverse Next-Generation Sequencing reads with MPI support","p":"LM"}
 {"n":"artemis","v":"18.2.0","t":"A set of Java genome visualization tools including the Artemis genome browser & annotation tool, ACT DNA sequence comparison viewer, DNA Plotter image generation tool and the BamView BAM/CRAM file viewer.","p":"LM"}
 {"n":"artex","v":"0.2.0","t":"Artex - Artic pipeline extension","p":"L"}
-{"n":"artic","v":"1.11.1","t":"ARTIC pipeline - a bioinformatics pipeline for working with virus sequencing data sequenced with nanopore.","p":"?"}
+{"n":"artic","v":"1.11.2","t":"ARTIC pipeline - a bioinformatics pipeline for working with virus sequencing data sequenced with nanopore.","p":"?"}
 {"n":"artic-porechop","v":"0.3.2pre","t":"Adapter removal and demultiplexing of Oxford Nanopore reads (fork of rrwick/Porechop)","p":"LM"}
 {"n":"artic-tools","v":"0.3.1","t":"A set of tools for working with the ARTIC bioinformatic pipeline.","p":"LM"}
 {"n":"arvados-cli","v":"0.1.20151207150126","t":"","p":"L"}
@@ -256,7 +257,7 @@
 {"n":"atol-annotation-report","v":"0.1.1","t":"Generate a standard PDF report for genome annotations.","p":"?"}
 {"n":"atol-bpa-datamapper","v":"0.4.3","t":"Map data from the BPA data portal for AToL's Genome Engine.","p":"?"}
 {"n":"atol-data-broker","v":"0.1.2","t":"Submits metadata to ENA on behalf of Canopy.","p":"?"}
-{"n":"atol-genome-launcher","v":"0.16.1","t":"Utility code for AToL's Genome Engine. This package provides modules for launching assemblies and annotations based on metadata ingested by the atol-bpa-datamapper.","p":"?"}
+{"n":"atol-genome-launcher","v":"0.19.0","t":"Utility code for AToL's Genome Engine. This package provides modules for launching assemblies and annotations based on metadata ingested by the atol-bpa-datamapper.","p":"?"}
 {"n":"atol-qc-annotation","v":"0.1.4","t":"Run QC on GTF and GFF files.","p":"?"}
 {"n":"atol-qc-raw-ont","v":"0.2.1","t":"Run read QC on ONT reads.","p":"?"}
 {"n":"atol-qc-raw-pacbio","v":"0.2.2","t":"Runs QC and produces summary stats on Pacbio HiFi reads","p":"?"}
@@ -280,7 +281,7 @@
 {"n":"autolog","v":"0.2","t":"quick and easy logging setup","p":"LM"}
 {"n":"automappa","v":"2.2.1","t":"Automappa: An interactive interface for exploration of metagenomes.","p":"?"}
 {"n":"autometa","v":"2.2.3","t":"Automated extraction of genomes from shotgun metagenomes","p":"?"}
-{"n":"aviary","v":"0.13.2","t":"aviary - Metagenomics pipeline using long and short reads.","p":"?"}
+{"n":"aviary","v":"0.13.3","t":"aviary - Metagenomics pipeline using long and short reads.","p":"?"}
 {"n":"avro","v":"1.8.0","t":"","p":"LM"}
 {"n":"avro-cwl","v":"1.8.9","t":"Avro is a serialization and RPC framework. This package is a fork of regular avro made by the CWL team in order to fix some issues (https://github.com/common-workflow-language/cwltool/issues/524)","p":"LM"}
 {"n":"avro-python2","v":"1.9.0","t":"Avro is a serialization and RPC framework.","p":"LM"}
@@ -330,7 +331,7 @@
 {"n":"bamclipper","v":"1.0.0","t":"Remove primer sequence from BAM alignments by soft-clipping.","p":"LM"}
 {"n":"bamcmp","v":"2.2","t":"Tools for deconvolving host and graft reads using full-length alignments and their scores.","p":"LM"}
 {"n":"bamdam","v":"0.4.3","t":"A post-mapping, post-least-common-ancestor toolkit for ancient DNA analysis.","p":"?"}
-{"n":"bamdash","v":"0.4.5","t":"Aggregate pathogen NGS results into an interactive plot.","p":"?"}
+{"n":"bamdash","v":"0.5.0","t":"Aggregate pathogen NGS results into an interactive plot.","p":"?"}
 {"n":"bamhash","v":"2.0","t":"Hash BAM and FASTQ files to verify data integrity.","p":"LM"}
 {"n":"bamkit","v":"16.07.26","t":"Tools for common BAM file manipulations","p":"?"}
 {"n":"bamm","v":"1.7.3","t":"Metagenomics-focused BAM file manipulation.","p":"L"}
@@ -402,7 +403,7 @@
 {"n":"beagle","v":"5.5_27Feb25.75f","t":"Beagle is a software package for phasing genotypes and for imputing ungenotyped markers.","p":"LM"}
 {"n":"beagle-lib","v":"4.0.1","t":"A general purpose library for evaluating the likelihood of sequence evolution on phylogenetic trees.","p":"LM"}
 {"n":"beast","v":"10.5.0","t":"BEAST is a cross-platform program for Bayesian analysis of molecular sequences using MCMC.","p":"LM"}
-{"n":"beast-pype","v":"0.11.1","t":"A package of BEAST 2 pipelines for phylodynamics.","p":"?"}
+{"n":"beast-pype","v":"0.12.0","t":"A package of BEAST 2 pipelines for phylodynamics.","p":"?"}
 {"n":"beast2","v":"2.7.7","t":"BEAST 2 is a cross-platform program for Bayesian phylogenetic analysis of molecular sequences.","p":"LM"}
 {"n":"beast2-xml","v":"1.6.2","t":"Command line script and Python class for generating BEAST2 XML config files.","p":"?"}
 {"n":"beav","v":"1.4.0","t":"beav: Bacterial genome and mobile element annotation pipeline.","p":"?"}
@@ -414,7 +415,7 @@
 {"n":"bedparse","v":"0.2.3","t":"A simple library and CLI tool to manipulate BED files","p":"?"}
 {"n":"bedtk","v":"1.2","t":"Bedtk is a set of simple tools to process BED files.","p":"LM"}
 {"n":"bedtools","v":"2.31.1","t":"A powerful toolset for genome arithmetic","p":"LM"}
-{"n":"beegees","v":"3.0.4","t":"High-throughput protein-coding DNA barcode recovery from genome skims","p":"?"}
+{"n":"beegees","v":"3.0.5","t":"High-throughput protein-coding DNA barcode recovery from genome skims","p":"?"}
 {"n":"beem-bio","v":"1.0.1","t":"Conversion of PDBx/mmCIF files to best effort/minimal PDB files.","p":"LM"}
 {"n":"behst","v":"3.8","t":"BEHST reads an input dataset of chromosome regions, and intersects them with the chromatin interactions available in the Hi-C dataset. Of these chromosome regions, BEHST selects those that are presentthe regulatory regions of genes of APPRIS, a dataset of principal isoform annotations. We defined these cis-regulatory regions upon the position of their nearest transcription start site of the APPRIS genes' principal transcripts (obtained through GENCODE), plus an upstream and downstream extension. Afterwards, BEHST takes the genes of the resulting partner loci found in gene regulatory regions, and performs a gene set enrichment analysis on them through g:Profiler. BEHST, finally, outputs the list of the most significant Gene Ontology terms detected by g:Profiler. Citation: Davide Chicco, Haixin Sarah Bi, Juri Reimand, and Michael M. Hoffman, 'BEHST: Genomic set enrichment analysis enhanced through integration of chromatin long-range interactions', 2018. In preparation. Website: http://behst.hoffmanlab.org/","p":"LM"}
 {"n":"bel-resources","v":"0.0.3","t":"Utilities for BEL resource files.","p":"?"}
@@ -501,7 +502,7 @@
 {"n":"bioc","v":"2.1","t":"bioc - Processing BioC, Brat, and PubTator with Python.","p":"?"}
 {"n":"biocamlib","v":"1.0.0","t":"An OCaml foundation upon which a number of the bioinformatics tools are built.","p":"LM"}
 {"n":"biocantor","v":"1.3.0","t":"Coordinate Maniuplation and Genome Annotation Data Model","p":"?"}
-{"n":"biocframe","v":"0.7.3","t":"Flexible dataframe representation to support nested structures.","p":"?"}
+{"n":"biocframe","v":"0.8.0","t":"Flexible dataframe representation to support nested structures.","p":"?"}
 {"n":"biocode","v":"0.12.1","t":"Bioinformatics code libraries and scripts.","p":"?"}
 {"n":"bioconda-repodata-patches","v":"20260421","t":"Generate tweaks to index metadata, hosted separately from anaconda.org index.","p":"?"}
 {"n":"bioconda-utils","v":"4.5.0","t":"Utilities for building and managing bioconda recipes.","p":"LM"}
@@ -571,8 +572,8 @@
 {"n":"biowdl-input-converter","v":"0.3.0","t":"Converting various input formats into WDL structs for BioWDL pipelines.","p":"?"}
 {"n":"biox","v":"1.2.0","t":"Biological Sequence Compression and Analysis Tool","p":"?"}
 {"n":"bipangolin","v":"0.5.0","t":"Per-base donor/acceptor splice site predictions from Pangolin representations","p":"?"}
-{"n":"bipode-httr","v":"1.0.0","t":"Pre-release version for testing purposes only","p":"?"}
-{"n":"bird_tool_utils_python","v":"0.6.0","t":"Python utilities used as part of the bird suite of bioinformatic tools.","p":"?"}
+{"n":"bipode-httr","v":"1.1.0","t":"Bayesian Inference for point-of-departure estimation (BIPODE) for High-Throughput Transcriptomics (HTTr)","p":"?"}
+{"n":"bird_tool_utils_python","v":"0.7.0","t":"Python utilities used as part of the bird suite of bioinformatic tools.","p":"?"}
 {"n":"bis-snp","v":"1.0.1","t":"Bisulfite-seq/NOMe-seq SNPs & cytosine methylation caller","p":"LM"}
 {"n":"bis-snp-utils","v":"0.0.1","t":"bis-snp-utils are support tools for Bis-SNP","p":"LM"}
 {"n":"biscot","v":"2.3.3","t":"Bionano SCaffolding Correction Tool","p":"?"}
@@ -605,7 +606,7 @@
 {"n":"bloocoo","v":"1.0.7","t":"Bloocoo is a k-mer spectrum-based read error corrector, designed to correct large datasets with a very low memory footprint. As an example, it can correct whole human genome re-sequencing reads at 70 x coverage with less than 4GB of memory.","p":"LM"}
 {"n":"bloomfiltertrie","v":"0.8.7","t":"An alignment-free, reference-free and incremental data structure for colored de Bruijn graph with application to pan-genome indexing.","p":"LM"}
 {"n":"blosum","v":"2.2.0","t":"A small module for easy access to BLOSUM matrices without dependencies.","p":"?"}
-{"n":"blue-crab","v":"0.5.0","t":"lossless nanopore pod5 <=> s/blow5 file conversion","p":"?"}
+{"n":"blue-crab","v":"0.6.0","t":"lossless nanopore pod5 <=> s/blow5 file conversion","p":"?"}
 {"n":"bmfilter","v":"3.101","t":"bmfilter is part of BMTagger aka Best Match Tagger, for removing human reads from metagenomics datasets","p":"LM"}
 {"n":"bmge","v":"1.12","t":"BMGE (Block Mapping and Gathering with Entropy) is a program that selects regions in a multiple sequence alignment that are suited for phylogenetic inference.","p":"?"}
 {"n":"bmtagger","v":"3.101","t":"BMTagger aka Best Match Tagger is for removing human reads from metagenomics datasets","p":"LM"}
@@ -648,7 +649,7 @@
 {"n":"breaktracer","v":"0.3.1","t":"Tracing inserted sequence fragments at structural variant breakpoints using long-reads","p":"LM"}
 {"n":"breseq","v":"0.40.2","t":"A computational pipeline for finding mutations relative to a reference sequence in short-read DNA re-sequencing data.","p":"LM"}
 {"n":"brockman-pipeline","v":"1.0","t":"Brockman Representation Of Chromatin by K-mers in Mark-Associated Nucleotides","p":"LM"}
-{"n":"bronko","v":"0.1.5","t":"bronko is an ultra-rapid mapping free variant caller for viral amplicon sequencing data","p":"LM"}
+{"n":"bronko","v":"0.1.6","t":"bronko is an ultra-rapid mapping free variant caller for viral amplicon sequencing data","p":"LM"}
 {"n":"brooklyn_plot","v":"0.0.4","t":"Gene co-expression and transcriptional bursting pattern recognition tool in single cell/nucleus RNA-sequencing data","p":"?"}
 {"n":"bs-seeker2","v":"2.1.7","t":"BS Seeker 2 is a seamless and versatile pipeline for accurately and fast mapping the bisulfite-treated short reads.","p":"LM"}
 {"n":"bs_call","v":"2.02","t":"DNA methylation and variant Caller for Bisulfite Sequencing Data.","p":"LM"}
@@ -680,17 +681,17 @@
 {"n":"bwa-aln-interactive","v":"0.7.18","t":"Version of the BWA aln read mapper for interactive alignment.","p":"LM"}
 {"n":"bwa-fastalign","v":"1.0.0","t":"Faster and Cheaper Sequence Alignment on Commercial CPUs (A faster version of bwa-mem with identical outputs).","p":"LM"}
 {"n":"bwa-mem2","v":"2.3","t":"The next version of bwa-mem.","p":"LM"}
-{"n":"bwa-mem3","v":"0.9.0","t":"Short-read aligner derived from bwa-mem2 with correctness fixes, performance improvements, and methylation alignment.","p":"LM"}
-{"n":"bwa-mem4","v":"4.0.0","t":"Byte-identical Rust reimplementation of bwa-mem2 2.3, with lower resident memory","p":"LM"}
+{"n":"bwa-mem3","v":"0.10.0","t":"Short-read aligner derived from bwa-mem2 with correctness fixes, performance improvements, and methylation alignment.","p":"LM"}
+{"n":"bwa-mem4","v":"4.3.3","t":"Byte-identical Rust reimplementation of bwa-mem2 2.3, with lower resident memory","p":"LM"}
 {"n":"bwa-meme","v":"1.0.6","t":"Faster BWA-MEM2 using learned-index","p":"L"}
 {"n":"bwakit","v":"0.7.18.dev1","t":"A self-consistent installation-free package of scripts and precompiled binaries, providing an end-to-end solution to read mapping","p":"LM"}
 {"n":"bwameth","v":"0.2.9","t":"A fast and accurate aligner of BS-seq reads.","p":"LM"}
 {"n":"bwise","v":"1.0.0","t":"BWISE is a de Bruijn assembly Workflow using Integral information of Short paired-End reads","p":"L"}
 {"n":"bwread","v":"0.0.5","t":"Read bigwig files quickly into PyRanges or DataFrames","p":"LM"}
 {"n":"bwtk","v":"1.8.2","t":"A bigWig toolkit.","p":"LM"}
-{"n":"bx-python","v":"0.14.0","t":"Tools for manipulating biological data, particularly multiple sequence alignments.","p":"LM"}
+{"n":"bx-python","v":"0.15.1","t":"Tools for manipulating biological data, particularly multiple sequence alignments.","p":"LM"}
 {"n":"bxtools","v":"0.1.0","t":"Tools for analyzing 10X Genomics data","p":"LM"}
-{"n":"bygul","v":"4.0.1","t":"Bygul is an amplicon read simulating tool that can generate different sample read proportions based on user input.","p":"?"}
+{"n":"bygul","v":"4.0.2","t":"Bygul is an amplicon read simulating tool that can generate different sample read proportions based on user input.","p":"?"}
 {"n":"byobu","v":"5.98","t":"Byobu is a GPLv3 open source text-based window manager and terminal multiplexer.","p":"L"}
 {"n":"c-ares","v":"1.11.0","t":"c-ares is a C library for asynchronous DNS requests (including name resolves)","p":"LM"}
 {"n":"c4counter","v":"0.0.2","t":"returns the number and types of human C4 regions in a fasta file","p":"?"}
@@ -699,7 +700,7 @@
 {"n":"cactus-gfa-tools","v":"0.1","t":"Command-line utilitites required for the Cactus Pangenome Pipeline.","p":"LM"}
 {"n":"cadd-scripts","v":"1.7.3","t":"CADD scripts release for offline scoring","p":"?"}
 {"n":"cadd-threshold-app","v":"0.0.9","t":"Shiny-for-Python app for exploring ClinVar distributions across CADD score thresholds.","p":"?"}
-{"n":"caddsv","v":"2.0.2","t":"CADD-SV structural variant scoring workflow CLI","p":"?"}
+{"n":"caddsv","v":"2.0.3","t":"CADD-SV structural variant scoring workflow CLI","p":"?"}
 {"n":"cafe","v":"5.1.0","t":"Computational Analysis of gene Family Evolution (CAFE)","p":"L"}
 {"n":"cage","v":"2016.05.13","t":"Changepoint Analysis for Efficient Variant Calling","p":"L"}
 {"n":"cagecleaner","v":"1.5.2","t":"Redundancy removal for gene cluster mining hit sets","p":"?"}
@@ -781,7 +782,7 @@
 {"n":"cell-types-analysis","v":"0.1.11","t":"A suite of scripts for analysis of scRNA-seq cell type classification tools outputs.","p":"?"}
 {"n":"cell2cell","v":"0.8.4","t":"Inferring cell-cell interactions from transcriptomes with cell2cell.","p":"LM"}
 {"n":"cellbender","v":"0.4.0","t":"A software package for eliminating technical artifacts from high-throughput single-cell RNA sequencing (scRNA-seq) data.","p":"?"}
-{"n":"cellitac","v":"1.0.6","t":"Cell type identification using Transcription factor Analysis and Chromatin accessibility","p":"?"}
+{"n":"cellitac","v":"2.0.0","t":"Cell type identification using Transcription factor Analysis and Chromatin accessibility","p":"?"}
 {"n":"cellosaurus","v":"0.2.0","t":"Cellosaurus identifier mapping toolkit.","p":"?"}
 {"n":"cellprofiler","v":"4.2.8.1","t":"CellProfiler is free, open-source software for quantitative analysis of biological images.","p":"LM"}
 {"n":"cellprofiler-core","v":"4.2.8.1","t":"Dependency for CellProfiler v4.","p":"?"}
@@ -800,7 +801,7 @@
 {"n":"centreseq","v":"0.3.8","t":"Fast generation of core genome from bacterial strains","p":"?"}
 {"n":"centrifuge","v":"1.0.4.2","t":"Classifier for metagenomic sequences. Supports classifier scripts","p":"LM"}
 {"n":"centrifuge-core","v":"1.0.4.2","t":"Classifier for metagenomic sequences. Does not include evaluation scripts","p":"LM"}
-{"n":"centrifuger","v":"1.1.2","t":"Lossless compression of microbial genomes for efficient and accurate metagenomic sequence classification.","p":"LM"}
+{"n":"centrifuger","v":"1.1.3","t":"Lossless compression of microbial genomes for efficient and accurate metagenomic sequence classification.","p":"LM"}
 {"n":"centroid_rna_package","v":"0.0.16","t":"Collection of RNA secondary structure prediction programs based on gamma-centroid estimator (Hamada et. al. 2009)","p":"L"}
 {"n":"centrosome","v":"1.3.3","t":"An open source image processing library. Dependency for CellProfiler","p":"LM"}
 {"n":"cerberus-mg","v":"0.2.1","t":"Three-headed host removal for metagenomic data: assembly, profiling and privacy-scrubbed outputs from one run.","p":"?"}
@@ -809,6 +810,7 @@
 {"n":"cesm","v":"2.1.3","t":"The Community Earth System Model (CESM) is a coupled climate model for simulating Earth’s climate system","p":"L"}
 {"n":"cfdna-biomarkersearch","v":"0.1.3","t":"Pipeline to identify candidate cfDNA biomarker sequences from WGS data","p":"?"}
 {"n":"cfm","v":"33","t":"Tools for applying Competitive Fragmentation Modeling (CFM) to spectrum prediction and metabolite identification tasks, as well as a tools for fragment generation and peak annotation.","p":"LM"}
+{"n":"cfm-id","v":"4.4.10","t":"CFM-ID 4 - Competitive Fragmentation Modeling for MS/MS prediction and metabolite identification","p":"LM"}
 {"n":"cfoldseeker","v":"0.2.0","t":"Tool to find gene clusters using protein structure similarity","p":"?"}
 {"n":"cgat-apps","v":"0.7.11","t":"Computational Genomics Analysis Toolkit.","p":"LM"}
 {"n":"cgat-daisy","v":"0.1.12","t":"A system to design and execute benchmarks","p":"?"}
@@ -830,7 +832,7 @@
 {"n":"chain2paf","v":"0.1.1","t":"convert CHAIN format to PAF format","p":"LM"}
 {"n":"chainc","v":"0.0.2","t":"Remove chain-breaking alignments using chain/net files","p":"LM"}
 {"n":"chainmap","v":"1.0.3","t":"Backport/clone of ChainMap for py26, py32, and pypy3.","p":"LM"}
-{"n":"chaintools","v":"0.0.12","t":"work with .chain files in rust","p":"LM"}
+{"n":"chaintools","v":"0.0.13","t":"work with .chain files in rust","p":"LM"}
 {"n":"chamois","v":"0.2.2","t":"Chemical Hierarchy Approximation for secondary Metabolism clusters Obtained In Silico.","p":"?"}
 {"n":"changeo","v":"1.3.4","t":"A bioinformatics toolkit for processing high-throughput lymphocyte receptor sequencing data.","p":"?"}
 {"n":"chanjo","v":"3.3.0","t":"","p":"LM"}
@@ -843,6 +845,7 @@
 {"n":"checkqc","v":"4.0.7","t":"A simple program to parse Illumina NGS data and check it for quality criteria.","p":"?"}
 {"n":"checkv","v":"1.1.1","t":"Assess the quality of metagenome-assembled viral genomes.","p":"?"}
 {"n":"chelae","v":"0.1.0","t":"A toolkit for trimming and filtering FASTQ reads.","p":"LM"}
+{"n":"chemap","v":"0.3.7","t":"Library for computing molecular fingerprint based similarities as well as dimensionality reduction based chemical space visualizations.","p":"?"}
 {"n":"chemproflow","v":"1.3.2","t":"End-to-end mapping of membrane transport from chemical structure to microorganisms","p":"?"}
 {"n":"cherri","v":"0.8","t":"Accurate detection of functional RNA-RNA Interactions sites","p":"?"}
 {"n":"chewbbaca","v":"3.5.4","t":"A complete suite for gene-by-gene schema creation and strain identification.","p":"LM"}
@@ -1062,9 +1065,9 @@
 {"n":"cortex_con","v":"0.04c","t":"cortex_con (primary contact Mario Caccamo) is for consensus genome assembly","p":"LM"}
 {"n":"cortexpy","v":"0.46.5","t":"A Python API for manipulating (Mc)Cortex de novo assembly graph and link data.","p":"LM"}
 {"n":"cosap","v":"0.1.0","t":"COSAP - Comparative Sequencing Analysis Platform","p":"?"}
-{"n":"cosg","v":"1.1.1","t":"Accurate and fast cell marker gene identification with COSG.","p":"?"}
+{"n":"cosg","v":"1.1.3","t":"Accurate and fast cell marker gene identification with COSG.","p":"?"}
 {"n":"cosi2","v":"2.4.0","t":"cosi2 is an efficient coalescent simulator with support for selection, population structure, variable recombination rates, and gene conversion. It supports exact and approximate simulation modes.","p":"LM"}
-{"n":"cosigt","v":"0.1.8","t":"Cosigt (COsine SImilarity-based GenoTyper)","p":"LM"}
+{"n":"cosigt","v":"0.2","t":"Cosigt (COsine SImilarity-based GenoTyper)","p":"LM"}
 {"n":"cospar","v":"0.5.0","t":"A toolkit for dynamic inference of cell fate by integrating state and lineage information.","p":"?"}
 {"n":"count_constant_sites","v":"0.1.1","t":"Compute the count of cases in constant sites in a (FASTA) multiple sequence alignment","p":"LM"}
 {"n":"count_logan_tig_coverage","v":"0.1.0","t":"Compute length-weighted mean and median coverage from Logan contig/unitig FASTA files","p":"LM"}
@@ -1171,7 +1174,7 @@
 {"n":"cytoscape","v":"3.10.4","t":"Cytoscape: an open source platform for network analysis and visualization.","p":"L"}
 {"n":"cytosnake","v":"0.0.2","t":"Orchestrating high-dimensional cell morphology data processing pipelines","p":"?"}
 {"n":"cytotrace2-python","v":"1.1.0","t":"CytoTRACE 2 is an interpretable AI method for predicting cellular potency and absolute developmental potential from scRNA-seq data.","p":"?"}
-{"n":"cytozip","v":"0.3.9","t":"cytozip: Chunk-based ZIP for cytosine (methylation) data","p":"L"}
+{"n":"cytozip","v":"0.4.1","t":"cytozip: Chunk-based ZIP for cytosine (methylation) data","p":"L"}
 {"n":"cyushuffle","v":"1.1.2","t":"A Cython wrapper over uShuffle - a useful tool for shuffling biological sequences while preserving the k-let counts","p":"LM"}
 {"n":"cyvcf","v":"0.8.0","t":"A cython wrapper around htslib built for fast parsing of Variant Call Format (VCF) files","p":"LM"}
 {"n":"cyvcf2","v":"0.34.0","t":"A cython wrapper around htslib built for fast parsing of Variant Call Format (VCF) files.","p":"LM"}
@@ -1254,7 +1257,7 @@
 {"n":"deepdetails","v":"1.0.0rc1","t":"Deep-learning-based DEconvolution of Tissue profiles with Accurate Interpretation of Locus-specific Signals (DeepDETAILS)","p":"?"}
 {"n":"deepdirect","v":"0.2.5","t":"In silico approach to generate mutations for protein complexes towards a specified direction (increase/decrease) in binding affinity.","p":"?"}
 {"n":"deepfplearn","v":"2.1","t":"Link molecular structures of chemicals (in form of topological fingerprints) with multiple targets.","p":"?"}
-{"n":"deeplc","v":"4.0.0","t":"DeepLC: Retention time prediction for (modified) peptides using Deep Learning.","p":"?"}
+{"n":"deeplc","v":"4.2.0","t":"DeepLC: Retention time prediction for (modified) peptides using Deep Learning.","p":"?"}
 {"n":"deeplcretrainer","v":"1.0.2","t":"Evaluating DeepLC performance and retraining prediction models.","p":"?"}
 {"n":"deeplift","v":"0.6.13.0","t":"DeepLIFT (Deep Learning Important FeaTures)","p":"?"}
 {"n":"deepmased","v":"0.3.1","t":"Deep learning for Metagenome Assembly Error Detection","p":"?"}
@@ -1327,6 +1330,7 @@
 {"n":"dipgenie","v":"1.0","t":"Diploid genome inference using pangenome graphs","p":"L"}
 {"n":"diphase","v":"1.0.3","t":"A diploid genome phasing tool","p":"L"}
 {"n":"dipper","v":"0.1.5","t":"DIPPER: An ultrafast tool for phylogenetic tree reconstruction.","p":"LM"}
+{"n":"directclean","v":"1.1.2","t":"Strand orientation, artifact removal, and chimeric read rescue for ONT direct-cDNA sequencing","p":"?"}
 {"n":"dirseq","v":"0.4.3","t":"Work out whether RNAseq reads in general agree with the direction of the gene predicted.","p":"?"}
 {"n":"discasm","v":"0.1.3","t":"DISCASM aims to extract reads that map to reference genomes in a discordant fashion and optionally include reads that do not map to the genome at all, and perform a de novo transcriptome assembly of these reads. DISCASM relies on the output from STAR (as run via STAR-Fusion), and supports de novo transcriptome assembly using Trinity or Oases. - https://github.com/DISCASM/DISCASM/wiki","p":"L"}
 {"n":"disco","v":"1.3","t":"Multi-threaded Distributed Memory Overlap-Layout-Consensus (OLC) Metagenome Assembler.","p":"LM"}
@@ -1409,7 +1413,7 @@
 {"n":"dudes","v":"0.10.0","t":"DUDes: a top-down taxonomic profiler for metagenomics and metaproteomics","p":"LM"}
 {"n":"duet","v":"1.0","t":"SNP-Assisted Structural Variant Calling and Phasing Using Oxford Nanopore Sequencing","p":"?"}
 {"n":"dunovo","v":"3.0.2","t":"Du Novo: A pipeline for processing duplex sequencing data.","p":"L"}
-{"n":"dupblaster","v":"0.2.0","t":"Fast duplicate marking for query-grouped SAM/BAM files, inspired by samblaster and Picard MarkDuplicates","p":"LM"}
+{"n":"dupblaster","v":"0.3.0","t":"Fast duplicate marking for query-grouped SAM/BAM files, inspired by samblaster and Picard MarkDuplicates","p":"LM"}
 {"n":"duphist","v":"1.1.5","t":"DupHIST: Duplication History Inference with Substitution-integrated Topology","p":"?"}
 {"n":"duphold","v":"0.2.1","t":"SV callers like lumpy look at split-reads and pair distances to find structural variants. This tool is a fast way to add depth information to those calls.","p":"L"}
 {"n":"duplex-tools","v":"0.3.3","t":"Duplex Tools contains a set of utilities for dealing with ONT Duplex sequencing data.","p":"?"}
@@ -1481,7 +1485,7 @@
 {"n":"emerald","v":"1.2.1","t":"Unlocking the suboptimal pairwise alignment space for protein sequences","p":"LM"}
 {"n":"emeraldbgc","v":"0.2.4.1","t":"SMBGC detection tool","p":"?"}
 {"n":"emirge","v":"0.61.1","t":"EMIRGE reconstructs full length sequences from short sequencing reads","p":"LM"}
-{"n":"emits","v":"0.1.0","t":"EM abundance estimation for fungal ITS communities from long-read sequencing","p":"LM"}
+{"n":"emits","v":"0.2.0","t":"EM abundance estimation for fungal ITS communities from long-read sequencing","p":"LM"}
 {"n":"emmix","v":"1.3","t":"A tool that fits a mixture model of multivariate normal or t-distributed components to a given data set.","p":"L"}
 {"n":"emmtyper","v":"0.2.0","t":"Streptococcus pyogenes in silico EMM typer","p":"?"}
 {"n":"emperor","v":"0.9.51","t":"EMPeror a tool for visualizing high-throughput microbial community data","p":"LM"}
@@ -1512,23 +1516,23 @@
 {"n":"enviroampdesigner","v":"0.1.3","t":"Tool for training model and classifying reads from environmental ONT amplicon sequencing.","p":"?"}
 {"n":"enzbert","v":"1.2","t":"Run EnzBert model that predicts the functional annotation of enzymes from protein sequences","p":"?"}
 {"n":"enzymm","v":"0.5.0","t":"Detect catalytic enzyme residues in protein structures by matching a library of known templates.","p":"?"}
-{"n":"enzywizard-aaprops","v":"1.0.2","t":"Command-line tool to compute per-residue amino acid properties (secondary structure via DSSP, solvent accessibility, torsion angles, physicochemical properties) from a cleaned protein structure and output a detailed JSON report.","p":"?"}
-{"n":"enzywizard-batch","v":"1.0.2","t":"Command-line meta-workflow tool that runs the complete EnzyWizard pipeline (properties, clusters, energy, flexibility, disorder, conservation, embeddings, pockets, docking, interactions) on a cleaned protein + MSA and produces an integrated graph JSON dataset.","p":"?"}
-{"n":"enzywizard-clean","v":"1.0.2","t":"Command-line tool to clean protein structures using PDBFixer (remove heterogens, repair atoms, add hydrogens via OpenMM), output cleaned CIF/PDB/FASTA files, and generate a detailed traceable JSON cleaning report.","p":"?"}
-{"n":"enzywizard-conservation","v":"1.0.2","t":"Command-line tool to compute residue-level sequence conservation from a query sequence and MSA using HMMER profile HMMs, outputting cleaned MSA, HMM profile, and JSON report.","p":"?"}
-{"n":"enzywizard-disorder","v":"1.0.2","t":"Command-line tool to predict intrinsically disordered regions (IDRs) from a cleaned protein structure using a FoldIndex-like algorithm based on hydrophobicity and net charge.","p":"?"}
-{"n":"enzywizard-dock","v":"1.0.2","t":"Command-line tool to perform molecular docking of one or multiple substrates against a cleaned protein structure using AutoDock Vina, with automatic pocket detection via PyVOL, and generate a detailed JSON docking report.","p":"?"}
-{"n":"enzywizard-embedding","v":"1.0.2","t":"Command-line tool to generate per-residue protein sequence embeddings using ESM-2 language models (fair-esm) from FASTA input and output a JSON report.","p":"?"}
-{"n":"enzywizard-energy","v":"1.0.2","t":"Command-line tool to calculate molecular energy terms (total potential + components) from a cleaned protein structure using OpenMM, with optional energy minimization.","p":"?"}
-{"n":"enzywizard-flexibility","v":"1.0.2","t":"Command-line tool for estimating protein flexibility (RMSF) from cleaned protein structures using ANM/GNM elastic network models via ProDy, outputting JSON report.","p":"?"}
-{"n":"enzywizard-hydrocluster","v":"1.0.2","t":"Command-line tool to identify hydrophobic clusters (ILE, VAL, LEU) in cleaned protein structures using contact area estimation and graph clustering, outputting a detailed JSON report.","p":"?"}
-{"n":"enzywizard-integrate","v":"1.0.2","t":"Command-line tool to integrate multiple EnzyWizard JSON reports into a unified protein/substrate interaction graph (nodes + edges) with comprehensive statistics.","p":"?"}
-{"n":"enzywizard-interaction","v":"1.0.2","t":"Command-line tool to detect molecular interactions (hydrogen bonds, ionic, van der Waals, pi-stacking, pi-cation, disulfide) in protein and protein-substrate systems and generate a detailed JSON report.","p":"?"}
-{"n":"enzywizard-mut-batch","v":"1.0.2","t":"Command-line meta-workflow tool that runs paired EnzyWizard analysis on a wild-type protein and its mutant (including properties, clusters, energy, flexibility, disorder, conservation, embeddings, pockets, docking, interactions) and produces a mutation-aware integrated graph JSON dataset.","p":"?"}
-{"n":"enzywizard-mut-clean","v":"1.0.2","t":"Command-line tool to clean wild-type and mutant protein structures, remap amino acid substitutions to cleaned numbering, output multi-format files (CIF/PDB/FASTA), and generate a detailed JSON cleaning + mutation report.","p":"?"}
+{"n":"enzywizard-aaprops","v":"1.0.3","t":"Command-line tool to compute per-residue amino acid properties (secondary structure via DSSP, solvent accessibility, torsion angles, physicochemical properties) from a cleaned protein structure and output a detailed JSON report.","p":"?"}
+{"n":"enzywizard-batch","v":"1.0.3","t":"Command-line meta-workflow tool that runs the complete EnzyWizard pipeline (properties, clusters, energy, flexibility, disorder, conservation, embeddings, pockets, docking, interactions) on a cleaned protein + MSA and produces an integrated graph JSON dataset.","p":"?"}
+{"n":"enzywizard-clean","v":"1.0.3","t":"Command-line tool to clean protein structures using PDBFixer (remove heterogens, repair atoms, add hydrogens via OpenMM), output cleaned CIF/PDB/FASTA files, and generate a detailed traceable JSON cleaning report.","p":"?"}
+{"n":"enzywizard-conservation","v":"1.0.3","t":"Command-line tool to compute residue-level sequence conservation from a query sequence and MSA using HMMER profile HMMs, outputting cleaned MSA, HMM profile, and JSON report.","p":"?"}
+{"n":"enzywizard-disorder","v":"1.0.3","t":"Command-line tool to predict intrinsically disordered regions (IDRs) from a cleaned protein structure using a FoldIndex-like algorithm based on hydrophobicity and net charge.","p":"?"}
+{"n":"enzywizard-dock","v":"1.0.3","t":"Command-line tool to perform molecular docking of one or multiple substrates against a cleaned protein structure using AutoDock Vina, with automatic pocket detection via PyVOL, and generate a detailed JSON docking report.","p":"?"}
+{"n":"enzywizard-embedding","v":"1.0.3","t":"Command-line tool to generate per-residue protein sequence embeddings using ESM-2 language models (fair-esm) from FASTA input and output a JSON report.","p":"?"}
+{"n":"enzywizard-energy","v":"1.0.3","t":"Command-line tool to calculate molecular energy terms (total potential + components) from a cleaned protein structure using OpenMM, with optional energy minimization.","p":"?"}
+{"n":"enzywizard-flexibility","v":"1.0.3","t":"Command-line tool for estimating protein flexibility (RMSF) from cleaned protein structures using ANM/GNM elastic network models via ProDy, outputting JSON report.","p":"?"}
+{"n":"enzywizard-hydrocluster","v":"1.0.3","t":"Command-line tool to identify hydrophobic clusters (ILE, VAL, LEU) in cleaned protein structures using contact area estimation and graph clustering, outputting a detailed JSON report.","p":"?"}
+{"n":"enzywizard-integrate","v":"1.0.3","t":"Command-line tool to integrate multiple EnzyWizard JSON reports into a unified protein/substrate interaction graph (nodes + edges) with comprehensive statistics.","p":"?"}
+{"n":"enzywizard-interaction","v":"1.0.3","t":"Command-line tool to detect molecular interactions (hydrogen bonds, ionic, van der Waals, pi-stacking, pi-cation, disulfide) in protein and protein-substrate systems and generate a detailed JSON report.","p":"?"}
+{"n":"enzywizard-mut-batch","v":"1.0.3","t":"Command-line meta-workflow tool that runs paired EnzyWizard analysis on a wild-type protein and its mutant (including properties, clusters, energy, flexibility, disorder, conservation, embeddings, pockets, docking, interactions) and produces a mutation-aware integrated graph JSON dataset.","p":"?"}
+{"n":"enzywizard-mut-clean","v":"1.0.4","t":"Command-line tool to clean wild-type and mutant protein structures, remap amino acid substitutions to cleaned numbering, output multi-format files (CIF/PDB/FASTA), and generate a detailed JSON cleaning + mutation report.","p":"?"}
 {"n":"enzywizard-mut-integrate","v":"1.0.2","t":"Command-line tool to integrate wild-type and mutant EnzyWizard JSON reports into paired protein/substrate graph representations for mutation effect analysis.","p":"?"}
-{"n":"enzywizard-pocket","v":"1.0.2","t":"Command-line tool to detect and characterize protein binding pockets from cleaned structures using PyVOL (bio-pyvol), generating a detailed JSON report.","p":"?"}
-{"n":"enzywizard-substrate","v":"1.0.2","t":"Command-line tool to process small-molecule substrates (from name or SMILES), generate 3D structures (SDF), and produce a detailed JSON report with physicochemical properties.","p":"?"}
+{"n":"enzywizard-pocket","v":"1.0.3","t":"Command-line tool to detect and characterize protein binding pockets from cleaned structures using PyVOL (bio-pyvol), generating a detailed JSON report.","p":"?"}
+{"n":"enzywizard-substrate","v":"1.0.3","t":"Command-line tool to process small-molecule substrates (from name or SMILES), generate 3D structures (SDF), and produce a detailed JSON report with physicochemical properties.","p":"?"}
 {"n":"eoulsan","v":"2.5","t":"A pipeline and a framework for NGS analysis (RNA-Seq and Chip-Seq)","p":"L"}
 {"n":"epa-ng","v":"0.3.8","t":"Massively parallel phylogenetic placement of genetic sequences","p":"LM"}
 {"n":"ephemeris","v":"0.10.11","t":"Ephemeris is an opinionated library and set of scripts for managing the bootstrapping of Galaxy project plugins - tools, index data, and workflows.","p":"LM"}
@@ -1654,7 +1658,7 @@
 {"n":"eternafold","v":"1.3.1","t":"RNA structure prediction algorithm improved through crowdsourced training data.","p":"LM"}
 {"n":"etoki","v":"1.2.3","t":"EToKi (Enterobase Tool Kit) includes methods related to Enterobase data analysis pipelines","p":"?"}
 {"n":"eukbin","v":"0.1.0","t":"BUSCO-guided binning for eukaryotic metagenomes","p":"?"}
-{"n":"eukcc","v":"2.1.3","t":"Check eukaryotic genomes or MAGs for completeness and contamination.","p":"?"}
+{"n":"eukcc","v":"2.2.0","t":"Check eukaryotic genomes or MAGs for completeness and contamination.","p":"?"}
 {"n":"eukdetect","v":"2.0.2","t":"Detect eukaryotes from shotgun metagenomic sequencing data","p":"?"}
 {"n":"eukfinder","v":"1.2.4","t":"Eukfinder is a tool for detecting eukaryotic sequences in metagenomic data.","p":"LM"}
 {"n":"eukrep","v":"0.6.7","t":"Classification of Eukaryotic and Prokaryotic sequences from metagenomic datasets","p":"?"}
@@ -1725,7 +1729,7 @@
 {"n":"fastahack","v":"2016.07.2","t":"fastahack --- *fast* FASTA file indexing, subsequence and sequence extraction","p":"LM"}
 {"n":"fastaindex","v":"0.11c","t":"FastA indexing and sequence retrival.","p":"LM"}
 {"n":"fastalite","v":"0.4.1","t":"Simplest possible fasta parser","p":"?"}
-{"n":"fastan","v":"0.8","t":"Fast Tandem Repeat Finder.","p":"LM"}
+{"n":"fastan","v":"0.8","t":"Fast Tandem Repeat Finder (also builds FastLTR and FastTIR).","p":"LM"}
 {"n":"fastani","v":"1.34","t":"FastANI is developed for fast alignment-free computation of whole-genome Average Nucleotide Identity (ANI).","p":"LM"}
 {"n":"fastaptamer","v":"1.0.16","t":"A Bioinformatic Toolkit for High-Throughput Sequence Analysis of Combinatorial Selections","p":"?"}
 {"n":"fastcov","v":"0.1.3","t":"This package installs fastcov and all it's dependencies. fastcov is used to plot coverage plots based on BAM files.","p":"?"}
@@ -1733,7 +1737,7 @@
 {"n":"fastdup","v":"1.0.0","t":"A Scalable Duplicate Marking Tool using Speculation-and-Test Mechanism.","p":"LM"}
 {"n":"fasten","v":"0.9.0","t":"Perform random operations on fastq files, using unix streaming. Secure your analysis with Fasten!","p":"LM"}
 {"n":"fastg2protlib","v":"1.0.2","t":"FASTG sequences to a protein library.","p":"?"}
-{"n":"fastga","v":"1.5","t":"FastGA - A Fast Genome Aligner.","p":"LM"}
+{"n":"fastga","v":"1.5.20260729","t":"FastGA - A Fast Genome Aligner.","p":"LM"}
 {"n":"fastindep","v":"1.0.0","t":"A fast random heuristic algorithm for identifying large sets of unrelated individuals and unrelated markers","p":"LM"}
 {"n":"fastk","v":"1.2","t":"FastK is a k‑mer counter that is optimized for processing high quality DNA assembly data sets such as those produced with an Illumina instrument or a PacBio run in HiFi mode.","p":"LM"}
 {"n":"fastkit","v":"1.0.2","t":"Routine pre-processing of biological data e.g. FASTA/FASTQ files","p":"?"}
@@ -1804,13 +1808,13 @@
 {"n":"fermi-lite","v":"0.1","t":"Fermi-lite is a standalone C library as well as a command-line tool for assembling Illumina short reads in regions from 100bp to 10 million bp in size.","p":"LM"}
 {"n":"fermi2","v":"r204","t":"Fermi2 focuses on the exploration of FMD-index as a graph.","p":"LM"}
 {"n":"fermikit","v":"0.14.dev1","t":"FermiKit is a de novo assembly based variant calling pipeline for deep Illumina resequencing data.","p":"LM"}
-{"n":"ferro-hgvs","v":"0.17.0","t":"HGVS variant parser and normalizer.","p":"LM"}
+{"n":"ferro-hgvs","v":"1.0.0","t":"HGVS variant parser and normalizer.","p":"LM"}
 {"n":"fetchmgs","v":"2.1.3","t":"FetchMGs extracts the 40 marker genes from genomes and metagenomes in an easy and accurate manner.","p":"?"}
 {"n":"ffgc","v":"2.4.2","t":"Family Free Genome Comparison (FFGC) workflow","p":"?"}
 {"n":"ffindex","v":"0.98","t":"FFindex - A database wrapped around mmap.","p":"LM"}
 {"n":"ffindex-dbkit","v":"0.2","t":"Tools to create ffindex files","p":"?"}
 {"n":"ffq","v":"0.3.1","t":"A command line tool that makes it easier to find sequencing data from the SRA / GEO / ENA.","p":"?"}
-{"n":"fg-mako","v":"0.1.5","t":"Fast SAM/BAM sorter (installs the `mako` binary).","p":"LM"}
+{"n":"fg-mako","v":"0.1.7","t":"Fast SAM/BAM sorter (installs the `mako` binary).","p":"LM"}
 {"n":"fg-sra","v":"0.1.0","t":"High-performance SRA-to-SAM/BAM/FASTQ converter.","p":"LM"}
 {"n":"fg-stitch","v":"0.1.2","t":"An aligner for long reads against one or more reference/expected vector/plasmid/construct(s).","p":"LM"}
 {"n":"fgap","v":"1.8.1","t":"FGAP: an automated gap closing tool","p":"LM"}
@@ -1821,7 +1825,7 @@
 {"n":"fgpyo","v":"1.5.1","t":"Python bioinformatics and genomics library","p":"?"}
 {"n":"fgsmk","v":"0.1.2","t":"Supporting functions for running Snakemake workflows.","p":"?"}
 {"n":"fgsv","v":"0.2.1","t":"Tools to find evidence for structural variation.","p":"?"}
-{"n":"fgumi","v":"0.6.0","t":"High-performance tools for UMI-tagged sequencing data.","p":"LM"}
+{"n":"fgumi","v":"0.7.0","t":"High-performance tools for UMI-tagged sequencing data.","p":"LM"}
 {"n":"fgwas","v":"0.3.6","t":"fgwas is a command line tool for integrating functional genomic information into a genome-wide association study (GWAS).","p":"LM"}
 {"n":"fibertools-rs","v":"0.13.0","t":"Mitchell Vollger's rust tools for fiberseq data.","p":"LM"}
 {"n":"ficus","v":"0.5","t":"provides a context manager for matplotlib figures.","p":"LM"}
@@ -1860,12 +1864,13 @@
 {"n":"flash","v":"1.2.11","t":"Merge mates from fragments that are shorter than twice the read length","p":"LM"}
 {"n":"flash2","v":"2.2.00","t":"Merge paired-end reads from fragments that are shorter than twice the read length.","p":"LM"}
 {"n":"flashlfq","v":"2.1.4","t":"Ultrafast label-free quantification algorithm for mass-spectrometry proteomics.","p":"LM"}
+{"n":"flashpca2","v":"2.0","t":"Fast principal component analysis of SNP data (FlashPCA2)","p":"LM"}
 {"n":"flavotyper","v":"0.5.1","t":"In silico serotyping for Flavobacterium psychrophilum","p":"?"}
 {"n":"flexbar","v":"3.5.0","t":"Flexible barcode and adapter removal.","p":"LM"}
 {"n":"flexi-formatter","v":"1.0.1","t":"Moving flexiplex barcode and UMI to bam tags","p":"?"}
 {"n":"flexidot","v":"2.1.0","t":"Flexible dotplotting of genomic sequences.","p":"?"}
 {"n":"flexiformatter","v":"1.0.6","t":"Moving flexiplex barcode and UMI to bam tags","p":"?"}
-{"n":"flexiplex","v":"1.02.6","t":"flexiplex: the flexible demultiplexer","p":"LM"}
+{"n":"flexiplex","v":"1.02.7","t":"flexiplex: the flexible demultiplexer","p":"LM"}
 {"n":"flexserv","v":"1.0.2","t":"FlexServ protein structure conformational ensemble generation tools","p":"LM"}
 {"n":"flexsweep","v":"2.0","t":"A versatile tool for detecting selective sweeps.","p":"LM"}
 {"n":"flextaxd","v":"0.4.4","t":"Script that allows the creation of custom kraken databases from various sources (NCBI, QIIME, CanSNPer)","p":"?"}
@@ -1905,6 +1910,7 @@
 {"n":"fqtk","v":"0.4.0","t":"A toolkit for working with FASTQ files.","p":"LM"}
 {"n":"fqtools","v":"2.0","t":"An efficient FASTQ manipulation suite.","p":"LM"}
 {"n":"fqtrim","v":"0.9.7","t":"fqtrim is a versatile stand-alone utility that can be used to trim adapters, poly-A tails, terminal unknown bases (Ns) and low quality 3' regions in reads from high-throughput next-generation sequencing machines.","p":"LM"}
+{"n":"fqxv","v":"0.7.0","t":"Lossless (opt-in lossy) archiver for short- and long-read FASTQ.","p":"LM"}
 {"n":"fqzcomp","v":"4.6","t":"Fqzcomp is a basic fastq compressor, designed primarily for high performance.","p":"L"}
 {"n":"fracsim","v":"1.0.2","t":"a FracMinHash-based genome similarity estimator for bacteria","p":"?"}
 {"n":"frag_gene_scan_rs","v":"1.1.0","t":"Rust implementation of the gene prediction model for short and error-prone reads","p":"LM"}
@@ -2091,7 +2097,7 @@
 {"n":"genomicranges","v":"0.8.5","t":"Container class to represent and operate over genomic regions and annotations.","p":"?"}
 {"n":"genomics-data-index","v":"0.9.2","t":"Indexes genomics data (nucleotide variants, kmers, MLST) for fast querying of features.","p":"?"}
 {"n":"genonets","v":"2.0","t":"Framework for creating and analyzing genotype networks from data.","p":"LM"}
-{"n":"genotopep","v":"0.1.0.1","t":"Reproducible peptide candidate generation from genome and metagenome assemblies or protein FASTA files.","p":"?"}
+{"n":"genotopep","v":"0.2.0.1","t":"Reproducible peptide candidate generation from genome and metagenome assemblies or protein FASTA files.","p":"?"}
 {"n":"genotyphi","v":"2.0","t":"Assign genotypes to Salmonella Typhi genomes based on VCF files (mapped to Typhi CT18 reference genome)","p":"?"}
 {"n":"genotypy","v":"0.3.4","t":"Automatically detect genomic barcodes integrated into loci of interest from sequencing data","p":"?"}
 {"n":"genrich","v":"0.6.1","t":"Detecting sites of genomic enrichment.","p":"LM"}
@@ -2293,7 +2299,7 @@
 {"n":"gw","v":"1.2.6","t":"View genomic sequencing data and vcf files","p":"LM"}
 {"n":"gwama","v":"2.2.2","t":"Genome-Wide Association Meta Analysis","p":"LM"}
 {"n":"gwaslab","v":"4.2.2","t":"Python toolkit for handling GWAS summary statistics","p":"?"}
-{"n":"gwiscan","v":"1.0.1","t":"Genome-wide identification and annotation pipeline for gene families or superfamilies","p":"?"}
+{"n":"gwiscan","v":"1.1.0","t":"GWIscan is a pipeline for the genome-wide identification and annotation of gene families.","p":"?"}
 {"n":"gxf2bed","v":"0.3.3","t":"Fastest GTF/GFF-to-BED converter chilling around","p":"LM"}
 {"n":"gxf2chrom","v":"0.1.0","t":"Everything in .chrom from GTF/GFF","p":"LM"}
 {"n":"gxfkit","v":"0.0.2","t":"Fast Rust reimplementation of AGAT GFF/GTF operations","p":"LM"}
@@ -2327,6 +2333,7 @@
 {"n":"haplocheck","v":"1.3.3","t":"Detects in-sample contamination in mtDNA or WGS sequencing studies by analyzing the mitchondrial content.","p":"?"}
 {"n":"haploclique","v":"1.3.1","t":"Viral quasispecies assembly via maximal clique finding. A method to reconstruct viral haplotypes and detect large insertions and deletions from NGS data.","p":"LM"}
 {"n":"haploconduct","v":"0.2.1","t":"HaploConduct is a package designed for reconstruction of individual haplotypes from next generation sequencing data, in particular Illumina. It provides two methods, SAVAGE and POLYTE, which can be run through the haploconduct wrapper.","p":"L"}
+{"n":"haplodon","v":"0.17.0","t":"Haplodon is a command-line tool designed for uncertainty-aware haplotype-based genomic variant effect prediction.","p":"LM"}
 {"n":"haploflow","v":"1.0","t":"Strain-aware viral genome assembler for short read sequence data","p":"LM"}
 {"n":"haplogrep","v":"2.4.0","t":"A tool for mtDNA haplogroup classification.","p":"?"}
 {"n":"haplogrep3","v":"3.2.2","t":"A tool for mtDNA haplogroup classification.","p":"?"}
@@ -2427,7 +2434,7 @@
 {"n":"hmftools-mark-dups","v":"1.1.7","t":"Mark read duplicates and form consenus sequences","p":"?"}
 {"n":"hmftools-neo","v":"1.3","t":"Identification of neoepitope and calculation of allele specific neoepitope binding and presentation likelihood.","p":"?"}
 {"n":"hmftools-orange","v":"5.0.1","t":"ORANGE summarizes the key outputs from all algorithms in the Hartwig suite.","p":"?"}
-{"n":"hmftools-pave","v":"1.9","t":"PAVE annotates SNV/MNV/INDEL calls with consequence on corresponding genes, transcripts, and proteins.","p":"?"}
+{"n":"hmftools-pave","v":"1.9.1","t":"PAVE annotates SNV/MNV/INDEL calls with consequence on corresponding genes, transcripts, and proteins.","p":"?"}
 {"n":"hmftools-peach","v":"2.0.0","t":"Infer haplotypes for interpretation in a pharmacogenomic context","p":"?"}
 {"n":"hmftools-protect","v":"2.3","t":"PROTECT determines the clinical evidence applicable for a particular tumor sample based on all genomic events and signatures that are determined by the Hartwig pipeline.","p":"?"}
 {"n":"hmftools-purple","v":"4.4","t":"PURPLE is a purity ploidy estimator for tumor samples.","p":"?"}
@@ -2449,7 +2456,7 @@
 {"n":"hmnfusion","v":"1.5.1","t":"Fusion analysis from DNA genomics.","p":"?"}
 {"n":"hmnillumina","v":"1.5.1","t":"A parser for Illumina run","p":"L"}
 {"n":"hmnqc","v":"0.5.1","t":"Compute differents metrics about quality, check identity and coverage from high-throughput sequencing provided by targeted NGS","p":"?"}
-{"n":"hmnrandomread","v":"0.10.0","t":"A sequence-read simulator program for NGS","p":"L"}
+{"n":"hmnrandomread","v":"0.11.0","t":"A sequence-read simulator program for NGS","p":"LM"}
 {"n":"hmntrimmer","v":"0.6.5","t":"A trimmer for NGS reads","p":"L"}
 {"n":"hmtnote","v":"0.7.2","t":"Human mitochondrial variants annotation using HmtVar.","p":"?"}
 {"n":"hocort","v":"1.2.2","t":"HoCoRT - Host Contamination Removal Tool","p":"?"}
@@ -2563,7 +2570,7 @@
 {"n":"inforna","v":"2.1.2","t":"A server for the design of RNA sequences that fold into a given pseudo-knot free RNA secondary structure.","p":"L"}
 {"n":"inheritance","v":"0.1.5","t":"inheritance models for mendelian diseases","p":"LM"}
 {"n":"inmoose","v":"0.9.1","t":"InMoose is the Integrated Multi Omic Open Source Environment. It is a collection of tools for the analysis of omic data.","p":"LM"}
-{"n":"inquistr","v":"0.27.1","t":"Tandem repeat toolkit for long reads.","p":"LM"}
+{"n":"inquistr","v":"0.28.1","t":"Tandem repeat toolkit for long reads.","p":"LM"}
 {"n":"insilicoseq","v":"2.0.1","t":"A sequencing simulator.","p":"?"}
 {"n":"insilicosv","v":"0.0.6","t":"Simulator for complex structural variants","p":"?"}
 {"n":"inspector","v":"1.3.1","t":"Accurate long-read de novo assembly evaluation with Inspector","p":"?"}
@@ -2594,7 +2601,7 @@
 {"n":"iprophit","v":"1.0.1","t":"Deep learning approach for identifying inducible prophage activity","p":"?"}
 {"n":"iptkl","v":"0.6.8","t":"IPTK is a library specialized in the analysis of HLA-peptidomes identified through an immunopeptidomics pipeline.","p":"?"}
 {"n":"ipyrad","v":"0.9.108","t":"Interactive assembly and analysis of RAD-seq data sets.","p":"?"}
-{"n":"ipyrad2","v":"0.1.12","t":"Interactive assembly and analysis of RAD-seq data sets","p":"?"}
+{"n":"ipyrad2","v":"0.1.15","t":"Interactive assembly and analysis of RAD-seq data sets","p":"?"}
 {"n":"ipython-cluster-helper","v":"0.6.4","t":"Tool to easily start up an IPython cluster on different schedulers","p":"LM"}
 {"n":"iqkm","v":"1.0","t":"Identification and quantification of KEGG Modules in metagenomes/genomes","p":"?"}
 {"n":"iqtree","v":"3.1.3","t":"Efficient phylogenomic software by maximum likelihood.","p":"LM"}
@@ -2703,7 +2710,7 @@
 {"n":"k8","v":"1.2","t":"Lightweight JavaScript shell based on Google's V8 JavaScript engine.","p":"LM"}
 {"n":"kaiju","v":"1.10.2","t":"Fast and sensitive taxonomic classification for metagenomics.","p":"LM"}
 {"n":"kakscalculator2","v":"2.0.1","t":"KaKs_Calculator2.0 calculates Ka and Ks.","p":"LM"}
-{"n":"kalamari","v":"5.9","t":"A curated database of completed assemblies with taxonomy IDs","p":"LM"}
+{"n":"kalamari","v":"5.10.0","t":"A curated database of completed assemblies with taxonomy IDs","p":"LM"}
 {"n":"kalign2","v":"2.04","t":"Kalign is a fast and accurate multiple sequence alignment algorithm designed to align large numbers of protein sequences.","p":"LM"}
 {"n":"kalign3","v":"3.4.0","t":"Kalign is a fast and accurate multiple sequence alignment algorithm.","p":"LM"}
 {"n":"kallisto","v":"0.52.0","t":"Quantifying abundances of transcripts from RNA-Seq data, or more generally of target sequences using high-throughput sequencing reads.","p":"LM"}
@@ -2719,7 +2726,7 @@
 {"n":"kcalign","v":"1.0.2","t":"Kalgin-based codon-aware aligner for multiple sequences","p":"?"}
 {"n":"kcftools","v":"0.4.0","t":"Rapid method to screen for introgression using k-mer counting","p":"?"}
 {"n":"kcounter","v":"0.1.2","t":"A simple library for counting DNA k-mers in Python. Written in Rust.","p":"LM"}
-{"n":"kegalign-full","v":"0.1.2.9","t":"KegAlign: A Scalable GPU-Based Whole Genome Aligner","p":"?"}
+{"n":"kegalign-full","v":"0.2.1.13","t":"KegAlign: A Scalable GPU-Based Whole Genome Aligner","p":"?"}
 {"n":"kegg-pathways-completeness","v":"1.4.4","t":"The tool counts completeness of each KEGG pathway for protein sequences.","p":"?"}
 {"n":"kegg_pull","v":"3.2.4","t":"Package that facilitates pulling database entries from KEGG via its REST API","p":"?"}
 {"n":"keggcharter","v":"1.1.2","t":"A tool for representing genomic potential and transcriptomic expression into KEGG pathways","p":"?"}
@@ -2923,6 +2930,7 @@
 {"n":"lohhla","v":"20171108","t":"A computational tool to evaluate HLA loss using next-generation sequencing data.","p":"LM"}
 {"n":"lollipop","v":"0.5.3","t":"A tool for Deconvolution for Wastewater Genomics","p":"?"}
 {"n":"longairr","v":"1.1.0","t":"Long-read adaptive immune receptor repertoire processing and annotation","p":"?"}
+{"n":"longbarcodeqc","v":"1.0.0","t":"Analyze long-read barcode libraries from Oxford Nanopore sequencing and generate an interactive QC report","p":"?"}
 {"n":"longbow","v":"2.3.1","t":"A Python program for nanopore sequencing basecalling configuration prediction","p":"?"}
 {"n":"longcalld","v":"0.0.11","t":"longcallD: local-haplotagging-based small and structural variant calling","p":"LM"}
 {"n":"longcallr","v":"2.0.0","t":"A Rust tool for SNP calling, haplotype phasing, and allele-specific analysis with long RNA-seq reads.","p":"LM"}
@@ -3025,6 +3033,7 @@
 {"n":"mantis-msi","v":"1.0.5","t":"MANTIS is a program developed for detecting microsatellite instability from paired-end BAM files","p":"LM"}
 {"n":"mantis-msi2","v":"2.0.0","t":"MANTIS2 is a program developed for detecting microsatellite instability from paired-end BAM files.","p":"LM"}
 {"n":"mantis_pfa","v":"1.5.5","t":"Consensus-driven protein function annotation tool","p":"LM"}
+{"n":"map4","v":"1.1.3","t":"MinHashed AtomPair Fingerprint of Radius 2","p":"?"}
 {"n":"mapad","v":"0.45.0","t":"An aDNA aware short-read mapper","p":"LM"}
 {"n":"mapcaller","v":"0.9.9.41","t":"MapCaller: combined short-read mapper and variant caller","p":"LM"}
 {"n":"mapdamage2","v":"2.2.3","t":"mapDamage: tracking and quantifying damage patterns in ancient DNA sequencing reads generated by Next-Generation Sequencing platforms.","p":"LM"}
@@ -3080,7 +3089,7 @@
 {"n":"maxquant","v":"2.0.3.0","t":"MaxQuant is a quantitative proteomics software package designed for analyzing large mass-spectrometric data sets. License restricted.","p":"L"}
 {"n":"mbcgmlst","v":"0.1.0","t":"cgMLST allele calling pipeline with Ridom-style output.","p":"?"}
 {"n":"mbg","v":"1.0.17","t":"Minimizer based sparse de Bruijn graph constructor","p":"LM"}
-{"n":"mbgc","v":"2.1.5","t":"A tool for compressing collection of genomes in FASTA format.","p":"LM"}
+{"n":"mbgc","v":"2.1.6","t":"A tool for compressing collection of genomes in FASTA format.","p":"LM"}
 {"n":"mbuffer","v":"20160228","t":"mbuffer is a tool for buffering data streams with a large set of unique features","p":"L"}
 {"n":"mccortex","v":"1.0","t":"De novo genome assembly and multisample variant calling.","p":"LM"}
 {"n":"mcl","v":"22.282","t":"MCL - a cluster algorithm for graphs.","p":"LM"}
@@ -3153,7 +3162,7 @@
 {"n":"metacoag","v":"1.3.0","t":"MetaCoAG: Binning Metagenomic Contigs via Composition, Coverage and Assembly Graphs","p":"LM"}
 {"n":"metacompass","v":"1.12","t":"MetaCompass: Reference-guided Assembly of Metagenomes.","p":"LM"}
 {"n":"metacontam","v":"0.0.1","t":"Contamination detection tool for metagenomic sequencing data","p":"?"}
-{"n":"metacontextify","v":"0.1.0","t":"Automated environmental annotation of marine metagenomic samples","p":"?"}
+{"n":"metacontextify","v":"0.2.0","t":"Automated environmental annotation of marine metagenomic samples","p":"?"}
 {"n":"metacortex","v":"0.5.1","t":"MetaCortex is an assembler for metagenomic, or environmental sequence data.","p":"L"}
 {"n":"metadmg","v":"0.5.0","t":"metaDMG-cpp: fast and efficient method for estimating mutation and damage rates in ancient DNA data.","p":"LM"}
 {"n":"metaeuk","v":"7.bba0d80","t":"MetaEuk - sensitive, high-throughput gene discovery and annotation for large-scale eukaryotic metagenomics","p":"LM"}
@@ -3199,7 +3208,7 @@
 {"n":"metasv","v":"0.5.4","t":"An accurate and integrative structural-variant caller for next generation sequencing","p":"LM"}
 {"n":"metator","v":"1.3.10","t":"Metagenomic binning based on Hi-C data.","p":"LM"}
 {"n":"metatracer","v":"0.1.1","t":"MetaTracer metatranscriptomic analysis pipeline.","p":"?"}
-{"n":"metatrawl","v":"0.4.1","t":"Mutable registry and workflow bookkeeping for large ZipStrain/SRA profiling projects.","p":"?"}
+{"n":"metatrawl","v":"0.4.10","t":"Mutable registry and workflow bookkeeping for large ZipStrain/SRA profiling projects.","p":"?"}
 {"n":"metatree","v":"0.0.1","t":"Visualisation of polyphyletic groups between phylogenetic trees to a reference tree.","p":"?"}
 {"n":"metav","v":"2.0.0","t":"Rapid detection and classification of viruses in metagenomics sequencing.","p":"?"}
 {"n":"metavelvet","v":"1.2.02","t":"MetaVelvet : An extension of Velvet assembler to de novo metagenome assembly from short sequence reads","p":"L"}
@@ -3229,7 +3238,7 @@
 {"n":"methbat","v":"1.1.0","t":"A battery of methylation tools for PacBio HiFi reads","p":"L"}
 {"n":"methphaser","v":"0.0.3","t":"MethPhaser: methylation-based haplotype phasing of human genomes","p":"?"}
 {"n":"methpipe","v":"5.0.1","t":"A pipeline for analyzing DNA methylation data from bisulfite sequencing.","p":"LM"}
-{"n":"methplotlib","v":"0.21.2","t":"Plot methylation data obtained from nanopolish","p":"?"}
+{"n":"methplotlib","v":"0.23.1","t":"Plot nucleotide modification data from nanopore sequencing","p":"?"}
 {"n":"methylartist","v":"1.5.4","t":"Tools for parsing and plotting nanopore methylation data.","p":"?"}
 {"n":"methyldackel","v":"0.6.1","t":"A (mostly) universal methylation extractor for BS-seq experiments. Formerly named PileOMeth.","p":"LM"}
 {"n":"methylextract","v":"1.9.1","t":"High-Quality methylation maps and SNV calling from whole genome bisulfite sequencing data","p":"LM"}
@@ -3261,7 +3270,7 @@
 {"n":"mhcflurry","v":"2.2.1","t":"MHC Binding Predictor","p":"?"}
 {"n":"mhcnuggets","v":"2.4.1","t":"MHCnuggets: Neoantigen peptide MHC binding prediction for class I and II","p":"LM"}
 {"n":"mhg","v":"1.1.0","t":"MHG is an annotation-free graph-based tool to merge and partition homologous groups.","p":"?"}
-{"n":"mi-pimento","v":"1.3.0","t":"A PrIMEr infereNce TOolkit to facilitate large-scale calling of metabarcoding amplicon sequence variants.","p":"?"}
+{"n":"mi-pimento","v":"1.3.1","t":"A PrIMEr infereNce TOolkit to facilitate large-scale calling of metabarcoding amplicon sequence variants.","p":"?"}
 {"n":"micall-lite","v":"0.1rc5","t":"A bioinformatic pipeline for mapping of FASTQ data to a set of reference sequences to generate consensus sequences, variant calls and coverage maps.","p":"LM"}
 {"n":"mice","v":"0.1.2","t":"Markers Inferred by Compacting Elements (mice). Synteny blocks from pangenomes.","p":"LM"}
 {"n":"micom","v":"0.37.1","t":"Microbial community modeling based on cobrapy.","p":"?"}
@@ -3376,6 +3385,7 @@
 {"n":"moabs","v":"1.3.9.6","t":"Methylation analysis on Bisulfite-Sequencing reads.","p":"LM"}
 {"n":"mob_suite","v":"3.1.9","t":"MOB-suite is a set of tools for finding, typing and reconstruction of plasmids from draft and complete genome assemblies.","p":"LM"}
 {"n":"mobidic-mpa","v":"1.3.0","t":"MPA: MoBiDiC Prioritization Algorithm","p":"?"}
+{"n":"mobiorigin","v":"0.1.5","t":"Sequence-and-marker classification of bacterial replicons","p":"?"}
 {"n":"mobivision-m","v":"1.3.2","t":"MobiVision-M is a linux based software design specifically for single-microbe RNA sequencing analysis.","p":"?"}
 {"n":"mobster","v":"0.2.4.1","t":"NGS tool for detecting MEI and gene retrotransposition events in WGS and WES data, see Thung et al. Genome Biol. 2014 for more information.","p":"LM"}
 {"n":"moca","v":"0.4.3","t":"Tool for motif conservation analysis","p":"LM"}
@@ -3386,12 +3396,12 @@
 {"n":"modle","v":"1.1.0","t":"High-performance stochastic modeling of DNA loop extrusion interactions","p":"LM"}
 {"n":"mofaflex","v":"0.1.2","t":"Versatile factor analysis framework for factor models for omics data","p":"?"}
 {"n":"mofapy","v":"1.2","t":"Multi-Omics Factor Analysis","p":"?"}
-{"n":"mofapy2","v":"0.7.4","t":"Multi-Omics Factor Analysis.","p":"?"}
+{"n":"mofapy2","v":"0.7.5","t":"Multi-Omics Factor Analysis.","p":"?"}
 {"n":"moff","v":"2.0.3","t":"moFF is an OS independent tool designed to extract apex MS1 intensity using a set of identified MS2 peptides.","p":"LM"}
 {"n":"mogaaap","v":"1.2.1","t":"MoGAAAP: Modular Genome Assembly, Annotation and quality Assessment Pipeline","p":"?"}
 {"n":"mogs","v":"0.2.0","t":"MOGS (Metagenome Ocurrence-based Genetic Screening)","p":"LM"}
 {"n":"mokapot","v":"0.10.0","t":"Fast and flexible semi-supervised learning for peptide detection","p":"?"}
-{"n":"molamola","v":"0.5.0","t":"Plot Oxford Nanopore variation as self-contained HTML reports.","p":"?"}
+{"n":"molamola","v":"0.6.0","t":"Plot Oxford Nanopore variation as self-contained HTML reports.","p":"?"}
 {"n":"molemap","v":"1.4.3.1","t":"Ultra fast molecule mapping for linked- and long-read data.","p":"LM"}
 {"n":"molpopgen-analysis","v":"0.8.8","t":"Deprecated and no longer maintained programs for the (pre-NGS-era) analysis of population-genetic data. Unless you work with Sanger data, results will be wrong. Please check the software homepage for more details.","p":"LM"}
 {"n":"moments","v":"1.6.0","t":"Evolutionary inference using SFS and LD statistics.","p":"LM"}
@@ -3433,7 +3443,7 @@
 {"n":"mrtrix3","v":"3.0.8","t":"A set of tools to perform various advanced diffusion MRI analyses, including constrained spherical deconvolution (CSD), probabilistic tractography, track-density imaging, and apparent fibre density","p":"L"}
 {"n":"ms","v":"2014_03_04","t":"","p":"L"}
 {"n":"ms-entropy","v":"1.3.4","t":"This package provides a Python implementation of calculating spectral entropy, entropy similarity, and Flash entropy search for mass spectrometry data.","p":"LM"}
-{"n":"ms2deepscore","v":"2.7.2","t":"Deep learning similarity measure for comparing MS/MS spectra with respect to their chemical similarity","p":"?"}
+{"n":"ms2deepscore","v":"2.9.0","t":"Deep learning similarity measure for comparing MS/MS spectra with respect to their chemical similarity","p":"?"}
 {"n":"ms2pip","v":"4.2.0","t":"MS²PIP: MS² Peak Intensity Prediction","p":"LM"}
 {"n":"ms2query","v":"1.5.4","t":"Reliable and fast MS/MS spectral based analogue search.","p":"?"}
 {"n":"ms2rescore","v":"3.2.1","t":"Modular and user-friendly platform for AI-assisted rescoring of peptide identifications.","p":"?"}
@@ -3444,7 +3454,9 @@
 {"n":"msalign2","v":"1.0","t":"Aligns 2 CE-MS or LC-MS datasets using accurate mass information.","p":"L"}
 {"n":"msamtools","v":"1.1.3","t":"microbiome-related extension to samtools","p":"LM"}
 {"n":"msaprobs","v":"0.9.7","t":"MSAProbs is a well-established state-of-the-art multiple sequence alignment algorithm for protein sequences.","p":"LM"}
+{"n":"msbuddy","v":"0.3.16","t":"Molecular formula annotation for MS-based small molecule analysis","p":"?"}
 {"n":"mseqtools","v":"0.9.1","t":"fastq/fasta file manipulation toolkit","p":"LM"}
+{"n":"msfiddle","v":"2.1.0","t":"FIDDLE - chemical formula prediction from tandem mass spectra by deep learning","p":"?"}
 {"n":"msfragger","v":"4.2","t":"Ultrafast, comprehensive peptide identification for mass spectrometry–based proteomics","p":"?"}
 {"n":"msgf_plus","v":"2024.03.26","t":"MS-GF+ is a MS/MS database search tool","p":"LM"}
 {"n":"msi","v":"0.3.8","t":"Metabarcoding sequences identification - from nanopore reads to taxa tables.","p":"?"}
@@ -3468,7 +3480,7 @@
 {"n":"mtnucratio","v":"0.7.1","t":"A small tool to determine MT to Nuclear ratios for NGS data.","p":"?"}
 {"n":"mtsv","v":"1.0.6","t":"MTSv is a suite of metagenomic binning and analysis tools.","p":"L"}
 {"n":"mtsv-tools","v":"2.2.0","t":"mtsv_tools contains core tools for alignment-based metagenomic/metatranscriptomic assignment.","p":"LM"}
-{"n":"muat","v":"0.1.26","t":"A package for Mutation Attention Tool","p":"?"}
+{"n":"muat","v":"0.1.27","t":"A package for Mutation Attention Tool","p":"?"}
 {"n":"mudskipper","v":"0.1.0","t":"mudskipper is a tool for converting genomic BAM/SAM files to transcriptomic BAM/RAD files.","p":"LM"}
 {"n":"mugsy","v":"1.2.3","t":"Mugsy is a multiple whole genome aligner.","p":"L"}
 {"n":"multi-omics-classification","v":"0.1.6","t":"A FAIR Machine Learning Framework for Benchmarking, Feature Selection, and Hyperparameter Optimization of machine learning Models for Multiomics Data in Galaxy","p":"?"}
@@ -3541,7 +3553,7 @@
 {"n":"nanoinsight","v":"0.0.3","t":"Repeat annotation tool for insertions called by NanoVar","p":"?"}
 {"n":"nanolyse","v":"1.2.1","t":"Removing lambda DNA control reads from fastq dataset","p":"LM"}
 {"n":"nanomath","v":"1.4.0","t":"A few simple math function for other Oxford Nanopore processing scripts","p":"LM"}
-{"n":"nanometa-live","v":"0.11.1","t":"Workflow and GUI for real-time species classification and pathogen characterization of nanopore sequence reads.","p":"?"}
+{"n":"nanometa-live","v":"0.15.0","t":"Workflow and GUI for real-time species classification and pathogen characterization of nanopore sequence reads.","p":"?"}
 {"n":"nanomod","v":"0.2.2","t":"A computational method for Nanopore signal analysis and modification detection.","p":"?"}
 {"n":"nanomonsv","v":"0.9.0","t":"Python tools for detecting structural variation from nanopore sequence data.","p":"?"}
 {"n":"nanomotif","v":"1.1.2","t":"Identifying methlyation motifs in nanopore data.","p":"?"}
@@ -3571,7 +3583,7 @@
 {"n":"ncbi-acc-download","v":"0.2.8","t":"Download files from NCBI Entrez by accession.","p":"?"}
 {"n":"ncbi-amr","v":"1.04","t":"AMRFinder find acquired antimicrobial resistance genes in protein or nucleotide sequences.","p":"LM"}
 {"n":"ncbi-amrfinderplus","v":"4.2.7","t":"AMRFinderPlus finds antimicrobial resistance and other genes in protein or nucleotide sequences.","p":"LM"}
-{"n":"ncbi-datasets-pyclient","v":"18.35.0","t":"NCBI Datasets API","p":"?"}
+{"n":"ncbi-datasets-pyclient","v":"18.36.0","t":"NCBI Datasets API","p":"?"}
 {"n":"ncbi-datasets-pylib","v":"16.6.1","t":"Easily gather data from across NCBI databases","p":"?"}
 {"n":"ncbi-fcs-gx","v":"0.5.5","t":"The NCBI Foreign Contamination Screen. Genomic cross-species aligner, for contamination detection.","p":"L"}
 {"n":"ncbi-genome-download","v":"0.3.3","t":"Download genome files from the NCBI FTP server.","p":"LM"}
@@ -3587,7 +3599,7 @@
 {"n":"ncrf","v":"1.01.02","t":"Noise-Cancelling Repeat Finder, Uncovering tandem repeats in error-prone long-read sequencing data.","p":"LM"}
 {"n":"ndex-python","v":"3.0.11.23","t":"NDEx Python includes a client and a data model.","p":"LM"}
 {"n":"ndex2","v":"3.12.0","t":"Nice CX Python includes a client and a data model.","p":"?"}
-{"n":"neat","v":"4.6.2","t":"Toolset for generating synthethic FASTQ, VCF and BAM files.","p":"?"}
+{"n":"neat","v":"4.7.0","t":"Toolset for generating synthethic FASTQ, VCF and BAM files.","p":"?"}
 {"n":"nebulizer","v":"0.7.2","t":"Command-line utilities to help with managing users, data libraries and tools in a Galaxy instance","p":"?"}
 {"n":"necat","v":"0.0.1_update20200803","t":"NECAT is an error correction and de-novo assembly tool for Nanopore long noisy reads.","p":"LM"}
 {"n":"nedbit-features-calculator","v":"1.2","t":"Network diffusion and biology-informed topological features","p":"LM"}
@@ -3651,7 +3663,7 @@
 {"n":"ngsderive","v":"4.0.0","t":"Backwards derive attributes from NGS data","p":"?"}
 {"n":"ngsep","v":"4.0.1","t":"NGSEP - Next Generation Sequencing Experience Platform","p":"?"}
 {"n":"ngseqbasic","v":"20.0","t":"Basic ChIP/DNaseI/ATAC analysis - from FASTQ to visualisation of tracks, in one command.","p":"L"}
-{"n":"ngsfetch","v":"0.1.1","t":"Fast retrieval of metadata and fastq files with ffq and aria2c","p":"?"}
+{"n":"ngsfetch","v":"0.1.2","t":"Fast retrieval of metadata and fastq files with ffq and aria2c","p":"?"}
 {"n":"ngshmmalign","v":"0.1.1","t":"ngshmmalign is a profile HMM aligner for NGS reads designed particularly for small genomes","p":"LM"}
 {"n":"ngsindex","v":"0.1.7","t":"Utilities for working with NGS index formats.","p":"?"}
 {"n":"ngslca","v":"1.0.5","t":"ngsLCA: fast and flexible taxonomic classification of DNA reads aligned to reference databases","p":"LM"}
@@ -3691,7 +3703,7 @@
 {"n":"novasplice","v":"0.0.4","t":"NovaSplice is a python tool to predict novel intronic splice sites from a given VCF file","p":"?"}
 {"n":"novoalign","v":"4.03.04","t":"Powerful tool designed for mapping of short reads onto a reference genome from Illumina, Ion Torrent, and 454 NGS platforms","p":"LM"}
 {"n":"novobreak","v":"1.1.3rc","t":"local assembly for breakpoint detection in cancer genomes","p":"LM"}
-{"n":"novoloci","v":"0.8","t":"Haplotype-aware assembler for complex regions and small genomes (ONT/HiFi).","p":"?"}
+{"n":"novoloci","v":"0.9","t":"Haplotype-aware assembler for complex regions and small genomes (ONT/HiFi).","p":"?"}
 {"n":"novoplasty","v":"4.3.5","t":"The organelle assembler and heteroplasmy caller","p":"LM"}
 {"n":"np-likeness-scorer","v":"2.1","t":"Calculates Natural Product(NP)-likeness of a molecule, i.e. the similarity of the molecule to the structure space covered by known natural products. NP-likeness is a useful criterion to screen compound libraries and to design new lead compounds","p":"LM"}
 {"n":"npinv","v":"1.24","t":"an accurate tool for detecting and genotyping inversion using multiple alignment long reads","p":"?"}
@@ -3706,10 +3718,10 @@
 {"n":"ntjoin","v":"1.1.7","t":"Genome assembly scaffolder using minimizer graphs","p":"LM"}
 {"n":"ntlink","v":"1.3.11","t":"Genome assembly scaffolder using long reads and minimizers","p":"LM"}
 {"n":"ntm-profiler","v":"0.8.2","t":"Profiling tool for NTM to detect species and resistance from WGS data","p":"?"}
-{"n":"ntroot","v":"1.2.3","t":"Ancestry inference from genomic data","p":"LM"}
+{"n":"ntroot","v":"1.2.4","t":"Ancestry inference from genomic data","p":"LM"}
 {"n":"ntsm","v":"1.2.1","t":"ntsm - Nucleotide Sequence/Sample Matcher","p":"LM"}
 {"n":"ntstat","v":"1.0.1","t":"a toolkit for statistical analysis of k-mer frequency and depth","p":"LM"}
-{"n":"ntsynt","v":"1.0.8","t":"Detecting multi-genome synteny blocks using minimizer graph mapping.","p":"LM"}
+{"n":"ntsynt","v":"1.0.9","t":"Detecting multi-genome synteny blocks using minimizer graph mapping.","p":"LM"}
 {"n":"ntsynt-viz","v":"1.1.0","t":"Visualizing multi-genome synteny patterns","p":"?"}
 {"n":"nucamino","v":"0.1.3","t":"A nucleotide to amino acid alignment program optimized for virus gene sequences","p":"LM"}
 {"n":"nucdiff","v":"2.0.3","t":"NucDiff locates and categorizes differences between two closely related nucleotide sequences.","p":"LM"}
@@ -3821,7 +3833,7 @@
 {"n":"oxbow","v":"0.8.1","t":"Read genomic file formats into data frames and more.","p":"LM"}
 {"n":"oxbreaker","v":"1.2.2","t":"GTK4 GUI wrapper that launches a Nextflow pipeline","p":"?"}
 {"n":"oxo-call","v":"0.13.0","t":"Model-intelligent orchestration for CLI bioinformatics — call any tool with LLM intelligence","p":"LM"}
-{"n":"oxo-flow-cli","v":"0.13.1","t":"CLI for the oxo-flow bioinformatics pipeline engine","p":"LM"}
+{"n":"oxo-flow-cli","v":"0.15.0","t":"CLI for the oxo-flow bioinformatics pipeline engine","p":"LM"}
 {"n":"p7zip","v":"15.09","t":"p7zip is a quick port of 7z.exe and 7za.exe (command line version of 7zip, see www.7-zip.org ) for Unix.","p":"L"}
 {"n":"pacbio_falcon","v":"052016","t":"A set of tools for fast aligning long reads for consensus and assembly","p":"LM"}
 {"n":"pacini_typing","v":"3.1.1","t":"YAML-based bacterial genotyping application","p":"?"}
@@ -4036,7 +4048,7 @@
 {"n":"phables","v":"1.5.0","t":"Phables: from fragmented assemblies to high-quality bacteriophage genomes.","p":"LM"}
 {"n":"phabox","v":"2.1.13","t":"Virus identification and analysis tool set","p":"?"}
 {"n":"phageflow","v":"1.0.0","t":"Modular bacteriophage genomics pipeline for complete genome recovery","p":"?"}
-{"n":"phagemine","v":"1.0.0","t":"Evidence-based bacteriophage genome annotation and discovery mining","p":"?"}
+{"n":"phagemine","v":"1.0.4","t":"Evidence-based bacteriophage genome annotation and discovery mining","p":"?"}
 {"n":"phamb","v":"1.0.1","t":"phamb discovery approach used to isolate metagenome derived viromes and High-quality viral genomes","p":"?"}
 {"n":"phame","v":"1.0.4","t":"A tool to derive SNP matrices and phylogenetic tree from raw reads, contigs, and full genomes.","p":"LM"}
 {"n":"phanotate","v":"1.6.7","t":"Phanotate gene caller for phages","p":"LM"}
@@ -4147,14 +4159,14 @@
 {"n":"piret","v":"0.3.4","t":"A tool for conducting RNA seq analysis.","p":"LM"}
 {"n":"pirs","v":"2.0.2","t":"pIRS is a program for simulating Illumina PE reads.","p":"L"}
 {"n":"pisad","v":"1.2.0","t":"pisad - Phsaed Intraspecies Sample Anomalies Detection tool","p":"LM"}
-{"n":"piscem","v":"0.22.1","t":"piscem is a next-generation compacted colored de Bruijn Graph-based indexer and mapper","p":"LM"}
+{"n":"piscem","v":"0.23.0","t":"piscem is a next-generation compacted colored de Bruijn Graph-based indexer and mapper","p":"LM"}
 {"n":"piscem-infer","v":"0.7.0","t":"piscem-infer is a flexible tool to perform target quantification from bulk-sequencing data","p":"LM"}
 {"n":"pisces","v":"5.2.10.49","t":"Somatic and germline variant caller for amplicon data. Recommended caller for tumor-only workflows.","p":"LM"}
 {"n":"pispino","v":"1.1","t":"PISPINO (PIpits SPIN-Off tools): Bioinformatics toolkits for processing NGS data","p":"LM"}
 {"n":"pixelator","v":"0.20.1","t":"A command-line tool and library to process and analyze sequencing data from Molecular Pixelation (MPX) assays.","p":"?"}
 {"n":"pizzly","v":"0.37.3","t":"Fast fusion detection using kallisto","p":"LM"}
 {"n":"pkiss","v":"2.3.0","t":"RNA secondary structure prediction including K-type and kissing hairpin- pseudoknots.","p":"LM"}
-{"n":"planemo","v":"0.75.46","t":"Command-line utilities to assist in building tools for the Galaxy project (https://galaxyproject.org).","p":"LM"}
+{"n":"planemo","v":"0.75.47","t":"Command-line utilities to assist in building tools for the Galaxy project (https://galaxyproject.org).","p":"LM"}
 {"n":"plannotate","v":"2.0.0","t":"Webserver and command line tool for annotating engineered plasmids.","p":"?"}
 {"n":"plant_tribes_assembly_post_processor","v":"1.0.4","t":"Transcriptome assembly post processing pipeline","p":"L"}
 {"n":"plant_tribes_gene_family_aligner","v":"1.0.4","t":"Gene family aligner pipeline","p":"LM"}
@@ -4192,7 +4204,7 @@
 {"n":"plinkio","v":"0.9.8","t":"A library for parsing plink genotype files","p":"LM"}
 {"n":"plmc","v":"20221105","t":"Inference of couplings in proteins and RNAs from sequence variation.","p":"LM"}
 {"n":"plncpro","v":"1.2.2","t":"PlncPRO is a program to predict long non-coding (lncRNAs) transcripts using Random Forests.","p":"LM"}
-{"n":"ploidypatch","v":"1.0.0","t":"Duplication-aware, review-oriented plant gene-model repair","p":"?"}
+{"n":"ploidypatch","v":"1.0.1","t":"Duplication-aware, review-oriented plant gene-model repair","p":"?"}
 {"n":"plotcritic","v":"1.0.1","t":"Python deployment tool for bespoke image curation projects, oriented toward scientific projects, especially genomic structural variation.","p":"?"}
 {"n":"plothic","v":"1.0.0","t":"Plot Whole genome Hi-C contact matrix heatmap.","p":"?"}
 {"n":"plotnado","v":"0.3.2","t":"Simple genomic track visualization and genome browser-style plotting","p":"?"}
@@ -4212,7 +4224,7 @@
 {"n":"poa","v":"2.0","t":"POA is Partial Order Alignment, a fast program for multiple sequence alignment in bioinformatics. Its advantages are speed, scalability, sensitivity, and the superior ability to handle branching / indels in the alignment.","p":"LM"}
 {"n":"pod5","v":"0.3.44","t":"Oxford Nanopore Technologies Pod5 File Format Python API and Tools.","p":"?"}
 {"n":"polap","v":"0.5.3.1","t":"POLAP: plant organelle long-read assembly pipeline","p":"?"}
-{"n":"polars-bio","v":"0.34.0","t":"Blazing fast genomic operations on large Python dataframes","p":"LM"}
+{"n":"polars-bio","v":"0.35.1","t":"Blazing fast genomic operations on large Python dataframes","p":"LM"}
 {"n":"poly-qtlseq","v":"1.2.6","t":"PolyploidQtlSeq is a program that extends QTL-seq for polyploid F1 populations.","p":"?"}
 {"n":"polyat","v":"0.1.2","t":"Command-line tool to quantify poly-A/T homopolymers within FASTQ sequencing reads.","p":"?"}
 {"n":"polymutt","v":"0.18","t":"Li B, Chen W, Zhan X, Busonero F, Sanna S, et al. (2012) A Likelihood-Based Framework for Variant Calling and De Novo Mutation Detection in Families. PLoS Genet 8(10): e1002944. doi:10.1371/journal.pgen.1002944","p":"L"}
@@ -4263,7 +4275,7 @@
 {"n":"presto","v":"0.7.9","t":"A bioinformatics toolkit for processing high-throughput lymphocyte receptor sequencing data.","p":"LM"}
 {"n":"prestor","v":"07f9c7caeb60","t":"A prototype package for generating quality control plots from pRESTO output.","p":"LM"}
 {"n":"pretext-suite","v":"0.0.2","t":"Meta-package for Pretext Hi-C contact map tools.","p":"?"}
-{"n":"pretext-to-asm","v":"1.3.3","t":"pretext-to-asm takes the AGP output from PretextView and the original FASTA file to generate new assembly FASTAs and support files","p":"?"}
+{"n":"pretext-to-asm","v":"1.3.5","t":"pretext-to-asm takes the AGP output from PretextView and the original FASTA file to generate new assembly FASTAs and support files","p":"?"}
 {"n":"pretextannotate","v":"1.1.3","t":"A package to annotate a pretext snapshot with size and chromosome information","p":"?"}
 {"n":"pretextgraph","v":"0.0.9","t":"Embeds bedgraph data into Pretext contact maps.","p":"LM"}
 {"n":"pretextmap","v":"0.2.4","t":"Paired REad TEXTure Mapper. Converts SAM formatted read pairs into genome contact maps.","p":"LM"}
@@ -4343,7 +4355,7 @@
 {"n":"provean","v":"1.1.5","t":"PROVEAN (Protein Variation Effect Analyzer) is a software tool which predicts whether an amino acid substitution or indel has an impact on the biological function of a protein.","p":"LM"}
 {"n":"prscs","v":"1.1.0","t":"PRS-CS is a Python based command line tool that infers posterior SNP effect sizes under continuous shrinkage (CS) priors using GWAS summary statistics and an external LD reference panel.","p":"?"}
 {"n":"prsedm","v":"1.3.0","t":"Polygenic risk score toolkit for diabetes.","p":"?"}
-{"n":"prseq","v":"0.0.34","t":"Python tools (backed by Rust) for sequence analysis.","p":"LM"}
+{"n":"prseq","v":"0.0.38","t":"Python tools (backed by Rust) for sequence analysis.","p":"LM"}
 {"n":"prymer","v":"3.0.2","t":"Python Primer Design Library","p":"?"}
 {"n":"psap","v":"1.0.7","t":"CLI interface for the PSAP classifier. PSAP implements a RandomForest approach to predict the probability of proteins to mediate protein phase separation (PPS).","p":"?"}
 {"n":"psaps","v":"1.0.1","t":"Phylogenetically standardized assessment of pangenome fluidity / size","p":"?"}
@@ -4401,9 +4413,9 @@
 {"n":"pybdei","v":"0.13","t":"Maximum likelihood estimation of Birth-Death Exposed-Infectious (BDEI) epidemiological model parameters from phylogenetic trees.","p":"LM"}
 {"n":"pybedgraph","v":"0.5.43","t":"A package for fast operations on 1-dimensional genomic signal tracks","p":"LM"}
 {"n":"pybedlite","v":"1.1.0","t":"Lightweight python classes for interfacing with bed intervals.","p":"LM"}
-{"n":"pybedtools","v":"0.12.0","t":"Wraps BEDTools for use in Python and adds many additional features.","p":"LM"}
+{"n":"pybedtools","v":"0.12.1","t":"Wraps BEDTools for use in Python and adds many additional features.","p":"LM"}
 {"n":"pybigwig","v":"0.3.25","t":"A python extension written in C for quick access to bigWig files.","p":"LM"}
-{"n":"pybiolib","v":"1.4.363","t":"BioLib Python Client.","p":"?"}
+{"n":"pybiolib","v":"1.4.386","t":"BioLib Python Client.","p":"?"}
 {"n":"pybiomart","v":"0.2.0","t":"A simple pythonic interface to biomart.","p":"?"}
 {"n":"pybmtools","v":"0.1.3","t":"A python extension written in C for quick access to DNA methylation BM files.","p":"LM"}
 {"n":"pychopper","v":"2.7.10","t":"A tool to identify, orient and rescue full length cDNA reads from nanopore data.","p":"?"}
@@ -4502,7 +4514,7 @@
 {"n":"pyseer","v":"1.4.2","t":"Sequence Element Enrichment Analysis (SEER), python implementation.","p":"LM"}
 {"n":"pysftp","v":"0.2.9","t":"A friendly face on SFTP","p":"LM"}
 {"n":"pyslim","v":"0.401","t":"Manipulate tree sequences produced by SLiM.","p":"?"}
-{"n":"pyslow5","v":"1.4.0","t":"slow5lib Python binding","p":"LM"}
+{"n":"pyslow5","v":"1.5.0","t":"slow5lib Python binding","p":"LM"}
 {"n":"pyspoa","v":"0.3.2","t":"Python binding to spoa library.","p":"LM"}
 {"n":"pysvg","v":"0.2.2","t":"Python SVG Library","p":"LM"}
 {"n":"pysvmlight","v":"0.4","t":"Interface to Thorsten Joachims' SVM-Light","p":"LM"}
@@ -4610,7 +4622,7 @@
 {"n":"raptor","v":"3.0.1","t":"Raptor: A fast and space-efficient pre-filter for querying very large collections of nucleotide sequences","p":"L"}
 {"n":"rasbhari","v":"1.4.0","t":"Rapid approach for spaced-seed optimization.","p":"L"}
 {"n":"rascaf","v":"20180710","t":"Scaffolding with RNA-seq read alignment.","p":"LM"}
-{"n":"rastair","v":"2.1.1","t":"Fast and flexible extraction of methylation information from BAM files.","p":"LM"}
+{"n":"rastair","v":"2.2.0","t":"Fast and flexible extraction of methylation information from BAM files.","p":"LM"}
 {"n":"rastqc","v":"0.1.0","t":"Fast Rust-based quality control for high-throughput sequencing data","p":"LM"}
 {"n":"rastqc-nanopore","v":"0.1.0","t":"Fast Rust-based QC for Oxford Nanopore sequencing data (Fast5 + POD5)","p":"LM"}
 {"n":"rasusa","v":"5.1.0","t":"Randomly subsample sequencing reads or alignments","p":"LM"}
@@ -4648,7 +4660,7 @@
 {"n":"readucks","v":"0.0.3","t":"Readucks: a simple demultiplexer for nanopore reads","p":"?"}
 {"n":"reago","v":"1.1","t":"An assembly tool for 16S ribosomal RNA recovery from metagenomic data","p":"LM"}
 {"n":"real","v":"1.0","t":"REad ALigner for Next-Generation sequencing reads.","p":"LM"}
-{"n":"realignpro","v":"0.2.1","t":"ReAlignPro: FASTA-to-MAF, MAF-to-BED, and TSV-to-figures utilities for comparative genomics.","p":"?"}
+{"n":"realignpro","v":"0.2.2","t":"ReAlignPro: FASTA-to-MAF, MAF-to-BED, and TSV-to-figures utilities for comparative genomics.","p":"?"}
 {"n":"realphy","v":"1.13","t":"The Reference sequence Alignment based Phylogeny","p":"?"}
 {"n":"reaper","v":"16.098","t":"Tool for demultiplexing, trimming and filtering sequencing data.","p":"LM"}
 {"n":"reaper-trim","v":"17.257","t":"Tool for demultiplexing, trimming and filtering sequencing data.","p":"LM"}
@@ -4691,7 +4703,7 @@
 {"n":"regional","v":"1.1.2","t":"simple manipulation and display of spatial regions in python","p":"?"}
 {"n":"reglscatterpy","v":"0.6.36","t":"Interactive WebGL scatterplots for single-cell data (AnnData/MuData/SpatialData) in Jupyter, VS Code and Colab","p":"?"}
 {"n":"regtools","v":"1.0.0","t":"Tools that integrate DNA-seq and RNA-seq data to help interpret mutations in a regulatory and splicing context.","p":"LM"}
-{"n":"relecov-tools","v":"1.8.0","t":"Tools for managing and processing of relecov data.","p":"?"}
+{"n":"relecov-tools","v":"1.9.0","t":"Tools for managing and processing of relecov data.","p":"?"}
 {"n":"relion","v":"5.1.0","t":"Image-processing software for cryo-electron microscopy.","p":"LM"}
 {"n":"relocate2","v":"2.0.1","t":"a high resolution transposable element insertion sites mapping tool for population resequencing","p":"LM"}
 {"n":"remag","v":"0.4.5","t":"Recovery of high-quality eukaryotic genomes from complex metagenomes","p":"?"}
@@ -4725,11 +4737,12 @@
 {"n":"resfinder","v":"4.7.2","t":"ResFinder identifies acquired antimicrobial resistance genes in total or partial sequenced isolates of bacteria.","p":"?"}
 {"n":"resistify","v":"2.4.0","t":"A plant resistance gene annotation tool.","p":"?"}
 {"n":"resmico","v":"1.2.2","t":"Increasing the quality of metagenome-assembled genomes with deep learning","p":"LM"}
-{"n":"respro","v":"0.1.1","t":"Pathogen-agnostic framework for genotypic antiviral resistance profiling from variants.","p":"?"}
+{"n":"respro","v":"0.1.2","t":"Pathogen-agnostic framework for genotypic antiviral resistance profiling from variants.","p":"?"}
 {"n":"restrander","v":"1.1.3","t":"A fast, accurate program for orienting and quality-checking cDNA sequencing reads","p":"LM"}
 {"n":"retry_decorator","v":"1.1.1","t":"Retry Decorator","p":"LM"}
 {"n":"revbayes","v":"1.4.1","t":"Bayesian Phylogenetic Inference Using Graphical Models and an Interactive Model-Specification Language.","p":"LM"}
 {"n":"reveal","v":"0.1","t":"Graph based multi genome aligner","p":"LM"}
+{"n":"reveal-tools","v":"1.0.1","t":"Toolkit for BAM-to-sequence-overview conversion, coverage analysis, and TE visualization","p":"?"}
 {"n":"reviewer","v":"0.2.7","t":"A tool for visualizing alignments of reads in regions containing tandem repeats","p":"LM"}
 {"n":"revoluzer","v":"0.1.8","t":"Genome rearrangement analysis tools","p":"L"}
 {"n":"revtag","v":"1.0.0","t":"Reverse (and complement) array-like SAM tags for negative facing alignments.","p":"LM"}
@@ -4764,7 +4777,7 @@
 {"n":"rich-msa","v":"0.1.0","t":"A Rich renderable for viewing Multiple Sequence Alignments in the terminal.","p":"?"}
 {"n":"rigel","v":"0.7.1","t":"Bayesian RNA-seq transcript quantification tool","p":"LM"}
 {"n":"riker","v":"0.4.1","t":"High-performance tools next generation sequencing QC.","p":"LM"}
-{"n":"rikin","v":"0.9.5","t":"Fast computation of RNA-RNA interaction kinetics","p":"LM"}
+{"n":"rikin","v":"0.9.6","t":"Fast computation of RNA-RNA interaction kinetics","p":"LM"}
 {"n":"rilseq","v":"0.82","t":"Processing RILSeq experiments results","p":"?"}
 {"n":"ripcal","v":"2.0","t":"RIPCAL is used for the bioinformatic analysis of repeat-induced point mutation (RIP) in fungal genome sequences","p":"?"}
 {"n":"ripser","v":"1.0.1","t":"Ripser: efficient computation of Vietoris–Rips persistence barcodes.","p":"LM"}
@@ -4881,7 +4894,7 @@
 {"n":"saintbioutils","v":"0.0.25","t":"A package of utility and miscellaneous functions for using in bioinformaticspipelines, primarily in Python.","p":"?"}
 {"n":"sak","v":"0.4.8","t":"This tool allows one to cut sequences and parts of sequences out of sequence files.","p":"LM"}
 {"n":"salmid","v":"0.1.23","t":"Rapid tool to check taxonomic ID of single isolate samples. Currently only IDs Salmonella species and subspecies, and some common contaminants (Listeria, Escherichia).","p":"?"}
-{"n":"salmon","v":"2.5.1","t":"Highly-accurate & wicked fast transcript-level quantification from RNA-seq reads (salmon 2.0, Rust).","p":"LM"}
+{"n":"salmon","v":"2.7.0","t":"Highly-accurate & wicked fast transcript-level quantification from RNA-seq reads (salmon 2.0, Rust).","p":"LM"}
 {"n":"salsa2","v":"2.3","t":"Salsa is a tool to scaffold long read assemblies with Hi-C.","p":"LM"}
 {"n":"salti","v":"0.9.0","t":"A modern multiple sequence alignment browser - built for the terminal.","p":"LM"}
 {"n":"salty","v":"1.0.6","t":"SaLTy assigns a lineage to Staphylococcus aureus WGS data and is suitable for describing large-scale S. aureus genomic epidemiology.","p":"?"}
@@ -4902,7 +4915,7 @@
 {"n":"sampei","v":"0.0.9","t":"SAMPEI, a searching method leveraging high quality query spectra within the same or different dataset to assign target spectra with peptide sequence and undefined modification (mass shift)","p":"?"}
 {"n":"sample-sheet","v":"0.13.0","t":"An Illumina Sample Sheet parsing library","p":"?"}
 {"n":"sample_grouping","v":"1.0.0","t":"A tool for merging reads based on metadata groups.","p":"?"}
-{"n":"samplesheet-parser","v":"2.5.0","t":"Multi-vendor, format-agnostic parser for sequencing sample sheets — Illumina IEM V1 & BCLConvert V2 plus Element AVITI run manifests, with index validation and color-balance checking","p":"?"}
+{"n":"samplesheet-parser","v":"2.5.2","t":"Multi-vendor, format-agnostic parser for sequencing sample sheets — Illumina IEM V1 & BCLConvert V2 plus Element AVITI run manifests, with index validation and color-balance checking","p":"?"}
 {"n":"samplot","v":"1.3.0","t":"Plot structural variant signals from BAMs and CRAMs.","p":"?"}
 {"n":"samrefiner","v":"1.4.2.1","t":"A program for gathering variant information from a SAM formated files.","p":"?"}
 {"n":"samshee","v":"0.2.14","t":"A schema-agnostic parser and writer for illumina sample sheets v2.","p":"?"}
@@ -4962,7 +4975,7 @@
 {"n":"scarap","v":"1.0.2","t":"A toolkit for prokaryotic comparative genomics","p":"?"}
 {"n":"scarches","v":"0.6.1","t":"Transfer learning with Architecture Surgery on Single-cell data","p":"?"}
 {"n":"scatac-fragment-tools","v":"0.1.4","t":"Tools for working with scATAC-seq fragment files.","p":"LM"}
-{"n":"scatrans","v":"0.10.13","t":"Single-cell active transcription analysis with spliced/unspliced RNA layers","p":"?"}
+{"n":"scatrans","v":"0.10.16","t":"Single-cell active transcription analysis with spliced/unspliced RNA layers","p":"?"}
 {"n":"sccaf","v":"0.0.10","t":"Single-Cell Clustering Assessment Framework","p":"?"}
 {"n":"sccaller","v":"2.0.0","t":"Dong X et al. Accurate identification of single-nucleotide variants in whole-genome-amplified single cells. Nat Methods. 2017 May;14(5):491-493. doi: 10.1038/nmeth.4227","p":"LM"}
 {"n":"sccellfie","v":"0.6.2","t":"A tool for inferring metabolic activities from single-cell and spatial transcriptomics","p":"?"}
@@ -4971,8 +4984,9 @@
 {"n":"scelvis","v":"0.8.9","t":"SCelVis - web-based visualization of single-cell data","p":"?"}
 {"n":"scepia","v":"0.5.1","t":"Single Cell Epigenome-based Inference of Activity","p":"?"}
 {"n":"scexecute","v":"1.3.3","t":"SCExecute generates cell-barcode specific BAM files from aligned, aggregate single-cell sequencing data, executing a user-provided command on each barcode-stratified BAM file.","p":"?"}
-{"n":"scfair","v":"0.10.0","t":"Fair highly variable gene selection for single-cell RNA-seq","p":"?"}
+{"n":"scfair","v":"0.10.1","t":"Fair highly variable gene selection for single-cell RNA-seq","p":"?"}
 {"n":"scg","v":"0.3.1","t":"The single cell genotyper (SCG): \"Roth A, McPherson A, Laks E, Biele J, Yap D, Wan A, et al. Clonal genotype and population structure inference from single-cell tumor sequencing. Nat Meth. 2016;13: 573–576. doi:10.1038/nmeth.3867\"","p":"LM"}
+{"n":"scgbinner","v":"1.0.5","t":"A deep learning-based metagenomic binning method","p":"?"}
 {"n":"scglue","v":"0.4.0","t":"Graph-linked unified embedding for unpaired single-cell multi-omics data integration","p":"?"}
 {"n":"schavott","v":"0.5.0","t":"Assembly and scaffolding of bacterial genomes in real time using MinION-sequencing.","p":"LM"}
 {"n":"schema","v":"0.7.0","t":"Simple data validation library","p":"LM"}
@@ -4984,6 +4998,7 @@
 {"n":"scib","v":"1.1.7","t":"Evaluating single-cell data integration methods","p":"LM"}
 {"n":"scikit-allel","v":"0.20.3","t":"","p":"L"}
 {"n":"scikit-bio","v":"0.4.2","t":"Data structures, algorithms and educational resources for bioinformatics.","p":"LM"}
+{"n":"scikit-fingerprints","v":"2.1.0","t":"Library for effective molecular fingerprints calculation","p":"?"}
 {"n":"scikits-datasmooth","v":"0.7.1","t":"Scikits data smoothing package","p":"LM"}
 {"n":"scinexus","v":"2026.5.18","t":"A Python framework for rapid development of data processing applications","p":"?"}
 {"n":"sciphi","v":"0.1.7","t":"Single-cell mutation identification via phylogenetic inference","p":"LM"}
@@ -5107,7 +5122,7 @@
 {"n":"seqtk","v":"1.5","t":"Seqtk is a fast and lightweight tool for processing sequences in the FASTA or FASTQ format.","p":"LM"}
 {"n":"seqtui","v":"0.1.1","t":"Terminal-based viewer and CLI toolkit for biological sequences (DNA/AA).","p":"LM"}
 {"n":"sequali","v":"1.0.2","t":"Fast sequencing quality metrics","p":"LM"}
-{"n":"sequana","v":"0.23.0","t":"A set of standalone application and snakemake pipelines dedicated to NGS (new generation sequencing) analysis.","p":"LM"}
+{"n":"sequana","v":"0.24.1","t":"A set of standalone application and snakemake pipelines dedicated to NGS (new generation sequencing) analysis.","p":"LM"}
 {"n":"sequana_pipetools","v":"1.5.7","t":"A set of tools to help building or using Sequana pipelines","p":"?"}
 {"n":"sequencetools","v":"1.6.0.0","t":"A tool (pileupCaller) for processing ancient DNA sequencing data","p":"LM"}
 {"n":"sequenoscope","v":"1.0.0","t":"Sequenoscope - A Modular Pipeline for ONT Adaptive Sampling and Comparative Microbial Genomics Visualization","p":"?"}
@@ -5200,7 +5215,7 @@
 {"n":"simo-omics","v":"1.0.0","t":"Spatial integration of multi-omics single-cell datasets through probabilistic alignment","p":"?"}
 {"n":"simphyni","v":"2.0.0","t":"SimPhyni: a tool for phylogenetic trait simulation and inference.","p":"?"}
 {"n":"simple_sv_annotation","v":"2019.02.18","t":"Simplify snpEff annotations for interesting cases","p":"LM"}
-{"n":"simpleaf","v":"0.28.0","t":"A rust framework to make using alevin-fry even simpler.","p":"LM"}
+{"n":"simpleaf","v":"0.30.0","t":"A rust framework to make using alevin-fry even simpler.","p":"LM"}
 {"n":"simplejson","v":"3.8.1","t":"Simple, fast, extensible JSON encoder/decoder for Python","p":"LM"}
 {"n":"simplesam","v":"0.1.4.2","t":"Simple pure Python SAM parser and objects for working with SAM records","p":"?"}
 {"n":"simscsntree","v":"0.0.9","t":"Simulating single cell sequencing data","p":"?"}
@@ -5215,7 +5230,7 @@
 {"n":"sinto","v":"0.10.1","t":"sinto: tools for single-cell data processing","p":"?"}
 {"n":"sipros","v":"5.0.1","t":"Tools for stable isotopic mass spectrometry-based metaproteomics","p":"?"}
 {"n":"siren-rnai","v":"0.1.9","t":"SIREN: Suite for Intelligent RNAi design and Evaluation of Nucleotide sequences","p":"?"}
-{"n":"sirius-csifingerid","v":"6.3.12","t":"SIRIUS (CLI + GUI) LC-MS/MS data analyses framework. Includes: SIRIUS, ZODIAC, CSI:FingerID (with COSMIC) and CANOPUS","p":"LM"}
+{"n":"sirius-csifingerid","v":"6.5.4","t":"SIRIUS (CLI + GUI) LC-MS/MS data analyses framework. Includes: SIRIUS, ZODIAC, CSI:FingerID (with COSMIC) and CANOPUS","p":"LM"}
 {"n":"sis","v":"0.1.2","t":"A tool that uses mummer to scaffold small genomes.","p":"LM"}
 {"n":"sistem","v":"1.0.5","t":"A tool for simulating tumor growth, metastasis, and DNA-seq data.","p":"?"}
 {"n":"sistr_cmd","v":"1.1.3","t":"Salmonella In Silico Typing Resource (SISTR) commandline tool for serovar prediction","p":"L"}
@@ -5225,7 +5240,7 @@
 {"n":"ska2","v":"0.5.1","t":"SKA (Split Kmer Analysis) version 2.","p":"LM"}
 {"n":"skani","v":"0.3.2","t":"skani is a fast and robust tool for calculating ANI between metagenome assembled genomes and contigs.","p":"LM"}
 {"n":"skc","v":"0.1.0","t":"Shared k-mer content between two genomes","p":"LM"}
-{"n":"skder","v":"1.3.6","t":"skDER & CiDDER: efficient & high-resolution dereplication methods for microbial genomes","p":"LM"}
+{"n":"skder","v":"1.3.7","t":"skDER & CiDDER: efficient & high-resolution dereplication methods for microbial genomes","p":"LM"}
 {"n":"skesa","v":"2.5.1","t":"Strategic Kmer Extension for Scrupulous Assemblies & Sequence Assembly Using Target Enrichment.","p":"LM"}
 {"n":"sketchlib","v":"0.4.1","t":"Fast sequence distance estimates","p":"LM"}
 {"n":"sketchy","v":"0.6.0","t":"Real-time lineage hashing and genotyping of bacterial pathogens","p":"LM"}
@@ -5274,12 +5289,12 @@
 {"n":"snakefmt","v":"2.0.3","t":"The uncompromising Snakemake code formatter.","p":"?"}
 {"n":"snakehichiptf","v":"0.1.4","t":"Snakemake-based HiChIP/TF analysis pipeline","p":"?"}
 {"n":"snakelines","v":"1.1.8","t":"Computational pipelines for processing of paired-end sequencing reads.","p":"?"}
-{"n":"snakemake","v":"9.25.2","t":"A popular workflow management system aiming at full in-silico reproducibility.","p":"LM"}
+{"n":"snakemake","v":"9.26.1","t":"A popular workflow management system aiming at full in-silico reproducibility.","p":"LM"}
 {"n":"snakemake-logger-plugin-panoptes","v":"0.3.0","t":"Snakemake 9 logger plugin that forwards workflow events to a panoptes server.","p":"?"}
 {"n":"snakemake-logger-plugin-prometheus","v":"0.1.3","t":"A Snakemake logger plugin that exposes workflow metrics via a Prometheus-compatible HTTP endpoint.","p":"?"}
 {"n":"snakemake-logger-plugin-pypsa","v":"0.2.0","t":"A PyPSA-Eur logger plugin for Snakemake","p":"?"}
 {"n":"snakemake-logger-plugin-snkmt","v":"0.1.8","t":"Snakemake logger plugin that writes logs to SQLite database.","p":"?"}
-{"n":"snakemake-minimal","v":"9.25.2","t":"A popular workflow management system aiming at full in-silico reproducibility.","p":"LM"}
+{"n":"snakemake-minimal","v":"9.26.1","t":"A popular workflow management system aiming at full in-silico reproducibility.","p":"LM"}
 {"n":"snakemake-scheduler-plugin-firstfit","v":"0.1.4","t":"A Snakemake scheduler plugin that selects the first jobs that fit available resources.","p":"?"}
 {"n":"snakemake-scheduler-plugin-greedy","v":"0.1.5","t":"A greedy Snakemake scheduler plugin.","p":"?"}
 {"n":"snakemake-scheduler-plugin-milp","v":"0.1.1","t":"A Snakemake scheduler plugin using Mixed-Integer Linear Programming (MILP).","p":"?"}
@@ -5432,7 +5447,7 @@
 {"n":"sra-tools","v":"3.4.1","t":"The SRA Toolkit and SDK from NCBI.","p":"LM"}
 {"n":"sracat","v":"0.2","t":"A command-line tool for extracting unordered read data from SRA files.","p":"LM"}
 {"n":"sracat-rs","v":"0.2.1","t":"Flexible streaming extraction of reads from NCBI .SRA files.","p":"LM"}
-{"n":"sracha","v":"0.5.0","t":"Fast parallel SRA downloader and streaming FASTQ converter.","p":"LM"}
+{"n":"sracha","v":"0.6.0","t":"Fast parallel SRA downloader and streaming FASTQ converter.","p":"LM"}
 {"n":"srahunter","v":"0.0.9","t":"srahunter is a tool for processing SRA accession numbers.","p":"?"}
 {"n":"srax","v":"1.5","t":"Systematic Resistome Analysis","p":"?"}
 {"n":"srf-n-trf","v":"0.1.2","t":"Extract specific monomers, motifs, and regions from srf and trf output","p":"LM"}
@@ -5446,7 +5461,7 @@
 {"n":"ssake","v":"4.0","t":"SSAKE is a genomics application for de novo assembly of millions of very short DNA sequences.","p":"LM"}
 {"n":"sscocaller","v":"0.2.2","t":"Haplotyping single-cell DNA sequenced gamete cells.","p":"LM"}
 {"n":"ssdrippipeline","v":"0.0.5","t":"Useful tools for the analysis of ssDRIP-seq data","p":"?"}
-{"n":"sshash","v":"5.1.1","t":"Compressed dictionary data structure for k-mers","p":"LM"}
+{"n":"sshash","v":"6.0.0","t":"Compressed dictionary data structure for k-mers","p":"LM"}
 {"n":"sshmm","v":"1.0.7","t":"ssHMM is an RNA motif finder that recovers sequence-structure motifs from RNA-binding protein data, such as CLIP-Seq data.","p":"L"}
 {"n":"ssiamb","v":"1.0.0","t":"Ambiguous-site counting for reads mapped back to their assembly","p":"?"}
 {"n":"ssm","v":"1.4","t":"Secondary-structure matching, tool for fast protein structure alignment","p":"LM"}
@@ -5565,6 +5580,7 @@
 {"n":"svist4get","v":"1.3.1.1","t":"A simple visualization tool for genomic tracks from sequencing experiments","p":"?"}
 {"n":"svjedi","v":"1.1.6","t":"SVJedi is a structural variation (SV) genotyper for long read data.","p":"?"}
 {"n":"svjedi-graph","v":"1.2.1","t":"SVJedi-graph is a structural variation (SV) genotyper for long read data using a variation graph to represent SVs.","p":"?"}
+{"n":"svjedi-tag","v":"1.1.0","t":"SVJedi-Tag : a tool for genotyping inversions using linked-reads data.","p":"?"}
 {"n":"svmlight","v":"6.02","t":"SVMLight Library by Thorsten Joachim.","p":"LM"}
 {"n":"svpg","v":"1.4.1","t":"Pangenome-based structural variation caller","p":"?"}
 {"n":"svseq2","v":"2","t":"An improved approach for accurate and efficient calling of structural variations with low-coverage sequence data","p":"LM"}
@@ -5578,7 +5594,7 @@
 {"n":"svviz","v":"1.6.2","t":"A read visualizer for structural variants","p":"LM"}
 {"n":"svync","v":"0.3.0","t":"A tool to standardize VCF files from structural variant callers","p":"LM"}
 {"n":"swalign","v":"0.3.7","t":"Smith-Waterman local aligner","p":"LM"}
-{"n":"swarm","v":"3.1.8","t":"A robust and fast clustering method for amplicon-based studies.","p":"LM"}
+{"n":"swarm","v":"3.2.0","t":"A robust and fast clustering method for amplicon-based studies.","p":"LM"}
 {"n":"sweepfinder2","v":"1.0","t":"A program written in C that can perform genomic scans for recent selective sweeps selection while controlling for background selection and mutation rate variation.","p":"LM"}
 {"n":"swga","v":"0.4.4","t":"Select primer sets for selective whole genome amplification (SWGA)","p":"LM"}
 {"n":"swiftlink","v":"1.0","t":"A multipoint parametric linkage analysis tool for large consanguineous pedigrees and is primarily targeted at pedigrees that cannot be analysed by a Lander-Green algorithm based program, i.e. many markers, but larger pedigrees.","p":"LM"}
@@ -5714,7 +5730,7 @@
 {"n":"tgtools","v":"0.0.4","t":"A command-line tool to help manipulate transjson files which are used to store transmission/relatedness networks.","p":"?"}
 {"n":"tgv","v":"0.3.0","t":"Explore genomes in the terminal. Light, blazing fast 🚀, vim-motion.","p":"LM"}
 {"n":"thapbi-pict","v":"1.0.24","t":"THAPBI Phytophthora ITS1 Classifier Tool (PICT).","p":"?"}
-{"n":"thebigbam","v":"0.4.0","t":"Compression and interactive exploration of large-scale sequencing alignments with circular mapping support","p":"LM"}
+{"n":"thebigbam","v":"0.6.0","t":"Compression and interactive exploration of large-scale sequencing alignments with circular mapping support","p":"LM"}
 {"n":"theiacov-gc","v":"2.3.2","t":"Command-line version of the TheiaCov genomic characterization workflow for SARS-CoV-2.","p":"?"}
 {"n":"themis","v":"0.1.0","t":"Themis: metagenomic profiler","p":"L"}
 {"n":"thesias","v":"3.1.1","t":"Testing Haplotype Effects In Association Studies","p":"L"}
@@ -5761,7 +5777,7 @@
 {"n":"toposort","v":"1.4","t":"","p":"LM"}
 {"n":"tortoize","v":"2.0.16","t":"Application to calculate ramachandran z-scores.","p":"LM"}
 {"n":"toulligqc","v":"2.9.1","t":"A post sequencing QC tool for Oxford Nanopore sequencers.","p":"LM"}
-{"n":"tower-cli","v":"0.38.0","t":"The Tower CLI an interface to Nextflow Tower via the CLI.","p":"LM"}
+{"n":"tower-cli","v":"0.40.0","t":"The Tower CLI an interface to Nextflow Tower via the CLI.","p":"LM"}
 {"n":"tpmcalculator","v":"0.0.6","t":"TPMCalculator quantifies mRNA abundance directly from the alignments by parsing BAM files.","p":"LM"}
 {"n":"tpp","v":"5.0.0","t":"The Trans-Proteomic Pipeline (TPP) is a collection of integrated tools for MS/MS proteomics developed at the Seattle Proteome Center. The Bioconda package includes the command-line versions of the TPP toolset. These programs include tools for validation (PeptideProphet, iProphet, ProteinProphet, Mayu) and quantification (XPRESS, ASAPRatio, Libra) as well as a number of parsers and converters (Out2XML, Mascot2XML, Tandem2XML, etc).","p":"L"}
 {"n":"tqdist","v":"1.0.0","t":"computes the triplet distance between rooted trees in O(n log n) time and the quartet distance between unrooted trees in O(dn log n) time, where d degree of the tree with the smallest degree.","p":"L"}
@@ -5818,7 +5834,7 @@
 {"n":"trf","v":"4.10.0rc2","t":"Tandem Repeats Finder is a program to locate and display tandem repeats in DNA sequences.","p":"LM"}
 {"n":"trgt","v":"5.1.0","t":"Tandem repeat genotyping and visualization from PacBio HiFi data","p":"L"}
 {"n":"tribal","v":"0.1.1","t":"TRIBAL is a package to infer B cell lineage trees from single-cell RNA sequencing data.","p":"LM"}
-{"n":"tricord","v":"0.1.3","t":"Run a command and report its process tree's CPU, memory, and I/O usage","p":"LM"}
+{"n":"tricord","v":"0.1.5","t":"Run a command and report its process tree's CPU, memory, and I/O usage","p":"LM"}
 {"n":"triform2","v":"0.0.5","t":"Improved sensitivity, specificity and control of false discovery rates in ChIP-Seq peak finding.","p":"LM"}
 {"n":"trim-galore","v":"2.3.0","t":"Fast adapter and quality trimming for NGS data — Oxidized Edition (Rust)","p":"LM"}
 {"n":"trim_isoseq_polya","v":"0.0.3","t":"Trims polyA tails from IsoSeq FASTA files","p":"LM"}
@@ -5851,7 +5867,7 @@
 {"n":"turboani","v":"0.1.8","t":"TurboANI is a super fast homology-aware average nucleotide identity estimation algorithm at unprecedented scale","p":"LM"}
 {"n":"turbocor","v":"0.1.1","t":"A command line tool to compute very large correlation matrices.","p":"LM"}
 {"n":"twilight","v":"0.2.3","t":"TWILIGHT: A high throughput tool for tall and wide multiple sequence alignment.","p":"LM"}
-{"n":"twinspector","v":"0.1.4","t":"TwInsPEctor: A tool for twin prime editing analysis.","p":"?"}
+{"n":"twinspector","v":"0.2.0","t":"TwInsPEctor: A tool for twin prime editing analysis.","p":"?"}
 {"n":"twopaco","v":"1.1.0","t":"A fast constructor of the compressed de Bruijn graph from many genomes.","p":"LM"}
 {"n":"txnova","v":"0.1.9","t":"Experimental-group-specific novel intergenic transcripts from bulk RNA-seq BAMs","p":"LM"}
 {"n":"typesine","v":"1.0.0","t":"Find and genotype SINE RIP loci from short-read sequencing data.","p":"?"}
@@ -6161,9 +6177,9 @@
 {"n":"unikmer","v":"0.20.0","t":"A versatile toolkit for k-mers with taxonomic information","p":"LM"}
 {"n":"unikseq","v":"2.0.1","t":"Unique DNA sequence region identification using a k-mer approach","p":"?"}
 {"n":"unimap","v":"0.1","t":"Unimap is a fork of minimap2 optimized for assembly-to-reference alignment.","p":"LM"}
-{"n":"unimeth","v":"0.2.2","t":"A unified DNA methylation detection framework for nanopore reads","p":"?"}
+{"n":"unimeth","v":"0.2.3","t":"A unified DNA methylation detection framework for nanopore reads","p":"?"}
 {"n":"uniprot","v":"1.3","t":"Retrieve protein sequence identifiers and metadata from http://uniprot.org","p":"LM"}
-{"n":"uniqsketch","v":"1.5.0","t":"UniqSketch: sensitive and resource-efficient strain-level detection in metagenomes.","p":"LM"}
+{"n":"uniqsketch","v":"1.6.0","t":"UniqSketch: sensitive and resource-efficient strain-level detection in metagenomes.","p":"LM"}
 {"n":"unitas","v":"1.6.1","t":"unitas is a convenient tool for efficient annotation of small non-coding RNA sequence datasets produced by Next Generation Sequencing.","p":"LM"}
 {"n":"unitem","v":"1.2.6","t":"Ensemble binning strategies for combining the output of multiple binning methods.","p":"?"}
 {"n":"unitig-caller","v":"1.3.2","t":"Determines presence/absence of sequence elements in bacterial sequence data.","p":"LM"}
@@ -6171,7 +6187,7 @@
 {"n":"unmerge","v":"1.0","t":"Interlaced forward and reverse paired-end reads to individual forward and reverse files","p":"L"}
 {"n":"unmicst","v":"2.6.6","t":"UNMICST - UnMicst Nuclear Segmentation Tool","p":"?"}
 {"n":"unmux","v":"0.4.0","t":"Flexible read parsing and demultiplexing to FASTX/SAM/BAM/CRAM, splitcode-style.","p":"LM"}
-{"n":"unum-bio","v":"0.1.1","t":"e pluribus unum: a pure-Rust HLA/KIR genotyper (a port of T1K).","p":"LM"}
+{"n":"unum-bio","v":"0.1.3","t":"e pluribus unum: a pure-Rust HLA/KIR genotyper (a port of T1K).","p":"LM"}
 {"n":"upd","v":"0.1.1","t":"Simple software to call UPD regions from germline exome/wgs trios.","p":"?"}
 {"n":"updio","v":"1.1.0","t":"UPDio is designed to identify uniparental disomy in probands of trio VCF data.","p":"?"}
 {"n":"upimapi","v":"1.13.3","t":"UniProt Id Mapping through API","p":"?"}
@@ -6293,7 +6309,7 @@
 {"n":"viloca","v":"1.2.0","t":"VILOCA is a tool to analyse short- and long-read sequencing viral samples. It provides mutation calls and local haplotypes.","p":"?"}
 {"n":"vinalc","v":"1.4.2","t":"VinaLC: MPI-accelerated molecular docking program for virtual screening.","p":"L"}
 {"n":"vine-phylo","v":"0.3.5","t":"VINE (phylogenetics): Variational Inference with Node Embeddings.","p":"LM"}
-{"n":"viotucluster","v":"0.6.0","t":"High-speed all-in-one viromics analysis pipeline for metagenomic data.","p":"?"}
+{"n":"viotucluster","v":"0.7.1","t":"High-speed all-in-one viromics analysis pipeline for metagenomic data.","p":"?"}
 {"n":"viptreegen","v":"1.1.4","t":"Viral proteomic tree generation from viral genomic sequences","p":"?"}
 {"n":"viral-host-hunter","v":"0.2.0","t":"Decrypting viral dark matter with predictive framework and therapeutic implications.","p":"?"}
 {"n":"viral_consensus","v":"1.0.4","t":"Fast viral consensus genome reconstruction.","p":"LM"}
@@ -6331,6 +6347,7 @@
 {"n":"vmatch","v":"2.3.1","t":"The Vmatch large scale sequence analysis software.","p":"LM"}
 {"n":"vnl","v":"1.17.0","t":"A multi-platform collection of C++ software libraries for Computer Vision and Image Understanding.","p":"L"}
 {"n":"voluptuous","v":"0.8.8","t":"Python data validation library","p":"LM"}
+{"n":"vomix-mega","v":"0.1.0","t":"An ultra-fast & modular end-to-end pipeline for terabyte-scale viral metagenomics analysis.","p":"?"}
 {"n":"voronota","v":"1.29.4816","t":"Compute Voronoi diagram vertices for macromolecular structures","p":"LM"}
 {"n":"votuderep","v":"0.6.0","t":"A tool to dereplicate and filter vOTUs","p":"?"}
 {"n":"voyager","v":"0.1.4","t":"Rapid and efficient mapping algorithm for long sequencing reads with insertion- and deletion errors.","p":"?"}
