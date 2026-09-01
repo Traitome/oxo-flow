@@ -16,30 +16,58 @@ oxo-flow.app (macOS)
 
 On launch the shell binary:
 
-1. **picks a free loopback port** and starts the axum web server
+1. **anchors its working directory** to `~/.oxo-flow/desktop` — the
+   per-user data directory where the SQLite database, logs, and workspace
+   files live (see below);
+2. **takes a single-instance lock** in that directory (a second launch
+   fails fast with a clear error instead of corrupting the database);
+3. **picks a free loopback port** and starts the axum web server
    (`oxo-flow-web`, personal mode — loopback-only) on a private tokio
    runtime;
-2. **waits for the listener** to accept TCP connections (so the first page
+4. **waits for the listener** to accept TCP connections (so the first page
    load never races server startup), then
-3. **opens a native webview window** (WKWebView on macOS, WebView2 on
+5. **opens a native webview window** (WKWebView on macOS, WebView2 on
    Windows, WebKitGTK on Linux — via the `wry` crate) pointed at the
    server URL;
-4. **exits when the window closes**, shutting the embedded server down.
+6. **exits when the window closes**, shutting the embedded server down.
 
 Closing the window is the app lifecycle: there is no background server
 process left behind. If the embedded server crashes, the window closes
-and the app exits non-zero instead of freezing on a stale page.
+and the app exits non-zero instead of freezing on a stale page. A
+watchdog task races the server against `SIGINT`/`SIGTERM`, so `kill` and
+Ctrl-C also shut the app down cleanly — including a signal arriving
+during the slow cold GTK/webkit startup on Linux, which exits gracefully
+instead of failing with a spurious startup error.
+
+## Data directory and lifecycle
+
+All desktop state lives in **`~/.oxo-flow/desktop`** (following the CLI's
+`~/.oxo-flow` convention):
+
+| Path | Contents |
+|---|---|
+| `~/.oxo-flow/desktop/oxo-flow.db` (+ `-wal`/`-shm`) | SQLite database |
+| `~/.oxo-flow/desktop/logs/` | server and audit logs |
+| `~/.oxo-flow/desktop/workspace/` | run workspaces |
+| `~/.oxo-flow/desktop/oxo-flow.desktop.lock` | single-instance lock |
+
+The lock is an advisory `flock` held for the process lifetime — the OS
+releases it automatically if the app crashes, so there is no stale-lock
+cleanup. Closing the window sends the process a `SIGTERM`, which runs the
+server's graceful shutdown (flush audit logs, finish in-flight requests)
+before exit; SIGTERM/SIGINT from outside do the same.
 
 Two quality-of-life details:
 
 - **Finder launches `.app` bundles with `cwd=/`**, where the server cannot
-  create its SQLite database (`oxo-flow.db`). The shell detects this and
-  switches to `$HOME` natively — so the desktop app keeps its data in your
-  home directory.
+  create its SQLite database. The shell anchors the working directory to
+  the data directory above before anything starts — so state never
+  scatters across whatever directory the app happened to be launched from.
 - **External links open in the system browser.** A navigation handler
   confines the app window to the app's own loopback origin; anything else
   (the GitHub/docs links in the UI) is handed to `open` / `xdg-open` /
-  `start`. The window itself never navigates away from the interface.
+  `start`. `target="_blank"` links and `window.open` calls are routed the
+  same way. The window itself never navigates away from the interface.
 
 Rendering stays in the OS webview (not a bundled browser, not Electron):
 the DAG canvas (React Flow) and CodeMirror editor run on the platform's
@@ -171,9 +199,10 @@ oxo-flow serve --open
 
 The Linux desktop entries (deb/rpm/AppImage) still launch
 `oxo-flow serve --open`, which opens the interface in the system browser —
-the native-window shell is currently packaged for macOS. Install
-`libwebkit2gtk-4.1-dev` and run the desktop crate directly if you want the
-windowed shell on Linux today:
+the release packaging for the native-window shell currently covers macOS.
+Install `libwebkit2gtk-4.1-dev` and run the desktop crate directly if you
+want the windowed shell on Linux today (the crate itself is
+platform-independent; verified on X11/Xvfb, Linux):
 
 ```bash
 cd crates/oxo-flow-desktop && cargo run --release
@@ -214,9 +243,9 @@ tarballs (built by CI, not by hand):
 |---|---|
 | `oxo-flow-<ver>-desktop-x86_64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Intel (Rosetta on Apple Silicon) |
 | `oxo-flow-<ver>-desktop-aarch64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Apple Silicon |
-| `oxo-flow-<ver>-desktop-amd64.deb` | Debian / Ubuntu (menu entry opens the system browser) |
-| `oxo-flow-<ver>-desktop-x86_64.rpm` | RHEL / Fedora / CentOS (menu entry opens the system browser) |
-| `oxo-flow-<ver>-desktop-x86_64.AppImage` | any Linux distribution (menu entry opens the system browser) |
+| `oxo-flow-<ver>-desktop-amd64.deb` | Debian / Ubuntu (menu entry opens the system browser; native window via the desktop crate) |
+| `oxo-flow-<ver>-desktop-x86_64.rpm` | RHEL / Fedora / CentOS (menu entry opens the system browser; native window via the desktop crate) |
+| `oxo-flow-<ver>-desktop-x86_64.AppImage` | any Linux distribution (menu entry opens the system browser; native window via the desktop crate) |
 | `oxo-flow-<ver>-<target>.tar.gz` | CLI binary, 8 targets (macOS ×2, Linux glibc/musl ×3 architectures) — for clusters, containers, and scripted installs |
 | `oxo-flow-web-<ver>-<target>.tar.gz` | Standalone web-server binary (no CLI subcommands) — for deployment hosts that only serve the UI |
 | `SHA256SUMS.txt` | Checksums for every asset above |
@@ -252,6 +281,12 @@ checkout is needed).
   (`0.16.0`) by value — it is outside the workspace, so it does not
   inherit `[workspace.package]`; bump it together with the rest on
   release.
+- **Data directory**: the desktop app keeps all state in
+  `~/.oxo-flow/desktop` (database, logs, workspace, single-instance
+  lock) — see the table above. The CLI's `oxo-flow serve` and the
+  desktop shell deliberately do not share a data directory, so both can
+  run side by side (e.g. while comparing a release install with a dev
+  build).
 - **Icon**: the app icon (`assets/oxo-flow.icns`, macOS) is rendered from
   `logo.svg` and shipped in the CI bundle. For local cargo-bundle builds,
   add `icon = ["../../assets/oxo-flow.icns"]` under
