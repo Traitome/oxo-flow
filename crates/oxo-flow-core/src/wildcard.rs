@@ -958,11 +958,18 @@ pub fn wildcard_combinations_from_pairs(
                 pair.control.clone().unwrap_or_default(),
             );
             if let Some(ref t) = pair.experiment_type {
-                values.insert("experiment_type".to_string(), t.clone());
-                values.insert("tumor_type".to_string(), t.clone());
+                // Trimmed like the delimited parse — JSON `[[pairs]]` files
+                // bypass `csv::Trim::All`.
+                let t = t.trim();
+                values.insert("experiment_type".to_string(), t.to_string());
+                values.insert("tumor_type".to_string(), t.to_string());
             }
             for (k, v) in &pair.metadata {
-                values.insert(k.clone(), v.clone());
+                // Trim to match the TSV/CSV parse path (`csv::Trim::All`) —
+                // JSON sheets and inline TOML entries reach here untrimmed,
+                // and a padded value would fail `wildcard.<key> == '…'`
+                // gates that plan-time validation (which trims) accepted.
+                values.insert(k.clone(), v.trim().to_string());
             }
             values
         })
@@ -1013,7 +1020,12 @@ pub fn wildcard_combinations_from_groups(
             values.insert("group".to_string(), group.name.clone());
             values.insert("sample".to_string(), sample.clone());
             for (k, v) in &group.metadata {
-                values.insert(k.clone(), v.clone());
+                // Trim to match the TSV/CSV parse path (`csv::Trim::All`) —
+                // JSON sheets reach here untrimmed, and a padded value would
+                // fail `wildcard.<key> == '…'` gates that plan-time
+                // validation (which trims, see `validate_sample_group_metadata`)
+                // accepted. Keys too: JSON allows `" key "` spellings.
+                values.insert(k.trim().to_string(), v.trim().to_string());
             }
             combinations.push(values);
         }
@@ -1516,6 +1528,45 @@ mod tests {
         }];
         let combos = wildcard_combinations_from_groups(&groups);
         assert_eq!(combos[0]["tissue"], "blood");
+    }
+
+    /// Values from JSON sheets (which bypass `csv::Trim::All`) must match
+    /// the trimmed comparisons plan-time validation makes: a padded
+    /// `" ont"` must satisfy `wildcard.reads_layout == 'ont'` (#283 review).
+    #[test]
+    fn wildcard_combinations_from_groups_trim_metadata() {
+        use crate::config::SampleGroup;
+        let mut meta = HashMap::new();
+        meta.insert(" reads_layout ".to_string(), " ont ".to_string());
+        meta.insert("dose".to_string(), " 50mg ".to_string());
+        let groups = vec![SampleGroup {
+            name: "grp".to_string(),
+            samples: vec!["S1".to_string()],
+            metadata: meta,
+        }];
+        let combos = wildcard_combinations_from_groups(&groups);
+        assert_eq!(combos[0]["reads_layout"], "ont");
+        assert_eq!(combos[0]["dose"], "50mg");
+    }
+
+    /// Pair metadata takes the same path — trim at fan-out so inline-TOML
+    /// `[[pairs]]` metadata behaves like the delimited parse.
+    #[test]
+    fn wildcard_combinations_from_pairs_trim_metadata() {
+        use crate::config::ExperimentControlPair;
+        let mut meta = HashMap::new();
+        meta.insert("input_type".to_string(), " srr ".to_string());
+        let pairs = vec![ExperimentControlPair {
+            pair_id: "P1".to_string(),
+            experiment: "E1".to_string(),
+            control: Some("C1".to_string()),
+            experiment_type: Some(" lung ".to_string()),
+            metadata: meta,
+            when: None,
+        }];
+        let combos = wildcard_combinations_from_pairs(&pairs);
+        assert_eq!(combos[0]["input_type"], "srr");
+        assert_eq!(combos[0]["experiment_type"], "lung");
     }
 
     #[test]
