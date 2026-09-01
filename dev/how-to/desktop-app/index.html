@@ -1629,6 +1629,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#data-directory-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data directory and lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3738,6 +3749,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#data-directory-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data directory and lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3885,33 +3907,89 @@
 
 
 <h1 id="desktop-app-packaging">Desktop App Packaging<a class="headerlink" href="#desktop-app-packaging" title="Permanent link">#</a></h1>
-<p>The web interface ships as a <strong>single product file</strong> on the desktop: the
-<code>oxo-flow</code> binary already contains the CLI, the workflow engine, the web
-server, and the SPA frontend. The bundle wraps it into the native app
-formats below — no browser install surprises, no separate server process.</p>
+<p>The desktop app ships as a <strong>single product file</strong>: the <code>oxo-flow-desktop</code>
+binary contains the workflow engine, the web server, and the SPA frontend
+(through <code>oxo-flow-web</code>), and renders the interface in a <strong>native OS
+webview window</strong> — no external browser involved.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow.app (macOS) / oxo-flow.deb (Linux)
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>└── oxo-flow                # launcher script — macOS double-click runs
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    │                       # the bundle with no arguments, so it cds to
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    │                       # $HOME and execs:
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    └── oxo-flow-bin serve --open   # the CLI: starts the local web server
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                    # and opens the default browser
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    └── Resources/static/       # SPA assets (resolved relative to
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>                                # the executable at runtime)
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    └── Resources/oxo-flow.icns # app icon (macOS)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow.app (macOS)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>└── Contents/MacOS/oxo-flow      # the desktop shell binary (wry + tao)
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    └── Contents/Resources/static/       # SPA assets, served by the shell
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    └── Contents/Resources/oxo-flow.icns # app icon
 </span></code></pre></div>
-<p>macOS launches a <code>.app</code> bundle's executable with <strong>no arguments</strong>, so the
-bundle contains a tiny launcher script (<code>Contents/MacOS/oxo-flow</code>) that
-starts in <code>$HOME</code> and routes the launch to the CLI's <code>serve --open</code> entry
-point (<code>Contents/MacOS/oxo-flow-bin</code>). This is what makes the desktop app
-open the interface when double-clicked — Finder launches apps with
-<code>cwd=/</code>, where the web server cannot create its SQLite database.</p>
-<p><code>--open</code> opens the interface in the system browser. Rendering stays in the
-browser engine: the DAG canvas (React Flow) and CodeMirror editor are
-mature browser technologies, and the browser gives users their own
-extensions, password managers, and devtools. A native-webview shell
-(Tauri) is a possible future enhancement for tray/notification integration,
-not a prerequisite for the product experience.</p>
+<p>On launch the shell binary:</p>
+<ol>
+<li><strong>anchors its working directory</strong> to <code>~/.oxo-flow/desktop</code> — the
+   per-user data directory where the SQLite database, logs, and workspace
+   files live (see below);</li>
+<li><strong>takes a single-instance lock</strong> in that directory (a second launch
+   fails fast with a clear error instead of corrupting the database);</li>
+<li><strong>picks a free loopback port</strong> and starts the axum web server
+   (<code>oxo-flow-web</code>, personal mode — loopback-only) on a private tokio
+   runtime;</li>
+<li><strong>waits for the listener</strong> to accept TCP connections (so the first page
+   load never races server startup), then</li>
+<li><strong>opens a native webview window</strong> (WKWebView on macOS, WebView2 on
+   Windows, WebKitGTK on Linux — via the <code>wry</code> crate) pointed at the
+   server URL;</li>
+<li><strong>exits when the window closes</strong>, shutting the embedded server down.</li>
+</ol>
+<p>Closing the window is the app lifecycle: there is no background server
+process left behind. If the embedded server crashes, the window closes
+and the app exits non-zero instead of freezing on a stale page. A
+watchdog task races the server against <code>SIGINT</code>/<code>SIGTERM</code>, so <code>kill</code> and
+Ctrl-C also shut the app down cleanly — including a signal arriving
+during the slow cold GTK/webkit startup on Linux, which exits gracefully
+instead of failing with a spurious startup error.</p>
+<h2 id="data-directory-and-lifecycle">Data directory and lifecycle<a class="headerlink" href="#data-directory-and-lifecycle" title="Permanent link">#</a></h2>
+<p>All desktop state lives in <strong><code>~/.oxo-flow/desktop</code></strong> (following the CLI's
+<code>~/.oxo-flow</code> convention):</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>~/.oxo-flow/desktop/oxo-flow.db</code> (+ <code>-wal</code>/<code>-shm</code>)</td>
+<td>SQLite database</td>
+</tr>
+<tr>
+<td><code>~/.oxo-flow/desktop/logs/</code></td>
+<td>server and audit logs</td>
+</tr>
+<tr>
+<td><code>~/.oxo-flow/desktop/workspace/</code></td>
+<td>run workspaces</td>
+</tr>
+<tr>
+<td><code>~/.oxo-flow/desktop/oxo-flow.desktop.lock</code></td>
+<td>single-instance lock</td>
+</tr>
+</tbody>
+</table>
+<p>The lock is an advisory <code>flock</code> held for the process lifetime — the OS
+releases it automatically if the app crashes, so there is no stale-lock
+cleanup. Closing the window sends the process a <code>SIGTERM</code>, which runs the
+server's graceful shutdown (flush audit logs, finish in-flight requests)
+before exit; SIGTERM/SIGINT from outside do the same.</p>
+<p>Two quality-of-life details:</p>
+<ul>
+<li><strong>Finder launches <code>.app</code> bundles with <code>cwd=/</code></strong>, where the server cannot
+  create its SQLite database. The shell anchors the working directory to
+  the data directory above before anything starts — so state never
+  scatters across whatever directory the app happened to be launched from.</li>
+<li><strong>External links open in the system browser.</strong> A navigation handler
+  confines the app window to the app's own loopback origin; anything else
+  (the GitHub/docs links in the UI) is handed to <code>open</code> / <code>xdg-open</code> /
+  <code>start</code>. <code>target="_blank"</code> links and <code>window.open</code> calls are routed the
+  same way. The window itself never navigates away from the interface.</li>
+</ul>
+<p>Rendering stays in the OS webview (not a bundled browser, not Electron):
+the DAG canvas (React Flow) and CodeMirror editor run on the platform's
+own engine, exactly the engine the release server serves to.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">#</a></h2>
 <ol>
 <li>Build the frontend first — a prebuilt SPA ships in
@@ -3920,23 +3998,38 @@ not a prerequisite for the product experience.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>..
 </span></code></pre></div>
 <ol>
-<li>Install cargo-bundle once:</li>
+<li>The desktop crate is <strong>excluded from the cargo workspace</strong> (tao/wry
+   need GUI toolchains — Xcode SDKs, WebKitGTK — that headless builds and
+   CI test jobs must not pull in). Build it with its own cargo invocation:</li>
 </ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>cargo-bundle<span class="w"> </span>--locked
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>crates/oxo-flow-desktop
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># → target/release/oxo-flow-desktop</span>
 </span></code></pre></div>
+<p>Platform notes: macOS needs the Xcode CLIs (<code>xcode-select --install</code>);
+Linux needs WebKitGTK 4.1 development files
+(<code>libwebkit2gtk-4.1-dev</code> on Debian/Ubuntu) and, for Wayland, the usual
+GTK scaling env vars; Windows needs the WebView2 runtime (preinstalled
+on Windows 10/11) and MSVC Build Tools.</p>
 <h2 id="macos-app-dmg">macOS (.app + .dmg)<a class="headerlink" href="#macos-app-dmg" title="Permanent link">#</a></h2>
 <p>The GitHub release ships a hand-rolled <code>.app</code> + <code>.dmg</code> built by CI
-(icon, launcher, and ad-hoc code signature included). To build a plain
-cargo-bundle app locally (no launcher/icon/signature):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>bundle-macos
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># → target/release/bundle/macos/oxo-flow.app</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># → target/release/bundle/macos/oxo-flow.dmg (double-click to install)</span>
+(desktop-shell binary, icon, SPA, and ad-hoc code signature included).
+To run the shell locally without packaging:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>crates/oxo-flow-desktop<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
+</span></code></pre></div>
+<p>To assemble the same bundle CI builds (<code>.app</code> + ad-hoc signature + DMG):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">APP</span><span class="o">=</span>oxo-flow.app
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">/Contents/MacOS"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">/Contents/Resources"</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>cp<span class="w"> </span>crates/oxo-flow-desktop/target/release/oxo-flow-desktop<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">   </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">/Contents/MacOS/oxo-flow"</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>cp<span class="w"> </span>-r<span class="w"> </span>crates/oxo-flow-web/static<span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">/Contents/Resources/static"</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>cp<span class="w"> </span>assets/oxo-flow.icns<span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">/Contents/Resources/oxo-flow.icns"</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>codesign<span class="w"> </span>--force<span class="w"> </span>--deep<span class="w"> </span>--sign<span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>hdiutil<span class="w"> </span>create<span class="w"> </span>-volname<span class="w"> </span><span class="s2">"oxo-flow"</span><span class="w"> </span>-srcfolder<span class="w"> </span><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span><span class="w"> </span>-ov<span class="w"> </span>-format<span class="w"> </span>UDZO<span class="w"> </span>oxo-flow.dmg
 </span></code></pre></div>
 <p>The <code>.app</code> is self-contained: drag it to /Applications, double-click, and
-the interface opens in your browser. Data (SQLite + workspace) lives in
-the directory the app launches from — the launcher starts in <code>$HOME</code>
-(Finder launches apps with <code>cwd=/</code>, where the server cannot create its
-<code>oxo-flow.db</code>), so the desktop app keeps its data in your home directory.</p>
+the interface opens in a native window. Data (SQLite + workspace) lives
+in <code>$HOME</code> (see the <code>cwd=/</code> note above).</p>
 <h3 id="install-and-first-run-macos">Install and first run (macOS)<a class="headerlink" href="#install-and-first-run-macos" title="Permanent link">#</a></h3>
 <ol>
 <li>
@@ -3954,8 +4047,8 @@ the directory the app launches from — the launcher starts in <code>$HOME</code
 <li>
 <p><strong>Recommended</strong> — clear the download quarantine once, then launch
      normally every time:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>xattr<span class="w"> </span>-dr<span class="w"> </span>com.apple.quarantine<span class="w"> </span>/Applications/oxo-flow.app
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>open<span class="w"> </span>/Applications/oxo-flow.app
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>xattr<span class="w"> </span>-dr<span class="w"> </span>com.apple.quarantine<span class="w"> </span>/Applications/oxo-flow.app
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>open<span class="w"> </span>/Applications/oxo-flow.app
 </span></code></pre></div>
 </li>
 <li>
@@ -3975,7 +4068,7 @@ the directory the app launches from — the launcher starts in <code>$HOME</code
 <p>The downloaded DMG itself carries the quarantine attribute; the command
    above strips it from the installed app. Alternatively strip it from the
    DMG before opening it:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>xattr<span class="w"> </span>-dr<span class="w"> </span>com.apple.quarantine<span class="w"> </span>~/Downloads/oxo-flow-*.dmg
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>xattr<span class="w"> </span>-dr<span class="w"> </span>com.apple.quarantine<span class="w"> </span>~/Downloads/oxo-flow-*.dmg
 </span></code></pre></div>
 <ol>
 <li><strong>First launch may be slow</strong> while macOS indexes the app; subsequent
@@ -3996,34 +4089,38 @@ the directory the app launches from — the launcher starts in <code>$HOME</code
   quarantine workaround entirely.</li>
 </ul>
 <h2 id="linux-deb-rpm-appimage">Linux (.deb / .rpm / .AppImage)<a class="headerlink" href="#linux-deb-rpm-appimage" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>bundle-deb<span class="w">    </span><span class="c1"># Debian/Ubuntu package</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>bundle-rpm<span class="w">    </span><span class="c1"># RHEL/Fedora package</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># or directly:</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>cargo<span class="w"> </span>bundle<span class="w"> </span>--release<span class="w"> </span>--format<span class="w"> </span>deb
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>bundle-deb<span class="w">    </span><span class="c1"># Debian/Ubuntu package</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>make<span class="w"> </span>bundle-rpm<span class="w">    </span><span class="c1"># RHEL/Fedora package</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># or directly:</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>cargo<span class="w"> </span>bundle<span class="w"> </span>--release<span class="w"> </span>--format<span class="w"> </span>deb
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>target/release/bundle/deb/oxo-flow_*.deb
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--open
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>target/release/bundle/deb/oxo-flow_*.deb
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>oxo-flow<span class="w"> </span>serve<span class="w"> </span>--open
 </span></code></pre></div>
-<p>The release <code>.deb</code> / <code>.rpm</code> ship an application-menu entry with the
-oxo-flow icon (<code>oxo-flow serve --open</code>), so after install you can also
-launch it from the desktop environment's app menu. The <code>.AppImage</code>
-carries the same entry (AppRun + <code>oxo-flow.desktop</code> + <code>oxo-flow.png</code>);
-double-click the file or run <code>./oxo-flow-*.AppImage</code>.</p>
+<p>The Linux desktop entries (deb/rpm/AppImage) still launch
+<code>oxo-flow serve --open</code>, which opens the interface in the system browser —
+the release packaging for the native-window shell currently covers macOS.
+Install <code>libwebkit2gtk-4.1-dev</code> and run the desktop crate directly if you
+want the windowed shell on Linux today (the crate itself is
+platform-independent; verified on X11/Xvfb, Linux):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">cd</span><span class="w"> </span>crates/oxo-flow-desktop<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
+</span></code></pre></div>
 <h2 id="windows">Windows<a class="headerlink" href="#windows" title="Permanent link">#</a></h2>
 <p>There is no Windows bundle yet — the release pipeline does not build one
-(<code>cargo-bundle</code>'s <code>msi</code> format requires a Windows host). Windows users
-run the Linux binaries under WSL2.</p>
+(<code>cargo-bundle</code>'s <code>msi</code> format requires a Windows host). Windows users run
+the Linux binaries under WSL2. The desktop crate itself compiles for
+Windows (wry uses WebView2) but is not packaged by CI yet.</p>
 <h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">#</a></h2>
-<p>After bundling, verify the packaged app serves the interface without a
-source checkout (the runtime resolves <code>static/</code> relative to the
-executable). In the CI bundle the real binary is <code>oxo-flow-bin</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">APP</span><span class="o">=</span><span class="s2">"target/release/bundle/macos/oxo-flow.app/Contents/MacOS/oxo-flow-bin"</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span><span class="w"> </span>serve<span class="w"> </span>-p<span class="w"> </span><span class="m">8999</span><span class="w"> </span><span class="p">&amp;</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8999/<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-q<span class="w"> </span><span class="s2">"__OXO_BASE__"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"SPA OK"</span>
+<p>After packaging, verify the shell starts its server and serves the SPA
+without a source checkout (the shell resolves <code>static/</code> relative to the
+executable, same lookup as the standalone server):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">APP</span><span class="o">=</span><span class="s2">"oxo-flow.app/Contents/MacOS/oxo-flow"</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="s2">"</span><span class="nv">$APP</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span><span class="w">            </span><span class="c1"># opens a native window; server on an ephemeral port</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>lsof<span class="w"> </span>-p<span class="w"> </span><span class="nv">$!</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-m1<span class="w"> </span>TCP<span class="w">     </span><span class="c1"># shows the loopback listener</span>
 </span></code></pre></div>
 <p>Verify the bundle signature and icon:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>codesign<span class="w"> </span>-dv<span class="w"> </span>--verbose<span class="o">=</span><span class="m">4</span><span class="w"> </span>oxo-flow.app<span class="w">        </span><span class="c1"># Signature=adhoc</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>plutil<span class="w"> </span>-lint<span class="w"> </span>oxo-flow.app/Contents/Info.plist
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>codesign<span class="w"> </span>-dv<span class="w"> </span>--verbose<span class="o">=</span><span class="m">4</span><span class="w"> </span>oxo-flow.app<span class="w">        </span><span class="c1"># Signature=adhoc</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>plutil<span class="w"> </span>-lint<span class="w"> </span>oxo-flow.app/Contents/Info.plist
 </span></code></pre></div>
 <h2 id="github-release-assets">GitHub Release Assets<a class="headerlink" href="#github-release-assets" title="Permanent link">#</a></h2>
 <p>Each tagged release publishes the desktop bundles alongside the raw
@@ -4046,15 +4143,15 @@ tarballs (built by CI, not by hand):</p>
 </tr>
 <tr>
 <td><code>oxo-flow-&lt;ver&gt;-desktop-amd64.deb</code></td>
-<td>Debian / Ubuntu</td>
+<td>Debian / Ubuntu (menu entry opens the system browser; native window via the desktop crate)</td>
 </tr>
 <tr>
 <td><code>oxo-flow-&lt;ver&gt;-desktop-x86_64.rpm</code></td>
-<td>RHEL / Fedora / CentOS</td>
+<td>RHEL / Fedora / CentOS (menu entry opens the system browser; native window via the desktop crate)</td>
 </tr>
 <tr>
 <td><code>oxo-flow-&lt;ver&gt;-desktop-x86_64.AppImage</code></td>
-<td>any Linux distribution</td>
+<td>any Linux distribution (menu entry opens the system browser; native window via the desktop crate)</td>
 </tr>
 <tr>
 <td><code>oxo-flow-&lt;ver&gt;-&lt;target&gt;.tar.gz</code></td>
@@ -4071,18 +4168,18 @@ tarballs (built by CI, not by hand):</p>
 </tbody>
 </table>
 <h3 id="install-from-a-tarball">Install from a tarball<a class="headerlink" href="#install-from-a-tarball" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.16.0/oxo-flow-v0.16.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.16.0/SHA256SUMS.txt
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.16.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.16.0/oxo-flow-v0.16.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.16.0/SHA256SUMS.txt
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.16.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
 </span></code></pre></div>
 <p>Pick the target that matches the machine: <code>gnu</code> for glibc distributions,
 <code>musl</code> for Alpine/static links, <code>armv7</code> for 32-bit ARM.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Linux one-liners</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Linux one-liners</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>sudo<span class="w"> </span>dpkg<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.deb<span class="w">          </span><span class="c1"># Debian/Ubuntu</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>sudo<span class="w"> </span>rpm<span class="w"> </span>-i<span class="w"> </span>oxo-flow-*desktop*.rpm<span class="w">           </span><span class="c1"># RHEL/Fedora</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>chmod<span class="w"> </span>+x<span class="w"> </span>oxo-flow-*desktop*.AppImage<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>./oxo-flow-*desktop*.AppImage<span class="w">   </span><span class="c1"># any distro</span>
 </span></code></pre></div>
 <p>The AppImage runs <code>oxo-flow serve --open</code> on launch; the deb/rpm install
 <code>/usr/bin/oxo-flow</code> with the SPA under <code>/usr/share/oxo-flow/static</code>
@@ -4090,7 +4187,16 @@ tarballs (built by CI, not by hand):</p>
 checkout is needed).</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Version</strong>: the bundle inherits the crate version from the workspace.</li>
+<li><strong>Version</strong>: the desktop crate repeats the workspace version
+  (<code>0.16.0</code>) by value — it is outside the workspace, so it does not
+  inherit <code>[workspace.package]</code>; bump it together with the rest on
+  release.</li>
+<li><strong>Data directory</strong>: the desktop app keeps all state in
+  <code>~/.oxo-flow/desktop</code> (database, logs, workspace, single-instance
+  lock) — see the table above. The CLI's <code>oxo-flow serve</code> and the
+  desktop shell deliberately do not share a data directory, so both can
+  run side by side (e.g. while comparing a release install with a dev
+  build).</li>
 <li><strong>Icon</strong>: the app icon (<code>assets/oxo-flow.icns</code>, macOS) is rendered from
   <code>logo.svg</code> and shipped in the CI bundle. For local cargo-bundle builds,
   add <code>icon = ["../../assets/oxo-flow.icns"]</code> under
