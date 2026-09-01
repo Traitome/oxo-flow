@@ -224,6 +224,19 @@ to the default renderer (exit 2 under `--strict`). `[report].format`
 remains unsupported — setting it makes the command warn (or fail under
 `--strict`); the output format is selected with `-f`.
 
+### Software-versions section
+
+The `software-versions` section renders an nf-core-style table of
+**declared** software per rule: docker `image:tag` (registry as its own
+field), module `(tool, version)`, and env files (conda/mamba/pixi/venv)
+with sha256 content hashes. It is a *static declaration* — the engine
+never executes anything to collect it, so resolved runtime package
+versions are not recorded and every entry says so. `collect_software_versions`
+mirrors `resolve_environment` precedence (env_group > rule.environment >
+defaults.environment) by calling it directly. The same document is
+exportable as YAML via `oxo-flow report --versions-yml PATH` (a
+CI-diffing artifact; hand-rolled emitter, byte-stable, quoting-aware).
+
 ### Metrics protocol
 
 QC metrics are parsed from **real tool output files** found under the run's

@@ -1795,6 +1795,9 @@ impl SectionRegistry {
         registry.register(Box::new(SampleMatrixGenerator));
         registry.register(Box::new(ProvenanceGenerator));
         registry.register(Box::new(TaskSummaryGenerator));
+        registry.register(Box::new(
+            crate::software_versions::SoftwareVersionsGenerator,
+        ));
         registry.register(Box::new(RuleCaptionsGenerator));
         registry.register(Box::new(AggregateMetricsGenerator));
         registry
