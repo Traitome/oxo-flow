@@ -635,6 +635,12 @@ pub enum Commands {
             help = "Import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section"
         )]
         acct: Option<PathBuf>,
+        #[arg(
+            long = "versions-yml",
+            value_name = "PATH",
+            help = "Write an nf-core-style versions.yml of declared software (docker image:tag, module tool/version, env-file hashes) to PATH ('-' for stdout) and exit; diff it in CI to catch undeclared dependency drift"
+        )]
+        versions_yml: Option<PathBuf>,
     },
     /// Start the web interface server.
     Serve {
@@ -1497,6 +1503,7 @@ async fn main() -> Result<()> {
             r_data,
             diff,
             acct,
+            versions_yml,
         } => {
             handle_report(crate::commands::output::ReportArgs {
                 workflow,
@@ -1517,6 +1524,7 @@ async fn main() -> Result<()> {
                 r_data,
                 diff,
                 acct,
+                versions_yml,
             })
             .await?
         }

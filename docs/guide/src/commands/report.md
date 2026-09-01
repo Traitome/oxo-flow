@@ -47,6 +47,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | `--diff` | — | — | `CHECKPOINT` — print a model-level diff of this report's checkpoint against another checkpoint (stderr, terminal-highlighted; the report still renders, exit code stays 0) |
 | `--acct` | — | — | `PATH` — import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section |
 | `--r-data` | — | — | `DIR` — write R-friendly TSV files (`sample_table.tsv`, `metrics.tsv`) to DIR |
+| `--versions-yml` | — | — | `PATH` — export an nf-core-style `versions.yml` of **declared** software per rule (docker `image:tag`, module `tool/version`, env files with sha256; `-` writes to stdout) and exit |
 | `--list-sections` | — | — | List available report sections and exit (no workflow needed) |
 | `--list-templates` | — | — | List available report templates and exit (no workflow needed) |
 | `--init-template` | — | — | Write the built-in report template to `./report-template.tera` and exit (refuses to overwrite an existing file) |
@@ -210,6 +211,27 @@ oxo-flow report --run results/experiment1 --diff .oxo-flow/checkpoint.json
 oxo-flow report --run results/experiment1 --acct sacct.csv
 ```
 
+### Export declared software versions
+
+```bash
+# stdout
+oxo-flow report pipeline.oxoflow --versions-yml -
+
+# commit the file and diff it in CI to catch undeclared dependency drift
+oxo-flow report pipeline.oxoflow --versions-yml versions.yml
+```
+
+Emits an nf-core-style `versions.yml` (also rendered as the report's
+`software-versions` section): for every rule, what the workflow
+**declares** — docker `image:tag` (registry kept as its own field), module
+`(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
+files with sha256 content hashes (a bare `venv` directory path is
+recorded as declared, without a hash — there is no file to hash). The
+engine never executes anything to produce this data, so
+resolved runtime package versions are **not** recorded — every entry
+carries that caveat. Environment resolution follows the usual precedence
+(env_group > rule.environment > defaults.environment).
+
 ---
 
 ## Data sources
@@ -295,7 +317,8 @@ sections = ["universal", "workflow-info", "commands"]
 - Available built-in section IDs (generator names used by the filter):
   `universal`, `execution-status`, `failure-diagnosis`,
   `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
-  `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary` —
+  `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`,
+  `software-versions` —
   the rendered HTML id can differ from the generator name: `universal`
   renders the `dashboard` section, and `execution-status` renders both
   `execution-status` and `benchmarks`
@@ -339,6 +362,22 @@ instance names in the checkpoint (`{rule}_{group}_{sample}`,
 `{rule}_auto-discovered_{sample}` for `sample_pattern` discovery, or
 `{rule}_{pair_id}` for pairs). Rows are base rule names, sorted
 failed-first so failing samples surface at the top.
+
+### Software Versions (`software-versions` / `--versions-yml`)
+
+The `software-versions` section is a static declaration extracted from
+the workflow definition — the engine never executes anything to produce
+it. Per rule it lists the declared backend: docker `image:tag` (registry
+kept as its own field), module `(tool, version)` with a note when no
+version segment exists, conda/mamba/pixi env files and
+`venv_requirements` files with **sha256 content hashes** (a bare `venv`
+directory path is recorded as declared, without a hash), or a "system
+environment" note when no environment is
+declared. Resolved runtime package versions depend on the execution
+environment and are deliberately **not** recorded — every entry carries
+that caveat. Export a machine-readable copy with
+`oxo-flow report --versions-yml PATH` and diff it in CI to catch
+undeclared dependency drift.
 
 ### Resource Accounting (`--acct`)
 

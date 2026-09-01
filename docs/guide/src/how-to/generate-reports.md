@@ -43,6 +43,26 @@ state yields byte-identical reports — safe to diff and commit.
 
 ---
 
+## Export Declared Software Versions
+
+For dependency auditing, export an nf-core-style `versions.yml` of what
+the workflow **declares** and diff it in CI:
+
+```bash
+oxo-flow report pipeline.oxoflow --versions-yml versions.yml
+```
+
+Each rule records its declared backend — docker `image:tag`, module
+`(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
+files with sha256 content hashes (a bare `venv` directory path is
+recorded as declared, without a hash). This is a static declaration (the
+engine never executes
+anything to collect it), so resolved runtime package versions are not
+included; every entry carries that caveat. `-` writes the YAML to
+stdout.
+
+---
+
 ## Report Contents
 
 A generated report includes:
@@ -61,6 +81,7 @@ A generated report includes:
 | **Resource Accounting** | Cluster accounting imported from an sacct CSV via `--acct` (Rule/State/Elapsed/CPU Time/Max RSS) |
 | **Environment** | Engine version, platform, and the environments the workflow's rules declare |
 | **Provenance** | Engine version, workflow file sha256, checkpoint location |
+| **Software Versions** | Declared software per rule, nf-core-style: docker `image:tag`, module `tool/version`, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded |
 | **Task Summary** | Per-rule table of tasks, types, inputs, outputs, environments, and resources |
 
 Sections adapt to available execution data — for example, **Execution
@@ -84,7 +105,7 @@ sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 > (`universal`, `execution-status`, `failure-diagnosis`,
 > `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
 > `environment`, `metrics`, `sample-matrix`, `provenance`,
-> `task-summary`). `template` is **consumed** (see below); `format` is
+> `task-summary`, `software-versions`). `template` is **consumed** (see below); `format` is
 > parsed but still unsupported: setting it makes the command warn (or fail
 > under `--strict`) instead of silently ignoring it — output formats are
 > selected via the CLI `-f` flag.
