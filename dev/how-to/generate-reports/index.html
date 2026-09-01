@@ -4050,6 +4050,18 @@ stdout.</p>
 <td><strong>Task Summary</strong></td>
 <td>Per-rule table of tasks, types, inputs, outputs, environments, and resources</td>
 </tr>
+<tr>
+<td><strong>Software Versions</strong></td>
+<td>Tool/version table parsed from known version-reporting files under the workdir</td>
+</tr>
+<tr>
+<td><strong>Rule Captions</strong></td>
+<td>Per-rule <code>report</code> annotations rendered as markdown (one subsection per executed instance) — set <code>report = "caption"</code> or <code>report = { file = "notes/qc.md", caption = "…" }</code> on a rule</td>
+</tr>
+<tr>
+<td><strong>Aggregate Metrics</strong></td>
+<td>MultiQC-style sample × metric matrix across all parsed tools, plus <code>*_mqc.json</code> custom content</td>
+</tr>
 </tbody>
 </table>
 <p>Sections adapt to available execution data — for example, <strong>Execution
@@ -4068,7 +4080,8 @@ which registered sections the report includes, by generator <strong>name</strong
 (<code>universal</code>, <code>execution-status</code>, <code>failure-diagnosis</code>,
 <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>,
 <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
-<code>task-summary</code>, <code>software-versions</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code> is
+<code>task-summary</code>, <code>software-versions</code>, <code>rule-captions</code>,
+<code>aggregate-metrics</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code> is
 parsed but still unsupported: setting it makes the command warn (or fail
 under <code>--strict</code>) instead of silently ignoring it — output formats are
 selected via the CLI <code>-f</code> flag.</p>
