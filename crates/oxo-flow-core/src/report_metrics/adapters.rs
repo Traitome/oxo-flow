@@ -7,7 +7,7 @@
 //! separator, no data rows) return [`crate::error::OxoFlowError::Report`];
 //! missing fields yield absent metrics instead of errors.
 
-use super::MetricValue;
+use super::{CustomContent, CustomValue, MetricValue};
 use crate::error::{OxoFlowError, Result};
 use crate::report::QcStatusLevel;
 
@@ -348,6 +348,78 @@ pub fn parse_kraken2_report(text: &str) -> Result<Vec<MetricValue>> {
     Ok(metrics)
 }
 
+/// Parse a MultiQC-style custom-content JSON file (issue #281):
+/// `{ "title": ..., "data": { sample: { metric: value, ... } | value } }`.
+///
+/// `data` values must be JSON objects mapping metric → value, or scalars —
+/// a scalar is accepted and rendered as a single `value` column. JSON
+/// objects are unordered, so rows are emitted in sorted sample order and
+/// each row's metric pairs in sorted metric order (byte-stable reports).
+/// Non-numeric JSON values are carried as `CustomValue::Text` verbatim.
+///
+/// `fallback_title` is the file stem (minus `_mqc.json`); used when the
+/// file carries no `title`. The workspace has no YAML dependency, so
+/// `*_mqc.yml` is out of scope for the scanner — `classify_filename`
+/// matches it and counts it as skipped instead.
+pub fn parse_mqc_json(text: &str, fallback_title: Option<&str>) -> Result<CustomContent> {
+    let json: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| report_parse_error("mqc", format!("custom content is not valid JSON: {e}")))?;
+
+    let title = json
+        .get("title")
+        .and_then(|t| t.as_str())
+        .map(|t| t.to_string())
+        .or_else(|| fallback_title.map(|t| t.to_string()))
+        .unwrap_or_else(|| "custom content".to_string());
+
+    let data_json = json
+        .get("data")
+        .ok_or_else(|| report_parse_error("mqc", "custom content is missing the `data` object"))?;
+
+    let mut rows: Vec<(String, Vec<(String, CustomValue)>)> = Vec::new();
+    match data_json {
+        // { sample: { metric: value, ... } }
+        serde_json::Value::Object(by_sample) => {
+            for (sample, metrics) in by_sample {
+                let pairs = match metrics {
+                    // A bare scalar per sample renders as one `value` column.
+                    serde_json::Value::Object(by_metric) => {
+                        let mut pairs: Vec<(String, CustomValue)> = by_metric
+                            .iter()
+                            .map(|(metric, value)| (metric.clone(), custom_value(value)))
+                            .collect();
+                        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                        pairs
+                    }
+                    scalar => vec![("value".to_string(), custom_value(scalar))],
+                };
+                rows.push((sample.clone(), pairs));
+            }
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        _ => {
+            return Err(report_parse_error(
+                "mqc",
+                "`data` must be an object mapping sample → metrics",
+            ));
+        }
+    }
+
+    Ok(CustomContent { title, data: rows })
+}
+
+/// Convert a JSON scalar into a [`CustomValue`]: numbers stay numeric,
+/// everything else becomes text.
+fn custom_value(value: &serde_json::Value) -> CustomValue {
+    match value {
+        serde_json::Value::Number(n) => CustomValue::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => CustomValue::Text(s.clone()),
+        serde_json::Value::Bool(b) => CustomValue::Text(b.to_string()),
+        serde_json::Value::Null => CustomValue::Text(String::new()),
+        other => CustomValue::Text(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +735,101 @@ mod tests {
     fn kraken2_malformed_errors() {
         assert!(parse_kraken2_report("").is_err());
         assert!(parse_kraken2_report("no tabs here\n").is_err());
+    }
+
+    // ── MultiQC custom content (*_mqc.json, issue #281) ──────────────────
+
+    #[test]
+    fn mqc_object_data_happy_path() {
+        let content = parse_mqc_json(
+            r#"{
+                "title": "Assembly summary",
+                "data": {
+                    "S2": { "n50": 8000, "busco": "91%" },
+                    "S1": { "n50": 12000, "busco": "95%" }
+                }
+            }"#,
+            Some("assembly_summary"),
+        )
+        .unwrap();
+        assert_eq!(content.title, "Assembly summary");
+        // Rows sorted by sample; each row's pairs sorted by metric.
+        assert_eq!(
+            content.data,
+            vec![
+                (
+                    "S1".to_string(),
+                    vec![
+                        ("busco".to_string(), CustomValue::Text("95%".to_string())),
+                        ("n50".to_string(), CustomValue::Number(12000.0)),
+                    ]
+                ),
+                (
+                    "S2".to_string(),
+                    vec![
+                        ("busco".to_string(), CustomValue::Text("91%".to_string())),
+                        ("n50".to_string(), CustomValue::Number(8000.0)),
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn mqc_scalar_data_renders_single_value_column() {
+        let content = parse_mqc_json(r#"{"data": {"S1": 0.95, "S2": 0.91}}"#, None).unwrap();
+        assert_eq!(content.title, "custom content", "no title, no fallback");
+        assert_eq!(
+            content.data,
+            vec![
+                (
+                    "S1".to_string(),
+                    vec![("value".to_string(), CustomValue::Number(0.95))]
+                ),
+                (
+                    "S2".to_string(),
+                    vec![("value".to_string(), CustomValue::Number(0.91))]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn mqc_title_falls_back_to_file_stem() {
+        let content = parse_mqc_json(r#"{"data": {"S1": {"x": 1}}}"#, Some("qc_rollup")).unwrap();
+        assert_eq!(content.title, "qc_rollup");
+    }
+
+    #[test]
+    fn mqc_non_numeric_values_stay_text() {
+        let content = parse_mqc_json(
+            r#"{"data": {"S1": {"flag": true, "note": null, "list": [1, 2]}}}"#,
+            None,
+        )
+        .unwrap();
+        let pairs = &content.data[0].1;
+        assert_eq!(
+            pairs,
+            &vec![
+                ("flag".to_string(), CustomValue::Text("true".to_string())),
+                ("list".to_string(), CustomValue::Text("[1,2]".to_string())),
+                ("note".to_string(), CustomValue::Text(String::new())),
+            ]
+        );
+    }
+
+    #[test]
+    fn mqc_invalid_json_is_an_error() {
+        assert!(parse_mqc_json("not json", None).is_err());
+    }
+
+    #[test]
+    fn mqc_missing_data_is_an_error() {
+        assert!(parse_mqc_json(r#"{"title": "orphan"}"#, None).is_err());
+    }
+
+    #[test]
+    fn mqc_non_object_data_is_an_error() {
+        assert!(parse_mqc_json(r#"{"data": [1, 2, 3]}"#, None).is_err());
     }
 }

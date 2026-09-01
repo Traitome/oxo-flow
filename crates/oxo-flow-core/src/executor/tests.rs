@@ -549,6 +549,7 @@ fn checkpoint_record_run_persists_diagnostics() {
         skip_reason: None,
         max_rss_mb: None,
         cpu_seconds: None,
+        caption: Some("GATK germline variant calling (issue #281 caption).".to_string()),
     };
     state.record_run(&record);
     state.mark_failed("call");
@@ -563,6 +564,10 @@ fn checkpoint_record_run_persists_diagnostics() {
         Some("gatk HaplotypeCaller -I out.bam")
     );
     assert_eq!(run.stderr_tail.as_deref(), Some("gatk: command not found"));
+    assert_eq!(
+        run.caption.as_deref(),
+        Some("GATK germline variant calling (issue #281 caption).")
+    );
 }
 
 #[test]
@@ -582,6 +587,7 @@ fn checkpoint_stderr_tail_is_bounded() {
         skip_reason: None,
         max_rss_mb: None,
         cpu_seconds: None,
+        caption: None,
     };
     state.record_run(&record);
     let tail = state.rule_runs["noisy"].stderr_tail.as_deref().unwrap();

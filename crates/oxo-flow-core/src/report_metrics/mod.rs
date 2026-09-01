@@ -37,6 +37,27 @@ pub struct ParsedMetrics {
     pub metrics: Vec<MetricValue>,
 }
 
+/// A value in MultiQC-style custom content: numbers stay numeric (they
+/// feed matrix formatting); everything else is carried as text.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CustomValue {
+    Number(f64),
+    Text(String),
+}
+
+/// One `*_mqc.json` custom-content file (issue #281): MultiQC's
+/// custom-content subset — a `title` plus a `data` table mapping sample
+/// → metric → value (a scalar value per sample is accepted and rendered
+/// as a single `value` column).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomContent {
+    /// Display title: the file's `title` field, else the file stem.
+    pub title: String,
+    /// Rows in sorted sample order; each row's `(metric, value)` pairs
+    /// are sorted by metric for byte-stable output.
+    pub data: Vec<(String, Vec<(String, CustomValue)>)>,
+}
+
 /// Scanner result: what was parsed and — critically — what was not
 /// (a scanner that cannot report its own gaps looks like it covered
 /// everything, issue #83 P1-5).
@@ -44,6 +65,8 @@ pub struct ParsedMetrics {
 pub struct ScanStats {
     /// Successfully parsed metrics.
     pub parsed: Vec<ParsedMetrics>,
+    /// Custom content parsed from `*_mqc.json` files (issue #281).
+    pub custom: Vec<CustomContent>,
     /// Files that matched a known tool pattern but were skipped: parse
     /// failures, files larger than the size cap, non-UTF-8 content.
     pub skipped: usize,
@@ -190,6 +213,17 @@ impl MetricsScanner {
                 }
             };
 
+            // Custom content (`*_mqc.json`) is dispatched separately: it
+            // fills `stats.custom` instead of the parsed-metrics list, and
+            // its sample comes from the file's own data, not the filename.
+            if tool == "mqc" {
+                match adapters::parse_mqc_json(&text, sample.as_deref()) {
+                    Ok(content) => stats.custom.push(content),
+                    Err(_) => stats.skipped += 1,
+                }
+                continue;
+            }
+
             match adapters::parse_for_tool(tool, &text) {
                 Ok(metrics) if metrics.is_empty() => {
                     // Parsed cleanly but nothing extractable — not a
@@ -220,6 +254,12 @@ const TOOL_SUFFIXES: &[(&str, &str)] = &[
     (".bcftools.stats", "bcftools"),
     (".kraken2.report", "kraken2"),
     (".kraken.report", "kraken2"),
+    // MultiQC-style custom content (issue #281). Only JSON is parsed — the
+    // workspace has no YAML dependency, so `*_mqc.yml` files are handled by
+    // the explicit `_mqc.yml` check in `classify_filename` and skipped with
+    // an honest note. For `_mqc.json` the stem minus the suffix is a
+    // fallback title, not a sample.
+    ("_mqc.json", "mqc"),
 ];
 
 /// Classify a filename into `(tool, sample)`; `None` when no known tool
@@ -230,14 +270,25 @@ const TOOL_SUFFIXES: &[(&str, &str)] = &[
 /// `*.summary` → the part before `.summary`. A filename that is exactly the
 /// suffix (`fastp.json`) leaves an empty remainder → sample = `None`.
 fn classify_filename(name: &str) -> Option<(&'static str, Option<String>)> {
+    // `*_mqc.yml` files are MultiQC custom content we cannot parse (no YAML
+    // dependency in the workspace). They match here so the scanner counts
+    // them as skipped — visible in Scan Notes — instead of silently
+    // disappearing.
     let lower = name.to_lowercase();
+    if lower.ends_with("_mqc.yml") {
+        return Some(("mqc-yml", None));
+    }
     for (suffix, tool) in TOOL_SUFFIXES {
         if lower.ends_with(suffix) {
-            // Include the separator dot in the strip (S1.fastp.json minus
-            // ".fastp.json" = "S1"); a bare `fastp.json` has none.
+            // Include the separator character in the strip (S1.fastp.json
+            // minus ".fastp.json" = "S1"; sample_mqc.json minus
+            // "_mqc.json" = "sample"). A bare `fastp.json` has none.
             let mut strip_len = suffix.len();
             let before = lower.len().checked_sub(suffix.len() + 1);
-            if before.is_some_and(|i| lower.as_bytes()[i] == b'.') {
+            if before.is_some_and(|i| {
+                let b = lower.as_bytes()[i];
+                b == b'.' || b == b'_'
+            }) {
                 strip_len += 1;
             }
             let stripped = &name[..name.len() - strip_len];
@@ -417,5 +468,58 @@ mod tests {
             other => panic!("unexpected scanner outcome: {other:?}"),
         }
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    }
+
+    // ── Custom content (*_mqc.json / *_mqc.yml, issue #281) ─────────────
+
+    #[test]
+    fn scanner_routes_mqc_json_to_custom_content() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("assembly_mqc.json"),
+            r#"{"title": "Assembly summary", "data": {"S1": {"n50": 12000}}}"#,
+        )
+        .unwrap();
+
+        let stats = MetricsScanner::new().scan_with_stats(dir.path());
+        assert!(stats.parsed.is_empty());
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.custom.len(), 1);
+        assert_eq!(stats.custom[0].title, "Assembly summary");
+        assert_eq!(stats.custom[0].data.len(), 1);
+    }
+
+    #[test]
+    fn scanner_counts_mqc_yml_as_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("notes_mqc.yml"),
+            "id: notes\ndata: {S1: 1}\n",
+        )
+        .unwrap();
+
+        let stats = MetricsScanner::new().scan_with_stats(dir.path());
+        assert!(stats.custom.is_empty(), "no YAML parser in the workspace");
+        assert_eq!(stats.skipped, 1, "yml custom content is an honest skip");
+    }
+
+    #[test]
+    fn scanner_mqc_broken_json_counts_as_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("broken_mqc.json"), "not json").unwrap();
+
+        let stats = MetricsScanner::new().scan_with_stats(dir.path());
+        assert!(stats.custom.is_empty());
+        assert_eq!(stats.skipped, 1);
+    }
+
+    #[test]
+    fn scanner_mqc_title_falls_back_to_file_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rollup_mqc.json"), r#"{"data": {"S1": 5}}"#).unwrap();
+
+        let stats = MetricsScanner::new().scan_with_stats(dir.path());
+        assert_eq!(stats.custom.len(), 1);
+        assert_eq!(stats.custom[0].title, "rollup", "stem minus _mqc.json");
     }
 }

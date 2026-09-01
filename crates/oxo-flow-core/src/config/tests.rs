@@ -6556,3 +6556,203 @@ fn output_pattern_unrelated_wildcard_is_not_a_fresh_reference() {
             .is_empty()
     );
 }
+
+// ── Issue #283: long-read dimension in sheet mode ──────────────────────────
+
+#[test]
+fn sample_groups_sheet_columns_become_metadata() {
+    // Extra TSV/CSV columns in a sample_groups_file map into group metadata,
+    // so a `reads_layout` column fans out as `{reads_layout}` in paths and
+    // `wildcard.reads_layout` in `when` (issue #283).
+    let dir = tempfile::tempdir().unwrap();
+    let sheet = dir.path().join("groups.tsv");
+    std::fs::write(
+        &sheet,
+        "name\tsamples\treads_layout\tlong_reads\n\
+         short\tSR1,SR2\tpe\t\n\
+         long\tLR1\tont\treads/flowcell1.fq.gz;reads/flowcell2.fq.gz\n",
+    )
+    .unwrap();
+
+    let wf = dir.path().join("lr.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "lr"
+        version = "1.0.0"
+        sample_groups_file = "groups.tsv"
+
+        [[rules]]
+        name = "assemble"
+        input = ["{long_reads}"]
+        output = ["asm/{group}_{sample}/assembly.fa"]
+        when = "wildcard.reads_layout == 'ont' || wildcard.reads_layout == 'pacbio'"
+        shell = "flye --nano-raw {input} --out-dir {output[0]}"
+
+        [[rules]]
+        name = "qc"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["qc/{sample}.txt"]
+        when = "wildcard.reads_layout != 'ont' && wildcard.reads_layout != 'pacbio'"
+        shell = "fastqc {input} -o {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&wf).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    // Sheet columns landed in group metadata (multi-file cell normalized
+    // to space-joined).
+    let long_group = config
+        .sample_groups
+        .iter()
+        .find(|g| g.name == "long")
+        .expect("long group");
+    assert_eq!(
+        long_group.metadata.get("long_reads").map(String::as_str),
+        Some("reads/flowcell1.fq.gz reads/flowcell2.fq.gz")
+    );
+
+    // Fan-out gates: only the ont row assembled, only pe rows qc'd.
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("assemble_long_LR1")),
+        "assemble instance missing: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("assemble_short")),
+        "short rows must not assemble: {names:?}"
+    );
+    assert!(names.iter().any(|n| n.starts_with("qc_short_SR1")));
+    assert!(!names.iter().any(|n| n.starts_with("qc_long_")));
+
+    // The multi-file cell splices verbatim: ONE input-list element carrying
+    // both paths (space-joined) — shell `{input}` rendering joins list
+    // elements, so `flye --nano-raw {input}` still receives both tokens
+    // (the oxo-flow-varlo#8 multi-file pattern).
+    let assemble = config
+        .rules
+        .iter()
+        .find(|r| r.name.starts_with("assemble_long"))
+        .unwrap();
+    assert_eq!(
+        assemble.input.to_vec(),
+        vec!["reads/flowcell1.fq.gz reads/flowcell2.fq.gz".to_string()],
+        "multi-file cell must splice as one verbatim element: {:?}",
+        assemble.input
+    );
+    assert!(
+        assemble
+            .shell
+            .as_deref()
+            .unwrap_or_default()
+            .contains("{input}"),
+        "shell template keeps the {{input}} placeholder for join-at-render"
+    );
+    // Per-instance bindings carry the sheet values (substitution floor).
+    let bindings = config.instance_bindings(assemble.name.as_str());
+    assert_eq!(
+        bindings.get("reads_layout").map(String::as_str),
+        Some("ont")
+    );
+    assert_eq!(bindings.get("sample").map(String::as_str), Some("LR1"));
+}
+
+#[test]
+fn sample_groups_sheet_reserved_column_is_rejected() {
+    // A `sample` column would override the engine's `{sample}` binding
+    // (metadata keys insert last in the combo) — rejected at parse.
+    let dir = tempfile::tempdir().unwrap();
+    let sheet = dir.path().join("groups.tsv");
+    std::fs::write(&sheet, "name\tsamples\tsample\nbad\tS1\tS1\n").unwrap();
+
+    let wf = dir.path().join("bad.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "bad"
+        version = "1.0.0"
+        sample_groups_file = "groups.tsv"
+        "#,
+    )
+    .unwrap();
+    let err = WorkflowConfig::from_file(&wf).unwrap_err().to_string();
+    assert!(
+        err.contains("reserved"),
+        "expected reserved-column error, got: {err}"
+    );
+}
+
+#[test]
+fn sample_groups_reads_layout_value_is_validated() {
+    // An unrecognized reads_layout value is a typo that would silently
+    // close every when gate — plan-time error naming the accepted set.
+    let toml = r#"
+        [workflow]
+        name = ""
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1"]
+        [sample_groups.metadata]
+        reads_layout = "nanopore"
+
+        [[rules]]
+        name = "assemble"
+        input = ["{long_reads}"]
+        output = ["asm/{sample}.fa"]
+        shell = "touch {output}"
+    "#;
+    let err = WorkflowConfig::parse(toml).unwrap_err().to_string();
+    assert!(
+        err.contains("reads_layout") && err.contains("ont"),
+        "expected reads_layout validation error, got: {err}"
+    );
+
+    // The accepted vocabulary passes.
+    let ok = toml.replace("\"\"", "\"ok\"").replace("nanopore", "ont");
+    WorkflowConfig::parse(&ok).unwrap();
+}
+
+#[test]
+fn sample_groups_csv_sheet_columns_work_too() {
+    // The CSV path maps extra columns identically to TSV.
+    let dir = tempfile::tempdir().unwrap();
+    let sheet = dir.path().join("groups.csv");
+    std::fs::write(
+        &sheet,
+        "name,samples,reads_layout\nshort,SR1,pe\nlong,LR1,pacbio\n",
+    )
+    .unwrap();
+
+    let wf = dir.path().join("csv.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "csv"
+        version = "1.0.0"
+        sample_groups_file = "groups.csv"
+
+        [[rules]]
+        name = "assemble"
+        input = ["raw/{sample}.fq"]
+        output = ["asm/{sample}.fa"]
+        when = "wildcard.reads_layout == 'pacbio'"
+        shell = "touch {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&wf).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.iter().any(|n| n.starts_with("assemble_long_LR1")));
+    assert!(!names.iter().any(|n| n.starts_with("assemble_short")));
+}

@@ -14,6 +14,18 @@ use std::sync::{Arc, LazyLock};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 
+/// Resolve a rule's report caption for the execution record (issue #281):
+/// inline `report` text directly, `report.file` read relative to `workdir`.
+/// Read failures degrade to `None` — a caption must never fail a run.
+pub fn rule_report_caption(rule: &Rule, workdir: &Path) -> Option<String> {
+    let report = rule.report.as_ref()?;
+    if let Some(text) = report.caption() {
+        return Some(text.to_owned());
+    }
+    let file = report.file()?;
+    std::fs::read_to_string(workdir.join(file)).ok()
+}
+
 use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
     sanitize_shell_command, validate_path_safety, validate_shell_safety,
@@ -240,6 +252,10 @@ pub struct JobRecord {
     /// sampler never observed the child; issue #83 P1-13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_seconds: Option<f64>,
+    /// The rule's resolved report caption (inline text or the content of
+    /// its `report.file`), captured at execution time (issue #281).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
 }
 
 /// Configuration for the executor.
@@ -1197,6 +1213,7 @@ impl LocalExecutor {
             skip_reason: None,
             max_rss_mb: None,
             cpu_seconds: None,
+            caption: rule_report_caption(rule, &self.config.workdir),
         };
 
         // Condition evaluation happens before any remote staging so a rule
@@ -2183,6 +2200,7 @@ impl LocalExecutor {
                     skip_reason: None,
                     max_rss_mb: None,
                     cpu_seconds: None,
+                    caption: rule_report_caption(rule, &self.config.workdir),
                 }
             })
             .collect()

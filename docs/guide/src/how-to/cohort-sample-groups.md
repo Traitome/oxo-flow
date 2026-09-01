@@ -124,13 +124,17 @@ Supported formats:
 ### TSV Format
 
 One row per group; the `samples` column is comma-separated. The same
-layout works for CSV (with `,` as delimiter):
+layout works for CSV (with `,` as delimiter). Every row must supply a
+cell for every column — a short row fails the sheet parse:
 
 ```tsv
 name	samples
 healthy	H001,H002
 disease	D001,D002
 ```
+
+Extra columns beyond `name` and `samples` become group metadata — see
+[Sheet columns as group metadata](../reference/workflow-format.md#sheet-columns-as-group-metadata).
 
 For groups with metadata, use JSON format.
 
