@@ -1,0 +1,101 @@
+# Release-channel image: assembles the image from the prebuilt binaries
+# published on the GitHub Release for the build ARG VERSION — no cargo
+# compilation happens here. A companion to ./Dockerfile (which compiles from
+# source and gates every push to main).
+#
+# ARG VERSION selects the release (e.g. 0.16.0); the target triple follows
+# the build platform: amd64 → x86_64-unknown-linux-gnu, arm64 →
+# aarch64-unknown-linux-gnu. Binaries are verified against the release's
+# SHA256SUMS.txt before being installed.
+#
+# Build it yourself:
+#   docker build -f Dockerfile.release \
+#     --build-arg VERSION=0.16.0 -t oxo-flow:0.16.0 .
+
+# ===== Fetch + verify release binaries (per-TARGETARCH) =====
+FROM debian:trixie-slim AS binaries
+ARG VERSION
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Map Docker's TARGETARCH (amd64/arm64) to the release tarball triple.
+# Only gnu targets: the release binaries are glibc-linked (verified: max
+# GLIBC symbol requirement 2.18) and this runtime is trixie-slim (glibc 2.41).
+RUN case "${TARGETARCH}" in \
+      amd64) OXO_TARGET="x86_64-unknown-linux-gnu" ;; \
+      arm64) OXO_TARGET="aarch64-unknown-linux-gnu" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && RELEASE_URL="https://github.com/Traitome/oxo-flow/releases/download/v${VERSION}" \
+    && mkdir -p /out \
+    && curl -fsSL -o /out/SHA256SUMS.txt "${RELEASE_URL}/SHA256SUMS.txt" \
+    && for pkg in oxo-flow oxo-flow-web; do \
+         curl -fsSL -o "/out/${pkg}.tar.gz" \
+           "${RELEASE_URL}/${pkg}-v${VERSION}-${OXO_TARGET}.tar.gz" || exit 1; \
+       done \
+    # Verify against the release's checksums. grep must produce exactly the
+    # two expected lines (one per tarball) or sha256sum -c fails on the
+    # missing/renamed entry — a renamed asset cannot sneak through.
+    && cd /out \
+    && grep -F "oxo-flow-v${VERSION}-${OXO_TARGET}.tar.gz" SHA256SUMS.txt > wanted.txt \
+    && grep -F "oxo-flow-web-v${VERSION}-${OXO_TARGET}.tar.gz" SHA256SUMS.txt >> wanted.txt \
+    && [ "$(wc -l < wanted.txt)" -eq 2 ] \
+    && sha256sum -c wanted.txt \
+    && tar -xzf oxo-flow.tar.gz \
+    && tar -xzf oxo-flow-web.tar.gz \
+    && rm -f /out/*.tar.gz /out/wanted.txt /out/SHA256SUMS.txt
+
+# ===== Frontend builder (SPA assets are not in any release tarball) =====
+FROM node:22-alpine AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+# ===== Runtime =====
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# vite emits to ../crates/oxo-flow-web/static (vite.config.ts outDir),
+# NOT frontend/dist — copy from there.
+COPY --from=frontend-builder /app/crates/oxo-flow-web/static /app/frontend/dist
+COPY --from=binaries /out/oxo-flow /app/oxo-flow
+COPY --from=binaries /out/oxo-flow-web /app/oxo-flow-web
+
+RUN mkdir -p /app/data && \
+    chown -R 1000:1000 /app
+
+USER 1000:1000
+
+# Same state/layout contract as ./Dockerfile: both entrypoints default their
+# SQLite DB to ./oxo-flow.db in the CWD — run from /app/data so state lands
+# on the mounted volume and survives container restarts. Binary paths stay
+# absolute.
+WORKDIR /app/data
+
+ENV OXO_FLOW_FRONTEND_DIR=/app/frontend/dist \
+    OXO_FLOW_MODE=team
+
+EXPOSE 3000
+
+LABEL org.opencontainers.image.title="oxo-flow" \
+      org.opencontainers.image.description="Bioinformatics pipeline engine" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-OxoFlow-Commercial" \
+      org.opencontainers.image.vendor="Traitome" \
+      org.opencontainers.image.authors="Shixiang Wang <w_shixiang@163.com>" \
+      org.opencontainers.image.source="https://github.com/Traitome/oxo-flow"
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"' || exit 1
+
+CMD ["/app/oxo-flow-web", "--host", "0.0.0.0", "--port", "3000", "--mode", "team"]

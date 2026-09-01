@@ -40,7 +40,10 @@ pub fn handle_graph(
         "tree" => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
         "mermaid" => Ok(dag.to_mermaid()),
         "metro" => dag.to_metro(&config.rules).map_err(|e| anyhow::anyhow!(e)),
-        _ => Err(anyhow::anyhow!("unsupported graph format: {}", format)),
+        _ => Err(anyhow::anyhow!(
+            "unsupported graph format '{}'. Supported formats: ascii, dot, dot-clustered, tree, mermaid, metro",
+            format
+        )),
     }?;
 
     if let Some(path) = output {

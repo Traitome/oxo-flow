@@ -355,6 +355,23 @@ pub async fn create_run(
             tracing::info!("Saved workflow to {:?}", workflow_path);
         }
 
+        // Stage the acting user's uploaded inputs into the run workspace
+        // (issue #276 L1): `POST /api/files` writes to
+        // `workspace/users/<u>/inputs/`, but the CLI executes in
+        // `runs/<id>/` (or the pipeline's persistent dir) and could never
+        // see them — every `metadata_file`/data-referencing workflow failed
+        // pre-execution for web-only users. Mirroring the whole tree keeps
+        // declared relative paths (`data/meta.tsv`) intact. Best-effort:
+        // a user with no uploads (or an IO hiccup on a stale upload) must
+        // not block the run; a genuinely needed missing file still fails
+        // loudly inside the CLI with its normal diagnostics.
+        let staged = crate::workspace::stage_user_inputs(&user.id, &run_dir);
+        match staged {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("Staged {n} uploaded input file(s) into {:?}", run_dir),
+            Err(e) => tracing::warn!("Could not stage user inputs for run {}: {e}", resp.run_id),
+        }
+
         // Reserve the run's resources in the quota tracker; the executor
         // releases them on the terminal state.
         crate::infra::quota::global_quota_tracker().record_start(

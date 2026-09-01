@@ -533,11 +533,42 @@ pub fn touch_command(
     let rules_to_touch: Vec<&oxo_flow_core::rule::Rule> = if rules.is_empty() {
         config.rules.iter().collect()
     } else {
-        config
+        let matched: Vec<&oxo_flow_core::rule::Rule> = config
             .rules
             .iter()
             .filter(|r| rules.contains(&r.name))
-            .collect()
+            .collect();
+        // A typo'd rule name must not exit 0 with "0 file(s) touched" —
+        // scripts would read that as success (audit #276 P4-5, the same
+        // unknown-name warning `--samples` gives).
+        let unknown: Vec<&String> = rules
+            .iter()
+            .filter(|n| !config.rules.iter().any(|r| &r.name == *n))
+            .collect();
+        for name in &unknown {
+            eprintln!(
+                "  {} rule '{name}' not found in workflow — no files touched for it",
+                "⚠".yellow()
+            );
+        }
+        if !unknown.is_empty() {
+            let expanded_hint = if config.rules.len() != config.rule_templates.len() {
+                " (run `oxo-flow dry-run <workflow>` to list expanded rule names)"
+            } else {
+                ""
+            };
+            eprintln!(
+                "  {} known rules: {}{expanded_hint}",
+                "Info:".dimmed(),
+                config
+                    .rules
+                    .iter()
+                    .map(|r| r.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        matched
     };
 
     let mut touched = 0usize;

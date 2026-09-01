@@ -351,20 +351,30 @@ fn scan_workflow_env_files(
         }
     }
 
-    // ── Scan [workflow] for pairs_file / sample_groups_file ───────────
+    // ── Scan [workflow] for pairs_file / sample_groups_file / metadata_file ──
 
     if let Some(wf) = toml_value.get("workflow") {
-        for key in &["pairs_file", "sample_groups_file"] {
+        // metadata_file is data the workflow CANNOT parse without: a bundle
+        // that omits it fails at plan time on the consumer side (issue #276).
+        // pairs_file/sample_groups_file are collected the same way. All three
+        // keep their RELATIVE path from the workflow dir (a file referenced as
+        // `data/meta.tsv` must land at `data/meta.tsv` inside the bundle, not
+        // flattened to the archive root).
+        for key in &["pairs_file", "sample_groups_file", "metadata_file"] {
             if let Some(file_path) = wf.get(key).and_then(|v| v.as_str()) {
                 let abs_path = workflow_dir.join(file_path);
                 if abs_path.exists() {
-                    let filename = Path::new(file_path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if !referenced_files.iter().any(|(name, _)| name == &filename) {
-                        referenced_files.push((filename, abs_path));
+                    if !referenced_files.iter().any(|(name, _)| name == file_path) {
+                        referenced_files.push((file_path.to_string(), abs_path));
                     }
+                } else {
+                    eprintln!(
+                        "  {} {} referenced but not found: {} (bundles that omit it \
+                         cannot run on the consumer side)",
+                        "⚠".yellow(),
+                        key,
+                        file_path
+                    );
                 }
             }
         }

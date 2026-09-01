@@ -208,7 +208,7 @@ If a value discovered from the filesystem does not match its constraint, it is i
 
 ### Safe Default Character Set
 
-Because wildcard values are substituted into shell command strings, wildcards **without** a declared constraint may only carry values matching `[A-Za-z0-9._/-]+` (letters, digits, dot, underscore, dash, path separator). Values outside this set fail validation before any shell runs. Direct command substitution (`$(` and backticks) is rejected unconditionally — including for constrained wildcards.
+Because wildcard values are substituted into shell command strings, wildcards **without** a declared constraint may only carry values matching `[A-Za-z0-9._/-]+` (letters, digits, dot, underscore, dash, path separator). Values outside this set fail validation before any shell runs. Direct command substitution (`$(` and backticks) is rejected unconditionally — including for constrained wildcards and under `OXO_FLOW_UNSAFE_WILDCARDS=1` (issue #276: the floor previously sat before the constraint/unsafe-mode skip, so a permissive constraint silently disabled it; it now runs on every non-`config.*` value, and the rendered command is additionally checked against each instance's own wildcard bindings so values baked in at expansion time are covered too).
 
 If your data legitimately needs other characters, declare an explicit `[wildcard_constraints]` entry for that wildcard, or export `OXO_FLOW_UNSAFE_WILDCARDS=1` to relax the character-set layer for the process (a one-time warning is logged; the substitution floor remains enforced).
 

@@ -10,7 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/Traitome/oxo-flow?label=release&style=flat-square)](https://github.com/Traitome/oxo-flow/releases)
 [![Crates.io](https://img.shields.io/crates/v/oxo-flow-core?label=crates.io&style=flat-square)](https://crates.io/crates/oxo-flow-core)
 [![bioconda](https://anaconda.org/bioconda/oxo-flow-cli/badges/version.svg)](https://bioconda.github.io/recipes/oxo-flow-cli/README.html)
-[![MSRV](https://img.shields.io/badge/MSRV-1.97.1-orange?style=flat-square)](rust-toolchain.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.98.0-orange?style=flat-square)](rust-toolchain.toml)
 [![Docs](https://img.shields.io/badge/docs-guide-blue?style=flat-square)](https://traitome.github.io/oxo-flow/latest/)
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%7C%20Dual-blue?style=flat-square)](#license)
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange?style=flat-square)](https://doc.rust-lang.org/edition-guide/)
@@ -101,6 +101,24 @@ cargo install oxo-flow-cli
 ```bash
 conda install -c bioconda oxo-flow-cli
 ```
+
+### Run with Docker
+
+Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image); `:main` is amd64-only and compiled from source:
+
+```bash
+# Web UI at http://localhost:3000 (CLI is inside the same image)
+docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
+
+# Pin a release
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
+
+# CLI one-shot usage (workflow files mounted from the host)
+docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
+  oxo-flow run my-pipeline.oxoflow
+```
+
+Health endpoint: `GET /api/health` returns `"status":"ok"` when the database is reachable.
 
 ### Build from source
 

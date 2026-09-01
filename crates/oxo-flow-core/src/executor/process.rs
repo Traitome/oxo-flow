@@ -1139,6 +1139,41 @@ impl LocalExecutor {
         wildcard_values: &HashMap<String, String>,
         config: &HashMap<String, toml::Value>,
     ) -> Result<JobRecord> {
+        self.execute_rule_with_bindings(rule, wildcard_values, config, &HashMap::new())
+            .await
+    }
+
+    /// Execute a single rule with EXPLICIT per-instance wildcard bindings
+    /// (issue #276): the caller (CLI/web run loop) hands over the expansion
+    /// combo the instance came from — sample names, `[[values]]` entries,
+    /// pair metadata. These are the values external input (samplesheets,
+    /// discovered filenames) can carry, so the substitution floor checks
+    /// the rendered command against them. Callers without fan-out pass an
+    /// empty map (via [`Self::execute_rule_with_config`]).
+    pub async fn execute_rule_with_bindings(
+        &self,
+        rule: &Rule,
+        wildcard_values: &HashMap<String, String>,
+        config: &HashMap<String, toml::Value>,
+        instance_bindings: &HashMap<String, String>,
+    ) -> Result<JobRecord> {
+        // Merge the instance bindings into the value map the guards see:
+        // `validate_wildcard_injection` applies the charset layer + floor
+        // to bare (non-`config.`) keys, and the rendered-command check
+        // needs the raw values to detect spliced substitutions.
+        let mut merged = wildcard_values.clone();
+        for (key, value) in instance_bindings {
+            merged.insert(key.clone(), value.clone());
+        }
+        self.execute_rule_inner(rule, &merged, config).await
+    }
+
+    async fn execute_rule_inner(
+        &self,
+        rule: &Rule,
+        wildcard_values: &HashMap<String, String>,
+        config: &HashMap<String, toml::Value>,
+    ) -> Result<JobRecord> {
         // Covers every return path of this function: whatever the rule's
         // outcome, once we leave here it no longer has an in-flight child
         // (issue #131).
@@ -1398,7 +1433,16 @@ impl LocalExecutor {
             .map(|c| mask_sensitive(&c, &self.config.sensitive_values));
 
         validate_wildcard_injection(wildcard_values, &self.config.wildcard_constraints)?;
+        // Per-instance wildcard bindings (sample/group values, `[[values]]`
+        // fan-out, scatter variables, `[[pairs]]` metadata — anything a
+        // collaborator-supplied samplesheet or auto-discovered filename can
+        // carry) are BAKED into the expanded rule's shell at expansion time,
+        // so they never appear in the `config.*`-keyed map the guard above
+        // receives. Check the RENDERED command against those values: a
+        // `$()`/backtick riding on one of them is rejected before the shell
+        // spawns (issue #276).
         for cmd in &resolved_commands {
+            validate_instance_bindings(cmd, wildcard_values)?;
             validate_shell_safety(cmd)?;
             for warning in sanitize_shell_command(cmd) {
                 tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
@@ -1771,6 +1815,15 @@ impl LocalExecutor {
             // Actually, the Phase 1 says "Fix timeout skipping retries".
 
             if attempt + 1 < max_attempts {
+                // Retry visibility (audit #276 P4-3): retries were completely
+                // silent unless -v; an operator watching the run must see
+                // that an attempt failed and another is starting.
+                tracing::warn!(
+                    rule = %rule.name,
+                    attempt = attempt + 1,
+                    max_attempts,
+                    "attempt failed — retrying"
+                );
                 if let Some(ref delay_str) = rule.retry_delay
                     && let Some(secs) = crate::rule::parse_duration_secs(delay_str)
                 {
@@ -2192,7 +2245,19 @@ fn build_execution_command_inner(
     if !rule.envvars.is_empty() {
         let mut env_prefix = String::new();
         for (k, v) in &rule.envvars {
-            let escaped_v = v.replace('\'', "'\\''");
+            // envvars values participate in placeholder expansion too: the
+            // `init` scaffold routes `{config.greeting}` through an env var
+            // so apostrophes/quotes in user data cannot break the command
+            // (audit #276 P4-2). Expand BEFORE shell-escaping so the value
+            // that lands in `export K='…'` is the final text.
+            let mut expand_map = wildcard_values.clone();
+            for (key, value) in wildcard_values {
+                if !key.starts_with("config.") && !key.starts_with("wildcard.") {
+                    expand_map.insert(format!("wildcard.{key}"), value.clone());
+                }
+            }
+            let expanded_v = super::expand_to_fixed_point(v, &expand_map, render_wildcard_value);
+            let escaped_v = expanded_v.replace('\'', "'\\''");
             env_prefix.push_str(&format!("export {}='{}'\n", k, escaped_v));
         }
         base_cmd = format!("{}{}", env_prefix, base_cmd);
@@ -2950,6 +3015,52 @@ pub(crate) fn render_wildcard_value(value: &str) -> String {
         }
     }
     value.to_string()
+}
+
+/// Binding-aware substitution floor (issue #276): reject a rendered command
+/// when one of the instance's own wildcard VALUES reached the shell carrying
+/// `$(` or a backtick. `bindings` maps bare wildcard name → the raw value
+/// the engine spliced (the expansion combo, NOT `config.*`).
+///
+/// The value-level guard ([`super::validate_wildcard_injection`]) only sees
+/// the `config.*`-keyed map; sample names, `[[values]]` fan-out, group
+/// metadata, and scatter variables are baked into the expanded rule's shell
+/// text at expansion time and surface only in the rendered command. A value
+/// that contains a substitution construct AND appears verbatim in the
+/// command is hostile by construction — the author's template cannot have
+/// put it there, because the engine rendered the external value verbatim
+/// (samplesheet row, discovered filename, `[[values]]` entry,
+/// `values_from` config override). A template's own `$(date …)` never
+/// contains an instance value, so it passes untouched.
+pub(crate) fn validate_instance_bindings(
+    cmd: &str,
+    bindings: &HashMap<String, String>,
+) -> Result<()> {
+    for (name, value) in bindings {
+        if name.starts_with("config.") {
+            continue; // trusted: workflow author / operator override
+        }
+        if !(value.contains("$(") || value.contains('`')) {
+            continue;
+        }
+        // The engine splices the value verbatim; its presence in the
+        // rendered command means the shell would evaluate it.
+        if cmd.contains(value.as_str()) {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Wildcard injection detected: command substitution in the value of \
+                     wildcard '{name}' reached the rendered shell command"
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Sample names and other wildcard values must not contain '$(' or \
+                     backticks; rename the sample, value, or file."
+                        .to_string(),
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn evaluate_condition(condition: &str, config_values: &HashMap<String, toml::Value>) -> bool {

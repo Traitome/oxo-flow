@@ -63,7 +63,12 @@ memory = "1G"
 name = "hello_world"
 description = "A minimal rule that writes a greeting"
 output = ["results/{{config.sample_name}}_output.txt"]
-shell = "echo '{{config.greeting}}' > {{output[0]}}"
+# NOTE: the value is passed via the environment, not spliced into the shell —
+# a greeting containing an apostrophe or quote cannot break the command
+# (audit #276 P4-2: the historical `echo '{{config.greeting}}'` broke on any
+# apostrophe in the config value). `--arg greeting=...` overrides the default.
+envvars = {{ GREETING = "{{config.greeting}}" }}
+shell = "echo \"$GREETING\" > {{output[0]}}"
 
 # ── Adding a second rule with a dependency ─────────────────────────────────
 # Uncomment the block below to create a two-step pipeline:
