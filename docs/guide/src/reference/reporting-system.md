@@ -202,7 +202,8 @@ sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 name. Available names: `universal`, `execution-status`,
 `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
 `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`,
-`task-summary` — enumerable at runtime with
+`task-summary`, `software-versions`, `rule-captions`,
+`aggregate-metrics` — enumerable at runtime with
 `oxo-flow report WF --list-sections`.
 
 The filter name is the generator name; the rendered HTML id can differ —

@@ -62,6 +62,9 @@ A generated report includes:
 | **Environment** | Engine version, platform, and the environments the workflow's rules declare |
 | **Provenance** | Engine version, workflow file sha256, checkpoint location |
 | **Task Summary** | Per-rule table of tasks, types, inputs, outputs, environments, and resources |
+| **Software Versions** | Tool/version table parsed from known version-reporting files under the workdir |
+| **Rule Captions** | Per-rule `report` annotations rendered as markdown (one subsection per executed instance) — set `report = "caption"` or `report = { file = "notes/qc.md", caption = "…" }` on a rule |
+| **Aggregate Metrics** | MultiQC-style sample × metric matrix across all parsed tools, plus `*_mqc.json` custom content |
 
 Sections adapt to available execution data — for example, **Execution
 Status** and **Failure Diagnosis** only appear with a checkpoint — and
@@ -84,7 +87,8 @@ sections = ["universal", "workflow-info", "commands", "failure-diagnosis"]
 > (`universal`, `execution-status`, `failure-diagnosis`,
 > `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`,
 > `environment`, `metrics`, `sample-matrix`, `provenance`,
-> `task-summary`). `template` is **consumed** (see below); `format` is
+> `task-summary`, `software-versions`, `rule-captions`,
+> `aggregate-metrics`). `template` is **consumed** (see below); `format` is
 > parsed but still unsupported: setting it makes the command warn (or fail
 > under `--strict`) instead of silently ignoring it — output formats are
 > selected via the CLI `-f` flag.
