@@ -2217,7 +2217,7 @@ pub async fn run_command(
                         skip_reason: None,
                         max_rss_mb: None,
                         cpu_seconds: None,
-                        caption: config.get_rule(&rule_name).and_then(|r| {
+                        caption: config.get_rule(rule_name).and_then(|r| {
                             oxo_flow_core::executor::process::rule_report_caption(
                                 r,
                                 workdir_actual.as_ref(),
@@ -2352,7 +2352,7 @@ pub async fn run_command(
                     ),
                     max_rss_mb: None,
                     cpu_seconds: None,
-                    caption: config.get_rule(&rule_name).and_then(|r| {
+                    caption: config.get_rule(rule_name).and_then(|r| {
                         oxo_flow_core::executor::process::rule_report_caption(
                             r,
                             workdir_actual.as_ref(),
