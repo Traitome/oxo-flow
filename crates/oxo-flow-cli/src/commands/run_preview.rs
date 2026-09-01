@@ -784,11 +784,28 @@ pub(crate) fn when_condition_false(
                 .or_insert_with(|| toml::Value::String(v.clone()));
         }
     }
-    !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+    // Every rule output of this run is pending at plan time: an existing
+    // file at one of those paths is a previous run's leftover that the
+    // producer will overwrite, so its stale value must not decide the
+    // gate here (issue #282 review). The verdict is deferred (true) and
+    // re-checked at execution time.
+    let pending_outputs: Vec<String> = config
+        .rules
+        .iter()
+        .flat_map(|r| {
+            let mut outs = r.output.to_vec();
+            if let Some(p) = &r.output_pattern {
+                outs.push(p.clone());
+            }
+            outs
+        })
+        .collect();
+    !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
         condition,
         &config_values,
         &HashMap::new(),
         config.base_dir(),
+        &pending_outputs,
     )
 }
 

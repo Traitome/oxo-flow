@@ -1090,6 +1090,146 @@ fn runtime_when_functions_count_real_files() {
 }
 
 #[test]
+fn wc_lines_decompresses_gzip_like_reads_count() {
+    // Issue #282 review: `wc_lines` must decompress `.gz` inputs the same
+    // way `reads_count` does — the count is of the decompressed content.
+    use super::process::evaluate_condition_with_workdir_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gz = dir.path().join("list.txt.gz");
+    let mut enc = flate2::write::GzEncoder::new(
+        std::fs::File::create(&gz).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut enc, b"a\nb\nc\n").unwrap();
+    enc.finish().unwrap();
+
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "wc_lines('list.txt.gz') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
+fn runtime_when_defer_survives_negation_and_chaining() {
+    // Issue #282 review: plan-time deferral is Kleene — `!`, `&&`, `||`
+    // over a deferred atom must stay deferred (collapsed to true by the
+    // wrapper), never collapse to a plan-time decision that prunes.
+    use super::process::evaluate_condition_with_wildcards_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+
+    // At plan time (no workdir) the file does not exist: the atom defers,
+    // and its negation stays deferred too (collapsed to true by the
+    // wrapper) — the pre-Kleene bug inverted it to a decided false that
+    // pruned the instance.
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        "!reads_count('trimmed/out.fq') > 0",
+        &config,
+        &empty,
+        None
+    ));
+    assert!(!evaluate_condition_with_wildcards_and_base_dir(
+        "reads_count('trimmed/out.fq') > 0 && config.enabled",
+        &HashMap::from([("enabled".to_string(), toml::Value::Boolean(false))]),
+        &empty,
+        None
+    ));
+    // Deferred || No stays deferred (true), while No || No is false.
+    assert!(evaluate_condition_with_wildcards_and_base_dir(
+        "reads_count('trimmed/out.fq') > 0 || config.enabled",
+        &HashMap::from([("enabled".to_string(), toml::Value::Boolean(false))]),
+        &empty,
+        None
+    ));
+    assert!(!evaluate_condition_with_wildcards_and_base_dir(
+        "config.off || config.also_off",
+        &HashMap::from([
+            ("off".to_string(), toml::Value::Boolean(false)),
+            ("also_off".to_string(), toml::Value::Boolean(false))
+        ]),
+        &empty,
+        None
+    ));
+    // Execution time (workdir set, file still missing) is decided, not
+    // deferred: fail closed, and the negation is a real negation there
+    // (atom false → !atom true).
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "!reads_count('trimmed/out.fq') > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
+fn runtime_when_defers_on_pending_outputs_even_if_file_exists() {
+    // Issue #282 review: at plan time, a file that is an output of this
+    // run's rules is *pending* even when it exists on disk (a previous
+    // run's leftover that the producer will overwrite) — the stale value
+    // must not decide the gate.
+    use super::process::evaluate_condition_with_wildcards_base_dir_and_pending_outputs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir.path().join("stale.txt");
+    std::fs::write(&stale, "x\n").unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    // Plan time resolves atom paths against the process cwd; the test uses
+    // absolute paths so the tempdir file is the one being read.
+    let stale = stale.display().to_string();
+
+    // Stale leftover matching a pending output pattern defers (true), even
+    // though the file exists and its real value is 1.
+    assert!(
+        evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 1"),
+            &config,
+            &empty,
+            None,
+            &["results/{name}.txt".to_string()]
+        )
+    );
+    // A concrete pending path defers too.
+    assert!(
+        evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 1"),
+            &config,
+            &empty,
+            None,
+            std::slice::from_ref(&stale)
+        )
+    );
+    // The same file with NO pending match reads its real value.
+    assert!(
+        !evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            &format!("wc_lines('{stale}') == 3"),
+            &config,
+            &empty,
+            None,
+            &["other/{name}.txt".to_string()]
+        )
+    );
+    // Execution time ignores pending outputs entirely (workdir set): the
+    // real value decides.
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "wc_lines('stale.txt') == 3",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
 fn evaluate_condition_literal_comparisons_compare_for_real() {
     use super::process::evaluate_condition_with_wildcards;
 

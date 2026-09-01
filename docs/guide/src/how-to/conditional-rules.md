@@ -64,7 +64,7 @@ available in `when` strings:
 | Function | Reads | Returns |
 |---|---|---|
 | `reads_count(path)` | FASTQ (plain or `.gz`) | record count (lines ÷ 4, truncated) |
-| `wc_lines(path)` | any plain-text file (gzip is **not** decompressed) | line count |
+| `wc_lines(path)` | any text file (plain or `.gz`) | line count of the decompressed content |
 | `file_size(path)` | any file | size in bytes |
 | `file_exists(path)` | — | 1/0 existence probe |
 
@@ -82,15 +82,13 @@ paths pass through; `{sample}` and other wildcards expand from the
 instance context). Because a gate may reference a file its producer has
 not written yet, the two phases behave differently:
 
-- **Planning** (`oxo-flow dry-run`, DAG build): a missing file makes the
-  condition evaluate to `true`, so the rule stays in the plan and is
-  judged later. Caveat: this defer-when-missing guarantee applies to the
-  runtime-function atom itself — if the gate *negates* it
-  (`!reads_count(...)`) or chains it with `&&`, the negated/combined
-  expression can still resolve to `false` at plan time and prune the
-  rule. Also note the functions read any file that *already exists*
-  (e.g. a previous run's output) at plan time, not just ones produced
-  later in the same run.
+- **Planning** (`oxo-flow dry-run`, DAG build): a runtime-function atom
+  whose file is missing — or whose file is an output of this run but
+  still holds a previous run's stale value — makes the whole gate defer:
+  it evaluates to `true` and the rule stays in the plan to be judged
+  again at execution time. The defer propagates through `!`, `&&`, `||`
+  and parentheses (three-valued logic), so a negated or chained gate is
+  never pruned at plan time just because its file is not ready.
 - **Execution**: a missing or unreadable file makes the condition
   evaluate to `false` (fail-closed) — a gate that cannot count what it
   was asked to count does not run the rule.
