@@ -1416,6 +1416,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#export-declared-software-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export Declared Software Versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#report-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3765,6 +3776,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#export-declared-software-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export Declared Software Versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#report-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3948,6 +3970,20 @@ narrative text) — see
 (<code>SOURCE_DATE_EPOCH</code> when set) and all lists are sorted, so identical
 state yields byte-identical reports — safe to diff and commit.</p>
 <hr />
+<h2 id="export-declared-software-versions">Export Declared Software Versions<a class="headerlink" href="#export-declared-software-versions" title="Permanent link">#</a></h2>
+<p>For dependency auditing, export an nf-core-style <code>versions.yml</code> of what
+the workflow <strong>declares</strong> and diff it in CI:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>versions.yml
+</span></code></pre></div>
+<p>Each rule records its declared backend — docker <code>image:tag</code>, module
+<code>(tool, version)</code>, conda/mamba/pixi env files and <code>venv_requirements</code>
+files with sha256 content hashes (a bare <code>venv</code> directory path is
+recorded as declared, without a hash). This is a static declaration (the
+engine never executes
+anything to collect it), so resolved runtime package versions are not
+included; every entry carries that caveat. <code>-</code> writes the YAML to
+stdout.</p>
+<hr />
 <h2 id="report-contents">Report Contents<a class="headerlink" href="#report-contents" title="Permanent link">#</a></h2>
 <p>A generated report includes:</p>
 <table>
@@ -4007,6 +4043,10 @@ state yields byte-identical reports — safe to diff and commit.</p>
 <td>Engine version, workflow file sha256, checkpoint location</td>
 </tr>
 <tr>
+<td><strong>Software Versions</strong></td>
+<td>Declared software per rule, nf-core-style: docker <code>image:tag</code>, module <code>tool/version</code>, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded</td>
+</tr>
+<tr>
 <td><strong>Task Summary</strong></td>
 <td>Per-rule table of tasks, types, inputs, outputs, environments, and resources</td>
 </tr>
@@ -4019,8 +4059,8 @@ every section, including <strong>Task Summary</strong>, can be filtered via
 <hr />
 <h2 id="report-configuration-in-oxoflow">Report Configuration in <code>.oxoflow</code><a class="headerlink" href="#report-configuration-in-oxoflow" title="Permanent link">#</a></h2>
 <p>Add a <code>[report]</code> section to your workflow file to filter report sections:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[report]</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">,</span><span class="w"> </span><span class="s2">"failure-diagnosis"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">[report]</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">,</span><span class="w"> </span><span class="s2">"failure-diagnosis"</span><span class="p">]</span>
 </span></code></pre></div>
 <blockquote>
 <p><strong>Note — partial support</strong>: of the three fields, <code>sections</code> filters
@@ -4028,7 +4068,7 @@ which registered sections the report includes, by generator <strong>name</strong
 (<code>universal</code>, <code>execution-status</code>, <code>failure-diagnosis</code>,
 <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>,
 <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
-<code>task-summary</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code> is
+<code>task-summary</code>, <code>software-versions</code>). <code>template</code> is <strong>consumed</strong> (see below); <code>format</code> is
 parsed but still unsupported: setting it makes the command warn (or fail
 under <code>--strict</code>) instead of silently ignoring it — output formats are
 selected via the CLI <code>-f</code> flag.</p>
@@ -4063,9 +4103,9 @@ selected via the CLI <code>-f</code> flag.</p>
 <h3 id="custom-templates">Custom templates<a class="headerlink" href="#custom-templates" title="Permanent link">#</a></h3>
 <p><code>[report].template</code> wires a custom <a href="https://tera.netlify.app/">Tera</a>
 template into HTML rendering:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">[report]</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">template</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"report.html"</span><span class="w">        </span><span class="c1"># the built-in template (the default)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># template = "my_report.tera"   # or a file: workflow dir first, then cwd</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">[report]</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">template</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"report.html"</span><span class="w">        </span><span class="c1"># the built-in template (the default)</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># template = "my_report.tera"   # or a file: workflow dir first, then cwd</span>
 </span></code></pre></div>
 <p>The scaffolded <code>report-template.tera</code> (from
 <code>oxo-flow report --init-template</code>) is a good starting point. The built-in
@@ -4080,56 +4120,56 @@ with a note — it applies to HTML output only.</p>
 (dark mode, print styles, accessible landmarks). User-controlled strings —
 workflow and rule names, commands, file paths — are HTML-escaped, so
 reports are safe to open and share. They can be opened in any browser:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>html<span class="w"> </span>-o<span class="w"> </span>report.html
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>open<span class="w"> </span>report.html<span class="w">   </span><span class="c1"># macOS</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>xdg-open<span class="w"> </span>report.html<span class="w">   </span><span class="c1"># Linux</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>html<span class="w"> </span>-o<span class="w"> </span>report.html
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>open<span class="w"> </span>report.html<span class="w">   </span><span class="c1"># macOS</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>xdg-open<span class="w"> </span>report.html<span class="w">   </span><span class="c1"># Linux</span>
 </span></code></pre></div>
 <hr />
 <h2 id="json-reports">JSON Reports<a class="headerlink" href="#json-reports" title="Permanent link">#</a></h2>
 <p>JSON reports are the same data model, machine-readable, with
 <code>schema_version</code>, a <code>command: "report"</code> tag, and provenance fields
 (<code>workflow_path</code>, <code>checkpoint_path</code>):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span>-o<span class="w"> </span>report.json
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># stdout stays pipe-safe: diagnostics and --ai output go to stderr</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.schema_version
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span>-o<span class="w"> </span>report.json
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># stdout stays pipe-safe: diagnostics and --ai output go to stderr</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.schema_version
 </span></code></pre></div>
 <p>Example output structure:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"report"</span><span class="p">,</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-pipeline Report"</span><span class="p">,</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-13T03:47:43Z"</span><span class="p">,</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">"workflow_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-pipeline"</span><span class="p">,</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">"workflow_version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1.0.0"</span><span class="p">,</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">"checkpoint_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">"workflow_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/my-pipeline.oxoflow"</span><span class="p">,</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">"sections"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">      </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Workflow Information"</span><span class="p">,</span>
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span>
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">        </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"KeyValue"</span><span class="p">,</span>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">        </span><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Name"</span><span class="p">,</span><span class="w"> </span><span class="s2">"my-pipeline"</span><span class="p">],</span>
-</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Version"</span><span class="p">,</span><span class="w"> </span><span class="s2">"1.0.0"</span><span class="p">],</span>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Total Rules"</span><span class="p">,</span><span class="w"> </span><span class="s2">"7"</span><span class="p">],</span>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Detected Domain"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Generic"</span><span class="p">]</span>
-</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">        </span><span class="p">]</span>
-</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">      </span><span class="p">},</span>
-</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">      </span><span class="nt">"subsections"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
-</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">  </span><span class="p">],</span>
-</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
-</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"report"</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-pipeline Report"</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-08-13T03:47:43Z"</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">"workflow_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-pipeline"</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">"workflow_version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1.0.0"</span><span class="p">,</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">"checkpoint_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/.oxo-flow/checkpoint.json"</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nt">"workflow_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/my-pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">"sections"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">      </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Workflow Information"</span><span class="p">,</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">        </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"KeyValue"</span><span class="p">,</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">        </span><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Name"</span><span class="p">,</span><span class="w"> </span><span class="s2">"my-pipeline"</span><span class="p">],</span>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Version"</span><span class="p">,</span><span class="w"> </span><span class="s2">"1.0.0"</span><span class="p">],</span>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Total Rules"</span><span class="p">,</span><span class="w"> </span><span class="s2">"7"</span><span class="p">],</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="w">          </span><span class="p">[</span><span class="s2">"Detected Domain"</span><span class="p">,</span><span class="w"> </span><span class="s2">"Generic"</span><span class="p">]</span>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="w">      </span><span class="nt">"subsections"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a><span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a><span class="p">}</span>
 </span></code></pre></div>
 <hr />
 <h2 id="pdf-reports">PDF Reports<a class="headerlink" href="#pdf-reports" title="Permanent link">#</a></h2>
 <p>PDF reports are converted from the HTML report via the external
 <code>wkhtmltopdf</code> binary:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>brew<span class="w"> </span>install<span class="w"> </span>wkhtmltopdf<span class="w">   </span><span class="c1"># macOS</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>apt<span class="w"> </span>install<span class="w"> </span>wkhtmltopdf<span class="w">    </span><span class="c1"># Linux</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>brew<span class="w"> </span>install<span class="w"> </span>wkhtmltopdf<span class="w">   </span><span class="c1"># macOS</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>apt<span class="w"> </span>install<span class="w"> </span>wkhtmltopdf<span class="w">    </span><span class="c1"># Linux</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf<span class="w"> </span>-o<span class="w"> </span>report.pdf
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf<span class="w"> </span>-o<span class="w"> </span>report.pdf
 </span></code></pre></div>
 <p>If <code>wkhtmltopdf</code> is not installed, the command degrades gracefully: it
 writes a printable HTML file (<code>report.html</code>) and warns, instead of
@@ -4137,15 +4177,15 @@ failing. Note the wkhtmltopdf project upstream has been archived — HTML
 output is the portable, supported-by-default format.</p>
 <p>You can also output the raw <code>wkhtmltopdf</code> command for scripting or custom
 processing:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf-command
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>pdf-command
 </span></code></pre></div>
 <hr />
 <h2 id="r-friendly-export-r-data">R-friendly Export (<code>--r-data</code>)<a class="headerlink" href="#r-friendly-export-r-data" title="Permanent link">#</a></h2>
 <p><code>--r-data &lt;DIR&gt;</code> writes two TSV files for downstream R analysis (in
 addition to the report itself):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--r-data<span class="w"> </span>analysis/
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="c1"># analysis/sample_table.tsv   sample  group</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># analysis/metrics.tsv        rule  wall_time_secs  max_memory_mb  status</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--r-data<span class="w"> </span>analysis/
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># analysis/sample_table.tsv   sample  group</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1"># analysis/metrics.tsv        rule  wall_time_secs  max_memory_mb  status</span>
 </span></code></pre></div>
 <p><code>sample_table.tsv</code> maps every sample to its group (from <code>[[sample_groups]]</code>
 and <code>[[pairs]]</code>); <code>metrics.tsv</code> has one row per rule with wall time, peak
@@ -4170,25 +4210,25 @@ Snapshot failures are warnings — a reporting hiccup never fails a run.
 <hr />
 <h2 id="programmatic-report-generation">Programmatic Report Generation<a class="headerlink" href="#programmatic-report-generation" title="Permanent link">#</a></h2>
 <p>You can also generate reports programmatically using the core library:</p>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">report</span><span class="p">::{</span><span class="n">Report</span><span class="p">,</span><span class="w"> </span><span class="n">ReportSection</span><span class="p">,</span><span class="w"> </span><span class="n">ReportContent</span><span class="p">};</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Report</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">"My Report"</span><span class="p">,</span><span class="w"> </span><span class="s">"pipeline"</span><span class="p">,</span><span class="w"> </span><span class="s">"1.0.0"</span><span class="p">);</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">report</span><span class="p">.</span><span class="n">add_section</span><span class="p">(</span><span class="n">ReportSection</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="n">title</span><span class="p">:</span><span class="w"> </span><span class="s">"Summary"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="s">"summary"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="n">content</span><span class="p">:</span><span class="w"> </span><span class="nc">ReportContent</span><span class="p">::</span><span class="n">KeyValue</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">        </span><span class="n">pairs</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">            </span><span class="p">(</span><span class="s">"Total Samples"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">"24"</span><span class="p">.</span><span class="n">to_string</span><span class="p">()),</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">            </span><span class="p">(</span><span class="s">"Pass Rate"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">"95.8%"</span><span class="p">.</span><span class="n">to_string</span><span class="p">()),</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">        </span><span class="p">],</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">    </span><span class="n">subsections</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[],</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="p">});</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="kd">let</span><span class="w"> </span><span class="n">html</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_html</span><span class="p">();</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="kd">let</span><span class="w"> </span><span class="n">json</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_json</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="kd">let</span><span class="w"> </span><span class="n">markdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_markdown</span><span class="p">();</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">report</span><span class="p">::{</span><span class="n">Report</span><span class="p">,</span><span class="w"> </span><span class="n">ReportSection</span><span class="p">,</span><span class="w"> </span><span class="n">ReportContent</span><span class="p">};</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Report</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">"My Report"</span><span class="p">,</span><span class="w"> </span><span class="s">"pipeline"</span><span class="p">,</span><span class="w"> </span><span class="s">"1.0.0"</span><span class="p">);</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="n">report</span><span class="p">.</span><span class="n">add_section</span><span class="p">(</span><span class="n">ReportSection</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span><span class="n">title</span><span class="p">:</span><span class="w"> </span><span class="s">"Summary"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="s">"summary"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="n">content</span><span class="p">:</span><span class="w"> </span><span class="nc">ReportContent</span><span class="p">::</span><span class="n">KeyValue</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">        </span><span class="n">pairs</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">            </span><span class="p">(</span><span class="s">"Total Samples"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">"24"</span><span class="p">.</span><span class="n">to_string</span><span class="p">()),</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">            </span><span class="p">(</span><span class="s">"Pass Rate"</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">"95.8%"</span><span class="p">.</span><span class="n">to_string</span><span class="p">()),</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">        </span><span class="p">],</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">    </span><span class="n">subsections</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[],</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="p">});</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="kd">let</span><span class="w"> </span><span class="n">html</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_html</span><span class="p">();</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="kd">let</span><span class="w"> </span><span class="n">json</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_json</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="kd">let</span><span class="w"> </span><span class="n">markdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">to_markdown</span><span class="p">();</span>
 </span></code></pre></div>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>

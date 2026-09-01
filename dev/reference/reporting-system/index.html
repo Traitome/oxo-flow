@@ -3129,6 +3129,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#software-versions-section" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Software-versions section
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#metrics-protocol" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3978,6 +3989,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#software-versions-section" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Software-versions section
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#metrics-protocol" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4192,7 +4214,7 @@ must be installed separately on the system.</p>
 name. Available names: <code>universal</code>, <code>execution-status</code>,
 <code>failure-diagnosis</code>, <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>,
 <code>file-manifest</code>, <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
-<code>task-summary</code> — enumerable at runtime with
+<code>task-summary</code>, <code>software-versions</code> — enumerable at runtime with
 <code>oxo-flow report WF --list-sections</code>.</p>
 <p>The filter name is the generator name; the rendered HTML id can differ —
 the <code>universal</code> generator renders the <code>dashboard</code> section, and
@@ -4209,6 +4231,17 @@ first, then the current directory. A render failure warns and falls back
 to the default renderer (exit 2 under <code>--strict</code>). <code>[report].format</code>
 remains unsupported — setting it makes the command warn (or fail under
 <code>--strict</code>); the output format is selected with <code>-f</code>.</p>
+<h3 id="software-versions-section">Software-versions section<a class="headerlink" href="#software-versions-section" title="Permanent link">#</a></h3>
+<p>The <code>software-versions</code> section renders an nf-core-style table of
+<strong>declared</strong> software per rule: docker <code>image:tag</code> (registry as its own
+field), module <code>(tool, version)</code>, and env files (conda/mamba/pixi/venv)
+with sha256 content hashes. It is a <em>static declaration</em> — the engine
+never executes anything to collect it, so resolved runtime package
+versions are not recorded and every entry says so. <code>collect_software_versions</code>
+mirrors <code>resolve_environment</code> precedence (env_group &gt; rule.environment &gt;
+defaults.environment) by calling it directly. The same document is
+exportable as YAML via <code>oxo-flow report --versions-yml PATH</code> (a
+CI-diffing artifact; hand-rolled emitter, byte-stable, quoting-aware).</p>
 <h3 id="metrics-protocol">Metrics protocol<a class="headerlink" href="#metrics-protocol" title="Permanent link">#</a></h3>
 <p>QC metrics are parsed from <strong>real tool output files</strong> found under the run's
 working directory (the checkpoint-recorded workdir, else the workflow

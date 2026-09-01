@@ -2520,6 +2520,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#export-declared-software-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export declared software versions
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2631,6 +2642,17 @@
     <span class="md-ellipsis">
       
         Sample Matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#software-versions-software-versions-versions-yml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Software Versions (software-versions / --versions-yml)
       
     </span>
   </a>
@@ -4213,6 +4235,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#export-declared-software-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export declared software versions
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4324,6 +4357,17 @@
     <span class="md-ellipsis">
       
         Sample Matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#software-versions-software-versions-versions-yml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Software Versions (software-versions / --versions-yml)
       
     </span>
   </a>
@@ -4530,6 +4574,12 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 <td><code>DIR</code> — write R-friendly TSV files (<code>sample_table.tsv</code>, <code>metrics.tsv</code>) to DIR</td>
 </tr>
 <tr>
+<td><code>--versions-yml</code></td>
+<td>—</td>
+<td>—</td>
+<td><code>PATH</code> — export an nf-core-style <code>versions.yml</code> of <strong>declared</strong> software per rule (docker <code>image:tag</code>, module <code>tool/version</code>, env files with sha256; <code>-</code> writes to stdout) and exit</td>
+</tr>
+<tr>
 <td><code>--list-sections</code></td>
 <td>—</td>
 <td>—</td>
@@ -4676,6 +4726,23 @@ format.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># sacct -o JobID,JobName,State,Elapsed,CPUTime,MaxRSS --parsable2</span>
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--acct<span class="w"> </span>sacct.csv
 </span></code></pre></div>
+<h3 id="export-declared-software-versions">Export declared software versions<a class="headerlink" href="#export-declared-software-versions" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># stdout</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>-
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># commit the file and diff it in CI to catch undeclared dependency drift</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--versions-yml<span class="w"> </span>versions.yml
+</span></code></pre></div>
+<p>Emits an nf-core-style <code>versions.yml</code> (also rendered as the report's
+<code>software-versions</code> section): for every rule, what the workflow
+<strong>declares</strong> — docker <code>image:tag</code> (registry kept as its own field), module
+<code>(tool, version)</code>, conda/mamba/pixi env files and <code>venv_requirements</code>
+files with sha256 content hashes (a bare <code>venv</code> directory path is
+recorded as declared, without a hash — there is no file to hash). The
+engine never executes anything to produce this data, so
+resolved runtime package versions are <strong>not</strong> recorded — every entry
+carries that caveat. Environment resolution follows the usual precedence
+(env_group &gt; rule.environment &gt; defaults.environment).</p>
 <hr />
 <h2 id="data-sources">Data sources<a class="headerlink" href="#data-sources" title="Permanent link">#</a></h2>
 <p>The report reads three kinds of data, in this order of truth:</p>
@@ -4764,14 +4831,15 @@ frameworks only.</p>
 declares when it applies (e.g. <code>failure-diagnosis</code> only when rules failed,
 <code>execution-status</code> only with a checkpoint). Filter them with
 <code>[report].sections</code>:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">[report]</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">[report]</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">]</span>
 </span></code></pre></div>
 <ul>
 <li>Available built-in section IDs (generator names used by the filter):
   <code>universal</code>, <code>execution-status</code>, <code>failure-diagnosis</code>,
   <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>,
-  <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>, <code>task-summary</code> —
+  <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>, <code>task-summary</code>,
+  <code>software-versions</code> —
   the rendered HTML id can differ from the generator name: <code>universal</code>
   renders the <code>dashboard</code> section, and <code>execution-status</code> renders both
   <code>execution-status</code> and <code>benchmarks</code></li>
@@ -4850,6 +4918,20 @@ instance names in the checkpoint (<code>{rule}_{group}_{sample}</code>,
 <code>{rule}_auto-discovered_{sample}</code> for <code>sample_pattern</code> discovery, or
 <code>{rule}_{pair_id}</code> for pairs). Rows are base rule names, sorted
 failed-first so failing samples surface at the top.</p>
+<h3 id="software-versions-software-versions-versions-yml">Software Versions (<code>software-versions</code> / <code>--versions-yml</code>)<a class="headerlink" href="#software-versions-software-versions-versions-yml" title="Permanent link">#</a></h3>
+<p>The <code>software-versions</code> section is a static declaration extracted from
+the workflow definition — the engine never executes anything to produce
+it. Per rule it lists the declared backend: docker <code>image:tag</code> (registry
+kept as its own field), module <code>(tool, version)</code> with a note when no
+version segment exists, conda/mamba/pixi env files and
+<code>venv_requirements</code> files with <strong>sha256 content hashes</strong> (a bare <code>venv</code>
+directory path is recorded as declared, without a hash), or a "system
+environment" note when no environment is
+declared. Resolved runtime package versions depend on the execution
+environment and are deliberately <strong>not</strong> recorded — every entry carries
+that caveat. Export a machine-readable copy with
+<code>oxo-flow report --versions-yml PATH</code> and diff it in CI to catch
+undeclared dependency drift.</p>
 <h3 id="resource-accounting-acct">Resource Accounting (<code>--acct</code>)<a class="headerlink" href="#resource-accounting-acct" title="Permanent link">#</a></h3>
 <p><code>--acct &lt;FILE&gt;</code> imports an sacct-style CSV into a <strong>Resource Accounting</strong>
 section: a <code>Rule / State / Elapsed / CPU Time / Max RSS (MB)</code> table plus
