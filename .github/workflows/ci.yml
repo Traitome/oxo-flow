@@ -564,6 +564,10 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-cli
           cargo build --release --target ${{ matrix.target }} -p oxo-flow-web
+          # Desktop shell lives outside the workspace (its own Cargo.toml
+          # workspace), so it needs its own cargo invocation.
+          (cd crates/oxo-flow-desktop && \
+            cargo build --release --target ${{ matrix.target }})
 
       - name: Package binaries
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
@@ -585,16 +589,17 @@ jobs:
         run: |
           set -euxo pipefail
           TARGET_DIR="target/${{ matrix.target }}/release"
+          DESKTOP_DIR="crates/oxo-flow-desktop/target/${{ matrix.target }}/release"
           mkdir -p dist
           # Hand-rolled .app bundle (cargo-bundle-style layout, extended
-          # with launcher script, icon, and code signature):
-          # - Contents/MacOS/oxo-flow     launcher script (double-click in
-          #                               Finder runs the bundle executable
-          #                               with NO arguments, so the script
-          #                               routes the launch to the CLI's
-          #                               `serve --open` entry point)
-          # - Contents/MacOS/oxo-flow-bin the real CLI binary
-          # - Contents/Resources/static   built SPA (self-contained app)
+          # with icon and code signature). The bundle executable is the
+          # wry-based desktop shell itself — a native window (WKWebView)
+          # around the embedded web server, no external browser involved:
+          # - Contents/MacOS/oxo-flow     desktop shell binary (serves the
+          #                               SPA on loopback and shows it in a
+          #                               native window; handles cwd=/ from
+          #                               Finder launches natively)
+          # - Contents/Resources/static   built SPA (served by the shell)
           # - Contents/Resources/oxo-flow.icns
           # - bundle-level ad-hoc code signature (arm64 macOS requires
           #   signed executables; the linker's ad-hoc Mach-O signature is
@@ -602,21 +607,9 @@ jobs:
           #   "damaged" by Gatekeeper on Apple Silicon).
           APP="oxo-flow.app"
           mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
-          cp "${TARGET_DIR}/oxo-flow" "${APP}/Contents/MacOS/oxo-flow-bin"
+          cp "${DESKTOP_DIR}/oxo-flow-desktop" "${APP}/Contents/MacOS/oxo-flow"
           cp -r crates/oxo-flow-web/static "${APP}/Contents/Resources/static"
           cp assets/oxo-flow.icns "${APP}/Contents/Resources/oxo-flow.icns"
-          # (printf instead of a heredoc: YAML block scalars cannot host a
-          # heredoc terminator at column 0.)
-          LAUNCHER="${APP}/Contents/MacOS/oxo-flow"
-          printf '%s\n' \
-            '#!/bin/sh' \
-            '# oxo-flow desktop launcher: macOS double-click runs the bundle' \
-            '# executable with no arguments; route it to serve --open. Start' \
-            '# in $HOME: Finder launches apps with cwd=/, where the server' \
-            '# cannot create its SQLite DB (oxo-flow.db) and exits.' \
-            'cd "${HOME:-$PWD}" || exit 1' \
-            'exec "$(dirname "$0")/oxo-flow-bin" serve --open "$@"' > "$LAUNCHER"
-          chmod +x "$LAUNCHER" "${APP}/Contents/MacOS/oxo-flow-bin"
           PLIST="${APP}/Contents/Info.plist"
           printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "$PLIST"
           printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' >> "$PLIST"
@@ -630,6 +623,8 @@ jobs:
           printf '  <key>CFBundleExecutable</key><string>oxo-flow</string>\n' >> "$PLIST"
           printf '  <key>CFBundleIconFile</key><string>oxo-flow</string>\n' >> "$PLIST"
           printf '  <key>LSMinimumSystemVersion</key><string>11.0</string>\n' >> "$PLIST"
+          printf '  <key>NSPrincipalClass</key><string>NSApplication</string>\n' >> "$PLIST"
+          printf '  <key>NSHighResolutionCapable</key><true/>\n' >> "$PLIST"
           printf '</dict></plist>\n' >> "$PLIST"
           # Ad-hoc (not Developer ID): makes the bundle internally consistent
           # so Gatekeeper does not flag it as "damaged" once the download

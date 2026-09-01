@@ -1,37 +1,77 @@
 # Desktop App Packaging
 
-The web interface ships as a **single product file** on the desktop: the
-`oxo-flow` binary already contains the CLI, the workflow engine, the web
-server, and the SPA frontend. The bundle wraps it into the native app
-formats below — no browser install surprises, no separate server process.
+The desktop app ships as a **single product file**: the `oxo-flow-desktop`
+binary contains the workflow engine, the web server, and the SPA frontend
+(through `oxo-flow-web`), and renders the interface in a **native OS
+webview window** — no external browser involved.
 
 ## How it works
 
 ```
-oxo-flow.app (macOS) / oxo-flow.deb (Linux)
-└── oxo-flow                # launcher script — macOS double-click runs
-    │                       # the bundle with no arguments, so it cds to
-    │                       # $HOME and execs:
-    └── oxo-flow-bin serve --open   # the CLI: starts the local web server
-                                    # and opens the default browser
-    └── Resources/static/       # SPA assets (resolved relative to
-                                # the executable at runtime)
-    └── Resources/oxo-flow.icns # app icon (macOS)
+oxo-flow.app (macOS)
+└── Contents/MacOS/oxo-flow      # the desktop shell binary (wry + tao)
+    └── Contents/Resources/static/       # SPA assets, served by the shell
+    └── Contents/Resources/oxo-flow.icns # app icon
 ```
 
-macOS launches a `.app` bundle's executable with **no arguments**, so the
-bundle contains a tiny launcher script (`Contents/MacOS/oxo-flow`) that
-starts in `$HOME` and routes the launch to the CLI's `serve --open` entry
-point (`Contents/MacOS/oxo-flow-bin`). This is what makes the desktop app
-open the interface when double-clicked — Finder launches apps with
-`cwd=/`, where the web server cannot create its SQLite database.
+On launch the shell binary:
 
-`--open` opens the interface in the system browser. Rendering stays in the
-browser engine: the DAG canvas (React Flow) and CodeMirror editor are
-mature browser technologies, and the browser gives users their own
-extensions, password managers, and devtools. A native-webview shell
-(Tauri) is a possible future enhancement for tray/notification integration,
-not a prerequisite for the product experience.
+1. **anchors its working directory** to `~/.oxo-flow/desktop` — the
+   per-user data directory where the SQLite database, logs, and workspace
+   files live (see below);
+2. **takes a single-instance lock** in that directory (a second launch
+   fails fast with a clear error instead of corrupting the database);
+3. **picks a free loopback port** and starts the axum web server
+   (`oxo-flow-web`, personal mode — loopback-only) on a private tokio
+   runtime;
+4. **waits for the listener** to accept TCP connections (so the first page
+   load never races server startup), then
+5. **opens a native webview window** (WKWebView on macOS, WebView2 on
+   Windows, WebKitGTK on Linux — via the `wry` crate) pointed at the
+   server URL;
+6. **exits when the window closes**, shutting the embedded server down.
+
+Closing the window is the app lifecycle: there is no background server
+process left behind. If the embedded server crashes, the window closes
+and the app exits non-zero instead of freezing on a stale page. A
+watchdog task races the server against `SIGINT`/`SIGTERM`, so `kill` and
+Ctrl-C also shut the app down cleanly — including a signal arriving
+during the slow cold GTK/webkit startup on Linux, which exits gracefully
+instead of failing with a spurious startup error.
+
+## Data directory and lifecycle
+
+All desktop state lives in **`~/.oxo-flow/desktop`** (following the CLI's
+`~/.oxo-flow` convention):
+
+| Path | Contents |
+|---|---|
+| `~/.oxo-flow/desktop/oxo-flow.db` (+ `-wal`/`-shm`) | SQLite database |
+| `~/.oxo-flow/desktop/logs/` | server and audit logs |
+| `~/.oxo-flow/desktop/workspace/` | run workspaces |
+| `~/.oxo-flow/desktop/oxo-flow.desktop.lock` | single-instance lock |
+
+The lock is an advisory `flock` held for the process lifetime — the OS
+releases it automatically if the app crashes, so there is no stale-lock
+cleanup. Closing the window sends the process a `SIGTERM`, which runs the
+server's graceful shutdown (flush audit logs, finish in-flight requests)
+before exit; SIGTERM/SIGINT from outside do the same.
+
+Two quality-of-life details:
+
+- **Finder launches `.app` bundles with `cwd=/`**, where the server cannot
+  create its SQLite database. The shell anchors the working directory to
+  the data directory above before anything starts — so state never
+  scatters across whatever directory the app happened to be launched from.
+- **External links open in the system browser.** A navigation handler
+  confines the app window to the app's own loopback origin; anything else
+  (the GitHub/docs links in the UI) is handed to `open` / `xdg-open` /
+  `start`. `target="_blank"` links and `window.open` calls are routed the
+  same way. The window itself never navigates away from the interface.
+
+Rendering stays in the OS webview (not a bundled browser, not Electron):
+the DAG canvas (React Flow) and CodeMirror editor run on the platform's
+own engine, exactly the engine the release server serves to.
 
 ## Prerequisites
 
@@ -42,29 +82,48 @@ not a prerequisite for the product experience.
    cd frontend && npm install && npm run build && cd ..
    ```
 
-2. Install cargo-bundle once:
+2. The desktop crate is **excluded from the cargo workspace** (tao/wry
+   need GUI toolchains — Xcode SDKs, WebKitGTK — that headless builds and
+   CI test jobs must not pull in). Build it with its own cargo invocation:
 
    ```bash
-   cargo install cargo-bundle --locked
+   cd crates/oxo-flow-desktop
+   cargo build --release
+   # → target/release/oxo-flow-desktop
    ```
+
+Platform notes: macOS needs the Xcode CLIs (`xcode-select --install`);
+Linux needs WebKitGTK 4.1 development files
+(`libwebkit2gtk-4.1-dev` on Debian/Ubuntu) and, for Wayland, the usual
+GTK scaling env vars; Windows needs the WebView2 runtime (preinstalled
+on Windows 10/11) and MSVC Build Tools.
 
 ## macOS (.app + .dmg)
 
 The GitHub release ships a hand-rolled `.app` + `.dmg` built by CI
-(icon, launcher, and ad-hoc code signature included). To build a plain
-cargo-bundle app locally (no launcher/icon/signature):
+(desktop-shell binary, icon, SPA, and ad-hoc code signature included).
+To run the shell locally without packaging:
 
 ```bash
-make bundle-macos
-# → target/release/bundle/macos/oxo-flow.app
-# → target/release/bundle/macos/oxo-flow.dmg (double-click to install)
+cd crates/oxo-flow-desktop && cargo run --release
+```
+
+To assemble the same bundle CI builds (`.app` + ad-hoc signature + DMG):
+
+```bash
+APP=oxo-flow.app
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp crates/oxo-flow-desktop/target/release/oxo-flow-desktop \
+   "$APP/Contents/MacOS/oxo-flow"
+cp -r crates/oxo-flow-web/static "$APP/Contents/Resources/static"
+cp assets/oxo-flow.icns "$APP/Contents/Resources/oxo-flow.icns"
+codesign --force --deep --sign - "$APP"
+hdiutil create -volname "oxo-flow" -srcfolder "$APP" -ov -format UDZO oxo-flow.dmg
 ```
 
 The `.app` is self-contained: drag it to /Applications, double-click, and
-the interface opens in your browser. Data (SQLite + workspace) lives in
-the directory the app launches from — the launcher starts in `$HOME`
-(Finder launches apps with `cwd=/`, where the server cannot create its
-`oxo-flow.db`), so the desktop app keeps its data in your home directory.
+the interface opens in a native window. Data (SQLite + workspace) lives
+in `$HOME` (see the `cwd=/` note above).
 
 ### Install and first run (macOS)
 
@@ -138,28 +197,34 @@ sudo dpkg -i target/release/bundle/deb/oxo-flow_*.deb
 oxo-flow serve --open
 ```
 
-The release `.deb` / `.rpm` ship an application-menu entry with the
-oxo-flow icon (`oxo-flow serve --open`), so after install you can also
-launch it from the desktop environment's app menu. The `.AppImage`
-carries the same entry (AppRun + `oxo-flow.desktop` + `oxo-flow.png`);
-double-click the file or run `./oxo-flow-*.AppImage`.
+The Linux desktop entries (deb/rpm/AppImage) still launch
+`oxo-flow serve --open`, which opens the interface in the system browser —
+the release packaging for the native-window shell currently covers macOS.
+Install `libwebkit2gtk-4.1-dev` and run the desktop crate directly if you
+want the windowed shell on Linux today (the crate itself is
+platform-independent; verified on X11/Xvfb, Linux):
+
+```bash
+cd crates/oxo-flow-desktop && cargo run --release
+```
 
 ## Windows
 
 There is no Windows bundle yet — the release pipeline does not build one
-(`cargo-bundle`'s `msi` format requires a Windows host). Windows users
-run the Linux binaries under WSL2.
+(`cargo-bundle`'s `msi` format requires a Windows host). Windows users run
+the Linux binaries under WSL2. The desktop crate itself compiles for
+Windows (wry uses WebView2) but is not packaged by CI yet.
 
 ## Verification
 
-After bundling, verify the packaged app serves the interface without a
-source checkout (the runtime resolves `static/` relative to the
-executable). In the CI bundle the real binary is `oxo-flow-bin`:
+After packaging, verify the shell starts its server and serves the SPA
+without a source checkout (the shell resolves `static/` relative to the
+executable, same lookup as the standalone server):
 
 ```bash
-APP="target/release/bundle/macos/oxo-flow.app/Contents/MacOS/oxo-flow-bin"
-"$APP" serve -p 8999 &
-curl -s http://127.0.0.1:8999/ | grep -q "__OXO_BASE__" && echo "SPA OK"
+APP="oxo-flow.app/Contents/MacOS/oxo-flow"
+"$APP" &            # opens a native window; server on an ephemeral port
+lsof -p $! | grep -m1 TCP     # shows the loopback listener
 ```
 
 Verify the bundle signature and icon:
@@ -178,9 +243,9 @@ tarballs (built by CI, not by hand):
 |---|---|
 | `oxo-flow-<ver>-desktop-x86_64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Intel (Rosetta on Apple Silicon) |
 | `oxo-flow-<ver>-desktop-aarch64-apple-darwin.dmg` / `-desktop-…-app.zip` | macOS Apple Silicon |
-| `oxo-flow-<ver>-desktop-amd64.deb` | Debian / Ubuntu |
-| `oxo-flow-<ver>-desktop-x86_64.rpm` | RHEL / Fedora / CentOS |
-| `oxo-flow-<ver>-desktop-x86_64.AppImage` | any Linux distribution |
+| `oxo-flow-<ver>-desktop-amd64.deb` | Debian / Ubuntu (menu entry opens the system browser; native window via the desktop crate) |
+| `oxo-flow-<ver>-desktop-x86_64.rpm` | RHEL / Fedora / CentOS (menu entry opens the system browser; native window via the desktop crate) |
+| `oxo-flow-<ver>-desktop-x86_64.AppImage` | any Linux distribution (menu entry opens the system browser; native window via the desktop crate) |
 | `oxo-flow-<ver>-<target>.tar.gz` | CLI binary, 8 targets (macOS ×2, Linux glibc/musl ×3 architectures) — for clusters, containers, and scripted installs |
 | `oxo-flow-web-<ver>-<target>.tar.gz` | Standalone web-server binary (no CLI subcommands) — for deployment hosts that only serve the UI |
 | `SHA256SUMS.txt` | Checksums for every asset above |
@@ -212,7 +277,16 @@ checkout is needed).
 
 ## Notes
 
-- **Version**: the bundle inherits the crate version from the workspace.
+- **Version**: the desktop crate repeats the workspace version
+  (`0.16.0`) by value — it is outside the workspace, so it does not
+  inherit `[workspace.package]`; bump it together with the rest on
+  release.
+- **Data directory**: the desktop app keeps all state in
+  `~/.oxo-flow/desktop` (database, logs, workspace, single-instance
+  lock) — see the table above. The CLI's `oxo-flow serve` and the
+  desktop shell deliberately do not share a data directory, so both can
+  run side by side (e.g. while comparing a release install with a dev
+  build).
 - **Icon**: the app icon (`assets/oxo-flow.icns`, macOS) is rendered from
   `logo.svg` and shipped in the CI bundle. For local cargo-bundle builds,
   add `icon = ["../../assets/oxo-flow.icns"]` under

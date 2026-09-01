@@ -1,0 +1,36 @@
+[package]
+name = "oxo-flow-desktop"
+version = "0.16.0"
+edition = "2024"
+authors = ["Traitome <https://github.com/Traitome>"]
+license = "Apache-2.0"
+repository = "https://github.com/Traitome/oxo-flow"
+homepage = "https://github.com/Traitome/oxo-flow"
+rust-version = "1.98.0"
+publish = false
+description = "Native desktop shell for the oxo-flow web interface (wry + tao)"
+
+# Standalone crate, excluded from the parent workspace (empty [workspace]
+# table above): tao/wry need GUI toolchains (Xcode SDKs, WebKitGTK) that
+# headless builds and the CI test jobs must not pull in. It shares the
+# parent's exact dependency versions via a path + version pin on
+# oxo-flow-web and the versions below.
+[workspace]
+
+[[bin]]
+name = "oxo-flow-desktop"
+path = "src/main.rs"
+
+[dependencies]
+oxo-flow-web = { path = "../oxo-flow-web", version = "0.16.0" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+fs2 = "0.4"
+libc = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# rwh_06: raw-window-handle 0.6 interop with wry; GTK/X11/Wayland features
+# are pulled in by the linux build via wry's webkit2gtk bindings.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
+wry = { version = "0.56", default-features = false, features = ["os-webview"] }

@@ -1,4 +1,4 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift contributors
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
 ci: fmt clippy build test schema-drift audit frontend-lint
@@ -67,7 +67,7 @@ contributors:
 	@echo "Human contributors (from git log):"
 	@git log --format="%aN" --all | grep -v "Claude\|noreply\|bot\|Copilot" | sort -u
 
-# ── Desktop packaging (cargo-bundle, docs/how-to/desktop-app.md) ──────────
+# ── Desktop packaging (docs/how-to/desktop-app.md) ────────────────────────
 # The SPA build output is copied into the CLI crate so the bundle carries it
 # without ".." resource paths (cargo-bundle mangles those). Frontend must be
 # built first — assets are gitignored build artifacts.
@@ -75,6 +75,14 @@ bundle-static:
 	@cd frontend && npm run build
 	@rm -rf crates/oxo-flow-cli/static
 	@cp -r crates/oxo-flow-web/static crates/oxo-flow-cli/static
+
+# Native-window desktop shell (wry + tao) around the embedded web server.
+# Lives outside the cargo workspace (GUI toolchains; see crates/
+# oxo-flow-desktop/Cargo.toml), so it builds with its own invocation.
+bundle-desktop:
+	@cd frontend && npm run build
+	cd crates/oxo-flow-desktop && cargo build --release
+	@echo "→ crates/oxo-flow-desktop/target/release/oxo-flow-desktop"
 
 bundle-macos: bundle-static
 	cd crates/oxo-flow-cli && cargo bundle --release --format osx

@@ -5,7 +5,13 @@ edition.workspace = true
 publish = false
 
 [workspace]
+# oxo-flow-desktop is the native window shell (wry) around the web server;
+# it is deliberately EXCLUDED (see `exclude` below) so headless builds and
+# CI test jobs never compile tao/wry, which need GUI toolchains (Xcode SDKs,
+# WebKitGTK). It is built by its own cargo invocation — see ci.yml's desktop
+# packaging job.
 members = ["crates/oxo-flow-core", "crates/oxo-flow-ai", "crates/oxo-flow-cli", "crates/oxo-flow-web"]
+exclude = ["crates/oxo-flow-desktop"]
 resolver = "2"
 
 [dependencies]
