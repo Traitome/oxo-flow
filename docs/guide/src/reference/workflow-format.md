@@ -184,7 +184,7 @@ author = "Your Name"
 | `min_version` | String | No | — | Minimum oxo-flow version required to run this workflow |
 | `format_version` | String | No | — | Format specification version for compatibility |
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
-| `sample_groups_file` | String | No | — | External TSV/JSON file defining sample groups |
+| `sample_groups_file` | String | No | — | External TSV/CSV/JSON file defining sample groups |
 | `metadata_file` | String | No | — | External TSV/CSV/JSON file of per-sample metadata columns, addressed as `{meta.<column>}` (see [Sample Metadata](#sample-metadata-metadata_file)) |
 | `pairs_pattern` | String | No | — | File glob pattern for auto-discovering pairs (e.g., `"aligned/{pair_id}/{exp}_vs_{ctrl}.bam"`) |
 | `sample_pattern` | String | No | — | File glob pattern for auto-discovering samples (e.g., `"raw/{sample}_R1.fastq.gz"`) |
@@ -1708,10 +1708,17 @@ sample_groups_file = "metadata/groups.tsv"  # or .csv, .json
 **TSV format** (samples can be comma-separated within the field):
 
 ```text
-name       samples                reads_layout    long_reads
-short      CTRL_001,CTRL_002      pe
-long       LR_001                 ont             reads/flowcell1.fq.gz;reads/flowcell2.fq.gz
+name	samples	reads_layout	long_reads
+short	CTRL_001,CTRL_002	pe	
+long	LR_001	ont	reads/flowcell1.fq.gz;reads/flowcell2.fq.gz
 ```
+
+Every row must supply a value for every column (tab-separated, one row per
+line) — a row missing a trailing cell fails the sheet parse with an
+unequal-lengths error. Leave a cell's value empty only if no `when` gate
+or placeholder references that metadata key for the group's samples (an
+empty cell behaves as an unbound key, which closes gates in *both*
+directions — including `!=`).
 
 **JSON format**:
 
@@ -1759,11 +1766,13 @@ it. Other metadata columns stay free-form — use the
 free-form values.
 
 **Multi-file cells** — a metadata cell may carry several paths (e.g. one
-FASTQ per flowcell) separated by whitespace or `;`. They are normalized to
-a single space-joined value that splices **verbatim** into the input list
+FASTQ per flowcell) separated by `;` (or tab-separated list cells in JSON
+sheets). They are normalized to a single space-joined value that splices
+**verbatim** into the input list
 as one element; shell rendering joins input-list elements, so
 `flye --nano-raw {input}` receives all paths as separate shell tokens
-(the `oxo-flow-varlo` `target_regions` multi-file pattern).
+(the `oxo-flow-varlo` `target_regions` multi-file pattern). Spaces alone
+do **not** split cells — separate multiple paths with `;`.
 
 **Reserved column names** — `group` and `sample` cannot be used as sheet
 columns: the fan-out binds `{group}`/`{sample}` first and metadata keys
