@@ -173,6 +173,11 @@ pub struct RuleRunRecord {
     /// failure diagnosis. Absent when the rule produced no stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+    /// The rule's resolved report caption (inline text or the content of its
+    /// `report.file`), captured at execution time (issue #281). Absent in
+    /// legacy checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
 }
 
 /// Persistent checkpoint state for resumable workflow execution.
@@ -456,6 +461,7 @@ impl CheckpointState {
                 exit_code: record.exit_code,
                 command: record.command.clone(),
                 stderr_tail: stderr_tail(record.stderr.as_deref()),
+                caption: record.caption.clone(),
             },
         );
     }

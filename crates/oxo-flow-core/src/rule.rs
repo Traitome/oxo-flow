@@ -99,6 +99,105 @@ impl<'de> Deserialize<'de> for OptionalMode {
     }
 }
 
+/// Report annotation for a rule, rendered by the `rule-captions` report
+/// section. TOML forms: `report = "caption text"` or
+/// `report = { file = "path", caption = "caption text" }`.
+///
+/// Captions are text/markdown only (no figure embedding in v1); a `file`
+/// is a markdown/text file resolved relative to the workdir at render time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleReport {
+    /// Inline caption text (markdown allowed).
+    Text(String),
+    /// Structured form: an optional markdown/text file (relative to the
+    /// workdir) and/or an optional inline caption.
+    Detailed {
+        /// Path to a markdown/text file, relative to the workdir.
+        file: Option<String>,
+        /// Inline caption text (markdown allowed).
+        caption: Option<String>,
+    },
+}
+
+impl Serialize for RuleReport {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Text(text) => serializer.serialize_str(text),
+            Self::Detailed { file, caption } => {
+                use serde::ser::SerializeStruct as _;
+                let mut len = 0;
+                if file.is_some() {
+                    len += 1;
+                }
+                if caption.is_some() {
+                    len += 1;
+                }
+                let mut state = serializer.serialize_struct("RuleReport", len)?;
+                if let Some(file) = file {
+                    state.serialize_field("file", file)?;
+                }
+                if let Some(caption) = caption {
+                    state.serialize_field("caption", caption)?;
+                }
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RuleReport {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = toml::Value::deserialize(deserializer)?;
+        match value {
+            toml::Value::String(s) => Ok(Self::Text(s)),
+            toml::Value::Table(map) => {
+                let field = |key: &str| -> Result<Option<String>, D::Error> {
+                    match map.get(key) {
+                        None | Some(toml::Value::String(_)) => Ok(map
+                            .get(key)
+                            .and_then(toml::Value::as_str)
+                            .map(str::to_owned)),
+                        Some(other) => Err(serde::de::Error::custom(format!(
+                            "report.{key} must be a string — got {other}"
+                        ))),
+                    }
+                };
+                let file = field("file")?;
+                let caption = field("caption")?;
+                if file.is_none() && caption.is_none() {
+                    return Err(serde::de::Error::custom(
+                        "report table needs at least one of `file` or `caption`",
+                    ));
+                }
+                Ok(Self::Detailed { file, caption })
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "report must be a string or a table with `file`/`caption` — got {other}"
+            ))),
+        }
+    }
+}
+
+impl RuleReport {
+    /// The inline caption text, if any.
+    #[must_use]
+    pub fn caption(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Detailed { caption, .. } => caption.as_deref(),
+        }
+    }
+
+    /// The referenced markdown/text file path, if any.
+    #[must_use]
+    pub fn file(&self) -> Option<&str> {
+        match self {
+            Self::Text(_) => None,
+            Self::Detailed { file, .. } => file.as_deref(),
+        }
+    }
+}
+
 /// Parse a duration string like "5s", "30s", "2m", "1h", "1d" into seconds.
 ///
 /// Returns `None` if the format is invalid or would overflow.
@@ -994,6 +1093,14 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
+    /// Report annotation rendered by the `rule-captions` section: inline
+    /// caption text, or `{ file = "…", caption = "…" }` where `file` is a
+    /// markdown/text file resolved relative to the workdir at render time.
+    /// Text/markdown only — no figure embedding (see issue #281).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<RuleReport>,
+
     /// Conditional execution expression.
     ///
     /// The rule is only executed when this expression evaluates to true.
@@ -1457,6 +1564,12 @@ impl RuleBuilder {
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.rule.description = Some(description.into());
+        self
+    }
+
+    /// Set the rule's report annotation (inline caption text).
+    pub fn report(mut self, report: crate::rule::RuleReport) -> Self {
+        self.rule.report = Some(report);
         self
     }
 

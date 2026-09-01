@@ -77,6 +77,7 @@ pub struct ReportArgs {
     pub r_data: Option<PathBuf>,
     pub diff: Option<PathBuf>,
     pub acct: Option<PathBuf>,
+    pub versions_yml: Option<PathBuf>,
 }
 
 /// Auto-discover a workflow file for `report` (issue #83 WS5).
@@ -337,6 +338,7 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         r_data,
         diff,
         acct,
+        versions_yml,
     } = args;
 
     print_banner();
@@ -375,6 +377,43 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         }
         std::fs::write(path, oxo_flow_core::report::builtin_template())?;
         println!("{}", path.display());
+        return Ok(());
+    }
+
+    // --versions-yml: export the static software-versions document (issue
+    // #280) and exit — a CI diffing artifact, so it needs no full report.
+    // Still requires a workflow (the versions come from its rules).
+    if let Some(path) = versions_yml {
+        let resolved = resolve_report_workflow(
+            workflow,
+            run_dir.as_deref(),
+            workdir.as_deref(),
+            checkpoint_path.as_deref(),
+            plan,
+        )?;
+        let workflow_file = resolved.workflow;
+        let config = WorkflowConfig::from_file(&workflow_file)
+            .with_context(|| format!("failed to parse {}", workflow_file.display()))?;
+        // Explicit --checkpoint wins; otherwise fall back to the
+        // checkpoint discovery already loaded (its workflow_git_sha feeds
+        // the document's provenance field) — the same precedence the full
+        // report path uses below.
+        let checkpoint = match checkpoint_path.as_deref() {
+            Some(p) => load_checkpoint(p, strict)?,
+            None => resolved.checkpoint,
+        };
+        let doc = oxo_flow_core::software_versions::collect_software_versions(
+            &config,
+            checkpoint.as_ref(),
+            Some(&workflow_file),
+        );
+        let yaml = doc.to_yaml();
+        if path == Path::new("-") {
+            print!("{yaml}");
+        } else {
+            std::fs::write(&path, yaml)?;
+            println!("{}", path.display());
+        }
         return Ok(());
     }
 
@@ -1517,7 +1556,27 @@ Keep the total under 200 words. Use simple language; explain jargon.
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hms_to_secs, parse_maxrss_to_mb};
+    use super::{parse_hms_to_secs, parse_maxrss_to_mb, resolve_report_workflow};
+
+    /// With no explicit workflow, `report --versions-yml` must still pick
+    /// up the auto-discovered checkpoint — its `workflow_git_sha` feeds the
+    /// versions document (issue #280 follow-up: the early exit previously
+    /// dropped `resolved.checkpoint`).
+    #[test]
+    fn versions_yml_resolution_carries_discovered_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, "[workflow]\nname = \"t\"\nversion = \"0.1\"\n").unwrap();
+        // Discovering from the workflow's own directory with no
+        // checkpoint on disk yields None — but the plumbing must be
+        // exercised end-to-end (explicit --checkpoint is tested via
+        // load_checkpoint; here we pin the None fallback path).
+        let resolved =
+            resolve_report_workflow(Some(wf.clone()), None, Some(dir.path()), None, false).unwrap();
+        assert_eq!(resolved.workflow, wf);
+        assert!(resolved.checkpoint.is_none());
+        assert!(resolved.checkpoint_path.is_none());
+    }
 
     #[test]
     fn hms_parser_handles_sacct_formats() {
