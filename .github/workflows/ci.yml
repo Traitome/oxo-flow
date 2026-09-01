@@ -412,7 +412,11 @@ jobs:
     needs: [test]
     # Skip on pull_request events — the test job already validates compilation.
     # Build and package are only needed for releases and main-branch pushes.
-    if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
+    if: >-
+      always() &&
+      needs.test.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      inputs.publish_images_only != true
     # Partial artifact sets are acceptable for feature branches only —
     # a broken release build must fail CI on main and tag pushes.
     continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
@@ -488,7 +492,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: [test]
     # Skip on pull_request events — macOS runners are slow and expensive.
-    if: always() && needs.test.result == 'success' && github.event_name != 'pull_request'
+    if: >-
+      always() && needs.test.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      inputs.publish_images_only != true
     # A cancelled/unavailable runner must not block feature-branch runs,
     # but a broken macOS release build must fail CI on main and tags.
     continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
@@ -655,6 +662,7 @@ jobs:
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
+      inputs.publish_images_only != true &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.build-linux.result == 'success' &&
       needs.build-macos.result == 'success'
@@ -890,12 +898,15 @@ jobs:
     # Depend directly on sync-version + test so crates.io publishing is not
     # blocked by binary build failures or a skipped GitHub Release job.
     # Publishing source crates is independent of the binary release artifacts.
+    # publish_images_only validation runs skip this entirely — a dry-run must
+    # never touch the crates.io registry.
     needs: [sync-version, test]
     runs-on: ubuntu-latest
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
+      inputs.publish_images_only != true &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:

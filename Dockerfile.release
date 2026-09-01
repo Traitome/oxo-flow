@@ -33,20 +33,24 @@ RUN case "${TARGETARCH}" in \
     && RELEASE_URL="https://github.com/Traitome/oxo-flow/releases/download/v${VERSION}" \
     && mkdir -p /out \
     && curl -fsSL -o /out/SHA256SUMS.txt "${RELEASE_URL}/SHA256SUMS.txt" \
+    # Download under the ORIGINAL release-asset names: sha256sum -c below
+    # checks the entries exactly as SHA256SUMS.txt lists them, so a renamed
+    # local file would read as "FAILED open or read" even when the content
+    # (and its checksum) is correct.
     && for pkg in oxo-flow oxo-flow-web; do \
-         curl -fsSL -o "/out/${pkg}.tar.gz" \
-           "${RELEASE_URL}/${pkg}-v${VERSION}-${OXO_TARGET}.tar.gz" || exit 1; \
+         ASSET="${pkg}-v${VERSION}-${OXO_TARGET}.tar.gz" \
+         && curl -fsSL -o "/out/${ASSET}" "${RELEASE_URL}/${ASSET}" || exit 1; \
        done \
-    # Verify against the release's checksums. grep must produce exactly the
-    # two expected lines (one per tarball) or sha256sum -c fails on the
-    # missing/renamed entry — a renamed asset cannot sneak through.
     && cd /out \
+    # Verify against the release's checksums. grep must produce exactly the
+    # two expected lines (one per tarball) or sha256sum -c fails on a
+    # missing entry — a renamed/mismatched asset cannot sneak through.
     && grep -F "oxo-flow-v${VERSION}-${OXO_TARGET}.tar.gz" SHA256SUMS.txt > wanted.txt \
     && grep -F "oxo-flow-web-v${VERSION}-${OXO_TARGET}.tar.gz" SHA256SUMS.txt >> wanted.txt \
     && [ "$(wc -l < wanted.txt)" -eq 2 ] \
     && sha256sum -c wanted.txt \
-    && tar -xzf oxo-flow.tar.gz \
-    && tar -xzf oxo-flow-web.tar.gz \
+    && tar -xzf "oxo-flow-v${VERSION}-${OXO_TARGET}.tar.gz" \
+    && tar -xzf "oxo-flow-web-v${VERSION}-${OXO_TARGET}.tar.gz" \
     && rm -f /out/*.tar.gz /out/wanted.txt /out/SHA256SUMS.txt
 
 # ===== Frontend builder (SPA assets are not in any release tarball) =====
