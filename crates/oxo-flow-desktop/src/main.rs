@@ -37,6 +37,8 @@ use wry::WebViewBuilderExtUnix;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -54,6 +56,19 @@ enum ShellEvent {
     /// SIGINT or SIGTERM was received; shut down gracefully.
     Signalled,
 }
+
+/// Set by the watchdog when it observes a signal or a server exit, and read
+/// by the blocking startup steps below (window build, server wait): while
+/// this thread is inside `WindowBuilder::build()` no event loop is running
+/// to receive proxy events, so a signal landing there would otherwise only
+/// wake oxo-flow-web's own shutdown handler — closing the listener out from
+/// under `wait_for_server` and turning a `kill` into a bogus startup
+/// failure. The flag makes the shutdown observable from this thread.
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// First error reported by the watchdog when the server task itself failed
+/// (crash or startup bind error), for the early-exit path below.
+static SERVER_FAILURE: OnceLock<String> = OnceLock::new();
 
 fn main() {
     if let Err(e) = run() {
@@ -110,27 +125,20 @@ fn run() -> Result<()> {
     // to map into anyhow here.
     let event_loop = EventLoopBuilder::<ShellEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
-    let window = WindowBuilder::new()
-        .with_title("oxo-flow")
-        .with_inner_size(LogicalSize::new(1440.0, 900.0))
-        .with_min_inner_size(LogicalSize::new(960.0, 600.0))
-        .build(&event_loop)
-        .context("failed to create window")?;
 
-    // Wait until the listener accepts TCP connections (bounded), so the
-    // first page load never races server startup. 10s covers cold starts
-    // (SQLite init, first-run migrations) on slow disks.
-    wait_for_server(HOST, port).context("the embedded web server did not become ready in time")?;
-
-    let webview = build_webview(&window, &server_url, port)
-        .context("failed to create webview")?;
-    let _ = webview; // kept alive by wry's internal association with the window
-
-    // Watchdog: the main loop idles in ControlFlow::Wait, where neither
-    // platform emits NewEvents(Poll) we could poll JoinHandles from — so the
-    // runtime pushes lifecycle events through the proxy instead (both
-    // backends wake the loop for proxy events even under Wait). Race the
-    // server against SIGINT/SIGTERM so `kill` shuts the app down cleanly.
+    // Watchdog: once the loop below is running it idles in
+    // ControlFlow::Wait, where neither platform emits NewEvents(Poll) we
+    // could poll JoinHandles from — so the runtime pushes lifecycle events
+    // through the proxy instead (both backends wake the loop for proxy
+    // events even under Wait). Race the server against SIGINT/SIGTERM so
+    // `kill` shuts the app down cleanly.
+    //
+    // This MUST be spawned before the window build below: cold GTK/webkit
+    // initialization blocks this thread for seconds, and a signal landing in
+    // that window would otherwise only wake oxo-flow-web's own shutdown
+    // handler — closing the listener out from under `wait_for_server` and
+    // turning a `kill` into a bogus startup failure. The watchdog also sets
+    // SHUTDOWN_REQUESTED, which the blocking steps check.
     runtime.spawn(async move {
         #[cfg(unix)]
         let interrupted = async {
@@ -153,13 +161,50 @@ fn run() -> Result<()> {
                     Ok(inner) => inner,
                     Err(join) => Err(anyhow::anyhow!("server task failed: {join}")),
                 };
+                if let Err(e) = &result {
+                    let _ = SERVER_FAILURE.set(format!("{e:#}"));
+                }
+                SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
                 let _ = proxy.send_event(ShellEvent::ServerFinished(result));
             }
             _ = interrupted => {
+                SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
                 let _ = proxy.send_event(ShellEvent::Signalled);
             }
         }
     });
+
+    let window = WindowBuilder::new()
+        .with_title("oxo-flow")
+        .with_inner_size(LogicalSize::new(1440.0, 900.0))
+        .with_min_inner_size(LogicalSize::new(960.0, 600.0))
+        .build(&event_loop)
+        .context("failed to create window")?;
+
+    // A signal (or server exit) that landed while the window was building
+    // never reaches the event loop — it is not running yet, and the proxy
+    // event is only queued. The watchdog flagged it in SHUTDOWN_REQUESTED,
+    // so honor the flag here instead of bringing up a window whose server
+    // is already shutting down; the exit code reports a server failure.
+    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+        return early_exit_result();
+    }
+
+    // Wait until the listener accepts TCP connections (bounded), so the
+    // first page load never races server startup. 10s covers cold starts
+    // (SQLite init, first-run migrations) on slow disks. The wait aborts
+    // early once the watchdog flags a shutdown — otherwise a signal arriving
+    // mid-wait would sit out the full deadline against a listener that is
+    // already closing.
+    if let ServerWait::ShuttingDown = wait_for_server(HOST, port)
+        .context("the embedded web server did not become ready in time")?
+    {
+        return early_exit_result();
+    }
+
+    let webview = build_webview(&window, &server_url, port)
+        .context("failed to create webview")?;
+    let _ = webview; // kept alive by wry's internal association with the window
 
     // The runtime is owned by the event-loop closure (tao's `run` never
     // returns — it has signature `-> !` — so all teardown happens inside
@@ -384,16 +429,43 @@ fn pick_free_port() -> Result<u16> {
         .context("failed to read the allocated port")
 }
 
+/// Outcome of the bounded server startup wait.
+enum ServerWait {
+    /// The listener accepts connections; safe to build the webview.
+    Ready,
+    /// The watchdog flagged a signal or server exit while we waited — the
+    /// startup sequence must not continue.
+    ShuttingDown,
+}
+
+/// Exit without ever showing a window, after a signal or server failure
+/// landed during startup. Mirrors the event-loop exit: a recorded server
+/// failure becomes exit code 1, otherwise 0 (a graceful `kill` during
+/// startup should not look like a crash).
+fn early_exit_result() -> Result<()> {
+    if let Some(err) = SERVER_FAILURE.get() {
+        anyhow::bail!("web server failed during startup: {err}");
+    }
+    Ok(())
+}
+
 /// Poll the listener until it accepts TCP connections or the deadline
-/// passes. `TcpStream::connect` takes a socket address pair, not the URL
-/// string: the `ToSocketAddrs` impl for `&str` would try to DNS-resolve the
-/// host `"http://127.0.0.1"`, which fails on Linux (glibc rejects the
-/// malformed hostname) even though macOS tolerated it.
-fn wait_for_server(host: &str, port: u16) -> Result<()> {
+/// passes, aborting as soon as the watchdog flags a shutdown. Polling
+/// `TcpStream::connect` (sync, on this thread) keeps the startup path free
+/// of runtime assumptions; the 50ms step is fast enough to notice a
+/// shutdown request promptly. Note `TcpStream::connect` takes a socket
+/// address pair, not the URL string: the `ToSocketAddrs` impl for `&str`
+/// would try to DNS-resolve the host `"http://127.0.0.1"`, which fails on
+/// Linux (glibc rejects the malformed hostname) even though macOS tolerated
+/// it.
+fn wait_for_server(host: &str, port: u16) -> Result<ServerWait> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            return Ok(ServerWait::ShuttingDown);
+        }
         if std::net::TcpStream::connect((host, port)).is_ok() {
-            return Ok(());
+            return Ok(ServerWait::Ready);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
