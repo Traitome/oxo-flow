@@ -117,7 +117,7 @@ fn run() -> Result<()> {
     // Wait until the listener accepts TCP connections (bounded), so the
     // first page load never races server startup. 10s covers cold starts
     // (SQLite init, first-run migrations) on slow disks.
-    wait_for_server(&server_url).context("the embedded web server did not become ready in time")?;
+    wait_for_server(HOST, port).context("the embedded web server did not become ready in time")?;
 
     let webview = build_webview(&window, &server_url, port)
         .context("failed to create webview")?;
@@ -331,16 +331,20 @@ fn pick_free_port() -> Result<u16> {
         .context("failed to read the allocated port")
 }
 
-/// Poll `GET {url}/` until it responds (any status) or the deadline passes.
-fn wait_for_server(url: &str) -> Result<()> {
+/// Poll the listener until it accepts TCP connections or the deadline
+/// passes. `TcpStream::connect` takes a socket address pair, not the URL
+/// string: the `ToSocketAddrs` impl for `&str` would try to DNS-resolve the
+/// host `"http://127.0.0.1"`, which fails on Linux (glibc rejects the
+/// malformed hostname) even though macOS tolerated it.
+fn wait_for_server(host: &str, port: u16) -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
-        if std::net::TcpStream::connect(url).is_ok() {
+        if std::net::TcpStream::connect((host, port)).is_ok() {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    anyhow::bail!("server at {url} did not start listening")
+    anyhow::bail!("server at {host}:{port} did not start listening")
 }
 
 #[cfg(test)]
