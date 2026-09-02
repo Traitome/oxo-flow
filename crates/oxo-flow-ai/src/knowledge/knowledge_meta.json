@@ -1,12 +1,12 @@
 {
   "sources": {
     "bioconda_tools": {
-      "count": 6470,
+      "count": 6487,
       "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6191,
+      "excluded": 6192,
       "description": "",
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-08-24T03:55:33Z",
+      "generated_at": "2026-09-01T08:23:27Z",
       "auto": true
     },
     "skills_index": {
@@ -15,7 +15,7 @@
       "domains": 64,
       "description": "",
       "data_file": "skills_index.jsonl",
-      "generated_at": "2026-08-23T16:01:26Z",
+      "generated_at": "2026-09-01T08:35:17Z",
       "auto": true
     },
     "nfcore_modules": {
@@ -23,7 +23,7 @@
       "url": "https://github.com/nf-core/modules",
       "description": "",
       "data_file": "nfcore_modules.jsonl",
-      "generated_at": "2026-08-23T16:01:36Z",
+      "generated_at": "2026-09-01T08:34:59Z",
       "auto": true
     },
     "commercial_tools": {
@@ -37,7 +37,7 @@
       ],
       "description": "",
       "data_file": "commercial_tools.jsonl",
-      "generated_at": "2026-08-23T16:36:34Z",
+      "generated_at": "2026-09-01T08:33:32Z",
       "auto": true
     },
     "pipeline_graph": {
@@ -52,7 +52,7 @@
       },
       "description": "",
       "data_file": "pipeline_graph.jsonl",
-      "generated_at": "2026-08-23T16:02:58Z",
+      "generated_at": "2026-09-01T08:35:06Z",
       "auto": true
     },
     "biotools_overlay": {
@@ -73,7 +73,7 @@
       "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
       "description": "",
       "data_file": "edam_terms.jsonl",
-      "generated_at": "2026-08-23T16:08:40Z",
+      "generated_at": "2026-09-01T08:33:33Z",
       "auto": true
     },
     "skillgraph_docs": {
@@ -81,9 +81,9 @@
       "url": "https://skillgraph.pipette.bio/mcp",
       "description": "full SKILL.md docs per skill (reserved for a later doc layer)",
       "data_file": "skillgraph_docs.jsonl",
-      "generated_at": "2026-08-23T16:02:58Z",
+      "generated_at": "2026-09-01T08:35:06Z",
       "auto": true
     }
   },
-  "generated_at": "2026-08-24T03:55:33Z"
+  "generated_at": "2026-09-01T08:35:17Z"
 }
