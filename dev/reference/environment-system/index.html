@@ -4242,12 +4242,19 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Environments already exist on the system</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--skip-env-setup
 </span></code></pre></div>
+<p>With the flag set, the engine does not create anything — a rule whose env
+is missing fails inside conda. For file-backed conda specs it therefore
+checks <code>conda env list</code> up front and names the expected <code>&lt;name&gt;-&lt;hash8&gt;</code>
+env before running: if an env under the plain <code>&lt;name&gt;</code> exists, it was
+likely built from the same spec before the content-hash suffix — symlink
+or rename it, build the suffixed env, or drop <code>--skip-env-setup</code>.</p>
 <hr />
 <h2 id="backend-implementations">Backend Implementations<a class="headerlink" href="#backend-implementations" title="Permanent link">#</a></h2>
 <h3 id="conda">Conda<a class="headerlink" href="#conda" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>conda</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses YAML environment file</li>
+<li><strong>Naming</strong>: A file-backed spec resolves to the env name <code>&lt;name&gt;-&lt;hash8&gt;</code>, where <code>&lt;name&gt;</code> is the YAML's <code>name:</code> field (falling back to the file stem) and <code>&lt;hash8&gt;</code> is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one (issue #159). Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (<code>conda env create -n &lt;name&gt;-&lt;hash8&gt; -f envs/spec.yaml</code>); the engine prints the expected name when it detects the env is missing under <code>--skip-env-setup</code></li>
 <li><strong>Activation</strong>: Runs <code>conda run --no-capture-output -n &lt;env_name&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code> — <code>--no-capture-output</code> (conda ≥ 4.13) keeps stdout/stderr live, and the <code>PATH</code> prefix makes the rule see the env's own tools first</li>
 <li><strong>Caching</strong>: Environments are created once and reused across rules that share the same YAML file</li>
 </ul>
