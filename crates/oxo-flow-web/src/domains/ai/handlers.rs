@@ -241,6 +241,22 @@ pub async fn explain(
     .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_EXPLAIN_ERROR", e))
 }
 
+/// Run a blocking filesystem walk off the async worker thread.
+///
+/// `block_in_place` tells the multi-threaded runtime this worker is about
+/// to block so it can move other tasks elsewhere — but it PANICS on a
+/// current-thread runtime (unit tests, embedded callers), so the flavor is
+/// checked first and the walk runs inline there (same contract as
+/// `auth::service::blocking_crypto`; issue #297 item 5).
+fn blocking_dir_walk<T>(op: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(op)
+        }
+        _ => op(),
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/ai/interpret",
@@ -275,7 +291,7 @@ pub async fn interpret(
                 // minor). The blocking-pool hop is only worth it when a
                 // workdir exists; otherwise stay on the cheap path.
                 let wd = wd.to_string();
-                tokio::task::block_in_place(|| {
+                blocking_dir_walk(|| {
                     let mut summary = String::new();
                     if let Ok(entries) = std::fs::read_dir(&wd) {
                         for entry in entries.filter_map(|e| e.ok()) {

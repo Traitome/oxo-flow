@@ -124,14 +124,17 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 
 Images are published to GitHub Container Registry automatically on every release and every push to `main`.
 Release images are multi-arch (`linux/amd64` + `linux/arm64`) and are assembled from the
-SHA256-verified release binaries; `:main` is amd64-only and compiled from source:
+SHA256-verified release binaries. `:latest` moves only after the release image passes a health
+smoke test, `:<major.minor>` (e.g. `:0.16`) tracks the newest patch of a minor line, and `:main`
+is a multi-arch dev build compiled from source:
 
 ```bash
 # Web UI at http://localhost:3000
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
-# Pin a specific release
+# Pin a specific release (or track a minor line)
 docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16
 
 # CLI one-shot usage — mount your workflow directory
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
