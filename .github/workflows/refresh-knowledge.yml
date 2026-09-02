@@ -7,7 +7,8 @@
 # green run with a notice; changes -> refresh-knowledge/<date> branch, commit of
 # data + meta files only, PR with label `automated` + per-source count summary
 # from knowledge_meta.json. Release safety: ci.yml sync-version gates dispatch
-# releases on 35-day freshness of auto:true sources (2x the 16-day cadence).
+# releases on 60-day freshness of auto:true sources (MAX_AGE_DAYS there; the
+# 16-day cadence leaves one missed run of slack).
 name: Knowledge Refresh
 
 on:
