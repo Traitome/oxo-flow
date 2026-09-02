@@ -232,7 +232,7 @@ Rate limiting and SSE:
 └── /pipeline/{id}          # DAG edit API: /command, /undo, /redo
 ```
 (See [Web API](./web-api.md) for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at `GET /api/openapi.json` on any running server.)
-(Old `/workflows/*` endpoints marked `#[deprecated]` exist only as unserved legacy modules — see [Legacy Modules](#legacy-modules-deprecated-since-080).)
+(Old `/workflows/*` endpoints are marked `#[deprecated]` in the source and exist only as unserved legacy modules.)
 
 ---
 

@@ -83,7 +83,6 @@ A generated report includes:
 | **Provenance** | Engine version, workflow file sha256, checkpoint location |
 | **Software Versions** | Declared software per rule, nf-core-style: docker `image:tag`, module `tool/version`, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded |
 | **Task Summary** | Per-rule table of tasks, types, inputs, outputs, environments, and resources |
-| **Software Versions** | Tool/version table parsed from known version-reporting files under the workdir |
 | **Rule Captions** | Per-rule `report` annotations rendered as markdown (one subsection per executed instance) — set `report = "caption"` or `report = { file = "notes/qc.md", caption = "…" }` on a rule |
 | **Aggregate Metrics** | MultiQC-style sample × metric matrix across all parsed tools, plus `*_mqc.json` custom content |
 
