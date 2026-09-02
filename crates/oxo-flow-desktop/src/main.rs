@@ -37,8 +37,8 @@ use wry::WebViewBuilderExtUnix;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -86,8 +86,12 @@ fn run() -> Result<()> {
     let data_dir = app_data_dir().context("failed to locate a home directory for app data")?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("failed to create data directory {}", data_dir.display()))?;
-    std::env::set_current_dir(&data_dir)
-        .with_context(|| format!("failed to change working directory to {}", data_dir.display()))?;
+    std::env::set_current_dir(&data_dir).with_context(|| {
+        format!(
+            "failed to change working directory to {}",
+            data_dir.display()
+        )
+    })?;
 
     // The embedded server writes logs/, oxo-flow.db, and serves the SPA —
     // mirror the CLI's tracing setup (human-readable, env-filterable).
@@ -102,9 +106,8 @@ fn run() -> Result<()> {
     // One shell per data directory: two instances would run two servers
     // against the same oxo-flow.db. The advisory lock releases automatically
     // when the process dies (no stale-lock cleanup needed).
-    let instance_lock = take_instance_lock().context(
-        "another oxo-flow desktop instance is already running for this user account",
-    )?;
+    let instance_lock = take_instance_lock()
+        .context("another oxo-flow desktop instance is already running for this user account")?;
 
     // Grab an ephemeral port, then start the embedded server on a tokio
     // runtime that outlives the event loop below.
@@ -142,9 +145,9 @@ fn run() -> Result<()> {
     runtime.spawn(async move {
         #[cfg(unix)]
         let interrupted = async {
-            use tokio::signal::unix::{signal, SignalKind as TkSignalKind};
-            let mut term = signal(TkSignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+            use tokio::signal::unix::{SignalKind as TkSignalKind, signal};
+            let mut term =
+                signal(TkSignalKind::terminate()).expect("failed to install SIGTERM handler");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = term.recv() => {}
@@ -202,8 +205,7 @@ fn run() -> Result<()> {
         return early_exit_result();
     }
 
-    let webview = build_webview(&window, &server_url, port)
-        .context("failed to create webview")?;
+    let webview = build_webview(&window, &server_url, port).context("failed to create webview")?;
     let _ = webview; // kept alive by wry's internal association with the window
 
     // The runtime is owned by the event-loop closure (tao's `run` never
@@ -382,9 +384,40 @@ fn is_app_origin(uri: &str, port: u16) -> bool {
     authority == format!("{HOST}:{port}")
 }
 
+/// Vet a URI for the OS browser opener: `http`/`https` scheme only (the
+/// comparison is case-insensitive per RFC 3986; the original spelling is
+/// preserved for the browser), no control characters. The OS openers
+/// dispatch every other scheme to its registered protocol HANDLER
+/// (`file://`, `ms-msdt:`, `search-ms:` — historic Windows-spawner
+/// vectors), and webview content is workflow-derived, so the scheme is
+/// pinned here rather than trusted to the opener. Control characters are
+/// rejected outright: argv isolation already contains them on every
+/// platform, but a crafted URI must fail loudly, not open a surprise
+/// target.
+fn vetted_external_uri(uri: &str) -> std::io::Result<&str> {
+    let scheme_ok = {
+        let lower = uri.to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+    };
+    if !scheme_ok {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("only http(s) URIs are opened externally, got: {uri}"),
+        ));
+    }
+    if uri.chars().any(char::is_control) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "URI contains control characters",
+        ));
+    }
+    Ok(uri)
+}
+
 /// Open a URI in the system browser (best-effort; failures are ignored —
 /// a missing `xdg-open` on a headless box must not crash the app).
 fn open_external(uri: &str) -> std::io::Result<()> {
+    let uri = vetted_external_uri(uri)?;
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -401,8 +434,15 @@ fn open_external(uri: &str) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", uri])
+        // NOT `cmd /c start`: cmd re-parses its command line, and Rust's
+        // argv quoting is not cmd quoting — an unquoted `&` is a command
+        // separator and an embedded `"` escapes the enclosing quote, so a
+        // crafted link in rendered content could execute commands.
+        // explorer.exe takes the URI as a single argv element (no shell
+        // re-parse) and hands it to the default browser; its odd
+        // exit-code-1-on-success is ignored (spawn result only).
+        std::process::Command::new("explorer")
+            .arg(uri)
             .spawn()
             .map(|_| ())
     }
@@ -480,7 +520,10 @@ mod tests {
     fn same_origin_is_app() {
         assert!(is_app_origin("http://127.0.0.1:4173/", 4173));
         assert!(is_app_origin("http://127.0.0.1:4173/api/health", 4173));
-        assert!(is_app_origin("http://127.0.0.1:4173/api/runs?x=1#frag", 4173));
+        assert!(is_app_origin(
+            "http://127.0.0.1:4173/api/runs?x=1#frag",
+            4173
+        ));
     }
 
     #[test]
@@ -504,5 +547,38 @@ mod tests {
         assert!(!is_app_origin("http://[::1]:4173/", 4173));
         // Userinfo trick: the host is evil.com, not the app.
         assert!(!is_app_origin("http://127.0.0.1:4173@evil.com/", 4173));
+    }
+
+    #[test]
+    fn external_uri_gate_accepts_http_https() {
+        assert!(vetted_external_uri("https://github.com/Traitome/oxo-flow").is_ok());
+        // Query separators and fragments are ordinary URI syntax — argv
+        // isolation (no shell) is what keeps them inert, so the gate must
+        // not charset-filter them away.
+        assert!(vetted_external_uri("http://example.com/docs?a=1&b=2#frag").is_ok());
+        // Scheme comparison is case-insensitive (RFC 3986).
+        assert!(vetted_external_uri("HTTPS://EXAMPLE.COM/").is_ok());
+    }
+
+    #[test]
+    fn external_uri_gate_rejects_other_schemes_and_control_chars() {
+        // Non-http(s) schemes dispatch to their registered protocol
+        // handler inside the OS opener — file/ms-msdt/search-ms are the
+        // historic spawner vectors, so the gate is a scheme allowlist,
+        // not a blocklist.
+        for uri in [
+            "file:///etc/passwd",
+            "ms-msdt:diagnostic",
+            "search-ms:q=secret",
+            "javascript:alert(1)",
+            "ftp://example.com/pub",
+            "HTTPX://example.com/",
+        ] {
+            assert!(vetted_external_uri(uri).is_err(), "must reject {uri}");
+        }
+        // Control characters: fail loudly instead of opening a surprise
+        // target.
+        assert!(vetted_external_uri("http://example.com/a\r\nX: 1").is_err());
+        assert!(vetted_external_uri("http://example.com/\0").is_err());
     }
 }
