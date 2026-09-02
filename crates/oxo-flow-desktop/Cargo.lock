@@ -2737,6 +2737,7 @@ dependencies = [
  "base64",
  "chrono",
  "csv",
+ "flate2",
  "fs2",
  "glob",
  "hex",

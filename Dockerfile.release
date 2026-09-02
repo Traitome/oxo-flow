@@ -64,6 +64,10 @@ RUN npm run build
 # ===== Runtime =====
 FROM debian:trixie-slim
 
+# ARGs are stage-scoped — re-declare so the OCI version LABEL below
+# resolves instead of rendering empty.
+ARG VERSION
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
