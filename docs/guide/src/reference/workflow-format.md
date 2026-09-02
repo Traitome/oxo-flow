@@ -1543,7 +1543,19 @@ shell = "{assembler} -o {output} {input}"
 ```
 
 - Every rule referencing `{assembler}` (bare form) or `{values.assembler}`
-  (namespaced form) expands into one instance per value.
+  (namespaced form) expands into one instance per value. The reference may
+  live in any trigger field — inputs, outputs, shell, `when`,
+  `expand_inputs` patterns, **or the rule's `output_pattern`** (issue
+  #296): a pattern-only reference fans the producer out per value with the
+  pattern baked per instance, exactly as it already does for
+  `{sample}`/pair wildcards.
+
+  ```toml
+  [[rules]]
+  name = "assemble"
+  output_pattern = "results/{assembler}/chunks.txt"   # fans out per value
+  shell = "scripts/build_all.sh"
+  ```
 - `values_from = "config.x"` resolves the value list from a config key at
   expansion time — a comma string (`"u1,u2"`) or array, the same semantics
   as `expand_inputs` config references. CLI `--arg x=u1,u2` or a profile
@@ -2511,6 +2523,16 @@ Semantics:
 - `{config.x}` in the pattern resolves from the workflow config before the
   scan; discovered files are literals, so exact-match edge inference works
   as usual.
+- A `[[values]]` wildcard in the pattern is **not** fresh — it is a
+  plan-time bound dimension (issue #296). The producer fans out per value
+  with the pattern baked per instance, the pattern is registered
+  producer-side in the DAG (so a per-value consumer's materialized input
+  exact-matches its own producer instance), and a pattern whose wildcards
+  are all bound this way skips the runtime scan entirely — the static
+  instances already are the domain. Mixed patterns
+  (`results/{assembler}/{chunk}.txt`) compose: the values dimension bakes
+  per instance while the fresh wildcard stays runtime-discovered, and the
+  deferred consumers instantiate over the union with both bindings.
 - Plan time: a consumer referencing a fresh wildcard has an empty domain and
   instantiates **nothing**; it is deferred whole (its own
   `[[values]]`/`[[pairs]]`/sample fan-out is baked from the producer's

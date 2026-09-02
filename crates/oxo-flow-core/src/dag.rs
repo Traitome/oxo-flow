@@ -100,6 +100,14 @@ impl WorkflowDag {
             for output in &rule.output {
                 output_to_node.entry(expand(output)).or_default().push(node);
             }
+            // Issue #296: an output_pattern is a producer-side declaration
+            // too. Registering it lets pattern-only producers (no `output`
+            // entries) link their consumers: exact matches at template
+            // level, and the expand_inputs pass below matches consumer
+            // patterns against the baked instance patterns.
+            if let Some(ref op) = rule.output_pattern {
+                output_to_node.entry(expand(op)).or_default().push(node);
+            }
         }
 
         // Step 2: Add edges based on input/output matching.
@@ -2222,6 +2230,54 @@ mod tests {
         });
         let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
         assert_eq!(dag.dependencies("multiqc").unwrap(), vec!["fastqc_raw"]);
+    }
+
+    #[test]
+    fn output_pattern_registers_producer_side_for_template_matching() {
+        // Issue #296: the output_pattern itself is a producer-side
+        // declaration. A consumer's raw expand_inputs pattern carrying the
+        // same wildcard literals exact-matches it — this is the edge the
+        // template-level graph (the catalog's source) must show for
+        // pattern-only producers.
+        let mut producer = make_rule("assemble", vec![], vec![]);
+        producer.output_pattern = Some("results/{assembler}/part.txt".to_string());
+        let mut consumer = make_rule("summarize", vec![], vec!["results/summary.txt"]);
+        consumer.expand_inputs.push(crate::rule::ExpandConfig {
+            pattern: "results/{assembler}/part.txt".to_string(),
+            variables: HashMap::new(),
+        });
+        let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
+        assert_eq!(dag.dependencies("summarize").unwrap(), vec!["assemble"]);
+    }
+
+    #[test]
+    fn expand_inputs_consumer_matches_baked_output_pattern_precisely() {
+        // Issue #296: a [[values]]-fanned output_pattern producer bakes its
+        // pattern per instance, and the expansion pass materializes a
+        // values consumer's expand_inputs pattern into ITS OWN concrete
+        // paths (the spades instance never sees megahit files). The baked
+        // producer pattern must be registered producer-side so the
+        // concrete consumer input exact-matches it — and only it: the
+        // per-value edge precision pinned by #268 item 1 holds.
+        let mut p1 = make_rule("assemble_assembler_spades", vec![], vec![]);
+        p1.output_pattern = Some("results/spades/part.txt".to_string());
+        let mut p2 = make_rule("assemble_assembler_megahit", vec![], vec![]);
+        p2.output_pattern = Some("results/megahit/part.txt".to_string());
+        let consumer = make_rule(
+            "summarize_assembler_spades",
+            vec!["results/spades/part.txt"],
+            vec!["results/summary_spades.txt"],
+        );
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        assert_eq!(
+            dag.dependencies("summarize_assembler_spades").unwrap(),
+            vec!["assemble_assembler_spades"]
+        );
+        // producer_of attributes the produced file to its pattern owner.
+        assert_eq!(
+            dag.producer_of("results/spades/part.txt"),
+            Some("assemble_assembler_spades")
+        );
     }
 
     #[test]

@@ -6599,6 +6599,342 @@ fn output_pattern_unrelated_wildcard_is_not_a_fresh_reference() {
     );
 }
 
+// ── Issue #296: [[values]] fan-out trigger must scan output_pattern ────────
+
+#[test]
+fn output_pattern_values_only_reference_fans_out_per_value() {
+    // A producer referencing a [[values]] table ONLY in its output_pattern
+    // must fan out per value — the pattern is a production-domain
+    // declaration exactly as it already is for pair/group triggers. Before
+    // the fix the rule stayed a single instance with the literal
+    // `{assembler}` token baked into its pattern, while per-value
+    // consumers (which DO fan out via expand_inputs) lost their producer.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296"
+
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/{assembler}/part.txt"
+        shell = "scripts/build_all.sh"
+
+        [[rules]]
+        name = "summarize"
+        expand_inputs = [{ pattern = "results/{assembler}/part.txt" }]
+        output = ["results/summary_{assembler}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    // The producer fans out per value, pattern baked per instance.
+    let spades = config
+        .get_rule("assemble_assembler_spades")
+        .expect("spades producer instance");
+    assert_eq!(
+        spades.output_pattern.as_deref(),
+        Some("results/spades/part.txt")
+    );
+    assert_eq!(
+        config
+            .expansion_values
+            .get("assemble_assembler_spades")
+            .and_then(|v| v.get("assembler").map(String::as_str)),
+        Some("spades")
+    );
+    let megahit = config
+        .get_rule("assemble_assembler_megahit")
+        .expect("megahit producer instance");
+    assert_eq!(
+        megahit.output_pattern.as_deref(),
+        Some("results/megahit/part.txt")
+    );
+
+    // The values-bound pattern wildcard is NOT fresh: no producer
+    // registration and no consumer deferral — plan-time values fan-out is
+    // the domain.
+    assert!(config.output_pattern_producers.is_empty());
+    assert!(config.pending_output_pattern.is_empty());
+
+    // End-to-end ordering (the second half of the bug): before the DAG
+    // registered output_pattern producer-side, the per-value consumers had
+    // NO edge to their producer and the execution order ran them FIRST.
+    // The expansion pass materializes each consumer's expand_inputs pattern
+    // to its own concrete path, so the edge is exact and per-value.
+    let dag = crate::WorkflowDag::from_rules(&config.rules).unwrap();
+    assert_eq!(
+        dag.dependencies("summarize_assembler_spades").unwrap(),
+        vec!["assemble_assembler_spades"]
+    );
+    assert_eq!(
+        dag.dependencies("summarize_assembler_megahit").unwrap(),
+        vec!["assemble_assembler_megahit"]
+    );
+    let order = dag.execution_order().unwrap();
+    let spades_pos = |name: &str| order.iter().position(|n| n == name).unwrap();
+    assert!(
+        spades_pos("assemble_assembler_spades") < spades_pos("summarize_assembler_spades"),
+        "producer must order before its consumer: {order:?}"
+    );
+}
+
+#[test]
+fn output_pattern_values_and_pair_dimensions_compose_through_pattern() {
+    // Orthogonal fan-out through the pattern: a producer whose
+    // output_pattern carries BOTH a values wildcard and a pair wildcard
+    // fans out over the Cartesian product, with every bound wildcard
+    // baked per instance (mirrors the pair-branch pattern baking).
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-pair.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-pair"
+
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/{pair_id}/{assembler}/part.txt"
+        shell = "scripts/build_all.sh"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names.len(), 2, "one instance per pair × value: {names:?}");
+    let p1 = config
+        .get_rule("assemble_assembler_spades_P1")
+        .expect("P1×spades");
+    assert_eq!(
+        p1.output_pattern.as_deref(),
+        Some("results/P1/spades/part.txt")
+    );
+    let p2 = config
+        .get_rule("assemble_assembler_megahit_P1")
+        .expect("P1×megahit");
+    assert_eq!(
+        p2.output_pattern.as_deref(),
+        Some("results/P1/megahit/part.txt")
+    );
+}
+
+#[test]
+fn output_pattern_values_reference_respects_per_instance_when() {
+    // The `when` gate applies to instances born from a pattern-only
+    // values reference exactly as it does for shell-triggered fan-out:
+    // non-matching combos never enter the plan.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-when.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-when"
+
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/{assembler}/part.txt"
+        when = "wildcard.assembler != 'megahit'"
+        shell = "scripts/build_all.sh"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["assemble_assembler_spades"],
+        "megahit gated off: {names:?}"
+    );
+    assert_eq!(
+        config
+            .get_rule("assemble_assembler_spades")
+            .and_then(|r| r.output_pattern.as_deref()),
+        Some("results/spades/part.txt")
+    );
+}
+
+#[test]
+fn output_pattern_fully_bound_by_values_needs_no_discovery() {
+    // Issue #296: once plan-time values fan-out has bound every wildcard,
+    // the baked pattern is a static contract — runtime discovery has
+    // nothing to enumerate and would only emit the spurious
+    // "matched no files" warning. A pattern with a residual fresh
+    // wildcard still needs discovery.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-bound.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-bound"
+
+        [[values]]
+        name = "assembler"
+        values = ["spades"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/{assembler}/part.txt"
+        shell = "scripts/build_all.sh"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let spades = config
+        .get_rule("assemble_assembler_spades")
+        .expect("values instance");
+    assert!(
+        !config.output_pattern_needs_discovery(spades),
+        "fully-bound pattern: nothing left to discover"
+    );
+
+    // A pattern whose wildcards are not all bound by fan-out sources
+    // (here: a fresh wildcard the runtime must enumerate) keeps discovery.
+    let mut fresh = spades.clone();
+    fresh.output_pattern = Some("results/spades/{part}.txt".to_string());
+    assert!(config.output_pattern_needs_discovery(&fresh));
+}
+
+#[test]
+fn output_pattern_values_and_fresh_wildcards_compose_end_to_end() {
+    // Mixed pattern: the values dimension fans out at PLAN time (baked per
+    // instance) while the fresh wildcard stays runtime-discovered per
+    // instance. The domain union across producer instances feeds the
+    // deferred consumer with BOTH bindings.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-mixed.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-mixed"
+
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/{assembler}/{chunk}.txt"
+        shell = "scripts/build_all.sh"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/{assembler}/{chunk}.txt"]
+        output = ["out/{assembler}_{chunk}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    // Registration: only the fresh wildcard is claimed; the values
+    // wildcard is plan-time bound.
+    assert_eq!(
+        config
+            .output_pattern_producers
+            .get("chunk")
+            .map(String::as_str),
+        Some("assemble")
+    );
+    // Per-value instances with the values wildcard baked, the fresh one
+    // intact, and the deferred consumer still pending.
+    assert_eq!(
+        config
+            .get_rule("assemble_assembler_spades")
+            .and_then(|r| r.output_pattern.as_deref()),
+        Some("results/spades/{chunk}.txt")
+    );
+    assert_eq!(
+        config
+            .get_rule("assemble_assembler_megahit")
+            .and_then(|r| r.output_pattern.as_deref()),
+        Some("results/megahit/{chunk}.txt")
+    );
+    assert!(config.get_rule("collect").is_none());
+    assert_eq!(config.pending_output_pattern.len(), 1);
+
+    // The producer instances complete: each discovers its own slice, with
+    // the values binding merged into every discovered combo.
+    for (assembler, chunks) in [("spades", &["1", "2"][..]), ("megahit", &["1"][..])] {
+        let path = dir.path().join(format!("results/{assembler}"));
+        std::fs::create_dir_all(&path).unwrap();
+        for chunk in chunks {
+            std::fs::write(path.join(format!("{chunk}.txt")), chunk).unwrap();
+        }
+        let instance = config
+            .get_rule(&format!("assemble_assembler_{assembler}"))
+            .cloned()
+            .unwrap();
+        let combos = config
+            .discover_output_pattern_files(&instance, dir.path())
+            .unwrap();
+        assert_eq!(combos.len(), chunks.len());
+        for combo in &combos {
+            assert_eq!(
+                combo.get("assembler").map(String::as_str),
+                Some(assembler),
+                "values binding merged into the discovered combo"
+            );
+        }
+        config.contribute_output_pattern_domain("assemble", combos);
+    }
+
+    // Consumers instantiate per (values × discovered) combo with both
+    // bindings baked.
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    let mut sorted = new_names.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec!["collect_megahit_1", "collect_spades_1", "collect_spades_2"]
+    );
+    let c = config.get_rule("collect_spades_1").expect("spades_1");
+    assert_eq!(c.input.to_vec(), vec!["results/spades/1.txt"]);
+    assert_eq!(c.output.to_vec(), vec!["out/spades_1.txt"]);
+}
+
 // ── Issue #283: long-read dimension in sheet mode ──────────────────────────
 
 #[test]

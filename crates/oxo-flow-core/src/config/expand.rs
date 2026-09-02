@@ -589,19 +589,33 @@ impl WorkflowConfig {
                 .copied()
                 .chain(rule.expand_inputs.iter().map(|e| e.pattern.as_str()))
                 .collect();
+            // The `[[values]]` TRIGGER text: `expand_texts` plus the rule's
+            // own `output_pattern` (issue #296) — the pattern is a
+            // production-domain declaration exactly as it already is for
+            // pair/group triggers, so a producer referencing a values table
+            // ONLY in its pattern fans out per value instead of baking a
+            // literal `{name}` token. Scoped: the fresh-wildcard
+            // consumer-deferral scan below keeps `expand_texts` — feeding
+            // the pattern there would make every producer defer on its OWN
+            // fresh wildcard (its pattern declares it).
+            let mut value_trigger_texts: Vec<&str> = expand_texts.clone();
+            if let Some(ref op) = rule.output_pattern {
+                value_trigger_texts.push(op);
+            }
             let mut active_value_tables: Vec<&ValueGroup> = Vec::new();
             for table in &self.values {
-                // Scan `expand_texts` (all_text + expand_inputs patterns),
-                // not just `trigger_text` (issue #268 item 1): a consumer
-                // that references a values table ONLY through an
-                // expand_inputs pattern (an aggregator gathering one file
-                // per table value) must still fan out per value — otherwise
-                // it keeps an empty `input` and, worse, loses the
-                // execution-DAG edges to its producers (the template graph
-                // infers them from the raw pattern). Per-value input
-                // selection continues to work below: each instance gathers
-                // the files matching its own binding of the pattern.
-                let referenced = expand_texts.iter().any(|t| {
+                // Scan `value_trigger_texts` (all_text + expand_inputs
+                // patterns + output_pattern), not just the pair/group
+                // `trigger_text` (issue #268 item 1): a consumer that
+                // references a values table ONLY through an expand_inputs
+                // pattern (an aggregator gathering one file per table
+                // value) must still fan out per value — otherwise it keeps
+                // an empty `input` and, worse, loses the execution-DAG
+                // edges to its producers (the template graph infers them
+                // from the raw pattern). Per-value input selection
+                // continues to work below: each instance gathers the files
+                // matching its own binding of the pattern.
+                let referenced = value_trigger_texts.iter().any(|t| {
                     t.contains(&format!("{{{}}}", table.name))
                         || t.contains(&format!("{{values.{}}}", table.name))
                 });
@@ -2228,6 +2242,20 @@ impl WorkflowConfig {
     /// combo is merged with the instance's own bindings (`[[values]]` /
     /// `[[pairs]]`) so the FULL wildcard map is reconstructed — the
     /// per-sample union source for downstream consumers.
+    /// Whether a producer instance's baked output_pattern still carries
+    /// wildcards for the runtime discovery pass to enumerate (issue #296).
+    /// A fully-bound pattern — every wildcard consumed by plan-time
+    /// fan-out, e.g. a `[[values]]`-only reference — is a static contract:
+    /// the plan-time instances already ARE the domain and plan-time
+    /// consumers hold their DAG edges, so running discovery on it can only
+    /// emit the spurious "matched no files" warning.
+    pub fn output_pattern_needs_discovery(&self, instance: &Rule) -> bool {
+        instance
+            .output_pattern
+            .as_deref()
+            .is_some_and(|p| !crate::wildcard::extract_wildcards(p).is_empty())
+    }
+
     pub fn discover_output_pattern_files(
         &self,
         instance: &Rule,

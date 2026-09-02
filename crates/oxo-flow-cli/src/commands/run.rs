@@ -4997,6 +4997,14 @@ async fn process_output_pattern_discovery(
         return Ok(Vec::new());
     };
 
+    // A fully-bound baked pattern (issue #296) is a static contract:
+    // plan-time fan-out already IS the domain and plan-time consumers hold
+    // their DAG edges — discovery has nothing to enumerate and the
+    // zero-discovery warning below would be spurious.
+    if !config.output_pattern_needs_discovery(&instance) {
+        return Ok(Vec::new());
+    }
+
     // 1. Scan the filesystem for this instance's output_pattern files.
     let combos = config.discover_output_pattern_files(&instance, workdir)?;
     if combos.is_empty() {
