@@ -69,6 +69,10 @@ commit_parsers = [
   # tooling artifacts, not user-facing changes.
   { message = "^chore: bump version", skip = true },
   { message = "^docs: update CHANGELOG", skip = true },
+  # Merge commits duplicate the PR commits' subjects; with
+  # filter_unconventional = false they would otherwise fall through to the
+  # catch-all and leak "Merge pull request #..." lines into release notes.
+  { message = "^Merge (pull request|branch|remote)", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
   { message = "^perf", group = "Performance" },
