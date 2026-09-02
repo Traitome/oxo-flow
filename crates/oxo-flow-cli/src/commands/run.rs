@@ -2779,6 +2779,14 @@ pub async fn run_command(
         // default disposition killing oxo-flow outright and orphaning every
         // child (PPID 1) with a half-written checkpoint.
         let join_result = tokio::select! {
+            // `biased` with join-next first: a result that is already
+            // reapable is ALWAYS drained before the signal branch can be
+            // taken. Without this, a signal landing in the same poll
+            // cycle as a completion races it at random — the teardown
+            // would then see the finished rule's id still in `task_rule`
+            // and record it Failed in the checkpoint.
+            biased;
+            result = join_set.join_next_with_id() => Some(result),
             received = async {
                 match signal_rx.changed().await {
                     Ok(()) => *signal_rx.borrow_and_update(),
@@ -2802,13 +2810,20 @@ pub async fn run_command(
                 // the signals' default dispositions.
                 None => None,
             },
-            result = join_set.join_next_with_id() => Some(result),
         };
         let Some(join_result) = join_result else {
             continue;
         };
         let (completed_rule, status, record) = match join_result {
-            Some(Ok((_id, v))) => v,
+            // Reaped: drop the id→rule link so a later signal teardown
+            // cannot record this rule Failed. (Only the panic branch
+            // used to remove the entry — every success or rule-level
+            // failure lingered here, so Ctrl-C marked ALL finished
+            // rules Failed in the checkpoint.)
+            Some(Ok((id, v))) => {
+                task_rule.remove(&id);
+                v
+            }
             Some(Err(e)) => {
                 if e.is_panic() {
                     tracing::error!("Task panicked: {e}");
