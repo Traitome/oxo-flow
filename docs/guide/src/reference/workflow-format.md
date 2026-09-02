@@ -583,7 +583,7 @@ memory = "32G"
 | `name` | String | **Yes** | Unique rule identifier |
 | `input` | Array of strings | **Yes** | Input file paths |
 | `output` | Array of strings | **Yes** | Output file paths |
-| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
+| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A `[[values]]` wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |

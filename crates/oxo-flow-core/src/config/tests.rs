@@ -6965,6 +6965,7 @@ fn output_pattern_deferred_consumer_projects_own_values_dimension() {
         name = "call"
         input = ["results/asm/{chunk}.txt"]
         output = ["vcfs/{caller}/{chunk}.vcf"]
+        when = "wildcard.caller != 'bcftools'"
         shell = "cp {input} {output}"
         "#,
     )
@@ -7012,6 +7013,22 @@ fn output_pattern_deferred_consumer_projects_own_values_dimension() {
             .and_then(|v| v.get("caller").map(String::as_str)),
         Some("freebayes"),
         "the projected binding is recorded for downstream attribution"
+    );
+    // `when` bakes from the MERGED combo (own values + producer domain) —
+    // bake-only, mirroring the runtime path: the execution-time re-check
+    // prunes the gated-off instances.
+    assert_eq!(
+        config
+            .get_rule("call_caller_bcftools_1")
+            .and_then(|r| r.when.clone()),
+        Some("'bcftools' != 'bcftools'".to_string()),
+        "the own-dimension binding is baked into when for execution-time pruning"
+    );
+    assert_eq!(
+        config
+            .get_rule("call_caller_freebayes_1")
+            .and_then(|r| r.when.clone()),
+        Some("'freebayes' != 'bcftools'".to_string())
     );
     assert!(config.pending_output_pattern.is_empty());
 }
