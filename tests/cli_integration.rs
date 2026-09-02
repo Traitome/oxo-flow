@@ -3795,6 +3795,105 @@ shell = "echo C"
 }
 
 #[test]
+fn cli_dry_run_targeted_does_not_prune_meta_when_rules() {
+    // Issue #299 regression: `-t` planning re-evaluated `when` clauses with
+    // an empty metadata context, so meta-bearing gates — and every gate-less
+    // rule downstream of them — were falsely pruned as "when-gated false"
+    // (live: the mag workflow's targeted runs were unusable). #293's
+    // per-instance meta baking fixed the verdicts; these assertions pin it.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("meta.tsv"),
+        "pair_id\texperiment\treads_2\nP1\tS1\tS1_2.fq.gz\nP2\tS2\t\n",
+    )
+    .unwrap();
+
+    let write_wf = |reads_sheet: &str, path: &std::path::Path| {
+        fs::write(
+            path,
+            format!(
+                r#"[workflow]
+name = "repro299"
+version = "1.0.0"
+metadata_file = "meta.tsv"
+
+[config]
+reads_sheet = "{reads_sheet}"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "S1"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "S2"
+
+[[rules]]
+name = "prep"
+output = ["{{pair_id}}/reads_1.fq.gz"]
+shell = "mkdir -p {{pair_id}} && touch {{output[0]}}"
+
+[[rules]]
+name = "megahit"
+input = ["{{pair_id}}/reads_1.fq.gz"]
+output = ["{{pair_id}}/contigs.fa"]
+when = "config.reads_sheet == '' || {{meta.reads_2}} != ''"
+shell = "touch {{output[0]}}"
+
+[[rules]]
+name = "multiqc"
+input = ["{{pair_id}}/contigs.fa"]
+output = ["report/{{pair_id}}.txt"]
+shell = "touch {{output[0]}}"
+"#
+            ),
+        )
+        .unwrap();
+    };
+    let empty_sheet = dir.path().join("empty_sheet.oxoflow");
+    write_wf("", &empty_sheet);
+    let with_sheet = dir.path().join("with_sheet.oxoflow");
+    write_wf("sheet.tsv", &with_sheet);
+
+    // Empty sheet: `config.reads_sheet == ''` decides — BOTH megahit
+    // instances are live, and the gate-less multiqc must survive targeting.
+    for target in ["megahit", "multiqc"] {
+        oxo_flow_cmd()
+            .args(["dry-run", empty_sheet.to_str().unwrap(), "-t", target])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("when-gated false").not())
+            .stderr(predicate::str::contains("prep_P1"))
+            .stderr(predicate::str::contains("prep_P2"));
+    }
+    oxo_flow_cmd()
+        .args(["dry-run", empty_sheet.to_str().unwrap(), "-t", "megahit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("megahit_P1"))
+        .stderr(predicate::str::contains("megahit_P2"));
+
+    // Reads sheet set: the meta disjunct decides per instance — P1 (reads_2
+    // non-empty) stays, P2 (empty cell) is genuinely gated at expansion, so
+    // megahit_P2 never enters the DAG. multiqc_P2 stays LISTED (it has no
+    // gate of its own; its missing input is surfaced as a readiness warning,
+    // a separate semantic from #299's false pruning).
+    oxo_flow_cmd()
+        .args(["dry-run", with_sheet.to_str().unwrap(), "-t", "megahit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("megahit_P1"))
+        .stderr(predicate::str::contains("megahit_P2").not());
+    oxo_flow_cmd()
+        .args(["dry-run", with_sheet.to_str().unwrap(), "-t", "multiqc"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("when-gated false").not())
+        .stderr(predicate::str::contains("multiqc_P1"))
+        .stderr(predicate::str::contains("megahit_P2").not());
+}
+
+#[test]
 fn cli_dry_run_shows_thread_and_env_info() {
     oxo_flow_cmd()
         .args(["dry-run", "examples/gallery/07_wgs_germline.oxoflow"])

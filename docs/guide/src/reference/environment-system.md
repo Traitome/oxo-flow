@@ -94,6 +94,13 @@ Use `--skip-env-setup` when environments are pre-built:
 oxo-flow run pipeline.oxoflow --skip-env-setup
 ```
 
+With the flag set, the engine does not create anything — a rule whose env
+is missing fails inside conda. For file-backed conda specs it therefore
+checks `conda env list` up front and names the expected `<name>-<hash8>`
+env before running: if an env under the plain `<name>` exists, it was
+likely built from the same spec before the content-hash suffix — symlink
+or rename it, build the suffixed env, or drop `--skip-env-setup`.
+
 ---
 
 ## Backend Implementations
@@ -102,6 +109,7 @@ oxo-flow run pipeline.oxoflow --skip-env-setup
 
 - **Detection**: Checks for `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file
+- **Naming**: A file-backed spec resolves to the env name `<name>-<hash8>`, where `<name>` is the YAML's `name:` field (falling back to the file stem) and `<hash8>` is the first 4 bytes of the spec's SHA-256 as 8 hex chars — two workflows shipping different YAMLs under the same name then build into distinct envs instead of silently sharing one (issue #159). Same content → same name, so identical specs deduplicate. Pre-create envs with exactly that name (`conda env create -n <name>-<hash8> -f envs/spec.yaml`); the engine prints the expected name when it detects the env is missing under `--skip-env-setup`
 - **Activation**: Runs `conda run --no-capture-output -n <env_name> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` — `--no-capture-output` (conda ≥ 4.13) keeps stdout/stderr live, and the `PATH` prefix makes the rule see the env's own tools first
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 

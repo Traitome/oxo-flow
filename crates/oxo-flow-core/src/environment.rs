@@ -73,6 +73,14 @@ pub trait EnvironmentBackend: Send + Sync {
 /// identical specs keep deduplicating. Non-file specs (inline strings)
 /// keep the plain name.
 fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
+    conda_env_name_parts(kind, spec).map(|(_, full)| full)
+}
+
+/// `(plain name, name with content-hash suffix)` for a file-backed conda
+/// spec — the split form of [`conda_env_name_from_spec`], exposed so the
+/// missing-env diagnosis (issue #300) can name both the derivation and the
+/// plain name an older env may have been created under.
+fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
     // Try reading the YAML file to extract `name:` field
     let file_content = std::fs::read(spec).ok();
     let from_yaml = file_content
@@ -103,6 +111,7 @@ fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
             .unwrap_or(spec)
             .to_string()
     });
+    let base_name = name.clone();
     // Content-hash suffix for file-backed specs (issue #159).
     if let Some(bytes) = file_content {
         use sha2::Digest;
@@ -115,7 +124,7 @@ fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        Ok(name)
+        Ok((base_name, name))
     } else {
         Err(OxoFlowError::Environment {
             kind: kind.to_string(),
@@ -123,6 +132,97 @@ fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
                 "invalid environment name '{name}' derived from spec '{spec}': names may contain only alphanumerics, '_' and '-'"
             ),
         })
+    }
+}
+
+/// Parse `conda env list` output into the set of NAMED environments. Named
+/// rows lead with the env name; unnamed prefix installs lead with an
+/// absolute path (contains `/`) and are excluded — they are not reachable
+/// via `-n` anyway.
+fn parse_conda_env_list(output: &str) -> HashSet<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| !name.contains('/') && *name != "*")
+        .map(str::to_string)
+        .collect()
+}
+
+/// The #300 diagnosis for a missing hash-suffixed env: `None` when there is
+/// nothing useful to say (plain-name spec, or the suffixed env exists),
+/// otherwise the full advice text. Pure so the decision stays unit-tested.
+fn missing_env_advice(
+    base: &str,
+    full: &str,
+    spec: &str,
+    existing: &HashSet<String>,
+) -> Option<String> {
+    if base == full || existing.contains(full) {
+        return None;
+    }
+    let hash8 = full.strip_prefix(base)?.strip_prefix('-')?;
+    if existing.contains(base) {
+        Some(format!(
+            "conda env '{full}' does not exist, but env '{base}' does — it was \
+             likely created from the same spec before the content-hash suffix \
+             (issue #159). Either symlink it (ln -s …/envs/{base} …/envs/{full}), \
+             rename it, or drop --skip-env-setup so the engine builds '{full}' itself"
+        ))
+    } else {
+        Some(format!(
+            "create it with `conda env create -n {full} -f {spec}` or drop \
+             --skip-env-setup (content hash {hash8} derives from '{spec}')"
+        ))
+    }
+}
+
+/// Warn once per env when `--skip-env-setup` is set but the hash-suffixed
+/// env the rendered commands reference does not exist (issue #300): without
+/// this, the rule dies much later inside conda with a bare
+/// `EnvironmentLocationNotFound` that never explains how the name was
+/// derived or that a plain-name env may already hold the same content.
+/// One `conda env list` per process; one warning per env name.
+pub fn diagnose_skipped_conda_env(kind: &str, spec: &str) {
+    static ENV_LIST: std::sync::OnceLock<Option<HashSet<String>>> = std::sync::OnceLock::new();
+    static DIAGNOSED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+        std::sync::OnceLock::new();
+
+    // The hash suffix is a conda/mamba file-spec scheme; the env inventory
+    // command is conda's (mamba-only boxes may not have it — skip silently).
+    if kind != "conda" {
+        return;
+    }
+    let Ok((base, full)) = conda_env_name_parts(kind, spec) else {
+        return;
+    };
+    if base == full {
+        return; // inline spec — no suffix, nothing to diagnose
+    }
+
+    let diagnosed = DIAGNOSED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    if !diagnosed
+        .lock()
+        .expect("env diagnosis mutex poisoned")
+        .insert(full.clone())
+    {
+        return; // already warned for this env
+    }
+
+    let envs = ENV_LIST.get_or_init(|| {
+        std::process::Command::new("conda")
+            .args(["env", "list"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| parse_conda_env_list(&String::from_utf8_lossy(&o.stdout)))
+    });
+    let Some(envs) = envs.as_ref() else {
+        return;
+    };
+    if let Some(advice) = missing_env_advice(&base, &full, spec, envs) {
+        eprintln!("⚠ env setup skipped: {advice}");
     }
 }
 
@@ -1795,6 +1895,72 @@ impl EnvironmentResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Missing-env diagnosis (issue #300) ─────────────────────────
+
+    #[test]
+    fn conda_env_name_parts_splits_base_and_hash_suffix() {
+        // File-backed spec: `name:` field + content-hash suffix.
+        let dir = tempfile::tempdir().unwrap();
+        let spec = dir.path().join("checkm2.yaml");
+        std::fs::write(&spec, "name: checkm2\ndependencies:\n  - checkm2\n").unwrap();
+        let (base, full) = conda_env_name_parts("conda", spec.to_str().unwrap()).unwrap();
+        assert_eq!(base, "checkm2");
+        assert!(full.starts_with("checkm2-") && full.len() == base.len() + 9);
+        // Same content → same suffix; different content → different suffix.
+        let (_, full_again) = conda_env_name_parts("conda", spec.to_str().unwrap()).unwrap();
+        assert_eq!(full, full_again);
+        std::fs::write(&spec, "name: checkm2\ndependencies:\n  - checkm2==1.1\n").unwrap();
+        let (_, full_other) = conda_env_name_parts("conda", spec.to_str().unwrap()).unwrap();
+        assert_ne!(full, full_other);
+    }
+
+    #[test]
+    fn conda_env_name_parts_inline_spec_has_no_suffix() {
+        // An inline string (not a readable file) keeps the plain name —
+        // nothing for the missing-env diagnosis to explain.
+        let (base, full) = conda_env_name_parts("conda", "some-env").unwrap();
+        assert_eq!(base, full);
+    }
+
+    #[test]
+    fn parse_conda_env_list_keeps_named_envs_only() {
+        let output = "# conda environments:\n#\nbase                  *  /opt/conda\ncheckm2                  /opt/conda/envs/checkm2\n/opt/conda/envs/unnamed-prefix\n\n";
+        let envs = parse_conda_env_list(output);
+        assert!(envs.contains("base") && envs.contains("checkm2"));
+        assert!(
+            !envs.iter().any(|e| e.contains('/')),
+            "prefix paths excluded: {envs:?}"
+        );
+        assert!(!envs.contains("*"));
+    }
+
+    #[test]
+    fn missing_env_advice_covers_both_fallbacks_and_silence() {
+        let envs: HashSet<String> = ["checkm2", "base"].into_iter().map(String::from).collect();
+        // Plain-name env exists → symlink/rename advice.
+        let advice =
+            missing_env_advice("checkm2", "checkm2-08dc2a29", "envs/checkm2.yaml", &envs).unwrap();
+        assert!(advice.contains("symlink") && advice.contains("checkm2-08dc2a29"));
+        // Plain-name env missing → create advice naming the derivation.
+        let empty: HashSet<String> = HashSet::new();
+        let advice =
+            missing_env_advice("checkm2", "checkm2-08dc2a29", "envs/checkm2.yaml", &empty).unwrap();
+        assert!(advice.contains("conda env create -n checkm2-08dc2a29 -f envs/checkm2.yaml"));
+        // Suffixed env exists → silent.
+        let with_full: HashSet<String> = ["checkm2-08dc2a29".to_string()].into();
+        assert_eq!(
+            missing_env_advice(
+                "checkm2",
+                "checkm2-08dc2a29",
+                "envs/checkm2.yaml",
+                &with_full
+            ),
+            None
+        );
+        // Inline spec (no suffix) → silent.
+        assert_eq!(missing_env_advice("qc", "qc", "qc", &empty), None);
+    }
 
     // ── Container workdir absolutization ───────────────────────────
 

@@ -1005,10 +1005,7 @@ pub async fn run_command(
             .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
-            eprintln!(
-                "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
-                "Note:".yellow()
-            );
+            print_target_skipped_note(skipped, &when_false_rules);
         }
         if filtered_order.is_empty() {
             emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
@@ -2120,10 +2117,7 @@ pub async fn run_command(
                     .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
                     .with_context(|| "failed to resolve target rules")?;
                 for skipped in &skipped_targets {
-                    eprintln!(
-                        "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
-                        "Note:".yellow()
-                    );
+                    print_target_skipped_note(skipped, &when_false_rules);
                 }
                 filtered
             };
@@ -2160,10 +2154,7 @@ pub async fn run_command(
                         .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
                         .with_context(|| "failed to resolve target rules")?;
                     for skipped in &skipped_targets {
-                        eprintln!(
-                            "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
-                            "Note:".yellow()
-                        );
+                        print_target_skipped_note(skipped, &when_false_rules);
                     }
                     filtered
                 };
@@ -4094,10 +4085,7 @@ pub async fn dry_run_command(
             .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
-            eprintln!(
-                "{} target '{skipped}' is when-gated false — it never runs; removed from the execution set (its upstream was pruned too)",
-                "Note:".yellow()
-            );
+            print_target_skipped_note(skipped, &when_false_rules);
         }
         filtered
     };
@@ -5091,6 +5079,26 @@ fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
     timings.sort_by(|a, b| b.1.total_cmp(&a.1));
     let total = timings.iter().map(|(_, secs)| secs).sum();
     (timings, total)
+}
+
+/// Explain a target removed from a targeted execution set. A target present
+/// in `when_false_rules` has its OWN false gate; one absent from the set was
+/// cascade-pruned because an UPSTREAM gate is false — the old single message
+/// claimed both were "when-gated false", which read as nonsense for gate-less
+/// rules (issue #299).
+fn print_target_skipped_note(skipped: &str, when_false_rules: &std::collections::HashSet<String>) {
+    let detail = if when_false_rules.contains(skipped) {
+        format!(
+            "target '{skipped}' is when-gated false — it never runs; \
+             removed from the execution set (its upstream was pruned too)"
+        )
+    } else {
+        format!(
+            "target '{skipped}' is unreachable — its upstream is when-gated \
+             false; removed from the execution set"
+        )
+    };
+    eprintln!("{} {detail}", "Note:".yellow());
 }
 
 pub async fn handle_status(
