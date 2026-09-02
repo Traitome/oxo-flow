@@ -96,11 +96,14 @@ pub fn inputs_directory(username: &str) -> Result<PathBuf> {
 /// CLI executes in the run/pipeline dir, so data-referencing workflows
 /// (`metadata_file`, input globs) failed pre-execution for web-only users.
 ///
-/// The WHOLE inputs tree is mirrored (skipping files that already exist in
-/// the destination, so pipeline re-runs keep newer local outputs), because
-/// which files a workflow needs is a parse-time property (`metadata_file`,
-/// input globs) the HTTP layer should not re-derive. Returns the number of
-/// files copied.
+/// The WHOLE inputs tree is mirrored, because which files a workflow needs
+/// is a parse-time property (`metadata_file`, input globs) the HTTP layer
+/// should not re-derive. A destination file is skipped only while it is at
+/// least as new as the staged source — so a re-uploaded input (source
+/// newer than the stale copy) is refreshed instead of being shadowed by it
+/// forever (issue #297 item 1), while a newer LOCAL file (a pipeline output
+/// sharing the staged path, written after staging) still survives
+/// re-staging. Returns the number of files copied.
 pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
     let root = inputs_directory(username)?;
     if !root.is_dir() {
@@ -125,7 +128,7 @@ pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
                 continue;
             };
             let dest = run_dir.join(rel);
-            if dest.exists() {
+            if dest_is_current(&dest, &meta) {
                 continue;
             }
             if let Some(parent) = dest.parent() {
@@ -138,6 +141,27 @@ pub fn stage_user_inputs(username: &str, run_dir: &Path) -> Result<usize> {
         }
     }
     Ok(copied)
+}
+
+/// True when `dest` already carries content at least as new as the staged
+/// source (whose metadata is `src_meta`): destination mtime same-or-newer
+/// than the source's. Compares instead of merely checking existence so a
+/// re-uploaded input (source newer than the stale copy) replaces it (issue
+/// #297 item 1) while newer local outputs are left alone. Size is
+/// deliberately NOT part of the check — freshness is an mtime property,
+/// and a same-size stale copy must still be refreshed.
+fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> bool {
+    let Ok(dest_meta) = fs::metadata(dest) else {
+        return false; // missing (or unreadable) → stage it
+    };
+    if !dest_meta.is_file() {
+        return false; // a directory/symlink in the way → replace with the file
+    }
+    match (src_meta.modified().ok(), dest_meta.modified().ok()) {
+        (Some(src_m), Some(dest_m)) => src_m <= dest_m,
+        // Filesystems without mtime: cannot compare — refresh.
+        _ => false,
+    }
 }
 
 /// Retrieve the persistent working directory of a saved pipeline (issue #69).
@@ -170,6 +194,11 @@ pub fn setup_pipeline_directory(username: &str, pipeline_id: &str) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serializes the tests that `set_current_dir` into a temp cwd —
+    /// `stage_user_inputs` resolves `workspace/…` relative to the process
+    /// cwd, so two concurrent cwd-dancing tests would stomp each other.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn get_pipeline_directory_returns_persistent_path() {
@@ -238,6 +267,7 @@ mod tests {
         // `inputs_directory` resolves `workspace/…` RELATIVE to the process
         // cwd (the same convention `setup_run_directory` follows at request
         // time), so the test runs inside a temp cwd.
+        let _cwd = CWD_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -266,6 +296,69 @@ mod tests {
         assert_eq!(second, 0, "existing files are not re-copied");
         assert!(run_dir.join("meta.tsv").is_file());
         assert!(run_dir.join("data/raw.txt").is_file());
+    }
+
+    #[test]
+    fn stage_user_inputs_refreshes_stale_copy_from_newer_upload() {
+        // Issue #297 item 1: `dest.exists()` alone kept a stale run-dir copy
+        // serving forever after the user re-uploaded the input. A newer
+        // upload must replace it; a newer LOCAL file (pipeline output on the
+        // staged path) must survive re-staging.
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        std::fs::create_dir_all("workspace/users/alice/inputs").unwrap();
+        std::fs::write("workspace/users/alice/inputs/meta.tsv", "v1\n").unwrap();
+        let run_dir = tmp.path().join("workspace/users/alice/runs/r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        assert_eq!(stage_user_inputs("alice", &run_dir).unwrap(), 1);
+
+        // Second run: the pipeline overwrote the staged copy with a local
+        // result (older than nothing), and the user re-uploaded meta.tsv.
+        let staged = run_dir.join("meta.tsv");
+        std::fs::write(&staged, "stale local copy\n").unwrap();
+        set_mtime(&staged, older());
+        std::fs::write("workspace/users/alice/inputs/meta.tsv", "v2 re-upload\n").unwrap();
+
+        let second = stage_user_inputs("alice", &run_dir).unwrap();
+
+        // A local file newer than its staged source is NOT clobbered.
+        let kept = run_dir.join("kept.txt");
+        std::fs::write(&kept, "pipeline output\n").unwrap();
+        std::fs::write("workspace/users/alice/inputs/kept.txt", "older upload\n").unwrap();
+        set_mtime(
+            std::path::Path::new("workspace/users/alice/inputs/kept.txt"),
+            older(),
+        );
+        let third = stage_user_inputs("alice", &run_dir).unwrap();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert_eq!(second, 1, "the newer upload replaces the stale copy");
+        assert_eq!(std::fs::read_to_string(&staged).unwrap(), "v2 re-upload\n");
+        assert_eq!(third, 0, "both files current — nothing left to stage");
+        assert_eq!(
+            std::fs::read_to_string(&kept).unwrap(),
+            "pipeline output\n",
+            "a newer local file survives re-staging"
+        );
+    }
+
+    /// Set a file's mtime into the recent past (deterministically older than
+    /// anything written by the test body itself).
+    fn older() -> std::time::SystemTime {
+        std::time::SystemTime::now() - std::time::Duration::from_secs(120)
+    }
+
+    fn set_mtime(path: &std::path::Path, t: std::time::SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(t))
+            .unwrap();
     }
 
     #[test]

@@ -4818,6 +4818,62 @@ fn cli_run_ref_build_fails_with_clear_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn cli_publish_rejects_traversal_in_metadata_file() {
+    // Issue #297 item 7: `metadata_file` et al. come straight from workflow
+    // TOML — a `..` reference must fail the publish (both to protect the
+    // staging dir and to keep `../` out of archive entry names, which would
+    // be a zip-slip on the consumer side).
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join("wf");
+    fs::create_dir_all(&wf_dir).unwrap();
+    fs::write(dir.path().join("outside.txt"), "secret\n").unwrap();
+    let wf = wf_dir.join("trav_meta.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"trav\"\nversion = \"1.0.0\"\nmetadata_file = \"../outside.txt\"\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(&wf_dir)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("escape the bundle root"));
+
+    assert!(
+        !wf_dir.join("trav_meta-bundle.tar.zst").exists(),
+        "no archive may be produced from a traversal workflow"
+    );
+}
+
+#[test]
+fn cli_publish_rejects_absolute_bundle_path() {
+    // An absolute reference would become an absolute ARCHIVE member name —
+    // an extractor following it writes outside the unpack root, so the
+    // publish must fail instead of producing the bundle.
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside-abs.txt");
+    fs::write(&outside, "data\n").unwrap();
+    let wf = dir.path().join("abs_meta.oxoflow");
+    fs::write(
+        &wf,
+        format!(
+            "[workflow]\nname = \"abs\"\nversion = \"1.0.0\"\nmetadata_file = {:?}\n\n[[rules]]\nname = \"s\"\noutput = [\"out.txt\"]\nshell = \"echo done > {{output[0]}}\"\n",
+            outside.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    oxo_flow_cmd()
+        .args(["publish", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("is absolute"));
+}
+
+#[test]
 fn cli_publish_creates_bundle() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("pub_test.oxoflow");

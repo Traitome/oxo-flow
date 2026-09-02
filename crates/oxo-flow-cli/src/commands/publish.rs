@@ -99,6 +99,7 @@ pub fn publish_command(
 
     // Copy all env/script files to temp dir and compute checksums
     for (rel_path, abs_path) in &referenced_files {
+        ensure_safe_bundle_path(rel_path)?;
         let checksum = compute_sha256(abs_path)?;
         let dest = temp_dir.join(rel_path);
         if let Some(parent) = dest.parent() {
@@ -230,6 +231,10 @@ pub fn publish_command(
             $builder.append_path_with_name(&wf_dest, wf_filename)?;
             // Add all env/script files
             for (rel_path, _abs_path) in &referenced_files {
+                // Backstop for the archive entry names themselves: a `../`
+                // entry would be a zip-slip on the consumer side even if the
+                // temp-dir copy above had somehow tolerated it.
+                ensure_safe_bundle_path(rel_path)?;
                 let dest = temp_dir.join(rel_path);
                 $builder.append_path_with_name(&dest, rel_path)?;
             }
@@ -284,6 +289,33 @@ pub fn publish_command(
     );
     eprintln!("  checksums: {} files verified (SHA-256)", checksum_count);
 
+    Ok(())
+}
+
+/// Reject bundle member paths that could escape the bundle root: absolute
+/// paths and `..` components. `referenced_files` paths come straight from
+/// workflow TOML (`metadata_file` / `pairs_file` / include references), so
+/// a hostile workflow must not steer `temp_dir.join(rel)` outside the
+/// staging dir on the publisher's machine, or plant `../` entry names the
+/// consumer-side extractor would follow (issue #297 item 7; POSIX-only —
+/// oxo-flow targets Linux/macOS).
+fn ensure_safe_bundle_path(rel_path: &str) -> Result<()> {
+    if rel_path.is_empty() {
+        anyhow::bail!("bundle path is empty");
+    }
+    let path = Path::new(rel_path);
+    if path.is_absolute() {
+        anyhow::bail!(
+            "bundle path '{rel_path}' is absolute — bundle members must be \
+             relative to the workflow dir"
+        );
+    }
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        anyhow::bail!("bundle path '{rel_path}' contains '..' — it would escape the bundle root");
+    }
     Ok(())
 }
 
@@ -362,6 +394,11 @@ fn scan_workflow_env_files(
         // flattened to the archive root).
         for key in &["pairs_file", "sample_groups_file", "metadata_file"] {
             if let Some(file_path) = wf.get(key).and_then(|v| v.as_str()) {
+                // These three come straight from workflow TOML — a hostile
+                // workflow must not steer bundle members outside the bundle
+                // (issue #297 item 7). Fail the publish loudly rather than
+                // silently trimming the reference.
+                ensure_safe_bundle_path(file_path)?;
                 let abs_path = workflow_dir.join(file_path);
                 if abs_path.exists() {
                     if !referenced_files.iter().any(|(name, _)| name == file_path) {

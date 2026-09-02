@@ -20,6 +20,21 @@ async fn fetch_reference(fetcher: &FetchUrlTool, url: &str) -> Result<String, St
     fetcher.execute(&arguments).await.map_err(|e| e.to_string())
 }
 
+/// Largest prefix of `s` with at most `max_bytes` bytes, cut at a char
+/// boundary. Byte-slicing (`&s[..n]`) panics when `n` lands inside a
+/// multi-byte UTF-8 sequence — CJK reference text routinely does (issue
+/// #297 item 6).
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Where the generated workflow lands.
 ///
 /// `-o` documents two shapes: a file path, and a directory signalled by a
@@ -181,7 +196,7 @@ pub async fn generate_workflow(
         match fetch_reference(&fetcher, url).await {
             Ok(text) => {
                 let preview = if text.len() > 300 {
-                    format!("{}...", &text[..300])
+                    format!("{}...", truncate_utf8(&text, 300))
                 } else {
                     text.clone()
                 };
@@ -202,7 +217,7 @@ pub async fn generate_workflow(
         match std::fs::read_to_string(path) {
             Ok(content) => {
                 let preview = if content.len() > 2000 {
-                    format!("{}...", &content[..2000])
+                    format!("{}...", truncate_utf8(&content, 2000))
                 } else {
                     content.clone()
                 };
@@ -625,6 +640,21 @@ fn validate_basic_structure(toml: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_utf8_cuts_at_char_boundary() {
+        // Issue #297 item 6: `&text[..300]` panicked when byte 300 split a
+        // multi-byte UTF-8 char — CJK reference text hit this on every fetch.
+        let cjk = "样本".repeat(150); // 3-byte chars; byte 298 lands inside char 100
+        assert_eq!(truncate_utf8(&cjk, 298).len(), 297);
+        assert!(truncate_utf8(&cjk, 298).ends_with("样"));
+        // A 4-byte emoji spanning byte 300 is dropped whole, no panic.
+        let emoji = format!("{}🧬y", "x".repeat(299));
+        assert_eq!(truncate_utf8(&emoji, 300), "x".repeat(299));
+        // Short input is returned as-is; ASCII cut at a boundary is exact.
+        assert_eq!(truncate_utf8("short", 300), "short");
+        assert_eq!(truncate_utf8(&"a".repeat(400), 300).len(), 300);
+    }
 
     #[test]
     fn extract_toml_from_code_fence() {

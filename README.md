@@ -104,14 +104,15 @@ conda install -c bioconda oxo-flow-cli
 
 ### Run with Docker
 
-Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image); `:main` is amd64-only and compiled from source:
+Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.16`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:
 
 ```bash
 # Web UI at http://localhost:3000 (CLI is inside the same image)
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
-# Pin a release
+# Pin a release (or track a minor line)
 docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16
 
 # CLI one-shot usage (workflow files mounted from the host)
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \

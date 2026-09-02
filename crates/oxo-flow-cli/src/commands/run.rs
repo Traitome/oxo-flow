@@ -3085,6 +3085,33 @@ pub async fn run_command(
             }
         }
 
+        // Skipped producers (issue #297 item 4): an outputs-up-to-date or
+        // condition-false skip never reaches discovery, so the producer's
+        // deferred consumers silently vanish from THIS run's plan. A
+        // checkpointed domain from an earlier success is replayed on resume,
+        // but a skip with no recorded domain leaves them uninstantiated for
+        // good — name both sides so the disappearance is attributable. A
+        // skip is not a failure, so unlike the block above this stays a
+        // warning and does not enter the failure summary.
+        if status == oxo_flow_core::executor::JobStatus::Skipped
+            && let Some(producer_template) = config.output_pattern_template_of(&completed_rule)
+        {
+            let consumers = config.pending_output_pattern_consumers_of(&producer_template);
+            if !consumers.is_empty() {
+                eprintln!(
+                    "{} {} not instantiated — output_pattern producer '{}' was skipped",
+                    "Warning:".bold().yellow(),
+                    consumers.join(", "),
+                    producer_template
+                );
+                tracing::warn!(
+                    producer = %producer_template,
+                    consumers = ?consumers,
+                    "skipped output_pattern producer leaves deferred consumers uninstantiated"
+                );
+            }
+        }
+
         // Abort on first failure when not in keep_going mode.
         let fc = fail_count.load(std::sync::atomic::Ordering::Relaxed);
         if fc > 0

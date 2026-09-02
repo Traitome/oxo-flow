@@ -423,7 +423,12 @@ jobs:
             exit 1
           fi
           echo "Re-running: $FAILED"
-          if cargo test --workspace -- --exact $FAILED; then
+          # One argument per test via a real array: an unquoted $FAILED
+          # word-splits on spaces too, and a fully-quoted one arrives as a
+          # single --exact filter containing newlines and matches nothing
+          # (issue #297 item 8).
+          mapfile -t FAILED_LIST <<< "$FAILED"
+          if cargo test --workspace -- --exact "${FAILED_LIST[@]}"; then
             echo "::warning::FAILED tests passed on re-run — classified as load-timing flakes (issue #249)"
             exit 0
           fi
@@ -1083,17 +1088,23 @@ jobs:
 
   # ─── Docker: publish the image to ghcr.io (GitHub Packages) ───────────────
   # Two channels with distinct jobs:
-  #   docker-publish         — main pushes → :main, built from source
-  #                            (Dockerfile). This is the regression gate:
-  #                            the shipped Dockerfile must keep compiling.
-  #   docker-publish-release — release tags/dispatch → :<version> + :latest,
+  #   docker-publish-main-{amd64,arm64} + docker-publish
+  #                         — main pushes → per-arch source builds
+  #                            (Dockerfile) pushed as :main-<arch>, then a
+  #                            manifest job merges them into :main so
+  #                            arm64 hosts pulling :main get a native image
+  #                            instead of a broken amd64-only one (issue
+  #                            #297 item 9). This is the regression gate:
+  #                            the shipped Dockerfile must keep compiling
+  #                            on both arches.
+  #   docker-publish-release — release tags/dispatch → :<version> (+ :latest
+  #                            and :<major.minor> after the smoke gate),
   #                            multi-arch (amd64+arm64) from the prebuilt
   #                            release binaries (Dockerfile.release,
   #                            SHA256-verified), so the image is
-  #                            byte-identical with the release tarballs and
-  #                            arm64 hosts get a native image.
-  docker-publish:
-    name: Docker (publish :main to ghcr.io)
+  #                            byte-identical with the release tarballs.
+  docker-publish-main-amd64:
+    name: Docker (build :main amd64 → ghcr.io)
     runs-on: ubuntu-latest
     needs: [sync-version, test, docker-build]
     if: >-
@@ -1115,19 +1126,49 @@ jobs:
       - name: Compute image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
 
-      - name: Compute image tags
-        id: tags
-        run: |
-          # Main pushes get a moving :main tag instead of a misleading
-          # :latest (release tags are published by docker-publish-release).
-          TAGS="${IMAGE}:main"
-          {
-            echo "tags<<EOF"
-            echo "$TAGS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          echo "Publishing tags:"
-          echo "$TAGS"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:main-amd64
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=main-amd64
+          cache-to: type=gha,mode=max,scope=main-amd64
+
+  docker-publish-main-arm64:
+    name: Docker (build :main arm64 → ghcr.io)
+    # Native arm64 runner (free for public repos) — building the Rust image
+    # under QEMU emulation would take hours, which is why :main used to ship
+    # amd64-only (issue #297 item 9).
+    runs-on: ubuntu-24.04-arm
+    needs: [sync-version, test, docker-build]
+    if: >-
+      always() &&
+      needs.docker-build.result == 'success' &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1139,15 +1180,56 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ env.IMAGE }}:main-arm64
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=main-arm64
+          cache-to: type=gha,mode=max,scope=main-arm64
+
+  docker-publish:
+    name: Docker (publish :main manifest to ghcr.io)
+    runs-on: ubuntu-latest
+    needs: [sync-version, test, docker-publish-main-amd64, docker-publish-main-arm64]
+    if: >-
+      always() &&
+      needs.docker-publish-main-amd64.result == 'success' &&
+      needs.docker-publish-main-arm64.result == 'success' &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # repository_owner is "Traitome" (uppercase) but ghcr requires lowercase
+      # image paths — force it down (${VAR,,} bash lowercase).
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge per-arch images into the moving :main manifest
+        run: |
+          # imagetools create is registry-side: it assembles a manifest list
+          # referencing the two just-pushed per-arch images and pushes it as
+          # :main. Main pushes get this moving tag instead of a misleading
+          # :latest (release tags are published by docker-publish-release).
+          docker buildx imagetools create \
+            -t "${IMAGE}:main" \
+            "${IMAGE}:main-amd64" "${IMAGE}:main-arm64"
+          docker buildx imagetools inspect "${IMAGE}:main"
 
       - name: Smoke-test the pushed image (health endpoint)
         run: |
@@ -1168,17 +1250,24 @@ jobs:
 
   # Release channel: assembles the image from the prebuilt release binaries
   # (no cargo build) as a multi-arch manifest (amd64 + arm64), publishing
-  # ghcr.io/traitome/oxo-flow:<version> + :latest. Runs only on release
-  # tags / dispatch-with-tag, and only after the release job has actually
-  # uploaded the artifacts — the binaries it installs come from that
-  # release, verified against SHA256SUMS.txt inside Dockerfile.release.
+  # ghcr.io/traitome/oxo-flow:<version>, then — only after the version-tag
+  # image passed the smoke test — promoting :latest and :<major.minor> from
+  # it server-side. Runs on release tags / dispatch-with-tag, and after the
+  # release job has uploaded the artifacts — the binaries it installs come
+  # from that release, verified against SHA256SUMS.txt inside
+  # Dockerfile.release. A dispatch with publish_images_only=true skips the
+  # release pipeline entirely (release job → 'skipped') and publishes from
+  # the EXISTING release's artifacts — that mode is what makes the
+  # publish_images_only input functional instead of a no-op (issue #297
+  # item 3).
   docker-publish-release:
     name: Docker (publish release to ghcr.io)
     runs-on: ubuntu-latest
     needs: [sync-version, test, release]
     if: >-
       always() &&
-      needs.release.result == 'success' &&
+      (needs.release.result == 'success' ||
+       (needs.release.result == 'skipped' && inputs.publish_images_only == true)) &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -1211,6 +1300,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve version (sync-version is skipped in publish_images_only mode)
+        run: |
+          set -euo pipefail
+          # Normal releases get the version from sync-version; a
+          # publish_images_only dispatch re-publishes an EXISTING release,
+          # so the version comes from the tag input instead (same fallback
+          # as the docker-build-release validation leg).
+          if [ -n "$SYNC_VERSION" ]; then
+            echo "VERSION=$SYNC_VERSION" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          fi
+          echo "Publishing version: $VERSION"
+        env:
+          SYNC_VERSION: ${{ needs.sync-version.outputs.version }}
+          TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
@@ -1218,19 +1324,22 @@ jobs:
           file: ./Dockerfile.release
           # VERSION is the synced release version; the Dockerfile resolves
           # the per-arch tarball triple from TARGETARCH at build time.
-          build-args: VERSION=${{ needs.sync-version.outputs.version }}
+          build-args: VERSION=${{ env.VERSION }}
           platforms: linux/amd64,linux/arm64
           push: true
+          # Only the immutable version tag is pushed here. :latest (and the
+          # rolling :<major.minor>) are promoted from it AFTER the smoke
+          # test below — tagging :latest in this step would publish a broken
+          # release as "latest" with no gate (issue #297 item 2).
           tags: |
-            ${{ env.IMAGE }}:${{ needs.sync-version.outputs.version }}
-            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ env.VERSION }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: false
 
       - name: Smoke-test the pushed image (health endpoint, native arch)
         run: |
-          docker pull "${IMAGE}:${{ needs.sync-version.outputs.version }}"
-          docker run -d --name oxo-flow-pub -p 3000:3000 "${IMAGE}:${{ needs.sync-version.outputs.version }}"
+          docker pull "${IMAGE}:${VERSION}"
+          docker run -d --name oxo-flow-pub -p 3000:3000 "${IMAGE}:${VERSION}"
           for i in $(seq 1 20); do
             if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
               echo "published release image healthy"
@@ -1243,6 +1352,28 @@ jobs:
           docker logs oxo-flow-pub || true
           docker rm -f oxo-flow-pub > /dev/null || true
           exit 1
+
+      - name: Promote :latest and :<major.minor> (smoke-gated, both arches)
+        run: |
+          set -euo pipefail
+          # Server-side re-tag of the pushed multi-arch manifest list — no
+          # rebuild, so BOTH platforms carry over (a docker tag+push here
+          # would replace the manifest with a single-arch image).
+          MAJOR_MINOR="${VERSION%.*}"
+          # Re-publishing an OLD release (publish_images_only dispatch) must
+          # not drag :latest backwards — only the repo's actual latest
+          # release gets the :latest alias; older ones keep their immutable
+          # version tag and gain only the rolling :<major.minor>.
+          LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" \
+            | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 || true)
+          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
+            echo "::warning::${RELEASE_TAG} is not the latest release (${LATEST_TAG}) — promoting only :${MAJOR_MINOR}, :latest stays with ${LATEST_TAG}"
+            docker buildx imagetools create -t "${IMAGE}:${MAJOR_MINOR}" "${IMAGE}:${VERSION}"
+            exit 0
+          fi
+          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${VERSION}"
+          docker buildx imagetools create -t "${IMAGE}:${MAJOR_MINOR}" "${IMAGE}:${VERSION}"
+          echo "promoted ${IMAGE}:${VERSION} → :latest and :${MAJOR_MINOR}"
 
   # ─── Frontend: build + e2e (Playwright against the real server) ──────────
   frontend:
