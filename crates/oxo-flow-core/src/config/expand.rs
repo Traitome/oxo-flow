@@ -1053,13 +1053,19 @@ impl WorkflowConfig {
                     }
 
                     // Per-instance `when` filtering (snakemake-style DAG
-                    // morphing) — see the pair branch above.
+                    // morphing) — see the pair branch above. Gate on BOTH
+                    // namespaces and bake both before evaluation: a raw
+                    // `{meta.<col>}` token hits the evaluator's
+                    // default-true fallback and phantom instances survive
+                    // planning (plan/execution mismatch).
                     if let Some(ref when) = rule.when
-                        && when.contains("wildcard.")
+                        && (when.contains("wildcard.") || when.contains("{meta."))
                     {
                         let combo_values = Self::expansion_when_context(combo);
+                        let baked = Self::bake_wildcard_when(when, combo);
+                        let baked = Self::bake_meta_when(&baked, &self.metadata, combo);
                         if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
-                            when,
+                            &baked,
                             &config_values,
                             &combo_values,
                             self.base_dir.as_deref(),
@@ -1084,11 +1090,14 @@ impl WorkflowConfig {
 
                     // Bake the per-instance wildcard bindings into the
                     // `when` (the instance survived filtering above) — see
-                    // the pair branch for the rationale.
+                    // the pair branch for the rationale. Both namespaces:
+                    // `{meta.<col>}` tokens would otherwise fall through to
+                    // the execution-time evaluator's default-true fallback.
                     if let Some(ref when) = rule.when
-                        && when.contains("wildcard.")
+                        && (when.contains("wildcard.") || when.contains("{meta."))
                     {
-                        expanded.when = Some(Self::bake_wildcard_when(when, combo));
+                        let baked = Self::bake_wildcard_when(when, combo);
+                        expanded.when = Some(Self::bake_meta_when(&baked, &self.metadata, combo));
                     }
 
                     // Structure-preserving expansion (List / Map / Dir).
@@ -1509,6 +1518,25 @@ impl WorkflowConfig {
 
             // process expand_inputs
             for exp in &rule.expand_inputs {
+                // `{meta.<column>}` inside an expand_inputs pattern is never
+                // resolved: per-instance metadata substitution
+                // (`apply_instance_meta`) has already run on the rule's own
+                // fields by the time this pass executes, and it never
+                // touches expand_inputs; the placeholder regex does not
+                // match dotted tokens either, so `variables` can never bind
+                // the reference. The pattern either expands with a literal
+                // `{meta.…}` token baked into every path or contributes
+                // zero inputs — warn so the author moves the reference into
+                // `input` (per-instance substitution applies there) or
+                // input_groups.
+                let meta_pattern = exp.pattern.contains("{meta.");
+                if meta_pattern {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        pattern = %exp.pattern,
+                        "expand_inputs pattern references '{{meta.<column>}}' but per-instance metadata substitution ran BEFORE this pass — the token is never resolved (put the pattern in `input` for substitution, or use input_groups)"
+                    );
+                }
                 let mut variables = HashMap::new();
                 for (var_name, var_ref) in &exp.variables {
                     if let Some(vals) = self.resolve_config_list(var_ref) {
@@ -1559,6 +1587,7 @@ impl WorkflowConfig {
                 // silent success. Name the pattern so the author can see
                 // which input quietly disappeared (#254 family guard).
                 if expanded.is_empty()
+                    && !meta_pattern
                     && !crate::wildcard::extract_wildcards(&exp.pattern).is_empty()
                 {
                     tracing::warn!(

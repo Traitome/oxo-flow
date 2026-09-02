@@ -5383,6 +5383,48 @@ fn metadata_workflow(
 }
 
 #[test]
+fn values_fanout_when_meta_reference_filters_not_phantoms() {
+    // The [[values]] fan-out branch gates `when` on `{meta.` too. A
+    // values-only combo carries no sample-like binding
+    // (sample/pair_id/experiment/control), so the metadata row cannot
+    // resolve and the gate closes for every instance. Before the fix the
+    // raw `{meta.endedness}` token reached the evaluator's default-true
+    // fallback and phantom instances survived planning.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tendedness\nS1\tSE\nS2\tPE\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[values]]
+        name = "assembler"
+        values = ["spades", "megahit"]
+
+        [[rules]]
+        name = "assemble"
+        input = ["reads/{assembler}/in.fq"]
+        output = ["contigs/{assembler}/out.fa"]
+        shell = "{assembler} -o {output[0]} {input[0]}"
+        when = "{meta.endedness} == 'SE'"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+    let survivors: Vec<&str> = config
+        .rules
+        .iter()
+        .map(|r| r.name.as_str())
+        .filter(|n| n.starts_with("assemble"))
+        .collect();
+    assert!(
+        survivors.is_empty(),
+        "values-only combos cannot resolve a metadata row — no instance may survive the gate, got {survivors:?}"
+    );
+}
+
+#[test]
 fn metadata_file_loads_tsv_rows_into_config() {
     // `[workflow] metadata_file` loads a per-sample table: the first column
     // is the sample id (matching `{sample}` values), the remaining columns
