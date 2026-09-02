@@ -27,6 +27,10 @@ RUN cargo build --release -p oxo-flow-web -p oxo-flow-cli
 # "GLIBC_2.39 not found" (issue #276 docker-build gate).
 FROM debian:trixie-slim
 WORKDIR /app
+# Image version for the OCI LABEL below. Default tracks the released
+# workspace version; CI overrides with --build-arg VERSION=… at release
+# time so the label cannot drift from the published tag.
+ARG VERSION=0.16.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -56,7 +60,7 @@ EXPOSE 3000
 
 LABEL org.opencontainers.image.title="oxo-flow" \
       org.opencontainers.image.description="Bioinformatics pipeline engine" \
-      org.opencontainers.image.version="0.16.0" \
+      org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-OxoFlow-Commercial" \
       org.opencontainers.image.vendor="Traitome" \
       org.opencontainers.image.authors="Shixiang Wang <w_shixiang@163.com>"
