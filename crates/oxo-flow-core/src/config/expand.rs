@@ -1485,16 +1485,11 @@ impl WorkflowConfig {
     fn materialize_expand_inputs(&self, rule: &mut Rule) {
         for exp in &rule.expand_inputs {
             // `{meta.<column>}` inside an expand_inputs pattern is never
-            // resolved: per-instance metadata substitution
-            // (`apply_instance_meta`) has already run on the rule's own
-            // fields by the time this pass executes, and it never
-            // touches expand_inputs; the placeholder regex does not
-            // match dotted tokens either, so `variables` can never bind
-            // the reference. The pattern either expands with a literal
-            // `{meta.…}` token baked into every path or contributes
-            // zero inputs — warn so the author moves the reference into
-            // `input` (per-instance substitution applies there) or
-            // input_groups.
+            // resolved: per-instance metadata substitution has already run
+            // on the rule's own fields by the time this pass executes, and
+            // `variables` can never bind the dotted token either. Warn so
+            // the author moves the reference into `input` (per-instance
+            // substitution applies there) or input_groups.
             let meta_pattern = exp.pattern.contains("{meta.");
             if meta_pattern {
                 tracing::warn!(
@@ -1503,49 +1498,7 @@ impl WorkflowConfig {
                     "expand_inputs pattern references '{{meta.<column>}}' but per-instance metadata substitution ran BEFORE this pass — the token is never resolved (put the pattern in `input` for substitution, or use input_groups)"
                 );
             }
-            let mut variables = HashMap::new();
-            for (var_name, var_ref) in &exp.variables {
-                if let Some(vals) = self.resolve_config_list(var_ref) {
-                    variables.insert(var_name.clone(), vals);
-                } else if var_ref.starts_with('[') && var_ref.ends_with(']') {
-                    let inner = &var_ref[1..var_ref.len() - 1];
-                    let vals = inner
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    variables.insert(var_name.clone(), vals);
-                } else {
-                    variables.insert(var_name.clone(), vec![var_ref.clone()]);
-                }
-            }
-
-            // Bind this instance's own [[values]] values so `{assembler}`
-            // inside the expand pattern resolves per instance — the
-            // spades instance never sees the megahit value.
-            let bindings = self.expansion_values.get(&rule.name).cloned();
-            if let Some(bindings) = &bindings {
-                for (name, value) in bindings {
-                    variables
-                        .entry(name.clone())
-                        .or_insert_with(|| vec![value.clone()]);
-                }
-            }
-
-            // Same per-instance binding for pair wildcards: `{pair_id}`
-            // (and the other pair keys) inside an expand pattern resolve
-            // to THIS instance's pair, so a per-pair gather rule picks up
-            // its own pair's files only (snakemake-style; the
-            // cohort-level `pair_id = "config.pairs_list"` variable form
-            // still wins when declared explicitly).
-            if let Some(pair_bindings) = self.expansion_pairs.get(&rule.name) {
-                for (name, value) in pair_bindings {
-                    variables
-                        .entry(name.clone())
-                        .or_insert_with(|| vec![value.clone()]);
-                }
-            }
-
+            let variables = self.expand_pattern_variables(exp, &rule.name);
             let mut expanded = crate::wildcard::cartesian_expand(&exp.pattern, &variables);
             // A pattern WITH wildcards that contributes zero inputs
             // means every wildcard lacked a provided value — usually
@@ -1563,7 +1516,7 @@ impl WorkflowConfig {
                 );
             }
             // Resolve the `{values.name}` namespace form per instance.
-            if let Some(bindings) = &bindings {
+            if let Some(bindings) = self.expansion_values.get(&rule.name) {
                 for path in &mut expanded {
                     *path = crate::wildcard::expand_values_namespace(path, bindings);
                 }
@@ -1572,6 +1525,53 @@ impl WorkflowConfig {
             current_input.extend(expanded);
             rule.input = FilePatterns::List(current_input);
         }
+    }
+
+    /// Resolve one `expand_inputs` pattern's variable table: config
+    /// references, inline `[a, b]` lists, literal values — then this
+    /// instance's own `[[values]]`/`[[pairs]]` bindings so `{assembler}`
+    /// resolves per instance (the spades instance never sees the megahit
+    /// files). Explicit variable declarations win over instance bindings.
+    fn expand_pattern_variables(
+        &self,
+        exp: &crate::rule::ExpandConfig,
+        rule_name: &str,
+    ) -> HashMap<String, Vec<String>> {
+        let mut variables = HashMap::new();
+        for (var_name, var_ref) in &exp.variables {
+            if let Some(vals) = self.resolve_config_list(var_ref) {
+                variables.insert(var_name.clone(), vals);
+            } else if var_ref.starts_with('[') && var_ref.ends_with(']') {
+                let inner = &var_ref[1..var_ref.len() - 1];
+                let vals = inner
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                variables.insert(var_name.clone(), vals);
+            } else {
+                variables.insert(var_name.clone(), vec![var_ref.clone()]);
+            }
+        }
+        // Pair wildcards follow the same per-instance rule: `{pair_id}`
+        // inside an expand pattern resolves to THIS instance's pair, so a
+        // per-pair gather rule picks up its own pair's files only
+        // (snakemake-style; the cohort-level
+        // `pair_id = "config.pairs_list"` variable form above still wins).
+        for bindings in [
+            self.expansion_values.get(rule_name),
+            self.expansion_pairs.get(rule_name),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for (name, value) in bindings {
+                variables
+                    .entry(name.clone())
+                    .or_insert_with(|| vec![value.clone()]);
+            }
+        }
+        variables
     }
 
     /// Apply the per-instance `{meta.<column>}` substitution (issue #227
@@ -2404,12 +2404,18 @@ impl WorkflowConfig {
             // pattern wildcard values so instantiation order (and the
             // reported names) is deterministic across runs and resume —
             // the discovery walkers see filesystem order, which is not.
-            let mut sorted: Vec<&crate::wildcard::WildcardValues> = domain.iter().collect();
-            sorted.sort_by_key(|combo| {
-                pattern_wildcards
-                    .iter()
-                    .map(|w| combo.get(w).cloned().unwrap_or_default())
-                    .collect::<Vec<String>>()
+            // Cloned owned so the `discovered_output_patterns` borrow ends
+            // here: the instantiation helper takes `&mut self` across the
+            // loop below.
+            let mut sorted: Vec<crate::wildcard::WildcardValues> = domain.to_vec();
+            sorted.sort_by(|a, b| {
+                let key = |combo: &crate::wildcard::WildcardValues| {
+                    pattern_wildcards
+                        .iter()
+                        .map(|w| combo.get(w).cloned().unwrap_or_default())
+                        .collect::<Vec<String>>()
+                };
+                key(a).cmp(&key(b))
             });
             // The consumer's OWN `[[values]]` dimension (issue #296
             // follow-up): a deferred template skips plan-time fan-out, so
@@ -2440,89 +2446,134 @@ impl WorkflowConfig {
                 for combo in &sorted {
                     // Merge the producer-domain binding with the consumer's
                     // own values binding — disjoint by construction.
-                    let mut merged = (*combo).clone();
+                    let mut merged = combo.clone();
                     merged.extend(own.clone());
-                    let mut name = consumer.name.clone();
-                    name.push_str(own_suffix);
-                    for w in &pattern_wildcards {
-                        name.push('_');
-                        name.push_str(&crate::wildcard::sanitize_instance_value(
-                            combo.get(w).map(String::as_str).unwrap_or_default(),
-                        ));
+                    if let Some(name) = self.instantiate_output_pattern_consumer(
+                        &consumer,
+                        &merged,
+                        own,
+                        own_suffix,
+                        &pattern_wildcards,
+                    )? {
+                        new_names.push(name);
                     }
-                    if self.rules.iter().any(|r| r.name == name) {
-                        // A previous instance of THIS consumer (post-reentry
-                        // re-expansion) is an idempotent no-op; any other
-                        // collision is a genuine naming conflict.
-                        if self
-                            .expansion_templates
-                            .get(&name)
-                            .is_some_and(|t| t == &consumer.name)
-                        {
-                            continue;
-                        }
-                        return Err(OxoFlowError::DuplicateRule { name });
-                    }
-                    let mut instance = consumer.clone();
-                    instance.name = name.clone();
-                    instance.input = expand_rule_patterns(&consumer.input, &merged);
-                    instance.output = expand_rule_patterns(&consumer.output, &merged);
-                    if let Some(ref shell) = consumer.shell {
-                        instance.shell = Some(expand_rule_shell(shell, &merged));
-                    }
-                    if let Some(ref log) = consumer.log {
-                        instance.log = Some(expand_rule_shell(log, &merged));
-                    }
-                    if let Some(ref op) = consumer.output_pattern {
-                        instance.output_pattern = Some(expand_rule_shell(op, &merged));
-                    }
-                    if let Some(ref when) = consumer.when
-                        && when.contains("wildcard.")
-                    {
-                        instance.when = Some(Self::bake_wildcard_when(when, &merged));
-                    }
-                    expand_command_text_fields(&mut instance, &consumer, |s| {
-                        expand_rule_shell(s, &merged)
-                    });
-                    self.apply_instance_meta(&mut instance, &merged);
-                    // Bake the instance's bound wildcards into the
-                    // expand_inputs patterns first (mirroring `input` /
-                    // `output` above): the producer-domain keys live only
-                    // in `merged`, so without this the gather never
-                    // resolves. The materialization pass then handles the
-                    // remaining config-variable references.
-                    for exp in &mut instance.expand_inputs {
-                        let is_wildcarded = crate::wildcard::has_wildcards(&exp.pattern)
-                            || crate::wildcard::contains_values_namespace(&exp.pattern);
-                        if is_wildcarded
-                            && let Ok(baked) =
-                                crate::wildcard::expand_pattern(&exp.pattern, &merged)
-                        {
-                            exp.pattern = crate::wildcard::expand_values_namespace(&baked, &merged);
-                        }
-                    }
-                    self.materialize_expand_inputs(&mut instance);
-                    // Readiness attribution (issue #63): the producer-pattern
-                    // wildcard bindings of this instance.
-                    let samples: Vec<String> = pattern_wildcards
-                        .iter()
-                        .filter_map(|w| merged.get(w).cloned())
-                        .collect();
-                    if !samples.is_empty() {
-                        self.expansion_samples.insert(name.clone(), samples);
-                    }
-                    if !own.is_empty() {
-                        self.expansion_values.insert(name.clone(), own.clone());
-                    }
-                    self.expansion_templates
-                        .insert(name.clone(), consumer.name.clone());
-                    self.rules.push(instance);
-                    new_names.push(name);
                 }
             }
         }
         self.pending_output_pattern = still_pending;
         Ok(new_names)
+    }
+
+    /// The instance name for one (own-values × producer-domain) combo:
+    /// consumer template, own-values suffix, then the producer-pattern
+    /// wildcard values in pattern order. `Ok(None)` signals an idempotent
+    /// no-op — a re-expansion (checkpoint re-entry) re-producing a name
+    /// THIS consumer already instantiated; any other collision is a
+    /// genuine naming conflict.
+    fn consumer_instance_name(
+        &self,
+        consumer: &Rule,
+        combo: &crate::wildcard::WildcardValues,
+        own_suffix: &str,
+        pattern_wildcards: &[String],
+    ) -> Result<Option<String>> {
+        let mut name = consumer.name.clone();
+        name.push_str(own_suffix);
+        for w in pattern_wildcards {
+            name.push('_');
+            name.push_str(&crate::wildcard::sanitize_instance_value(
+                combo.get(w).map(String::as_str).unwrap_or_default(),
+            ));
+        }
+        if self.rules.iter().any(|r| r.name == name) {
+            if self
+                .expansion_templates
+                .get(&name)
+                .is_some_and(|t| t == &consumer.name)
+            {
+                return Ok(None);
+            }
+            return Err(OxoFlowError::DuplicateRule { name });
+        }
+        Ok(Some(name))
+    }
+
+    /// Build, register, and file one deferred-consumer instance from a
+    /// merged binding combo (producer domain ⊕ own values). Returns the
+    /// instance name, or `None` for the idempotent no-op case (see
+    /// [`Self::consumer_instance_name`]).
+    fn instantiate_output_pattern_consumer(
+        &mut self,
+        consumer: &Rule,
+        merged: &crate::wildcard::WildcardValues,
+        own: &crate::wildcard::WildcardValues,
+        own_suffix: &str,
+        pattern_wildcards: &[String],
+    ) -> Result<Option<String>> {
+        let Some(name) =
+            self.consumer_instance_name(consumer, merged, own_suffix, pattern_wildcards)?
+        else {
+            return Ok(None);
+        };
+        let mut instance = consumer.clone();
+        instance.name = name.clone();
+        instance.input = expand_rule_patterns(&consumer.input, merged);
+        instance.output = expand_rule_patterns(&consumer.output, merged);
+        if let Some(ref shell) = consumer.shell {
+            instance.shell = Some(expand_rule_shell(shell, merged));
+        }
+        if let Some(ref log) = consumer.log {
+            instance.log = Some(expand_rule_shell(log, merged));
+        }
+        if let Some(ref op) = consumer.output_pattern {
+            instance.output_pattern = Some(expand_rule_shell(op, merged));
+        }
+        if let Some(ref when) = consumer.when
+            && when.contains("wildcard.")
+        {
+            instance.when = Some(Self::bake_wildcard_when(when, merged));
+        }
+        expand_command_text_fields(&mut instance, consumer, |s| expand_rule_shell(s, merged));
+        self.apply_instance_meta(&mut instance, merged);
+        self.bake_expand_inputs_bindings(&mut instance, merged);
+        self.materialize_expand_inputs(&mut instance);
+        // Readiness attribution (issue #63): the producer-pattern
+        // wildcard bindings of this instance.
+        let samples: Vec<String> = pattern_wildcards
+            .iter()
+            .filter_map(|w| merged.get(w).cloned())
+            .collect();
+        if !samples.is_empty() {
+            self.expansion_samples.insert(name.clone(), samples);
+        }
+        if !own.is_empty() {
+            self.expansion_values.insert(name.clone(), own.clone());
+        }
+        self.expansion_templates
+            .insert(name.clone(), consumer.name.clone());
+        self.rules.push(instance);
+        Ok(Some(name))
+    }
+
+    /// Bake the instance's bound wildcards into its `expand_inputs`
+    /// patterns (mirroring `input` / `output`): the producer-domain keys
+    /// live only in the merged combo, so without this the gather never
+    /// resolves. The materialization pass then handles the remaining
+    /// config-variable references.
+    fn bake_expand_inputs_bindings(
+        &self,
+        instance: &mut Rule,
+        merged: &crate::wildcard::WildcardValues,
+    ) {
+        for exp in &mut instance.expand_inputs {
+            let is_wildcarded = crate::wildcard::has_wildcards(&exp.pattern)
+                || crate::wildcard::contains_values_namespace(&exp.pattern);
+            if is_wildcarded
+                && let Ok(baked) = crate::wildcard::expand_pattern(&exp.pattern, merged)
+            {
+                exp.pattern = crate::wildcard::expand_values_namespace(&baked, merged);
+            }
+        }
     }
 
     /// Resolve split values from SplitConfig.
