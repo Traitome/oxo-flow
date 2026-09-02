@@ -3980,16 +3980,19 @@ Desktop users may prefer the <code>.deb</code> / <code>.rpm</code> / <code>.AppI
 <h2 id="option-4-run-with-docker">Option 4 — Run with Docker<a class="headerlink" href="#option-4-run-with-docker" title="Permanent link">#</a></h2>
 <p>Images are published to GitHub Container Registry automatically on every release and every push to <code>main</code>.
 Release images are multi-arch (<code>linux/amd64</code> + <code>linux/arm64</code>) and are assembled from the
-SHA256-verified release binaries; <code>:main</code> is amd64-only and compiled from source:</p>
+SHA256-verified release binaries. <code>:latest</code> moves only after the release image passes a health
+smoke test, <code>:&lt;major.minor&gt;</code> (e.g. <code>:0.16</code>) tracks the newest patch of a minor line, and <code>:main</code>
+is a multi-arch dev build compiled from source:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Web UI at http://localhost:3000</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>oxo-flow<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>:3000<span class="w"> </span>ghcr.io/traitome/oxo-flow:latest
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Pin a specific release</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Pin a specific release (or track a minor line)</span>
 </span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>:3000<span class="w"> </span>ghcr.io/traitome/oxo-flow:0.16.0
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># CLI one-shot usage — mount your workflow directory</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/work"</span><span class="w"> </span>-w<span class="w"> </span>/work<span class="w"> </span>ghcr.io/traitome/oxo-flow:latest<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>my-pipeline.oxoflow
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>:3000<span class="w"> </span>ghcr.io/traitome/oxo-flow:0.16
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># CLI one-shot usage — mount your workflow directory</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/work"</span><span class="w"> </span>-w<span class="w"> </span>/work<span class="w"> </span>ghcr.io/traitome/oxo-flow:latest<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>my-pipeline.oxoflow
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Data persistence</p>
