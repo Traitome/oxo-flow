@@ -1,6 +1,6 @@
 [package]
 name = "oxo-flow-desktop"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 authors = ["Traitome <https://github.com/Traitome>"]
 license = "Apache-2.0"
@@ -22,7 +22,7 @@ name = "oxo-flow-desktop"
 path = "src/main.rs"
 
 [dependencies]
-oxo-flow-web = { path = "../oxo-flow-web", version = "0.16.0" }
+oxo-flow-web = { path = "../oxo-flow-web", version = "0.17.0" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 fs2 = "0.4"

@@ -28,7 +28,7 @@ When given a workflow file, lists the environments used by each rule.
 **Output:**
 
 ```
-oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
 Available environment backends:
   ✓ conda
   ✓ docker

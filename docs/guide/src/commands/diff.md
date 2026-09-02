@@ -34,7 +34,7 @@ oxo-flow diff v1.oxoflow v2.oxoflow
 ## Output
 
 ```
-oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
 Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
   • [rules] rule "bwa_align": shell command changed
   • [config] config variable changed: "threads"

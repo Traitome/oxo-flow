@@ -51,7 +51,7 @@ oxo-flow init my-pipeline -d /projects/genomics/my-pipeline
 ## Output
 
 ```
-oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
 ✓ Created new project at my-pipeline
   my-pipeline/my-pipeline.oxoflow
   my-pipeline/envs/example.yaml

@@ -59,7 +59,7 @@ $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
 
 ```bash
 $ oxo-flow dry-run examples/gallery/01_hello_world.oxoflow
-oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
 DAG: (dry-run) 1 rules would execute
   1. greet
      threads=1
@@ -83,7 +83,7 @@ Since this is a single rule, the DAG is trivial. The default `graph` output is a
 
 ```bash
 $ oxo-flow graph -f dot examples/gallery/01_hello_world.oxoflow
-oxo-flow v0.16.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
 digraph {
     0 [ label = "greet"]
 }
