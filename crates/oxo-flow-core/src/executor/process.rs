@@ -650,6 +650,16 @@ impl LocalExecutor {
     }
     async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
         if self.config.skip_env_setup {
+            // With setup skipped, a missing hash-suffixed conda env used to
+            // surface only as conda's opaque EnvironmentLocationNotFound at
+            // rule time. Diagnose it here instead: name the derivation and
+            // the plain-name fallback when one exists (issue #300).
+            match (&rule.environment.conda, &rule.environment.mamba) {
+                (Some(spec), None) if rule.environment.conda_prefix.is_none() => {
+                    crate::environment::diagnose_skipped_conda_env("conda", spec);
+                }
+                _ => {}
+            }
             return Ok(());
         }
         let env_spec = &rule.environment;
