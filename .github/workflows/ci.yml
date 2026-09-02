@@ -208,6 +208,34 @@ jobs:
             CHANGED=true
           fi
 
+          # The desktop shell is EXCLUDED from the workspace (its manifest has
+          # an empty [workspace] table), so nothing above touches it — yet it
+          # repeats the release version twice: its own [package] version and
+          # the caret pin on the oxo-flow-web path dependency. Left stale, the
+          # ^old-version requirement cannot resolve against the bumped
+          # workspace and build-macos (a required release leg) fails on the
+          # first release after the pin diverges.
+          DESKTOP_TOML="crates/oxo-flow-desktop/Cargo.toml"
+          if [ -f "$DESKTOP_TOML" ]; then
+            # Portable BRE: `^version` matches only the [package] version
+            # (dependency pins are inline or indented); the oxo-flow-web
+            # line address scopes the second expression to the path-dep pin.
+            sed -i \
+              -e "s/^version = \"[0-9][0-9.]*\"/version = \"$VERSION\"/" \
+              -e "/oxo-flow-web = /s/version = \"[0-9][0-9.]*\"/version = \"$VERSION\"/" \
+              "$DESKTOP_TOML"
+            if ! git diff --quiet -- "$DESKTOP_TOML"; then
+              echo "Updating desktop crate version pins → $VERSION"
+              CHANGED=true
+            fi
+          fi
+
+          # Keep the SPA's package.json version aligned (not a cargo member,
+          # otherwise never bumped; its version ships inside the desktop app).
+          if [ -f frontend/package.json ]; then
+            sed -i "0,/\"version\": \"[0-9][0-9.]*\"/s//\"version\": \"$VERSION\"/" frontend/package.json
+          fi
+
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust (stable)
@@ -216,7 +244,13 @@ jobs:
 
       - name: Update Cargo.lock
         if: steps.patch.outputs.changed == 'true'
-        run: cargo update --workspace
+        run: |
+          cargo update --workspace
+          # The desktop crate is excluded from the workspace and commits its
+          # own lockfile; its copy of the internal crate versions must track
+          # the manifest pins patched above or every later desktop build
+          # fails lockfile verification.
+          (cd crates/oxo-flow-desktop && cargo update --workspace)
 
       - name: Commit and push version bump
         id: push
@@ -230,6 +264,11 @@ jobs:
           [ -f CITATION.cff ] && git add CITATION.cff
           [ -f README.md ] && git add README.md
           [ -d docs/guide/src ] && git add docs/guide/src/*.md docs/guide/src/**/*.md
+          # Excluded-desktop crate: manifest pins + its own lockfile.
+          [ -f crates/oxo-flow-desktop/Cargo.toml ] && \
+            git add crates/oxo-flow-desktop/Cargo.toml crates/oxo-flow-desktop/Cargo.lock
+          # SPA manifest ships inside the desktop app bundle.
+          [ -f frontend/package.json ] && git add frontend/package.json frontend/package-lock.json
           # Re-tagging a version whose files are already synced leaves nothing
           # to commit (CITATION.cff/docs branches set CHANGED unconditionally).
           # Tolerate it: the dedicated "Create and push release tag" step
@@ -586,55 +625,14 @@ jobs:
       - name: Package desktop app (.app + .dmg)
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         shell: bash
+        # Single packaging path shared with `make bundle-macos` — the script
+        # hand-rolls the .app bundle (bundle executable = the wry desktop
+        # shell, Resources/static = the SPA, ad-hoc codesign) and emits the
+        # same artifact names this job's upload step globs.
         run: |
           set -euxo pipefail
-          TARGET_DIR="target/${{ matrix.target }}/release"
-          DESKTOP_DIR="crates/oxo-flow-desktop/target/${{ matrix.target }}/release"
-          mkdir -p dist
-          # Hand-rolled .app bundle (cargo-bundle-style layout, extended
-          # with icon and code signature). The bundle executable is the
-          # wry-based desktop shell itself — a native window (WKWebView)
-          # around the embedded web server, no external browser involved:
-          # - Contents/MacOS/oxo-flow     desktop shell binary (serves the
-          #                               SPA on loopback and shows it in a
-          #                               native window; handles cwd=/ from
-          #                               Finder launches natively)
-          # - Contents/Resources/static   built SPA (served by the shell)
-          # - Contents/Resources/oxo-flow.icns
-          # - bundle-level ad-hoc code signature (arm64 macOS requires
-          #   signed executables; the linker's ad-hoc Mach-O signature is
-          #   not a bundle signature — unsigned bundles are reported as
-          #   "damaged" by Gatekeeper on Apple Silicon).
-          APP="oxo-flow.app"
-          mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
-          cp "${DESKTOP_DIR}/oxo-flow-desktop" "${APP}/Contents/MacOS/oxo-flow"
-          cp -r crates/oxo-flow-web/static "${APP}/Contents/Resources/static"
-          cp assets/oxo-flow.icns "${APP}/Contents/Resources/oxo-flow.icns"
-          PLIST="${APP}/Contents/Info.plist"
-          printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "$PLIST"
-          printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' >> "$PLIST"
-          printf '<plist version="1.0"><dict>\n' >> "$PLIST"
-          printf '  <key>CFBundleName</key><string>oxo-flow</string>\n' >> "$PLIST"
-          printf '  <key>CFBundleDisplayName</key><string>oxo-flow</string>\n' >> "$PLIST"
-          printf '  <key>CFBundleIdentifier</key><string>org.oxoflow.oxoflow</string>\n' >> "$PLIST"
-          printf '  <key>CFBundleVersion</key><string>%s</string>\n' "${RELEASE_TAG#v}" >> "$PLIST"
-          printf '  <key>CFBundleShortVersionString</key><string>%s</string>\n' "${RELEASE_TAG#v}" >> "$PLIST"
-          printf '  <key>CFBundlePackageType</key><string>APPL</string>\n' >> "$PLIST"
-          printf '  <key>CFBundleExecutable</key><string>oxo-flow</string>\n' >> "$PLIST"
-          printf '  <key>CFBundleIconFile</key><string>oxo-flow</string>\n' >> "$PLIST"
-          printf '  <key>LSMinimumSystemVersion</key><string>11.0</string>\n' >> "$PLIST"
-          printf '  <key>NSPrincipalClass</key><string>NSApplication</string>\n' >> "$PLIST"
-          printf '  <key>NSHighResolutionCapable</key><true/>\n' >> "$PLIST"
-          printf '</dict></plist>\n' >> "$PLIST"
-          # Ad-hoc (not Developer ID): makes the bundle internally consistent
-          # so Gatekeeper does not flag it as "damaged" once the download
-          # quarantine is cleared; a downloaded ad-hoc app is still blocked
-          # by Gatekeeper until the quarantine attribute is removed (see
-          # docs/guide/src/how-to/desktop-app.md).
-          codesign --force --deep --sign - "${APP}"
-          (cd dist && zip -qry "oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}-app.zip" "../${APP}")
-          hdiutil create -volname "oxo-flow" -srcfolder "${APP}" -ov -format UDZO \
-            "dist/oxo-flow-${RELEASE_TAG}-desktop-${{ matrix.target }}.dmg"
+          scripts/package-macos-app.sh \
+            "${{ matrix.target }}" "${RELEASE_TAG}" dist
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')

@@ -67,7 +67,9 @@ contributors:
 	@echo "Human contributors (from git log):"
 	@git log --format="%aN" --all | grep -v "Claude\|noreply\|bot\|Copilot" | sort -u
 
-# ── Desktop packaging (docs/how-to/desktop-app.md) ────────────────────────
+# ── Desktop packaging (docs/guide/src/how-to/desktop-app.md) ──────────────
+VERSION := $(shell sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' Cargo.toml | head -1)
+
 # The SPA build output is copied into the CLI crate so the bundle carries it
 # without ".." resource paths (cargo-bundle mangles those). Frontend must be
 # built first — assets are gitignored build artifacts.
@@ -84,9 +86,10 @@ bundle-desktop:
 	cd crates/oxo-flow-desktop && cargo build --release
 	@echo "→ crates/oxo-flow-desktop/target/release/oxo-flow-desktop"
 
-bundle-macos: bundle-static
-	cd crates/oxo-flow-cli && cargo bundle --release --format osx
-	cd crates/oxo-flow-cli && cargo bundle --release --format dmg
+# Same packaging path as the release CI (scripts/package-macos-app.sh): the
+# bundle executable is the desktop shell itself, not the CLI binary.
+bundle-macos: bundle-static bundle-desktop
+	bash scripts/package-macos-app.sh '' "v$(VERSION)" dist
 
 bundle-deb: bundle-static
 	cd crates/oxo-flow-cli && cargo bundle --release --format deb
