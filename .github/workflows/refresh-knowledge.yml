@@ -4,11 +4,15 @@
 # dispatch. scripts/refresh-knowledge/*.py are stdlib-only python3, idempotent
 # (rewrite data only on change); a failing script is tolerated (other sources
 # still refresh), reported via ::error, and named in the PR body. No changes ->
-# green run with a notice; changes -> refresh-knowledge/<date> branch, commit of
-# data + meta files only, PR with label `automated` + per-source count summary
-# from knowledge_meta.json. Release safety: ci.yml sync-version gates dispatch
-# releases on 60-day freshness of auto:true sources (MAX_AGE_DAYS there; the
-# 16-day cadence leaves one missed run of slack).
+# green run with a notice; changes -> the stable refresh-knowledge/auto branch
+# (re-runs force-push it in place — no dated orphan branches), commit of data +
+# meta files only, then a PR with label `automated` + per-source count summary
+# from knowledge_meta.json; if the org policy refuses Actions-created PRs, the
+# same handoff falls back to an issue pointing at the branch and the run stays
+# green (the refresh itself succeeded; only the handoff channel changed).
+# Release safety: ci.yml sync-version gates dispatch releases on 60-day
+# freshness of auto:true sources (MAX_AGE_DAYS there; the 16-day cadence
+# leaves one missed run of slack).
 name: Knowledge Refresh
 
 on:
@@ -75,7 +79,10 @@ jobs:
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y-%m-%d)"
-          BRANCH="refresh-knowledge/${DATE}"
+          # Stable branch name: a re-run force-pushes it in place. Dated names
+          # accumulated one orphan branch per failed handoff; this cannot pile
+          # up, and the issue/PR body carries the refresh date.
+          BRANCH="refresh-knowledge/auto"
           META="crates/oxo-flow-ai/src/knowledge/knowledge_meta.json"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -106,6 +113,13 @@ jobs:
           )"
           git checkout -B "${BRANCH}"
           git commit -m "chore(knowledge): automatic knowledge refresh ${DATE}"
+          # Establish the remote-tracking ref before the lease push: the
+          # Actions checkout (depth 1, default branch only) never fetches
+          # ${BRANCH}, and on the SECOND run --force-with-lease without a
+          # local tracking ref rejects with "(stale info)" (git needs the
+          # tracking ref to know the remote's real tip). A failed fetch is
+          # the first-run create case, which needs no lease.
+          git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
           git push -u --force-with-lease origin "${BRANCH}"
           FAILED_NOTE=""
           [ -n "${FAILED_SCRIPTS:-}" ] && \
@@ -113,9 +127,29 @@ jobs:
           BODY="$(printf 'Automated refresh of the embedded knowledge data (run: %s).\n\nPer-source entry counts (from `knowledge_meta.json`):\n%s\n\n```\n%s\n```\n%s' "$DATE" "$SUMMARY" "$DIFF_STAT" "${FAILED_NOTE}")"
           gh label create automated --description "PRs from the Knowledge Refresh workflow" 2>/dev/null \
             || echo "::warning::Could not create 'automated' label (exists already or permission denied)"
-          gh pr create \
+          COMPARE_URL="${{ github.server_url }}/${{ github.repository }}/compare/${{ github.event.repository.default_branch }}...${BRANCH}"
+          EXISTING_PR="$(gh pr list --head "${BRANCH}" --state open --json number -q '.[0].number' 2>/dev/null || true)"
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "::notice::Open PR #${EXISTING_PR} already tracks ${BRANCH} — the branch was updated in place"
+          elif gh pr create \
             --base "${{ github.event.repository.default_branch }}" \
             --head "${BRANCH}" \
             --title "chore(knowledge): automatic knowledge refresh ${DATE}" \
             --body "${BODY}" \
-            --label automated
+            --label automated; then
+            echo "::notice::Knowledge refresh PR created from ${BRANCH}"
+          else
+            # Org policy can forbid PR creation by GITHUB_TOKEN ("GitHub
+            # Actions is not permitted to create or approve pull requests").
+            # The refresh itself succeeded and the data is committed — fall
+            # back to an issue so the handoff is recorded and the run stays
+            # green. Only fail if neither channel works.
+            echo "::warning::PR creation refused (org policy blocks Actions-created PRs) — opening an issue instead"
+            ISSUE_BODY="$(printf '%s\n\nMerge `refs/heads/%s` into `%s` to land this refresh. Compare: %s' "${BODY}" "${BRANCH}" "${{ github.event.repository.default_branch }}" "${COMPARE_URL}")"
+            gh issue create \
+              --title "chore(knowledge): automatic knowledge refresh ${DATE} (PR blocked by org policy)" \
+              --body "${ISSUE_BODY}" \
+              --label automated \
+              || { echo "::error::Could not create a PR or an issue — refreshed data is committed on ${BRANCH} but no handoff was recorded"; exit 1; }
+            echo "::notice::Knowledge refresh handoff issue created; data waits on ${BRANCH}"
+          fi
