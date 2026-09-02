@@ -519,7 +519,7 @@ Each section ID maps to a registered `ReportSectionGenerator`:
 | `environment` | Available backends and oxo-flow version | Always |
 | `clinical-compliance` | ACMG/AMP classification, audit trail, biomarkers | Always |
 | `execution-status` | Per-rule execution status and benchmark metrics | Only with checkpoint |
-| `software-versions` | Tool/version table parsed from known version-reporting files (`*version*` filenames) | When version files are found |
+| `software-versions` | Declared software per rule, nf-core-style: docker `image:tag`, module `tool/version`, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded (see [Reporting](reporting-system.md#software-versions-section)) | When any rule declares an environment |
 | `rule-captions` | Per-rule `report` annotations rendered as markdown — see [Rule Captions](#rule-captions) | When any rule declares `report` |
 | `aggregate-metrics` | MultiQC-style sample × metric matrix across tools, plus `*_mqc.json` custom content | When metric or custom-content files are found |
 
