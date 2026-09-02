@@ -6935,6 +6935,146 @@ fn output_pattern_values_and_fresh_wildcards_compose_end_to_end() {
     assert_eq!(c.output.to_vec(), vec!["out/spades_1.txt"]);
 }
 
+#[test]
+fn output_pattern_deferred_consumer_projects_own_values_dimension() {
+    // Follow-up to #296: a deferred consumer's OWN `[[values]]` dimension
+    // must survive runtime instantiation. The template skips plan-time
+    // fan-out (the fresh-wildcard deferral runs first), so the projection
+    // happens here — one instance per (own value × discovered combo),
+    // with both bindings baked and `expansion_values` recorded. Tables
+    // already bound by the producer's domain (shared wildcards) ride the
+    // combos instead of projecting a contradictory second copy.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-own.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-own"
+
+        [[values]]
+        name = "caller"
+        values = ["freebayes", "bcftools"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/asm/{chunk}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "call"
+        input = ["results/asm/{chunk}.txt"]
+        output = ["vcfs/{caller}/{chunk}.vcf"]
+        shell = "cp {input} {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.pending_output_pattern.len(), 1);
+
+    for chunk in ["1", "2"] {
+        let path = dir.path().join(format!("results/asm/{chunk}.txt"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, chunk).unwrap();
+    }
+    let instance = config.get_rule("assemble").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    assert_eq!(combos.len(), 2);
+    config.contribute_output_pattern_domain("assemble", combos);
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    let mut sorted = new_names.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![
+            "call_caller_bcftools_1",
+            "call_caller_bcftools_2",
+            "call_caller_freebayes_1",
+            "call_caller_freebayes_2",
+        ],
+        "one instance per own value × discovered chunk"
+    );
+    let fb = config
+        .get_rule("call_caller_freebayes_1")
+        .expect("instance");
+    assert_eq!(fb.input.to_vec(), vec!["results/asm/1.txt"]);
+    assert_eq!(fb.output.to_vec(), vec!["vcfs/freebayes/1.vcf"]);
+    assert_eq!(
+        config
+            .expansion_values
+            .get("call_caller_freebayes_1")
+            .and_then(|v| v.get("caller").map(String::as_str)),
+        Some("freebayes"),
+        "the projected binding is recorded for downstream attribution"
+    );
+    assert!(config.pending_output_pattern.is_empty());
+}
+
+#[test]
+fn output_pattern_deferred_consumer_expand_inputs_materialize() {
+    // A deferred consumer that gathers via `expand_inputs` must get its
+    // patterns materialized into concrete inputs at instantiation — the
+    // plan-time pass never touches deferred templates, so without this
+    // the instance runs with an empty input.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-gather.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-gather"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "rollup"
+        input = []
+        expand_inputs = [{ pattern = "results/chunks/{part}.txt", variables = {} }]
+        output = ["results/all.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert_eq!(config.pending_output_pattern.len(), 1);
+
+    for part in ["1", "2", "3"] {
+        let path = dir.path().join(format!("results/chunks/{part}.txt"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, part).unwrap();
+    }
+    let instance = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    config.contribute_output_pattern_domain("split", combos);
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    assert_eq!(
+        new_names,
+        vec!["rollup_1", "rollup_2", "rollup_3"],
+        "no own values dimension: identity naming, one instance per combo"
+    );
+    let r = config.get_rule("rollup_1").expect("instance");
+    assert_eq!(
+        r.input.to_vec(),
+        vec!["results/chunks/1.txt"],
+        "expand_inputs materialized into the runtime instance's input"
+    );
+}
+
 // ── Issue #283: long-read dimension in sheet mode ──────────────────────────
 
 #[test]

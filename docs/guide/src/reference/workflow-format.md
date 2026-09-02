@@ -2534,19 +2534,22 @@ Semantics:
   per instance while the fresh wildcard stays runtime-discovered, and the
   deferred consumers instantiate over the union with both bindings.
 - Plan time: a consumer referencing a fresh wildcard has an empty domain and
-  instantiates **nothing**; it is deferred whole (its own
-  `[[values]]`/`[[pairs]]`/sample fan-out is baked from the producer's
-  discovered bindings). A consumer declared **before** its producer is
-  legal but warned. Referencing two producers' fresh wildcards in one rule
-  is a v1 error; a chain — a rule that is both consumer and producer of
-  fresh wildcards — is supported.
+  instantiates **nothing**; it is deferred whole. Wildcards shared with the
+  producer's pattern ride the discovered bindings; `[[values]]` tables the
+  consumer references on its own project as an extra Cartesian dimension at
+  instantiation (issue #296 follow-up). A consumer declared **before** its
+  producer is legal but warned. Referencing two producers' fresh wildcards
+  in one rule is a v1 error; a chain — a rule that is both consumer and
+  producer of fresh wildcards — is supported.
 - Runtime: when a producer **instance** completes, the engine scans its
   pattern and unions the discovered values into the producer template's
   domain. When **all** of the producer's instances have completed, the
-  deferred consumers are instantiated (one instance per domain value,
-  deterministically named `consumer_<values>`), and the new instances are
-  inserted forward into the remaining plan — forward-safety comes from
-  completion ordering, not DAG topology, exactly like checkpoint re-entry.
+  deferred consumers are instantiated (one instance per domain value × own
+  values binding, deterministically named `consumer_<own values>_<values>`,
+  with `expand_inputs` patterns materialized into concrete inputs), and the
+  new instances are inserted forward into the remaining plan —
+  forward-safety comes from completion ordering, not DAG topology, exactly
+  like checkpoint re-entry.
 - Interaction with `resume`: the discovered domains are persisted
   (persist-first, before fan-out). A resume replays the **partial**
   persisted domain to instantiate consumers for the producer instances
