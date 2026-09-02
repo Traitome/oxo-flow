@@ -483,8 +483,14 @@ pub fn discover_wildcards_from_pattern_tree_with(
     let mut seen = HashSet::new();
 
     // Walk the tree; only files whose relative path matches the full
-    // pattern contribute. Symlinks are followed, unreadable subtrees are
-    // skipped (best-effort, matching the flat walker's stance).
+    // pattern contribute. `DirEntry::file_type` does NOT follow symlinks,
+    // so a symlink-to-directory fails the `is_dir` recursion test: it is
+    // probed as a path candidate instead (and almost never matches a file
+    // pattern). Net semantics — followlinks=False, like Python's
+    // os.walk default: symlinked FILES inside scanned directories still
+    // match, symlinked DIRS are not descended (no runaway traversal on
+    // symlink cycles). Unreadable subtrees are skipped (best-effort,
+    // matching the flat walker's stance).
     fn walk(
         dir: &std::path::Path,
         base: &std::path::Path,
@@ -969,7 +975,10 @@ pub fn wildcard_combinations_from_pairs(
                 // JSON sheets and inline TOML entries reach here untrimmed,
                 // and a padded value would fail `wildcard.<key> == '…'`
                 // gates that plan-time validation (which trims) accepted.
-                values.insert(k.clone(), v.trim().to_string());
+                // Keys too: JSON allows `" key "` spellings, and a padded
+                // key yields a wildcard no `{wildcard.<key>}` reference can
+                // match (same rationale as the groups path below).
+                values.insert(k.trim().to_string(), v.trim().to_string());
             }
             values
         })
@@ -1380,6 +1389,46 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn discover_wildcards_from_pattern_tree_symlink_semantics() {
+        // The documented walker stance (followlinks=False, like Python's
+        // os.walk default): a symlinked FILE inside a scanned directory
+        // matches in place, a symlinked DIRECTORY is probed as a path
+        // candidate but never descended into (no runaway traversal on
+        // symlink cycles). The {sub} wildcard makes descent observable —
+        // descending through `mirror` would surface (mirror, …) combos.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("results/real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("S1_L1_R1.fastq.gz"), "").unwrap();
+        std::os::unix::fs::symlink(
+            real.join("S1_L1_R1.fastq.gz"),
+            real.join("S1_L2_R1.fastq.gz"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("results/mirror")).unwrap();
+
+        let results = discover_wildcards_from_pattern_tree(
+            dir.path(),
+            "results/{sub}/{sample}_{lane}_R1.fastq.gz",
+        )
+        .unwrap();
+        let mut combos: Vec<_> = results
+            .into_iter()
+            .map(|c| (c["sub"].clone(), c["sample"].clone(), c["lane"].clone()))
+            .collect();
+        combos.sort();
+        assert_eq!(
+            combos,
+            vec![
+                ("real".to_string(), "S1".to_string(), "L1".to_string()),
+                ("real".to_string(), "S1".to_string(), "L2".to_string()),
+            ],
+            "symlinked file must match in place; symlinked dir must not be descended"
+        );
+    }
+
+    #[test]
     fn discover_wildcards_from_pattern_tree_rejects_mismatched_repeated_wildcard() {
         // A repeated wildcard must hold the SAME value at every position:
         // "consensus/{antibody}/{antibody}.peaks.bed" may regex-match
@@ -1550,12 +1599,14 @@ mod tests {
     }
 
     /// Pair metadata takes the same path — trim at fan-out so inline-TOML
-    /// `[[pairs]]` metadata behaves like the delimited parse.
+    /// `[[pairs]]` metadata behaves like the delimited parse. Keys too: a
+    /// padded key would yield a wildcard no `{wildcard.<key>}` reference
+    /// can match.
     #[test]
     fn wildcard_combinations_from_pairs_trim_metadata() {
         use crate::config::ExperimentControlPair;
         let mut meta = HashMap::new();
-        meta.insert("input_type".to_string(), " srr ".to_string());
+        meta.insert(" input_type ".to_string(), " srr ".to_string());
         let pairs = vec![ExperimentControlPair {
             pair_id: "P1".to_string(),
             experiment: "E1".to_string(),
@@ -1567,6 +1618,10 @@ mod tests {
         let combos = wildcard_combinations_from_pairs(&pairs);
         assert_eq!(combos[0]["input_type"], "srr");
         assert_eq!(combos[0]["experiment_type"], "lung");
+        assert!(
+            !combos[0].contains_key(" input_type "),
+            "padded metadata key must not survive into the wildcard map"
+        );
     }
 
     #[test]
