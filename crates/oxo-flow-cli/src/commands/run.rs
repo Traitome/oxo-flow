@@ -2131,11 +2131,34 @@ pub async fn run_command(
     // by the skip preprocessing below). A fresh run replays an empty record
     // and adds nothing; `--rerun` deliberately skips it so the producer
     // re-discovers the domain live.
+    // Gate (issue #296 follow-up): instantiate only when EVERY producer
+    // instance is already completed. A producer that still has to re-run
+    // keeps its consumers pending — the runtime discovery pass then
+    // instantiates them from the final domain union, so the final consumer
+    // set is the union of all per-instance slices (a partial replay would
+    // drain the pending set and silently drop the later slices).
     {
         let ck = checkpoint.lock().await;
         if !ck.output_pattern_domains.is_empty() && !rerun {
             config.discovered_output_patterns = ck.output_pattern_domains.clone();
-            let replayed = config.expand_output_pattern_consumers()?;
+            let all_producers_complete = ck.output_pattern_domains.keys().all(|template| {
+                config.rules.iter().all(|r| {
+                    r.output_pattern.is_none()
+                        || (config.expansion_templates.get(&r.name).map(String::as_str)
+                            != Some(template.as_str())
+                            && r.name != *template)
+                        || ck.completed_rules.contains(&r.name)
+                })
+            });
+            let replayed = if all_producers_complete {
+                config.expand_output_pattern_consumers()?
+            } else {
+                tracing::info!(
+                    "deferred output_pattern consumers stay pending: a producer instance \
+                     is not completed yet — the runtime discovery pass will instantiate them"
+                );
+                Vec::new()
+            };
             tracing::info!(
                 count = replayed.len(),
                 "replayed runtime-discovered output_pattern domains"
@@ -4998,7 +5021,28 @@ async fn process_output_pattern_discovery(
     };
 
     // 1. Scan the filesystem for this instance's output_pattern files.
-    let combos = config.discover_output_pattern_files(&instance, workdir)?;
+    //
+    // A fully-bound baked pattern (issue #296) is a static contract:
+    // plan-time fan-out already IS the domain and plan-time consumers hold
+    // their DAG edges — discovery has nothing to enumerate and the
+    // zero-discovery warning would be spurious. Deferred consumers can
+    // still be attached, though, when the binding came from a fan-out the
+    // engine baked itself (scatter writes its variable into the pattern):
+    // their domain is the instance's own bindings, not the filesystem, so
+    // contribute that directly instead of starving them silently.
+    let combos = if config.output_pattern_needs_discovery(&instance) {
+        config.discover_output_pattern_files(&instance, workdir)?
+    } else {
+        let bindings = config.instance_bindings(instance_name);
+        if bindings.is_empty()
+            || config
+                .pending_output_pattern_consumers_of(&template)
+                .is_empty()
+        {
+            return Ok(Vec::new());
+        }
+        vec![bindings]
+    };
     if combos.is_empty() {
         // Zero discoveries after producer success: loud, but legal — the
         // consumers stay uninstantiated (a later instance of the same

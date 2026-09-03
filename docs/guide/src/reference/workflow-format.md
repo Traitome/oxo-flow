@@ -583,7 +583,7 @@ memory = "32G"
 | `name` | String | **Yes** | Unique rule identifier |
 | `input` | Array of strings | **Yes** | Input file paths |
 | `output` | Array of strings | **Yes** | Output file paths |
-| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
+| `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A `[[values]]` wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
 | `description` | String | No | Human-readable description of what this rule does |
@@ -1543,7 +1543,19 @@ shell = "{assembler} -o {output} {input}"
 ```
 
 - Every rule referencing `{assembler}` (bare form) or `{values.assembler}`
-  (namespaced form) expands into one instance per value.
+  (namespaced form) expands into one instance per value. The reference may
+  live in any trigger field — inputs, outputs, shell, `when`,
+  `expand_inputs` patterns, **or the rule's `output_pattern`** (issue
+  #296): a pattern-only reference fans the producer out per value with the
+  pattern baked per instance, exactly as it already does for
+  `{sample}`/pair wildcards.
+
+  ```toml
+  [[rules]]
+  name = "assemble"
+  output_pattern = "results/{assembler}/chunks.txt"   # fans out per value
+  shell = "scripts/build_all.sh"
+  ```
 - `values_from = "config.x"` resolves the value list from a config key at
   expansion time — a comma string (`"u1,u2"`) or array, the same semantics
   as `expand_inputs` config references. CLI `--arg x=u1,u2` or a profile
@@ -2511,27 +2523,44 @@ Semantics:
 - `{config.x}` in the pattern resolves from the workflow config before the
   scan; discovered files are literals, so exact-match edge inference works
   as usual.
+- A `[[values]]` wildcard in the pattern is **not** fresh — it is a
+  plan-time bound dimension (issue #296). The producer fans out per value
+  with the pattern baked per instance, the pattern is registered
+  producer-side in the DAG (so a per-value consumer's materialized input
+  exact-matches its own producer instance), and a pattern whose wildcards
+  are all bound this way skips the runtime scan entirely — the static
+  instances already are the domain. Mixed patterns
+  (`results/{assembler}/{chunk}.txt`) compose: the values dimension bakes
+  per instance while the fresh wildcard stays runtime-discovered, and the
+  deferred consumers instantiate over the union with both bindings.
 - Plan time: a consumer referencing a fresh wildcard has an empty domain and
-  instantiates **nothing**; it is deferred whole (its own
-  `[[values]]`/`[[pairs]]`/sample fan-out is baked from the producer's
-  discovered bindings). A consumer declared **before** its producer is
-  legal but warned. Referencing two producers' fresh wildcards in one rule
-  is a v1 error; a chain — a rule that is both consumer and producer of
-  fresh wildcards — is supported.
+  instantiates **nothing**; it is deferred whole. Wildcards shared with the
+  producer's pattern ride the discovered bindings; `[[values]]` tables the
+  consumer references on its own project as an extra Cartesian dimension at
+  instantiation, under the same plan-time semantics as a static fan-out —
+  `wildcard_constraints` filtered and per-instance `when` gates evaluated,
+  so gated-off combos never become instances (issue #296 follow-up). A
+  consumer declared **before** its producer is legal but warned.
+  Referencing two producers' fresh wildcards in one rule is a v1 error; a
+  chain — a rule that is both consumer and producer of fresh wildcards —
+  is supported.
 - Runtime: when a producer **instance** completes, the engine scans its
   pattern and unions the discovered values into the producer template's
   domain. When **all** of the producer's instances have completed, the
-  deferred consumers are instantiated (one instance per domain value,
-  deterministically named `consumer_<values>`), and the new instances are
-  inserted forward into the remaining plan — forward-safety comes from
-  completion ordering, not DAG topology, exactly like checkpoint re-entry.
+  deferred consumers are instantiated (one instance per domain value × own
+  values binding, deterministically named `consumer_<own values>_<values>`,
+  with `expand_inputs` patterns materialized into concrete inputs), and the
+  new instances are inserted forward into the remaining plan —
+  forward-safety comes from completion ordering, not DAG topology, exactly
+  like checkpoint re-entry.
 - Interaction with `resume`: the discovered domains are persisted
-  (persist-first, before fan-out). A resume replays the **partial**
-  persisted domain to instantiate consumers for the producer instances
-  that already succeeded; when a failed instance is retried and succeeds,
-  the fan-out is idempotent and only the new values extend the consumer
-  set — partial progress across a resume is preserved, and the final
-  consumer set equals the union of all per-instance discoveries.
+  (persist-first, before fan-out). A resume replays the persisted domain
+  and instantiates the deferred consumers only when **every** producer
+  instance is already completed; when a failed instance still has to
+  re-run, its consumers stay pending and the live runtime pass
+  instantiates them from the final domain union — the final consumer set
+  equals the union of all per-instance discoveries, never a partial
+  slice.
 - Zero discoveries after producer success is **loud**: a warning is emitted
   and the consumers stay uninstantiated (a later producer instance may
   still contribute). A producer **failure** leaves the consumers

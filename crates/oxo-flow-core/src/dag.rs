@@ -78,6 +78,13 @@ impl WorkflowDag {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
         let mut output_to_node: HashMap<String, Vec<NodeIndex>> = HashMap::new();
+        // Strings claimed via `output_pattern` (issue #296). They register
+        // producer-side for exact matching, but are EXCLUDED from the
+        // template matchers below: a raw pattern like `refs/{build}/bt2.gz`
+        // regex-matches arbitrary concrete inputs (`refs/legacy/bt2.gz`)
+        // that no dataflow connects, and the fabricated edges can serialize
+        // unrelated rules or fabricate cycles.
+        let mut pattern_claims: HashSet<String> = HashSet::new();
 
         // Step 1: Add all rules as nodes
         for (idx, rule) in rules.iter().enumerate() {
@@ -99,6 +106,16 @@ impl WorkflowDag {
             // a different config key still match.
             for output in &rule.output {
                 output_to_node.entry(expand(output)).or_default().push(node);
+            }
+            // Issue #296: an output_pattern is a producer-side declaration
+            // too. Registering it lets pattern-only producers (no `output`
+            // entries) link their consumers: exact matches at template
+            // level, and the expand_inputs pass below matches consumer
+            // patterns against the baked instance patterns.
+            if let Some(ref op) = rule.output_pattern {
+                let claimed = expand(op);
+                pattern_claims.insert(claimed.clone());
+                output_to_node.entry(claimed).or_default().push(node);
             }
         }
 
@@ -125,8 +142,10 @@ impl WorkflowDag {
         // `variants/{sample}.g.vcf.gz` → `^variants/(?P<sample>\S+)\.g\.vcf\.gz$`).
         // Outputs referencing `{config.x}` cannot compile a valid regex group
         // name — those are skipped (None) and simply never match.
+        // Output_pattern claims stay out (see `pattern_claims`).
         let template_matchers: Vec<(String, Option<Regex>)> = producer_outputs
             .iter()
+            .filter(|(output, _)| !pattern_claims.contains(output))
             .map(|(output, _)| {
                 let matcher = if output.contains('{') {
                     crate::wildcard::pattern_to_regex(output).ok()
@@ -2222,6 +2241,71 @@ mod tests {
         });
         let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
         assert_eq!(dag.dependencies("multiqc").unwrap(), vec!["fastqc_raw"]);
+    }
+
+    #[test]
+    fn output_pattern_registers_producer_side_for_template_matching() {
+        // Issue #296: the output_pattern itself is a producer-side
+        // declaration. A consumer's raw expand_inputs pattern carrying the
+        // same wildcard literals exact-matches it — this is the edge the
+        // template-level graph (the catalog's source) must show for
+        // pattern-only producers.
+        let mut producer = make_rule("assemble", vec![], vec![]);
+        producer.output_pattern = Some("results/{assembler}/part.txt".to_string());
+        let mut consumer = make_rule("summarize", vec![], vec!["results/summary.txt"]);
+        consumer.expand_inputs.push(crate::rule::ExpandConfig {
+            pattern: "results/{assembler}/part.txt".to_string(),
+            variables: HashMap::new(),
+        });
+        let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
+        assert_eq!(dag.dependencies("summarize").unwrap(), vec!["assemble"]);
+    }
+
+    #[test]
+    fn expand_inputs_consumer_matches_baked_output_pattern_precisely() {
+        // Issue #296: a [[values]]-fanned output_pattern producer bakes its
+        // pattern per instance, and the expansion pass materializes a
+        // values consumer's expand_inputs pattern into ITS OWN concrete
+        // paths (the spades instance never sees megahit files). The baked
+        // producer pattern must be registered producer-side so the
+        // concrete consumer input exact-matches it — and only it: the
+        // per-value edge precision pinned by #268 item 1 holds.
+        let mut p1 = make_rule("assemble_assembler_spades", vec![], vec![]);
+        p1.output_pattern = Some("results/spades/part.txt".to_string());
+        let mut p2 = make_rule("assemble_assembler_megahit", vec![], vec![]);
+        p2.output_pattern = Some("results/megahit/part.txt".to_string());
+        let consumer = make_rule(
+            "summarize_assembler_spades",
+            vec!["results/spades/part.txt"],
+            vec!["results/summary_spades.txt"],
+        );
+        let dag = WorkflowDag::from_rules(&[p1, p2, consumer]).unwrap();
+        assert_eq!(
+            dag.dependencies("summarize_assembler_spades").unwrap(),
+            vec!["assemble_assembler_spades"]
+        );
+        // producer_of attributes the produced file to its pattern owner.
+        assert_eq!(
+            dag.producer_of("results/spades/part.txt"),
+            Some("assemble_assembler_spades")
+        );
+    }
+
+    #[test]
+    fn output_pattern_claims_never_template_match_concrete_inputs() {
+        // Issue #296 review finding: a raw output_pattern registered
+        // producer-side must exact-match only. It must NOT join the
+        // template matchers — `refs/{build}/bt2.gz` regex-matches any
+        // concrete `refs/<x>/bt2.gz` input, and the fabricated edge can
+        // serialize unrelated rules or fabricate a cycle.
+        let mut producer = make_rule("index_ref", vec![], vec![]);
+        producer.output_pattern = Some("refs/{build}/bt2.gz".to_string());
+        let consumer = make_rule("align_legacy", vec!["refs/legacy/bt2.gz"], vec!["aln.bam"]);
+        let dag = WorkflowDag::from_rules(&[producer, consumer]).unwrap();
+        assert!(
+            dag.dependencies("align_legacy").unwrap().is_empty(),
+            "a pattern claim must not claim a concrete input it does not produce"
+        );
     }
 
     #[test]
