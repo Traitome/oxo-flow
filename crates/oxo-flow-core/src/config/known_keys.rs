@@ -1066,10 +1066,26 @@ mod tests {
             "schema shape changed"
         );
 
+        let top_level_props: Vec<String> = schema
+            .pointer("/properties")
+            .and_then(|p| p.as_object())
+            .map(|p| p.keys().cloned().collect())
+            .unwrap_or_default();
+        assert!(
+            !top_level_props.is_empty(),
+            "schema root /properties is missing or shape changed"
+        );
+
         for key in RULE_KEYS {
             assert!(
                 rule_props.iter().any(|p| p == key),
                 "schema $defs/rule omits '{key}'"
+            );
+        }
+        for key in TOP_LEVEL_KEYS {
+            assert!(
+                top_level_props.iter().any(|p| p == key),
+                "schema root /properties omits '{key}'"
             );
         }
         for key in WORKFLOW_KEYS {
@@ -1079,7 +1095,6 @@ mod tests {
             );
         }
         for (keys, pointer) in [
-            (TOP_LEVEL_KEYS, ""),
             (DEFAULTS_KEYS, "/properties/defaults"),
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
