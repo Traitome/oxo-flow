@@ -1024,8 +1024,13 @@ jobs:
   docker-build:
     name: Docker (build)
     runs-on: ubuntu-latest
-    needs: [test]
-    if: always() && needs.test.result == 'success'
+    # Need sync-version explicitly: checkout uses its updated_sha output, and
+    # GHA only exposes needs.<job>.outputs when <job> is listed in needs.
+    needs: [sync-version, test]
+    if: >-
+      always() &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success'
     permissions:
       contents: read
     steps:
@@ -1034,7 +1039,16 @@ jobs:
           ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - name: Build the image
-        run: docker build -t oxo-flow:ci .
+        run: |
+          set -euo pipefail
+          # Keep the OCI version LABEL in lockstep with workspace Cargo.toml
+          # (Dockerfile default is only a local-dev fallback).
+          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read workspace.package version from Cargo.toml"
+            exit 1
+          fi
+          docker build --build-arg "VERSION=$VERSION" -t oxo-flow:ci .
 
       - name: Smoke-test the container (health endpoint)
         run: |
@@ -1052,23 +1066,26 @@ jobs:
           docker rm -f oxo-flow-ci > /dev/null || true
           exit 1
 
-  # Validation leg for the release channel: builds Dockerfile.release from an
-  # EXISTING release's artifacts (no tag push, no publish) so the channel's
-  # download → verify → assemble → serve path is exercised between releases.
-  # Skipped everywhere except manual dispatch with a tag input.
-  # Native-arch only (no QEMU): the multi-arch path is covered by the
-  # docker-publish-release-{amd64,arm64} native runners at publish time;
-  # emulating arm64 here previously made validation take hours for no
-  # extra coverage beyond "curl + sha256sum + COPY still work".
+  # Validation leg for the release channel: builds Dockerfile.release from
+  # release artifacts (download → verify → assemble → serve). Dispatch-only.
+  # Native-arch only (no QEMU): multi-arch is covered by the native
+  # docker-publish-release-{amd64,arm64} jobs at publish time.
+  #
+  # Must wait for the release job when it runs (new tag): otherwise this
+  # leg races the asset upload and fails curling GitHub Release tarballs.
+  # publish_images_only skips release and reuses an EXISTING release's
+  # assets — same success/skipped gate as docker-publish-release-*.
   docker-build-release:
     name: Docker (build release, no publish)
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, release]
     if: >-
       always() &&
       needs.test.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
-      inputs.tag != ''
+      inputs.tag != '' &&
+      (needs.release.result == 'success' ||
+       (needs.release.result == 'skipped' && inputs.publish_images_only == true))
     permissions:
       contents: read
     steps:
@@ -1151,6 +1168,16 @@ jobs:
       - name: Compute image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
 
+      - name: Resolve VERSION from Cargo.toml
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read workspace.package version from Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -1166,10 +1193,31 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64
+          build-args: VERSION=${{ env.VERSION }}
           tags: ${{ env.IMAGE }}:main-amd64
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: false
           cache-from: type=gha,scope=main-amd64
           cache-to: type=gha,mode=max,scope=main-amd64
+
+      - name: Smoke-test :main-amd64 (native)
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}:main-amd64"
+          docker run -d --name oxo-flow-main-amd64 -p 3000:3000 "${IMAGE}:main-amd64"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "main-amd64 healthy"
+              docker rm -f oxo-flow-main-amd64 > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::main-amd64 image did not become healthy"
+          docker logs oxo-flow-main-amd64 || true
+          docker rm -f oxo-flow-main-amd64 > /dev/null || true
+          exit 1
 
   docker-publish-main-arm64:
     name: Docker (build :main arm64 → ghcr.io)
@@ -1195,6 +1243,16 @@ jobs:
       - name: Compute image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oxo-flow" >> "$GITHUB_ENV"
 
+      - name: Resolve VERSION from Cargo.toml
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read workspace.package version from Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -1210,10 +1268,31 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/arm64
+          build-args: VERSION=${{ env.VERSION }}
           tags: ${{ env.IMAGE }}:main-arm64
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: false
           cache-from: type=gha,scope=main-arm64
           cache-to: type=gha,mode=max,scope=main-arm64
+
+      - name: Smoke-test :main-arm64 (native)
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}:main-arm64"
+          docker run -d --name oxo-flow-main-arm64 -p 3000:3000 "${IMAGE}:main-arm64"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "main-arm64 healthy"
+              docker rm -f oxo-flow-main-arm64 > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::main-arm64 image did not become healthy"
+          docker logs oxo-flow-main-arm64 || true
+          docker rm -f oxo-flow-main-arm64 > /dev/null || true
+          exit 1
 
   docker-publish:
     name: Docker (publish :main manifest to ghcr.io)
@@ -1360,6 +1439,24 @@ jobs:
           cache-from: type=gha,scope=release-amd64
           cache-to: type=gha,mode=max,scope=release-amd64
 
+      - name: Smoke-test :${{ env.VERSION }}-amd64 (native)
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}:${VERSION}-amd64"
+          docker run -d --name oxo-flow-rel-amd64 -p 3000:3000 "${IMAGE}:${VERSION}-amd64"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "release-amd64 healthy"
+              docker rm -f oxo-flow-rel-amd64 > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::release-amd64 image did not become healthy"
+          docker logs oxo-flow-rel-amd64 || true
+          docker rm -f oxo-flow-rel-amd64 > /dev/null || true
+          exit 1
+
   docker-publish-release-arm64:
     name: Docker (build release arm64 → ghcr.io)
     # Native arm64 runner (free for public repos) — QEMU-emulated npm +
@@ -1422,6 +1519,24 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=release-arm64
           cache-to: type=gha,mode=max,scope=release-arm64
+
+      - name: Smoke-test :${{ env.VERSION }}-arm64 (native)
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}:${VERSION}-arm64"
+          docker run -d --name oxo-flow-rel-arm64 -p 3000:3000 "${IMAGE}:${VERSION}-arm64"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "release-arm64 healthy"
+              docker rm -f oxo-flow-rel-arm64 > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::release-arm64 image did not become healthy"
+          docker logs oxo-flow-rel-arm64 || true
+          docker rm -f oxo-flow-rel-arm64 > /dev/null || true
+          exit 1
 
   docker-publish-release:
     name: Docker (publish release to ghcr.io)
