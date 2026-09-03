@@ -103,8 +103,11 @@ resource_bottlenecks: [{
 - A rule is flagged when `actual ≥ 80% × limit` — a conservative threshold
   because the peak is **sampled every 200 ms** across the rule's process
   subtree, not an exact `getrusage` maximum; sub-interval spikes can be
-  missed. Cluster-executed rules carry no measurement (`None`), and legacy
-  checkpoints degrade to an empty list.
+  missed. Cluster-executed rules carry the scheduler accounting store's
+  peak RSS when it reports one (SLURM `sacct`'s max `MaxRSS` across task
+  rows); the value is `None` only for schedulers without accounting
+  (e.g. LSF) or a missing accounting row. Legacy checkpoints degrade to
+  an empty list.
 
 ## Extending the Pattern Library
 

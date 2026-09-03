@@ -90,7 +90,7 @@ $ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 
 ### Run
 
-Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--sample` on the CLI). Each sample needs all three input pairs on disk under `wgs/`, `rnaseq/`, and `methyl/`:
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--samples` on the CLI). Each sample needs all three input pairs on disk under `wgs/`, `rnaseq/`, and `methyl/`:
 
 ```bash
 oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
@@ -102,7 +102,7 @@ oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
 
 | Rule | Threads | Memory | Environment | Branch |
 |------|---------|--------|-------------|--------|
-| wgs_align | 16 | 32G | docker | WGS |
+| wgs_align | 16 | 32G | conda | WGS |
 | wgs_call_variants | 8 | 16G | singularity | WGS |
 | rnaseq_align | 16 | 32G | conda | RNA-seq |
 | rnaseq_quantify | 4 | 8G | conda | RNA-seq |

@@ -59,7 +59,7 @@ The `samples = "samples.csv"` key in `[config]` is inert: no rule references it,
 
 ```bash
 $ oxo-flow validate examples/gallery/06_rnaseq_quantification.oxoflow
-✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 6 dependencies
+✓ examples/gallery/06_rnaseq_quantification.oxoflow — 5 rules, 5 dependencies
 ```
 
 ### Resource Summary

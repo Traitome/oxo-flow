@@ -8,7 +8,7 @@ Thank you for considering contributing to oxo-flow! This guide covers everything
 
 ### Prerequisites
 
-- **Rust 1.85+** (edition 2024) — [rustup.rs](https://rustup.rs)
+- **Rust 1.98+** (edition 2024, `rust-version = "1.98.0"`) — [rustup.rs](https://rustup.rs)
 - **Git 2.x+**
 - **MkDocs 1.5+** (optional, for docs) — `pip install mkdocs-material`
 
@@ -53,7 +53,8 @@ the window before adding retries.
 
 ```bash
 make ci
-# Runs: cargo fmt --check, cargo clippy -D warnings, cargo build, cargo test
+# Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
+#       cargo build, cargo test, schema-drift, cargo audit, frontend-lint
 ```
 
 ---
@@ -80,7 +81,7 @@ oxo-flow/
 | Convention | Rule |
 |---|---|
 | **Formatting** | `cargo fmt` — enforced in CI |
-| **Linting** | `cargo clippy -- -D warnings` — all warnings are errors |
+| **Linting** | `cargo clippy --workspace --all-targets -- -D warnings` — all warnings are errors |
 | **Error handling** | `thiserror` for library errors, `anyhow` for binary errors |
 | **Naming** | `snake_case` for functions, `PascalCase` for types |
 | **Async** | `tokio` for async runtime |
@@ -108,12 +109,15 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All four checks must pass:
+All seven checks must pass:
 
 - [x] `cargo fmt -- --check`
-- [x] `cargo clippy --workspace -- -D warnings`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo build --workspace`
 - [x] `cargo test --workspace`
+- [x] `schema-drift` (OpenAPI spec matches code)
+- [x] `cargo audit`
+- [x] `frontend-lint`
 
 ### 4. Commit with Conventional Commits
 
@@ -161,8 +165,8 @@ chore: update dependencies
 |---|---|
 | Unit tests | `#[cfg(test)]` modules within source files |
 | Integration tests | `tests/` directory at workspace root |
-| Web API tests | `crates/oxo-flow-web/src/lib.rs` |
-| CLI tests | `crates/oxo-flow-cli/src/main.rs` |
+| Web API tests | `crates/oxo-flow-web/tests/` (plus unit tests in `src/`) |
+| CLI tests | `crates/oxo-flow-cli/tests/` (plus unit tests in `src/`) |
 
 Run all tests:
 

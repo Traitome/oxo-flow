@@ -33,7 +33,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--target` | `-t` | All rules | Run only specific target rules |
 | `--module` | — | — | Run one include module and the producers of its declared inputs (repeatable; unions with `--target`). Module names are the include's `name` field or its file stem (see [Partial module runs](#partial-module-runs-module)) |
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
-| `--timeout` | — | `0` (disabled) | Timeout per job in seconds |
+| `--timeout` | — | `0` (disabled) | Timeout per job in seconds, or a duration like `1h`/`30m` |
 | `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
@@ -41,14 +41,14 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
-| `--max-submitted` | — | `N` | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
+| `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
 | `--provenance` | — | — | Track output file checksums for later verification |
 | `--arg` | — | — | Legacy form: set a workflow config value (`KEY=VALUE`). Repeatable. See `[config]` in workflow-format |
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
 | `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
-| `--samples` | — | `LIST` | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
+| `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
 | `--background` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)) |
@@ -162,7 +162,8 @@ that cannot produce output.
 ### Set a per-job timeout
 
 ```bash
-oxo-flow run pipeline.oxoflow --timeout 3600
+# 3600 seconds, or equivalently:
+oxo-flow run pipeline.oxoflow --timeout 1h
 ```
 
 ### Limit resource usage

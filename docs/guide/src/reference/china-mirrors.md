@@ -61,8 +61,10 @@ export OXO_REGISTRY_MIRRORS="docker.io=mirror.example.com;registry-1.docker.io=m
 ```
 
 - Semicolon-separated `host=mirror` pairs; host matching is
-  case-insensitive and port-agnostic (`localhost:5000/…` is never
-  rewritten).
+  case-insensitive and port-agnostic. A registry port is stripped before
+  matching, so `localhost:5000/…` is treated as the `localhost` namespace
+  and **is rewritten** when `localhost` itself is mapped (e.g.
+  `localhost=mirror.example.com`).
 - A first path segment without a dot or colon (`uhrigs/arriba`) is the
   docker.io *namespace* and follows the docker.io mapping, keeping its
   full path.

@@ -45,14 +45,10 @@ oxo-flow license /path/to/license.key
 
 | Option | Description |
 |--------|-------------|
+| `--json` | Output machine-readable JSON to stdout (human-readable logs stay on stderr) |
 | `-v, --verbose` | Enable verbose (debug-level) logging |
 | `--quiet` | Suppress non-essential output (errors only) |
 | `--no-color` | Disable colored output |
-
-!!! note "No `--json` output"
-
-    `license` always prints human-readable text; the global `--json` flag
-    is not honored here.
 
 ## Notes
 

@@ -145,7 +145,7 @@ Rate limiting and SSE:
 | **dag** | `domains/dag/` | DAG-specific types and operations |
 | **observability** | `domains/observability/` | Health check, system info, runtime metrics, structured logging (3-layer), audit, SSE |
 | **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations |
-| **infra/license** | `infra/license.rs` | License notice text, banner, footer HTML, X-OxoFlow-License header middleware |
+| **infra/license** | `infra/license.rs` | License notice text, banner, X-OxoFlow-License header middleware (the web UI footer label lives in the SPA, `frontend/src/components/Layout.tsx`) |
 | **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
 | **infra/hpc** | `infra/hpc.rs` | Slurm script generation, scheduler detection |
 

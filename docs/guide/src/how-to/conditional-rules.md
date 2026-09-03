@@ -237,9 +237,10 @@ Use `oxo-flow dry-run` to preview the execution plan:
 oxo-flow dry-run my-pipeline.oxoflow
 ```
 
-Note that dry-run does **not** evaluate `when` conditions — all rules appear in
-the plan. `when` is evaluated at execution time: rules whose condition is false
-are skipped and reported as `Skipped` in the run output.
+Note that dry-run **does** evaluate `when` conditions: rules whose condition
+is false appear in the plan marked `[skip: when condition false]`, and the
+summary counts them under `will skip`. At execution time the same rules are
+skipped and reported as `Skipped` in the run output.
 
 ## Full Example
 

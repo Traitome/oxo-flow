@@ -27,7 +27,7 @@ The DAG engine is implemented in `crates/oxo-flow-core/src/dag.rs` using the [`p
 pub struct WorkflowDag {
     graph: DiGraph<DagNode, ()>,
     name_to_node: HashMap<String, NodeIndex>,
-    output_to_node: HashMap<String, NodeIndex>,
+    output_to_node: HashMap<String, Vec<NodeIndex>>,
 }
 
 pub struct DagNode {
@@ -38,7 +38,7 @@ pub struct DagNode {
 
 - `graph` — a directed graph where nodes are `DagNode` (rule name + index) and edges are dependencies
 - `name_to_node` — maps rule names to their graph node indices for O(1) lookup
-- `output_to_node` — maps output file patterns to the rule node that produces them
+- `output_to_node` — maps output file patterns to **all** nodes producing that output (a `Vec`, since several rules may declare the same output pattern)
 
 ---
 
@@ -74,7 +74,9 @@ let order: Vec<String> = dag.execution_order()?;
 // ["fastqc", "trim_reads", "align", "multiqc"]
 ```
 
-The implementation uses Kahn's algorithm (BFS-based topological sort), which also serves as a second cycle-detection pass.
+The implementation uses petgraph's `toposort` (a DFS-based topological
+sort), which also serves as a second cycle-detection pass — a cycle is
+reported as a petgraph `Cycle` error and surfaced as `OxoFlowError::CycleDetected`.
 
 ---
 
@@ -228,7 +230,6 @@ digraph {
 | `to_dot()` | `String` | Graphviz DOT output |
 | `root_rules()` | `Vec<String>` | Entry-point rules (no upstream dependencies) |
 | `leaf_rules()` | `Vec<String>` | Terminal rules (no downstream dependents) |
-| `orphan_rules()` | `Vec<&str>` | Rules with neither inputs nor outputs connected to others |
 | `dependencies(name)` | `Vec<String>` | Direct upstream dependencies of a rule |
 | `dependents(name)` | `Vec<String>` | Direct downstream dependents of a rule |
 | `critical_path()` | `Vec<String>` | Longest chain of sequential dependencies |
@@ -300,11 +301,7 @@ Use these to understand workflow structure: root rules are your entry points (ty
 
 ### Orphan Rules
 
-```rust
-let orphans = dag.orphan_rules();  // Rules not connected to any other rule
-```
-
-Orphan rules have no dependencies and no dependents — they are isolated islands in the DAG. This is often a configuration mistake (misspelled input/output file paths) rather than intentional. Run `oxo-flow validate` to check for orphans — they will still execute but may indicate wiring errors.
+The `WorkflowDag` API has no orphan query. `oxo-flow validate` does flag orphan rules — rules whose inputs match no other rule's outputs and that look like wiring mistakes (misspelled paths) — as lint warnings; they still execute but may indicate configuration errors.
 
 ### Output Collision Detection
 
@@ -460,7 +457,7 @@ The cycle path `A → B → C → A` shows you the circular chain. To break it:
 - The DAG is immutable once built — modifications require rebuilding from rules
 - Wildcard patterns are matched literally during DAG construction; expansion happens at execution time
 - The petgraph `DiGraph` provides efficient graph traversal with O(V + E) topological sort
-- Cycle detection uses petgraph's topological sort (Kahn's algorithm); DFS is used only to reconstruct the cycle path for error messages
+- Cycle detection uses petgraph's DFS-based `toposort`; the DFS walk is also used to reconstruct the cycle path for error messages
 
 ---
 

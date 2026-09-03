@@ -156,7 +156,11 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 - **Detection**: Checks for `python3` on `$PATH`
 - **Resolution**: Parses `requirements.txt` file
 - **Activation**: Creates a venv (if needed) and activates it before the command
-- **Caching**: Venvs are stored in a cache directory keyed by the requirements hash
+- **Caching**: Venvs are stored in a cache directory keyed by the declared
+  venv spec (`venv:<path>` — the venv path you declared in the rule), not by
+  a hash of the requirements content. Editing `requirements.txt` in place
+  does not by itself invalidate the cache; bump the venv path or clear the
+  cache to force a rebuild.
 
 ### HPC Modules
 
@@ -202,6 +206,7 @@ pub struct EnvironmentSpec {
     pub conda_prefix: Option<String>,
     pub mamba_prefix: Option<String>,
     pub venv_requirements: Option<String>,
+    pub gpus: Option<String>,
 }
 ```
 
@@ -242,11 +247,12 @@ oxo-flow env list
 oxo-flow env check pipeline.oxoflow
 ```
 
-The `env check` command verifies:
-
-1. The backend type is available on the system
-2. The specification file exists (for conda YAML, pixi TOML, requirements.txt)
-3. The image reference is syntactically valid (for Docker/Singularity)
+The `env check` command calls the resolver's `validate_spec` for each rule's
+environment, which verifies **backend availability on the current system**
+(e.g. the conda/pixi/docker/singularity binary exists and is runnable; pixi
+additionally requires a `pixi.toml` in the current directory). It does not
+re-check spec files or image reference syntax — `validate` and `lint` cover
+declaration-level checks.
 
 ---
 

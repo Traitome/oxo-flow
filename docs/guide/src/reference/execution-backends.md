@@ -27,6 +27,7 @@ checkpoint semantics.
 ## `ExecutorBackend` trait
 
 ```rust
+#[async_trait::async_trait]
 pub trait ExecutorBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn render_script(&self, rule: &ScheduledRule) -> Result<String>;
@@ -34,6 +35,19 @@ pub trait ExecutorBackend: Send + Sync {
     async fn poll(&self, job_ids: &[String]) -> Result<HashMap<String, BackendJobStatus>>;
     async fn cancel(&self, job_id: &str) -> Result<()>;
     async fn logs(&self, job_id: &str) -> Result<String>;
+
+    // Provided methods (defaults shown):
+    fn render_array_script(&self, rule: &Rule, cmd_dir: &str, count: usize)
+        -> Result<String>  // default: Err "does not support job arrays"
+        — render one ARRAY script for `count` same-rule instances whose
+          per-index commands live in `cmd_dir`; backends without array
+          support error and the driver falls back to per-job submission
+    async fn terminal_status(&self, job_id: &str) -> Option<TerminalRecord>
+        // default None — terminal record from the scheduler's accounting
+        // store; None keeps the job in flight
+    fn polls_elements_directly(&self) -> bool
+        // default false — SLURM's squeue reports array elements by their
+        // `{base}_{index}` ids (true); PBS/SGE/LSF list only the base id
 }
 ```
 

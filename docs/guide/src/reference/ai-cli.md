@@ -213,7 +213,7 @@ explicit disable:
       "suggestion": "stop the pilot before VQSR (-t <rule>) or use hard filtering..."
     }
   ],
-  "provenance": {"model": "deepseek-v4-pro", "bio_skills": 562, "pipeline_graph_nodes": 79}
+  "provenance": {"model": "deepseek-v4-pro", "bio_skills": 562, "pipeline_graph_nodes": 78}
 }
 ```
 
@@ -289,9 +289,9 @@ model = "deepseek-v4-flash"
 The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):
 
 1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
-2. **Bioconda Tool Database**: 6,103 curated CLI tools with current versions and descriptions (filtered from 6,470 raw registry entries; see `knowledge_meta.json`) — queried on demand via `lookup_tool`
+2. **Bioconda Tool Database**: 6,487 curated CLI tools with current versions and descriptions (filtered from 12,679 raw registry entries; see `knowledge_meta.json`) — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
-4. **Pipeline Knowledge Graph**: 79 workflow skills and 469 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
+4. **Pipeline Knowledge Graph**: 78 workflow skills and 465 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
 
 Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.
 
@@ -447,16 +447,17 @@ whether it is auto-updated or manually curated:
 
 ```json
 {
-  "sources": [
-    {
-      "name": "bioconda_tools",
-      "description": "Bioconda CLI tool database",
+  "sources": {
+    "bioconda_tools": {
+      "count": 6487,
+      "url": "https://conda.anaconda.org/bioconda/channeldata.json",
+      "excluded": 6192,
       "data_file": "bioconda_tools.jsonl",
-      "count": 6132,
-      "generated_at": "2026-08-22T10:54:00Z",
+      "generated_at": "2026-09-01T08:23:27Z",
       "auto": true
     }
-  ]
+  },
+  "generated_at": "2026-09-01T08:23:27Z"
 }
 ```
 

@@ -125,7 +125,7 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 Images are published to GitHub Container Registry automatically on every release and every push to `main`.
 Release images are multi-arch (`linux/amd64` + `linux/arm64`) and are assembled from the
 SHA256-verified release binaries. `:latest` moves only after the release image passes a health
-smoke test, `:<major.minor>` (e.g. `:0.16`) tracks the newest patch of a minor line, and `:main`
+smoke test, `:<major.minor>` (e.g. `:0.17`) tracks the newest patch of a minor line, and `:main`
 is a multi-arch dev build compiled from source:
 
 ```bash

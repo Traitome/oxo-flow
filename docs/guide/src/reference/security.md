@@ -18,7 +18,7 @@ These patterns **halt execution** — the workflow will not run:
 | Filesystem destruction | `mkfs`, `mkswap`, `dd` to `/dev/sd*` | E011 |
 | Permission escalation | `chmod 777 /`, `chmod -R 777` | E011 |
 | Block device writes | `> /dev/sd*`, `>> /dev/sd*` | E011 |
-| Remote code execution | `curl/wget \| sh/bash/sudo` | E011 |
+| Remote code execution | `curl/wget ... \| sh/bash/dash` | E011 |
 | Fork bombs | `() { :\|:& };:` patterns | E011 |
 | Data destruction | `dd if=/dev/zero/random/urandom` | E011 |
 
@@ -30,10 +30,9 @@ These emit **warnings** but allow execution (common in bioinformatics scripts):
 |---------|---------|
 | `$(command)` substitution | Command substitution detected |
 | Backtick `` `command` `` | Backtick command substitution |
-| `>/dev/` redirects | Redirect to /dev/ detected |
-| `eval` | eval usage detected |
-| `rm -rf /` (in shell) | Dangerous recursive deletion |
+| `rm -rf` | Dangerous recursive deletion |
 | `chmod 777` | Overly permissive chmod |
+| `eval` | eval usage detected |
 | `curl/wget` piped to shell or `&& bash` | Remote pipe to shell detected |
 
 ---
@@ -56,20 +55,26 @@ Interpreter paths are enforced at **run time**, when a script rule's `interprete
 
 Hardcoded credentials in workflow TOML content are detected by the `oxo-flow lint` command (`format::scan_for_secrets`), which emits S008 warnings; it does not block execution.
 
-### Detected Secret Types
+### Detected Secret Patterns
 
-| Pattern | Examples |
-|---------|----------|
-| API keys / tokens | `API_KEY=sk-<YOUR-KEY>`, `AUTH_TOKEN=<YOUR-KEY>` |
-| Passwords | `password = "hunter2"`, `pwd = "..."` |
-| Anthropic keys | `sk-ant-api03-...`, `sk-proj-...` |
-| OpenAI / DeepSeek keys | `sk-<32+ chars>` |
-| GitHub tokens | `ghp_...`, `gho_...`, `ghu_...`, `ghs_...`, `ghr_...` |
-| AWS keys | `AKIA...`, `ASIA...` |
-| Private keys (PEM) | `-----BEGIN RSA PRIVATE KEY-----` |
-| DB connection strings | `postgresql://user:pass@host/db` |
+`scan_for_secrets` does case-insensitive substring matching against exactly
+nine patterns — finding one emits an S008 warning naming it:
 
-Secret values are **redacted** in findings — only the first and last 4 characters are shown.
+| Pattern | Warning message |
+|---------|-----------------|
+| `AKIA` | Possible AWS Access Key |
+| `sk-` | Possible Stripe/OpenAI secret key |
+| `ghp_` | Possible GitHub personal access token |
+| `glpat-` | Possible GitLab personal access token |
+| `password` | Possible password in configuration |
+| `secret` | Possible secret in configuration |
+| `api_key` | Possible API key in configuration |
+| `access_token` | Possible access token in configuration |
+| `private_key` | Possible private key in configuration |
+
+The scanner matches the raw substrings above (e.g. any `sk-` prefix, not a
+length-validated key shape), so both true positives and some false positives
+survive — review the flagged lines yourself.
 
 Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `***` in logs, `--help`, and error output.
 
