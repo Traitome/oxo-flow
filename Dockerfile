@@ -1,5 +1,7 @@
 # ===== Frontend builder =====
-FROM node:22-alpine AS frontend-builder
+# $BUILDPLATFORM: SPA output is arch-independent — keep npm on the host
+# arch even when the image TARGETARCH differs (avoids QEMU npm thrash).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
