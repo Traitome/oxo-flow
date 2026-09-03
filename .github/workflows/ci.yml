@@ -198,12 +198,21 @@ jobs:
             find docs/guide/src -name "*.md" -exec sed -i -E \
               -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
               -e "s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$VERSION\"/g" \
-              -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" {} \;
+              -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" \
+              -e "s/(X-OxoFlow-Version: |\"oxo_flow_version\": \")[0-9]+\.[0-9]+\.[0-9]+/\1$VERSION/g" \
+              -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\.[0-9]+#\1$VERSION#g" \
+              -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\$#\1${VERSION%.*}#g" \
+              -e "s/(# oxo-flow )[0-9]+\.[0-9]+\.[0-9]+/\1$VERSION/g" \
+              -e "s/[\\(]\`[0-9]+\.[0-9]+\.[0-9]+\`[\\)] by value/(\`$VERSION\`) by value/g" \
+              {} \;
             # Also update README.md
             if [ -f README.md ]; then
               sed -i -E \
                 -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
-                -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" README.md
+                -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" \
+                -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\.[0-9]+#\1$VERSION#g" \
+                -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\$#\1${VERSION%.*}#g" \
+                README.md
             fi
             CHANGED=true
           fi
