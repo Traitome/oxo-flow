@@ -13,8 +13,8 @@ for the design rationale).
 | Layer | What is evaluated | Example metric |
 |---|---|---|
 | **Tool** | Knowledge grounding: does the AI name the right tool, the right version, and refuse fake tools? | `name_match`, `version_match`, `no_hallucination` |
-| **Rule** | Single-step generation: right tool, pinned version that exists in the knowledge base, key parameters, inputs/outputs, resource sanity | `tool_present`, `version_pinned`, `key_params`, `validate_pass` |
-| **Workflow** | End-to-end generation: structural validity, step/tool coverage, DAG edges, final outputs | `validate_pass`, `lint_pass`, `step_coverage`, `edge_coverage` |
+| **Rule** | Single-step generation: right tool, pinned version that exists in the knowledge base, key parameters, normalized I/O declarations, explicit resources | `tool_present`, `version_pinned`, `io_declared`, `resources_in_range` |
+| **Workflow** | End-to-end generation: structural validity, step/tool coverage, DAG edges, final outputs across repeated trials | `validate_pass`, `lint_pass`, `step_coverage`, `edge_coverage` |
 
 ## The loop
 

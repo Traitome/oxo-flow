@@ -4,8 +4,7 @@ The AI evaluation benchmark is organized as three CSVs — one per evaluation
 layer — under `eval/gold/`. Each row is one question ("item") with a gold
 answer. The gold answer is a **draft by construction** (`gold_draft_by =
 claude`): every row carries a `provenance_url` pointing at the primary
-source the answer was derived from, so a human reviewer (student, friend)
-can verify each row against the source without trusting the draft.
+source the answer was derived from, so a human reviewer can verify each row against the source without trusting the draft.
 
 Reviewers edit only the review columns; `eval/scripts/runner.py` scores only rows with `review_status = approved` unless run with `--include-unreviewed`. When no approved rows exist, the harness now exits with an explicit error instead of silently emitting an empty report.
 
