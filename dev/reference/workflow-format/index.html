@@ -4560,7 +4560,7 @@ and includes without a contract behave exactly as before.</p>
 <tr>
 <td><code>repo</code> + <code>ref</code></td>
 <td>String pair</td>
-<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.16.0"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;</code> (<code>OXO_FLOW_MODULE_CACHE</code> overrides) — versioned modules, reproducible composition</td>
+<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.17.0"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;</code> (<code>OXO_FLOW_MODULE_CACHE</code> overrides) — versioned modules, reproducible composition</td>
 </tr>
 </tbody>
 </table>
@@ -5262,7 +5262,7 @@ disk space matters.</p>
 <td><code>output_pattern</code></td>
 <td>String</td>
 <td>No</td>
-<td>Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. Mutually exclusive with <code>output</code>/<code>transform</code>/<code>input_groups</code> — see <a href="#runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs</a></td>
+<td>Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A <code>[[values]]</code> wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with <code>output</code>/<code>transform</code>/<code>input_groups</code> — see <a href="#runtime-discovered-outputs-output_pattern">Runtime-Discovered Outputs</a></td>
 </tr>
 <tr>
 <td><code>shell</code></td>
@@ -6705,36 +6705,46 @@ per combination:</p>
 </span></code></pre></div>
 <ul>
 <li>Every rule referencing <code>{assembler}</code> (bare form) or <code>{values.assembler}</code>
-  (namespaced form) expands into one instance per value.</li>
-<li><code>values_from = "config.x"</code> resolves the value list from a config key at
+  (namespaced form) expands into one instance per value. The reference may
+  live in any trigger field — inputs, outputs, shell, <code>when</code>,
+  <code>expand_inputs</code> patterns, <strong>or the rule's <code>output_pattern</code></strong> (issue
+  #296): a pattern-only reference fans the producer out per value with the
+  pattern baked per instance, exactly as it already does for
+  <code>{sample}</code>/pair wildcards.</li>
+</ul>
+<p><div class="language-toml highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble"</span>
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/{assembler}/chunks.txt"</span><span class="w">   </span><span class="c1"># fans out per value</span>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"scripts/build_all.sh"</span>
+</span></code></pre></div>
+- <code>values_from = "config.x"</code> resolves the value list from a config key at
   expansion time — a comma string (<code>"u1,u2"</code>) or array, the same semantics
   as <code>expand_inputs</code> config references. CLI <code>--arg x=u1,u2</code> or a profile
   then drives the fan-out without editing the workflow; takes precedence
-  over a static <code>values</code> when both are set.</li>
-<li>Multiple <code>[[values]]</code> tables form a cartesian product with each other
+  over a static <code>values</code> when both are set.
+- Multiple <code>[[values]]</code> tables form a cartesian product with each other
   and with sample groups / pairs (deterministic order: the first table
-  varies slowest).</li>
-<li>Instance names follow the existing convention:
-  <code>assemble_assembler_spades_batch_S1</code>.</li>
-<li>Value groups must have unique names and must not collide with the
+  varies slowest).
+- Instance names follow the existing convention:
+  <code>assemble_assembler_spades_batch_S1</code>.
+- Value groups must have unique names and must not collide with the
   reserved wildcards (<code>sample</code>, <code>pair_id</code>, <code>experiment</code>, <code>control</code>,
   <code>group</code>, <code>tumor</code>, <code>normal</code>, <code>experiment_type</code>, <code>tumor_type</code>) or the
   executor placeholders (<code>input</code>, <code>output</code>, <code>log</code>, <code>threads</code>, <code>memory</code>) —
   a table named <code>input</code> would replace the placeholder in every rule's
-  shell.</li>
-</ul>
+  shell.</p>
 <hr />
 <h2 id="pairs-experiment-control-pairing-wc-01"><code>[[pairs]]</code> — Experiment-Control Pairing (WC-01)<a class="headerlink" href="#pairs-experiment-control-pairing-wc-01" title="Permanent link">#</a></h2>
 <p><code>[[pairs]]</code> defines experiment-control sample pairs for somatic variant calling and other comparative analyses.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_001"</span>
-</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_01"</span>
-</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_01"</span>
-</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5" href="#__codelineno-54-5"></a>
-</span><span id="__span-54-6"><a id="__codelineno-54-6" name="__codelineno-54-6" href="#__codelineno-54-6"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-54-7"><a id="__codelineno-54-7" name="__codelineno-54-7" href="#__codelineno-54-7"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_002"</span>
-</span><span id="__span-54-8"><a id="__codelineno-54-8" name="__codelineno-54-8" href="#__codelineno-54-8"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_02"</span>
-</span><span id="__span-54-9"><a id="__codelineno-54-9" name="__codelineno-54-9" href="#__codelineno-54-9"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_02"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_001"</span>
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_01"</span>
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_01"</span>
+</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a>
+</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_002"</span>
+</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_02"</span>
+</span><span id="__span-55-9"><a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_02"</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -6789,14 +6799,14 @@ per combination:</p>
 <h3 id="pair-level-gating-with-when">Pair-level gating with <code>when</code><a class="headerlink" href="#pair-level-gating-with-when" title="Permanent link">#</a></h3>
 <p>One static <code>[[pairs]]</code> table can carry profile-switched sample sets — a
 toggle in <code>[config]</code> decides which pairs fan out:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="k">[config]</span>
-</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="n">extended</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="w">   </span><span class="c1"># flip via --profile or CLI override</span>
-</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>
-</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXTRA_001"</span>
-</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_02"</span>
-</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a><span class="n">control</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_02"</span>
-</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.extended"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="k">[config]</span>
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="n">extended</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="w">   </span><span class="c1"># flip via --profile or CLI override</span>
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a>
+</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-56-5"><a id="__codelineno-56-5" name="__codelineno-56-5" href="#__codelineno-56-5"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXTRA_001"</span>
+</span><span id="__span-56-6"><a id="__codelineno-56-6" name="__codelineno-56-6" href="#__codelineno-56-6"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_02"</span>
+</span><span id="__span-56-7"><a id="__codelineno-56-7" name="__codelineno-56-7" href="#__codelineno-56-7"></a><span class="n">control</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_02"</span>
+</span><span id="__span-56-8"><a id="__codelineno-56-8" name="__codelineno-56-8" href="#__codelineno-56-8"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.extended"</span>
 </span></code></pre></div>
 <p>While <code>extended</code> is <code>false</code>, <code>EXTRA_001</code> fans out no rules; flipping it and
 re-running restores the pair's instances (re-expansion from the preserved
@@ -6805,36 +6815,36 @@ so a misspelled key (<code>when = "config.extened"</code>) gates the pair out wi
 plan-time warning naming the offending key.</p>
 <h3 id="loading-pairs-from-external-file">Loading pairs from external file<a class="headerlink" href="#loading-pairs-from-external-file" title="Permanent link">#</a></h3>
 <p>For large cohort studies with hundreds or thousands of pairs, use <code>pairs_file</code> in <code>[workflow]</code>:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"somatic-calling"</span>
-</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a><span class="n">pairs_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/pairs.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"somatic-calling"</span>
+</span><span id="__span-57-3"><a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a><span class="n">pairs_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/pairs.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
 </span></code></pre></div>
 <p><strong>TSV format</strong> (tab-separated, header required):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>pair_id    experiment    control    experiment_type
-</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>CASE_001   EXP_01        CTRL_01    lung_adenocarcinoma
-</span><span id="__span-57-3"><a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a>CASE_002   EXP_02        CTRL_02    colorectal
-</span><span id="__span-57-4"><a id="__codelineno-57-4" name="__codelineno-57-4" href="#__codelineno-57-4"></a>CASE_003   EXP_03        CTRL_03    breast_cancer
+<div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>pair_id    experiment    control    experiment_type
+</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>CASE_001   EXP_01        CTRL_01    lung_adenocarcinoma
+</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>CASE_002   EXP_02        CTRL_02    colorectal
+</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>CASE_003   EXP_03        CTRL_03    breast_cancer
 </span></code></pre></div>
 <p><strong>CSV format</strong> (comma-separated):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>pair_id,experiment,control,experiment_type
-</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>CASE_001,EXP_01,CTRL_01,lung_adenocarcinoma
-</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>CASE_002,EXP_02,CTRL_02,colorectal
+<div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>pair_id,experiment,control,experiment_type
+</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>CASE_001,EXP_01,CTRL_01,lung_adenocarcinoma
+</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>CASE_002,EXP_02,CTRL_02,colorectal
 </span></code></pre></div>
 <p><strong>JSON format</strong>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a><span class="p">[</span>
-</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"EXP_01"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CTRL_01"</span><span class="p">},</span>
-</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"EXP_02"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CTRL_02"</span><span class="p">}</span>
-</span><span id="__span-59-4"><a id="__codelineno-59-4" name="__codelineno-59-4" href="#__codelineno-59-4"></a><span class="p">]</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a><span class="p">[</span>
+</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"EXP_01"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CTRL_01"</span><span class="p">},</span>
+</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3" href="#__codelineno-60-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"EXP_02"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CTRL_02"</span><span class="p">}</span>
+</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4" href="#__codelineno-60-4"></a><span class="p">]</span>
 </span></code></pre></div>
 <p>Inline <code>[[pairs]]</code> and <code>pairs_file</code> can be used together; entries from both sources are merged.</p>
 <h3 id="auto-discovery-from-file-pattern">Auto-discovery from file pattern<a class="headerlink" href="#auto-discovery-from-file-pattern" title="Permanent link">#</a></h3>
 <p>For workflows with existing paired files, use <code>pairs_pattern</code> in <code>[workflow]</code> to auto-discover pairs by scanning the filesystem:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"somatic-calling"</span>
-</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3" href="#__codelineno-60-3"></a><span class="n">pairs_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"aligned/{pair_id}/{experiment}_vs_{control}.bam"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"somatic-calling"</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a><span class="n">pairs_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"aligned/{pair_id}/{experiment}_vs_{control}.bam"</span>
 </span></code></pre></div>
 <p>oxo-flow scans files matching this pattern and extracts wildcards from paths. For a file:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>aligned/CASE_001/EXP_01_vs_CTRL_01.bam
+<div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>aligned/CASE_001/EXP_01_vs_CTRL_01.bam
 </span></code></pre></div>
 <p>Creates pair:</p>
 <ul>
@@ -6848,29 +6858,29 @@ plan-time warning naming the offending key.</p>
 - Pattern is converted to glob (<code>*</code>) for filesystem scan</p>
 <p>This eliminates the need for manual pair lists or external files when working with pre-organized directory structures.</p>
 <h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2" href="#__codelineno-62-2"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_001"</span>
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3" href="#__codelineno-62-3"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_01"</span>
-</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4" href="#__codelineno-62-4"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_01"</span>
-</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5" href="#__codelineno-62-5"></a>
-</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6" href="#__codelineno-62-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7" href="#__codelineno-62-7"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"mutect2"</span>
-</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8" href="#__codelineno-62-8"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{experiment}.bam"</span><span class="p">,</span><span class="w"> </span><span class="s2">"aligned/{control}.bam"</span><span class="p">]</span>
-</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9" href="#__codelineno-62-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{pair_id}.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10" href="#__codelineno-62-10"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"CASE_001"</span>
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"EXP_01"</span>
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4" href="#__codelineno-63-4"></a><span class="n">control</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"CTRL_01"</span>
+</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5" href="#__codelineno-63-5"></a>
+</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6" href="#__codelineno-63-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7" href="#__codelineno-63-7"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"mutect2"</span>
+</span><span id="__span-63-8"><a id="__codelineno-63-8" name="__codelineno-63-8" href="#__codelineno-63-8"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{experiment}.bam"</span><span class="p">,</span><span class="w"> </span><span class="s2">"aligned/{control}.bam"</span><span class="p">]</span>
+</span><span id="__span-63-9"><a id="__codelineno-63-9" name="__codelineno-63-9" href="#__codelineno-63-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{pair_id}.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-63-10"><a id="__codelineno-63-10" name="__codelineno-63-10" href="#__codelineno-63-10"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk Mutect2 -I {input[0]} -I {input[1]} -normal {control} -O {output[0]}"</span>
 </span></code></pre></div>
 <p>Produces rule <code>mutect2_CASE_001</code> with concrete file paths.</p>
 <p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/15_paired_experiment_control_pairs.oxoflow"><code>examples/gallery/15_paired_experiment_control_pairs.oxoflow</code></a> for a full clinical somatic calling pipeline.</p>
 <hr />
 <h2 id="sample_groups-multi-sample-cohorts-wc-02"><code>[[sample_groups]]</code> — Multi-Sample Cohorts (WC-02)<a class="headerlink" href="#sample_groups-multi-sample-cohorts-wc-02" title="Permanent link">#</a></h2>
 <p><code>[[sample_groups]]</code> organises samples into named groups (e.g., case vs. control) for cohort studies.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a><span class="k">[[sample_groups]]</span>
-</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"control"</span>
-</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"CTRL_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_002"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_003"</span><span class="p">]</span>
-</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4" href="#__codelineno-63-4"></a>
-</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5" href="#__codelineno-63-5"></a><span class="k">[[sample_groups]]</span>
-</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6" href="#__codelineno-63-6"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"case"</span>
-</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7" href="#__codelineno-63-7"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a><span class="k">[[sample_groups]]</span>
+</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"control"</span>
+</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3" href="#__codelineno-64-3"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"CTRL_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_002"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_003"</span><span class="p">]</span>
+</span><span id="__span-64-4"><a id="__codelineno-64-4" name="__codelineno-64-4" href="#__codelineno-64-4"></a>
+</span><span id="__span-64-5"><a id="__codelineno-64-5" name="__codelineno-64-5" href="#__codelineno-64-5"></a><span class="k">[[sample_groups]]</span>
+</span><span id="__span-64-6"><a id="__codelineno-64-6" name="__codelineno-64-6" href="#__codelineno-64-6"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"case"</span>
+</span><span id="__span-64-7"><a id="__codelineno-64-7" name="__codelineno-64-7" href="#__codelineno-64-7"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">]</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -6908,14 +6918,14 @@ plan-time warning naming the offending key.</p>
 keys automatically — see <a href="#sheet-columns-as-group-metadata">Sheet columns as group metadata</a>.</p>
 <h3 id="loading-groups-from-external-file">Loading groups from external file<a class="headerlink" href="#loading-groups-from-external-file" title="Permanent link">#</a></h3>
 <p>For large cohorts, use <code>sample_groups_file</code> in <code>[workflow]</code>:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2" href="#__codelineno-64-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cohort-analysis"</span>
-</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3" href="#__codelineno-64-3"></a><span class="n">sample_groups_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/groups.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cohort-analysis"</span>
+</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a><span class="n">sample_groups_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/groups.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
 </span></code></pre></div>
 <p><strong>TSV format</strong> (samples can be comma-separated within the field):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>name    samples reads_layout    long_reads
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a>short   CTRL_001,CTRL_002   pe  
-</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a>long    LR_001  ont reads/flowcell1.fq.gz;reads/flowcell2.fq.gz
+<div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>name    samples reads_layout    long_reads
+</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a>short   CTRL_001,CTRL_002   pe  
+</span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3" href="#__codelineno-66-3"></a>long    LR_001  ont reads/flowcell1.fq.gz;reads/flowcell2.fq.gz
 </span></code></pre></div>
 <p>Every row must supply a value for every column (tab-separated, one row per
 line) — a row missing a trailing cell fails the sheet parse with an
@@ -6924,10 +6934,10 @@ or placeholder references that metadata key for the group's samples (an
 empty cell behaves as an unbound key, which closes gates in <em>both</em>
 directions — including <code>!=</code>).</p>
 <p><strong>JSON format</strong>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a><span class="p">[</span>
-</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2" href="#__codelineno-66-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"control"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"CTRL_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_002"</span><span class="p">]},</span>
-</span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3" href="#__codelineno-66-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"case"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">]}</span>
-</span><span id="__span-66-4"><a id="__codelineno-66-4" name="__codelineno-66-4" href="#__codelineno-66-4"></a><span class="p">]</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a><span class="p">[</span>
+</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"control"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"CTRL_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CTRL_002"</span><span class="p">]},</span>
+</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"case"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">]}</span>
+</span><span id="__span-67-4"><a id="__codelineno-67-4" name="__codelineno-67-4" href="#__codelineno-67-4"></a><span class="p">]</span>
 </span></code></pre></div>
 <h3 id="sheet-columns-as-group-metadata">Sheet columns as group metadata<a class="headerlink" href="#sheet-columns-as-group-metadata" title="Permanent link">#</a></h3>
 <p>In TSV/CSV sheets, <strong>every column other than <code>name</code> and <code>samples</code> becomes
@@ -6936,19 +6946,19 @@ group metadata</strong>: it fans out per <code>(group, sample)</code> pair as a 
 conditions — the same vocabulary as the inline
 <code>metadata</code> table. This is how a cohort declares a second read
 dimension (issue #283):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble"</span>
-</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{long_reads}"</span><span class="p">]</span>
-</span><span id="__span-67-4"><a id="__codelineno-67-4" name="__codelineno-67-4" href="#__codelineno-67-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"asm/{group}_{sample}/assembly.fa"</span><span class="p">]</span>
-</span><span id="__span-67-5"><a id="__codelineno-67-5" name="__codelineno-67-5" href="#__codelineno-67-5"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.reads_layout == 'ont' || wildcard.reads_layout == 'pacbio'"</span>
-</span><span id="__span-67-6"><a id="__codelineno-67-6" name="__codelineno-67-6" href="#__codelineno-67-6"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"flye --nano-raw {input} --out-dir {output[0]}"</span>
-</span><span id="__span-67-7"><a id="__codelineno-67-7" name="__codelineno-67-7" href="#__codelineno-67-7"></a>
-</span><span id="__span-67-8"><a id="__codelineno-67-8" name="__codelineno-67-8" href="#__codelineno-67-8"></a><span class="k">[[rules]]</span>
-</span><span id="__span-67-9"><a id="__codelineno-67-9" name="__codelineno-67-9" href="#__codelineno-67-9"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc"</span>
-</span><span id="__span-67-10"><a id="__codelineno-67-10" name="__codelineno-67-10" href="#__codelineno-67-10"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-67-11"><a id="__codelineno-67-11" name="__codelineno-67-11" href="#__codelineno-67-11"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/{sample}.txt"</span><span class="p">]</span>
-</span><span id="__span-67-12"><a id="__codelineno-67-12" name="__codelineno-67-12" href="#__codelineno-67-12"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.reads_layout != 'ont' &amp;&amp; wildcard.reads_layout != 'pacbio'"</span>
-</span><span id="__span-67-13"><a id="__codelineno-67-13" name="__codelineno-67-13" href="#__codelineno-67-13"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"assemble"</span>
+</span><span id="__span-68-3"><a id="__codelineno-68-3" name="__codelineno-68-3" href="#__codelineno-68-3"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{long_reads}"</span><span class="p">]</span>
+</span><span id="__span-68-4"><a id="__codelineno-68-4" name="__codelineno-68-4" href="#__codelineno-68-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"asm/{group}_{sample}/assembly.fa"</span><span class="p">]</span>
+</span><span id="__span-68-5"><a id="__codelineno-68-5" name="__codelineno-68-5" href="#__codelineno-68-5"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.reads_layout == 'ont' || wildcard.reads_layout == 'pacbio'"</span>
+</span><span id="__span-68-6"><a id="__codelineno-68-6" name="__codelineno-68-6" href="#__codelineno-68-6"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"flye --nano-raw {input} --out-dir {output[0]}"</span>
+</span><span id="__span-68-7"><a id="__codelineno-68-7" name="__codelineno-68-7" href="#__codelineno-68-7"></a>
+</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8" href="#__codelineno-68-8"></a><span class="k">[[rules]]</span>
+</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9" href="#__codelineno-68-9"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc"</span>
+</span><span id="__span-68-10"><a id="__codelineno-68-10" name="__codelineno-68-10" href="#__codelineno-68-10"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-68-11"><a id="__codelineno-68-11" name="__codelineno-68-11" href="#__codelineno-68-11"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/{sample}.txt"</span><span class="p">]</span>
+</span><span id="__span-68-12"><a id="__codelineno-68-12" name="__codelineno-68-12" href="#__codelineno-68-12"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"wildcard.reads_layout != 'ont' &amp;&amp; wildcard.reads_layout != 'pacbio'"</span>
+</span><span id="__span-68-13"><a id="__codelineno-68-13" name="__codelineno-68-13" href="#__codelineno-68-13"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {output[0]}"</span>
 </span></code></pre></div>
 <p>Short-read rows gate <code>assemble</code> closed and <code>qc</code> open; long-read rows the
 reverse — one rule template per branch, expanded per sample.</p>
@@ -6973,33 +6983,33 @@ last, so such a column would shadow the engine's binding for every row in
 the group. A sheet carrying them is rejected at parse time — rename the
 column (e.g. <code>sample_id</code>).</p>
 <h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a><span class="k">[[sample_groups]]</span>
-</span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"treatment"</span>
-</span><span id="__span-68-3"><a id="__codelineno-68-3" name="__codelineno-68-3" href="#__codelineno-68-3"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S002"</span><span class="p">]</span>
-</span><span id="__span-68-4"><a id="__codelineno-68-4" name="__codelineno-68-4" href="#__codelineno-68-4"></a>
-</span><span id="__span-68-5"><a id="__codelineno-68-5" name="__codelineno-68-5" href="#__codelineno-68-5"></a><span class="k">[[rules]]</span>
-</span><span id="__span-68-6"><a id="__codelineno-68-6" name="__codelineno-68-6" href="#__codelineno-68-6"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-68-7"><a id="__codelineno-68-7" name="__codelineno-68-7" href="#__codelineno-68-7"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fq.gz"</span><span class="p">]</span>
-</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8" href="#__codelineno-68-8"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9" href="#__codelineno-68-9"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa {input[0]} &gt; {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a><span class="k">[[sample_groups]]</span>
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">"treatment"</span>
+</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a><span class="n">samples</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S002"</span><span class="p">]</span>
+</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a>
+</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5" href="#__codelineno-69-5"></a><span class="k">[[rules]]</span>
+</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6" href="#__codelineno-69-6"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7" href="#__codelineno-69-7"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-69-8"><a id="__codelineno-69-8" name="__codelineno-69-8" href="#__codelineno-69-8"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-69-9"><a id="__codelineno-69-9" name="__codelineno-69-9" href="#__codelineno-69-9"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa {input[0]} &gt; {output[0]}"</span>
 </span></code></pre></div>
 <p>Produces <code>align_treatment_S001</code> and <code>align_treatment_S002</code>.</p>
 <p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow"><code>examples/gallery/12_cohort_analysis.oxoflow</code></a> for a complete cohort study pipeline.</p>
 <h3 id="auto-discovery-with-sample_pattern">Auto-Discovery with <code>sample_pattern</code><a class="headerlink" href="#auto-discovery-with-sample_pattern" title="Permanent link">#</a></h3>
 <p>The <code>[workflow]</code> <code>sample_pattern</code> auto-discovers samples from the filesystem:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a><span class="c1"># Exactly one pattern — uncomment the one that matches your data:</span>
-</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a><span class="c1"># Paired-end reads (Illumina standard)</span>
-</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a><span class="n">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
-</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5" href="#__codelineno-69-5"></a>
-</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6" href="#__codelineno-69-6"></a><span class="c1"># # Paired-end reads (common variant)</span>
-</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7" href="#__codelineno-69-7"></a><span class="c1"># sample_pattern = "raw/{sample}_1.fq.gz"</span>
-</span><span id="__span-69-8"><a id="__codelineno-69-8" name="__codelineno-69-8" href="#__codelineno-69-8"></a>
-</span><span id="__span-69-9"><a id="__codelineno-69-9" name="__codelineno-69-9" href="#__codelineno-69-9"></a><span class="c1"># # Single-end reads</span>
-</span><span id="__span-69-10"><a id="__codelineno-69-10" name="__codelineno-69-10" href="#__codelineno-69-10"></a><span class="c1"># sample_pattern = "raw/{sample}.fastq.gz"</span>
-</span><span id="__span-69-11"><a id="__codelineno-69-11" name="__codelineno-69-11" href="#__codelineno-69-11"></a>
-</span><span id="__span-69-12"><a id="__codelineno-69-12" name="__codelineno-69-12" href="#__codelineno-69-12"></a><span class="c1"># # With technical replicates</span>
-</span><span id="__span-69-13"><a id="__codelineno-69-13" name="__codelineno-69-13" href="#__codelineno-69-13"></a><span class="c1"># sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2" href="#__codelineno-70-2"></a><span class="c1"># Exactly one pattern — uncomment the one that matches your data:</span>
+</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3" href="#__codelineno-70-3"></a><span class="c1"># Paired-end reads (Illumina standard)</span>
+</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4" href="#__codelineno-70-4"></a><span class="n">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
+</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5" href="#__codelineno-70-5"></a>
+</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6" href="#__codelineno-70-6"></a><span class="c1"># # Paired-end reads (common variant)</span>
+</span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7" href="#__codelineno-70-7"></a><span class="c1"># sample_pattern = "raw/{sample}_1.fq.gz"</span>
+</span><span id="__span-70-8"><a id="__codelineno-70-8" name="__codelineno-70-8" href="#__codelineno-70-8"></a>
+</span><span id="__span-70-9"><a id="__codelineno-70-9" name="__codelineno-70-9" href="#__codelineno-70-9"></a><span class="c1"># # Single-end reads</span>
+</span><span id="__span-70-10"><a id="__codelineno-70-10" name="__codelineno-70-10" href="#__codelineno-70-10"></a><span class="c1"># sample_pattern = "raw/{sample}.fastq.gz"</span>
+</span><span id="__span-70-11"><a id="__codelineno-70-11" name="__codelineno-70-11" href="#__codelineno-70-11"></a>
+</span><span id="__span-70-12"><a id="__codelineno-70-12" name="__codelineno-70-12" href="#__codelineno-70-12"></a><span class="c1"># # With technical replicates</span>
+</span><span id="__span-70-13"><a id="__codelineno-70-13" name="__codelineno-70-13" href="#__codelineno-70-13"></a><span class="c1"># sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"</span>
 </span></code></pre></div>
 <p>Supported wildcards in <code>sample_pattern</code>:
 | Wildcard | Description | Example match |
@@ -7009,14 +7019,14 @@ column (e.g. <code>sample_id</code>).</p>
 | <code>{read}</code> | Read pair identifier | <code>1</code> or <code>2</code> (R1/R2) |</p>
 <h3 id="merging-multiple-sample-sources">Merging Multiple Sample Sources<a class="headerlink" href="#merging-multiple-sample-sources" title="Permanent link">#</a></h3>
 <p>All sample sources are merged into a single <code>{config.samples_list}</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a><span class="c1"># Filesystem auto-discovery</span>
-</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2" href="#__codelineno-70-2"></a><span class="nv">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
-</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3" href="#__codelineno-70-3"></a>
-</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4" href="#__codelineno-70-4"></a><span class="c1"># CSV/TSV file</span>
-</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5" href="#__codelineno-70-5"></a><span class="nv">sample_groups_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/samples.csv"</span>
-</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6" href="#__codelineno-70-6"></a>
-</span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7" href="#__codelineno-70-7"></a><span class="c1"># Ad-hoc via CLI</span>
-</span><span id="__span-70-8"><a id="__codelineno-70-8" name="__codelineno-70-8" href="#__codelineno-70-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--sample<span class="w"> </span>EXTRA_01<span class="w"> </span>--sample<span class="w"> </span>EXTRA_02
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a><span class="c1"># Filesystem auto-discovery</span>
+</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a><span class="nv">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
+</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>
+</span><span id="__span-71-4"><a id="__codelineno-71-4" name="__codelineno-71-4" href="#__codelineno-71-4"></a><span class="c1"># CSV/TSV file</span>
+</span><span id="__span-71-5"><a id="__codelineno-71-5" name="__codelineno-71-5" href="#__codelineno-71-5"></a><span class="nv">sample_groups_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/samples.csv"</span>
+</span><span id="__span-71-6"><a id="__codelineno-71-6" name="__codelineno-71-6" href="#__codelineno-71-6"></a>
+</span><span id="__span-71-7"><a id="__codelineno-71-7" name="__codelineno-71-7" href="#__codelineno-71-7"></a><span class="c1"># Ad-hoc via CLI</span>
+</span><span id="__span-71-8"><a id="__codelineno-71-8" name="__codelineno-71-8" href="#__codelineno-71-8"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--sample<span class="w"> </span>EXTRA_01<span class="w"> </span>--sample<span class="w"> </span>EXTRA_02
 </span></code></pre></div>
 <p>All sources deduplicate — the same sample from multiple sources appears once.
 Per-group sample lists are available as <code>{config.samples_&lt;group_name&gt;}</code>.</p>
@@ -7038,23 +7048,23 @@ methylseq <code>when = "config.single_end_mode || {meta.endedness} == 'SE'"</cod
 pattern, chipseq antibody fan-out (see
 <a href="#input-groups-input_groups">Input Groups</a>), and rnaseq-style per-sample
 parameter lookups:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"methylseq"</span>
-</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a><span class="n">metadata_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/samples.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-72-1"><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-72-2"><a id="__codelineno-72-2" name="__codelineno-72-2" href="#__codelineno-72-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"methylseq"</span>
+</span><span id="__span-72-3"><a id="__codelineno-72-3" name="__codelineno-72-3" href="#__codelineno-72-3"></a><span class="n">metadata_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"metadata/samples.tsv"</span><span class="w">  </span><span class="c1"># or .csv, .json</span>
 </span></code></pre></div>
 <p><strong>TSV/CSV format</strong> — the first column is the sample id (must match the
 values your <code>{sample}</code> wildcards resolve to); every other header becomes a
 column:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-72-1"><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a>sample    endedness    adapters
-</span><span id="__span-72-2"><a id="__codelineno-72-2" name="__codelineno-72-2" href="#__codelineno-72-2"></a>SE1       SE           AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
-</span><span id="__span-72-3"><a id="__codelineno-72-3" name="__codelineno-72-3" href="#__codelineno-72-3"></a>PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>sample    endedness    adapters
+</span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a>SE1       SE           AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+</span><span id="__span-73-3"><a id="__codelineno-73-3" name="__codelineno-73-3" href="#__codelineno-73-3"></a>PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
 </span></code></pre></div>
 <p><strong>JSON format</strong> — a list of objects; the <code>sample</code> key identifies the row
 (all other keys become columns):</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a><span class="p">[</span>
-</span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"sample"</span><span class="p">:</span><span class="w"> </span><span class="s2">"SE1"</span><span class="p">,</span><span class="w"> </span><span class="nt">"endedness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"SE"</span><span class="p">,</span><span class="w"> </span><span class="nt">"adapters"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"</span><span class="p">},</span>
-</span><span id="__span-73-3"><a id="__codelineno-73-3" name="__codelineno-73-3" href="#__codelineno-73-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"sample"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PE1"</span><span class="p">,</span><span class="w"> </span><span class="nt">"endedness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PE"</span><span class="p">,</span><span class="w"> </span><span class="nt">"adapters"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"</span><span class="p">}</span>
-</span><span id="__span-73-4"><a id="__codelineno-73-4" name="__codelineno-73-4" href="#__codelineno-73-4"></a><span class="p">]</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-74-1"><a id="__codelineno-74-1" name="__codelineno-74-1" href="#__codelineno-74-1"></a><span class="p">[</span>
+</span><span id="__span-74-2"><a id="__codelineno-74-2" name="__codelineno-74-2" href="#__codelineno-74-2"></a><span class="w">  </span><span class="p">{</span><span class="nt">"sample"</span><span class="p">:</span><span class="w"> </span><span class="s2">"SE1"</span><span class="p">,</span><span class="w"> </span><span class="nt">"endedness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"SE"</span><span class="p">,</span><span class="w"> </span><span class="nt">"adapters"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"</span><span class="p">},</span>
+</span><span id="__span-74-3"><a id="__codelineno-74-3" name="__codelineno-74-3" href="#__codelineno-74-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"sample"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PE1"</span><span class="p">,</span><span class="w"> </span><span class="nt">"endedness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PE"</span><span class="p">,</span><span class="w"> </span><span class="nt">"adapters"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"</span><span class="p">}</span>
+</span><span id="__span-74-4"><a id="__codelineno-74-4" name="__codelineno-74-4" href="#__codelineno-74-4"></a><span class="p">]</span>
 </span></code></pre></div>
 <p><strong>Semantics:</strong></p>
 <ul>
@@ -7075,51 +7085,51 @@ column:</p>
   sample-like binding) is an error at execution time (residual
   placeholder).</li>
 </ul>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-74-1"><a id="__codelineno-74-1" name="__codelineno-74-1" href="#__codelineno-74-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-74-2"><a id="__codelineno-74-2" name="__codelineno-74-2" href="#__codelineno-74-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
-</span><span id="__span-74-3"><a id="__codelineno-74-3" name="__codelineno-74-3" href="#__codelineno-74-3"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-74-4"><a id="__codelineno-74-4" name="__codelineno-74-4" href="#__codelineno-74-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"trimmed/{sample}.fq"</span><span class="p">]</span>
-</span><span id="__span-74-5"><a id="__codelineno-74-5" name="__codelineno-74-5" href="#__codelineno-74-5"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.single_end_mode || {meta.endedness} == 'SE'"</span>
-</span><span id="__span-74-6"><a id="__codelineno-74-6" name="__codelineno-74-6" href="#__codelineno-74-6"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"cutadapt -a {meta.adapters} {input[0]} -o {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2" href="#__codelineno-75-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
+</span><span id="__span-75-3"><a id="__codelineno-75-3" name="__codelineno-75-3" href="#__codelineno-75-3"></a><span class="n">input</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-75-4"><a id="__codelineno-75-4" name="__codelineno-75-4" href="#__codelineno-75-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"trimmed/{sample}.fq"</span><span class="p">]</span>
+</span><span id="__span-75-5"><a id="__codelineno-75-5" name="__codelineno-75-5" href="#__codelineno-75-5"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.single_end_mode || {meta.endedness} == 'SE'"</span>
+</span><span id="__span-75-6"><a id="__codelineno-75-6" name="__codelineno-75-6" href="#__codelineno-75-6"></a><span class="n">shell</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"cutadapt -a {meta.adapters} {input[0]} -o {output[0]}"</span>
 </span></code></pre></div>
 <p>Metadata paths can also feed inputs directly (DAG edges still infer by
 exact path match, since the paths are plan-time literals):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2" href="#__codelineno-75-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mapping_qc"</span>
-</span><span id="__span-75-3"><a id="__codelineno-75-3" name="__codelineno-75-3" href="#__codelineno-75-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{meta.bam_path}"</span><span class="p">]</span>
-</span><span id="__span-75-4"><a id="__codelineno-75-4" name="__codelineno-75-4" href="#__codelineno-75-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"samtools stats {input[0]} &gt; {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2" href="#__codelineno-76-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"mapping_qc"</span>
+</span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3" href="#__codelineno-76-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{meta.bam_path}"</span><span class="p">]</span>
+</span><span id="__span-76-4"><a id="__codelineno-76-4" name="__codelineno-76-4" href="#__codelineno-76-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"samtools stats {input[0]} &gt; {output[0]}"</span>
 </span></code></pre></div>
 <h3 id="partial-pair-tolerance-tumor-only-mode">Partial Pair Tolerance &amp; Tumor-Only Mode<a class="headerlink" href="#partial-pair-tolerance-tumor-only-mode" title="Permanent link">#</a></h3>
 <p>Pairs with missing controls are supported — <code>control</code> is now optional:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a><span class="c1"># Tumor-only CNV calling (no matched normals)</span>
-</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2" href="#__codelineno-76-2"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3" href="#__codelineno-76-3"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T1"</span>
-</span><span id="__span-76-4"><a id="__codelineno-76-4" name="__codelineno-76-4" href="#__codelineno-76-4"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T1"</span>
-</span><span id="__span-76-5"><a id="__codelineno-76-5" name="__codelineno-76-5" href="#__codelineno-76-5"></a><span class="c1"># control omitted → {control} = ""</span>
-</span><span id="__span-76-6"><a id="__codelineno-76-6" name="__codelineno-76-6" href="#__codelineno-76-6"></a>
-</span><span id="__span-76-7"><a id="__codelineno-76-7" name="__codelineno-76-7" href="#__codelineno-76-7"></a><span class="c1"># Pooled normal via config values</span>
-</span><span id="__span-76-8"><a id="__codelineno-76-8" name="__codelineno-76-8" href="#__codelineno-76-8"></a><span class="k">[[pairs]]</span>
-</span><span id="__span-76-9"><a id="__codelineno-76-9" name="__codelineno-76-9" href="#__codelineno-76-9"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T2"</span>
-</span><span id="__span-76-10"><a id="__codelineno-76-10" name="__codelineno-76-10" href="#__codelineno-76-10"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T2"</span>
-</span><span id="__span-76-11"><a id="__codelineno-76-11" name="__codelineno-76-11" href="#__codelineno-76-11"></a><span class="c1"># control = ""  # empty string also works</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a><span class="c1"># Tumor-only CNV calling (no matched normals)</span>
+</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2" href="#__codelineno-77-2"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3" href="#__codelineno-77-3"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T1"</span>
+</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4" href="#__codelineno-77-4"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T1"</span>
+</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5" href="#__codelineno-77-5"></a><span class="c1"># control omitted → {control} = ""</span>
+</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6" href="#__codelineno-77-6"></a>
+</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7" href="#__codelineno-77-7"></a><span class="c1"># Pooled normal via config values</span>
+</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8" href="#__codelineno-77-8"></a><span class="k">[[pairs]]</span>
+</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9" href="#__codelineno-77-9"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T2"</span>
+</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10" href="#__codelineno-77-10"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"T2"</span>
+</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11" href="#__codelineno-77-11"></a><span class="c1"># control = ""  # empty string also works</span>
 </span></code></pre></div>
 <p>Rules using <code>{control}</code> receive an empty string when no control is specified.
 Use shell conditionals or declarative <code>[config]</code> entries to handle this:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2" href="#__codelineno-77-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cnv_detect"</span>
-</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3" href="#__codelineno-77-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{experiment}.bam"</span><span class="p">]</span>
-</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4" href="#__codelineno-77-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
-</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5" href="#__codelineno-77-5"></a><span class="s2">if [ -n "{control}" ]; then</span>
-</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6" href="#__codelineno-77-6"></a><span class="s2">    cnvkit.py batch {input} --normal aligned/{control}.bam</span>
-</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7" href="#__codelineno-77-7"></a><span class="s2">else</span>
-</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8" href="#__codelineno-77-8"></a><span class="s2">    cnvkit.py batch {input} --method cbs  # tumor-only mode</span>
-</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9" href="#__codelineno-77-9"></a><span class="s2">fi</span>
-</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10" href="#__codelineno-77-10"></a><span class="s2">"""</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1" href="#__codelineno-78-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2" href="#__codelineno-78-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cnv_detect"</span>
+</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3" href="#__codelineno-78-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{experiment}.bam"</span><span class="p">]</span>
+</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4" href="#__codelineno-78-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
+</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5" href="#__codelineno-78-5"></a><span class="s2">if [ -n "{control}" ]; then</span>
+</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6" href="#__codelineno-78-6"></a><span class="s2">    cnvkit.py batch {input} --normal aligned/{control}.bam</span>
+</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7" href="#__codelineno-78-7"></a><span class="s2">else</span>
+</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8" href="#__codelineno-78-8"></a><span class="s2">    cnvkit.py batch {input} --method cbs  # tumor-only mode</span>
+</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9" href="#__codelineno-78-9"></a><span class="s2">fi</span>
+</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10" href="#__codelineno-78-10"></a><span class="s2">"""</span>
 </span></code></pre></div>
 <p>For pooled-normal scenarios, use declarative <code>[config]</code> entries:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1" href="#__codelineno-78-1"></a><span class="k">[config]</span>
-</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2" href="#__codelineno-78-2"></a><span class="n">normal_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"pooled"</span><span class="p">,</span><span class="w"> </span><span class="n">help</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"matched, pooled, or none"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3" href="#__codelineno-78-3"></a><span class="n">pooled_normal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"results/pooled_normal.bam"</span><span class="w"> </span><span class="p">}</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a><span class="k">[config]</span>
+</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2" href="#__codelineno-79-2"></a><span class="n">normal_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"pooled"</span><span class="p">,</span><span class="w"> </span><span class="n">help</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"matched, pooled, or none"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3" href="#__codelineno-79-3"></a><span class="n">pooled_normal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"results/pooled_normal.bam"</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
 <p>Supported multi-omics pair patterns:</p>
 <table>
@@ -7161,12 +7171,12 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <hr />
 <h2 id="when-conditional-rule-execution-wf-01"><code>when</code> — Conditional Rule Execution (WF-01)<a class="headerlink" href="#when-conditional-rule-execution-wf-01" title="Permanent link">#</a></h2>
 <p>The optional <code>when</code> field on a rule contains an expression evaluated against <code>[config]</code> values. When the expression evaluates to <strong>false</strong> the rule is skipped at execution time (<code>JobStatus::Skipped</code>, "condition evaluated to false") — it remains in the DAG but does not run. Predicates over per-instance bindings (<code>wildcard.&lt;key&gt;</code>, <code>{meta.&lt;column&gt;}</code>) are decided earlier, at plan time: non-matching instances never enter the DAG, so dry-run and <code>validate</code> counts reflect exactly what a real run would execute.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2" href="#__codelineno-79-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3" href="#__codelineno-79-3"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc"</span>
-</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4" href="#__codelineno-79-4"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
-</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5" href="#__codelineno-79-5"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/sample_fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6" href="#__codelineno-79-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input[0]} -o qc/"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1" href="#__codelineno-80-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2" href="#__codelineno-80-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
+</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3" href="#__codelineno-80-3"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.run_qc"</span>
+</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4" href="#__codelineno-80-4"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/sample_R1.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5" href="#__codelineno-80-5"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/sample_fastqc.html"</span><span class="p">]</span>
+</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6" href="#__codelineno-80-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input[0]} -o qc/"</span>
 </span></code></pre></div>
 <h3 id="expression-syntax">Expression syntax<a class="headerlink" href="#expression-syntax" title="Permanent link">#</a></h3>
 <table>
@@ -7255,12 +7265,12 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <code>file_size(path)</code> let a <code>when</code> gate inspect files produced earlier in the
 same run (issue #282) — e.g. skip a variant caller on samples whose
 trimmed FASTQ has too few records:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1" href="#__codelineno-80-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2" href="#__codelineno-80-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_variants"</span>
-</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3" href="#__codelineno-80-3"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"reads_count('trimmed/{sample}.fq.gz') &gt; config.min_reads"</span>
-</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4" href="#__codelineno-80-4"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"trimmed/{sample}.fq.gz"</span><span class="p">]</span>
-</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5" href="#__codelineno-80-5"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6" href="#__codelineno-80-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller --input {input[0]} --output {output[0]}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1" href="#__codelineno-81-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2" href="#__codelineno-81-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_variants"</span>
+</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3" href="#__codelineno-81-3"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"reads_count('trimmed/{sample}.fq.gz') &gt; config.min_reads"</span>
+</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4" href="#__codelineno-81-4"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"trimmed/{sample}.fq.gz"</span><span class="p">]</span>
+</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5" href="#__codelineno-81-5"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6" href="#__codelineno-81-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller --input {input[0]} --output {output[0]}"</span>
 </span></code></pre></div>
 <ul>
 <li><strong>Path resolution</strong> — relative paths join against the run <strong>workdir</strong>;
@@ -7324,63 +7334,63 @@ gate and everything else (including <code>"foo"</code>) opens it. For a strict
 boolean column, use the comparison form instead so any unexpected value
 falls through to <em>no override</em> rather than opening both branches of a
 markdup/nomarkdup pair:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1" href="#__codelineno-81-1"></a><span class="c1"># strict per-sample boolean (recommended for true/false columns)</span>
-</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2" href="#__codelineno-81-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.mark_duplicates || {meta.mark_duplicates} == 'true'"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1" href="#__codelineno-82-1"></a><span class="c1"># strict per-sample boolean (recommended for true/false columns)</span>
+</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2" href="#__codelineno-82-2"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.mark_duplicates || {meta.mark_duplicates} == 'true'"</span>
 </span></code></pre></div>
 <p>A missing row or column renders <code>false</code> in a truthiness position and <code>''</code>
 in a comparison — always a closed gate, never an unbound token. This makes
 <code>{meta.x} == ''</code> the official <strong>absence guard</strong> idiom: it gates the
 "column present" branch and closes cleanly for rows that lack the column.</p>
 <h3 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1" href="#__codelineno-82-1"></a><span class="k">[config]</span>
-</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2" href="#__codelineno-82-2"></a><span class="n">run_annotation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3" href="#__codelineno-82-3"></a><span class="n">min_coverage</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
-</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4" href="#__codelineno-82-4"></a><span class="n">mode</span><span class="w">           </span><span class="o">=</span><span class="w"> </span><span class="s2">"WGS"</span>
-</span><span id="__span-82-5"><a id="__codelineno-82-5" name="__codelineno-82-5" href="#__codelineno-82-5"></a>
-</span><span id="__span-82-6"><a id="__codelineno-82-6" name="__codelineno-82-6" href="#__codelineno-82-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-82-7"><a id="__codelineno-82-7" name="__codelineno-82-7" href="#__codelineno-82-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vep_annotate"</span>
-</span><span id="__span-82-8"><a id="__codelineno-82-8" name="__codelineno-82-8" href="#__codelineno-82-8"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.run_annotation &amp;&amp; config.min_coverage &gt;= 20'</span>
-</span><span id="__span-82-9"><a id="__codelineno-82-9" name="__codelineno-82-9" href="#__codelineno-82-9"></a><span class="c1"># ...</span>
-</span><span id="__span-82-10"><a id="__codelineno-82-10" name="__codelineno-82-10" href="#__codelineno-82-10"></a>
-</span><span id="__span-82-11"><a id="__codelineno-82-11" name="__codelineno-82-11" href="#__codelineno-82-11"></a><span class="k">[[rules]]</span>
-</span><span id="__span-82-12"><a id="__codelineno-82-12" name="__codelineno-82-12" href="#__codelineno-82-12"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wgs_coverage"</span>
-</span><span id="__span-82-13"><a id="__codelineno-82-13" name="__codelineno-82-13" href="#__codelineno-82-13"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.mode == "WGS"'</span>
-</span><span id="__span-82-14"><a id="__codelineno-82-14" name="__codelineno-82-14" href="#__codelineno-82-14"></a><span class="c1"># ...</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1" href="#__codelineno-83-1"></a><span class="k">[config]</span>
+</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2" href="#__codelineno-83-2"></a><span class="n">run_annotation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3" href="#__codelineno-83-3"></a><span class="n">min_coverage</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
+</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4" href="#__codelineno-83-4"></a><span class="n">mode</span><span class="w">           </span><span class="o">=</span><span class="w"> </span><span class="s2">"WGS"</span>
+</span><span id="__span-83-5"><a id="__codelineno-83-5" name="__codelineno-83-5" href="#__codelineno-83-5"></a>
+</span><span id="__span-83-6"><a id="__codelineno-83-6" name="__codelineno-83-6" href="#__codelineno-83-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-83-7"><a id="__codelineno-83-7" name="__codelineno-83-7" href="#__codelineno-83-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vep_annotate"</span>
+</span><span id="__span-83-8"><a id="__codelineno-83-8" name="__codelineno-83-8" href="#__codelineno-83-8"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.run_annotation &amp;&amp; config.min_coverage &gt;= 20'</span>
+</span><span id="__span-83-9"><a id="__codelineno-83-9" name="__codelineno-83-9" href="#__codelineno-83-9"></a><span class="c1"># ...</span>
+</span><span id="__span-83-10"><a id="__codelineno-83-10" name="__codelineno-83-10" href="#__codelineno-83-10"></a>
+</span><span id="__span-83-11"><a id="__codelineno-83-11" name="__codelineno-83-11" href="#__codelineno-83-11"></a><span class="k">[[rules]]</span>
+</span><span id="__span-83-12"><a id="__codelineno-83-12" name="__codelineno-83-12" href="#__codelineno-83-12"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wgs_coverage"</span>
+</span><span id="__span-83-13"><a id="__codelineno-83-13" name="__codelineno-83-13" href="#__codelineno-83-13"></a><span class="n">when</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'config.mode == "WGS"'</span>
+</span><span id="__span-83-14"><a id="__codelineno-83-14" name="__codelineno-83-14" href="#__codelineno-83-14"></a><span class="c1"># ...</span>
 </span></code></pre></div>
 <p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/11_conditional_workflow.oxoflow"><code>examples/gallery/11_conditional_workflow.oxoflow</code></a> for a full example.</p>
 <hr />
 <h2 id="dependency-resolution">Dependency Resolution<a class="headerlink" href="#dependency-resolution" title="Permanent link">#</a></h2>
 <p>Dependencies are inferred automatically: if rule B lists a file in its <code>input</code> that appears in rule A's <code>output</code>, then B depends on A.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1" href="#__codelineno-83-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2" href="#__codelineno-83-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"step1"</span>
-</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3" href="#__codelineno-83-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"intermediate.txt"</span><span class="p">]</span>
-</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4" href="#__codelineno-83-4"></a><span class="c1"># ...</span>
-</span><span id="__span-83-5"><a id="__codelineno-83-5" name="__codelineno-83-5" href="#__codelineno-83-5"></a>
-</span><span id="__span-83-6"><a id="__codelineno-83-6" name="__codelineno-83-6" href="#__codelineno-83-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-83-7"><a id="__codelineno-83-7" name="__codelineno-83-7" href="#__codelineno-83-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"step2"</span>
-</span><span id="__span-83-8"><a id="__codelineno-83-8" name="__codelineno-83-8" href="#__codelineno-83-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"intermediate.txt"</span><span class="p">]</span><span class="w">   </span><span class="c1"># depends on step1</span>
-</span><span id="__span-83-9"><a id="__codelineno-83-9" name="__codelineno-83-9" href="#__codelineno-83-9"></a><span class="c1"># ...</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-84-1"><a id="__codelineno-84-1" name="__codelineno-84-1" href="#__codelineno-84-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-84-2"><a id="__codelineno-84-2" name="__codelineno-84-2" href="#__codelineno-84-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"step1"</span>
+</span><span id="__span-84-3"><a id="__codelineno-84-3" name="__codelineno-84-3" href="#__codelineno-84-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"intermediate.txt"</span><span class="p">]</span>
+</span><span id="__span-84-4"><a id="__codelineno-84-4" name="__codelineno-84-4" href="#__codelineno-84-4"></a><span class="c1"># ...</span>
+</span><span id="__span-84-5"><a id="__codelineno-84-5" name="__codelineno-84-5" href="#__codelineno-84-5"></a>
+</span><span id="__span-84-6"><a id="__codelineno-84-6" name="__codelineno-84-6" href="#__codelineno-84-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-84-7"><a id="__codelineno-84-7" name="__codelineno-84-7" href="#__codelineno-84-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"step2"</span>
+</span><span id="__span-84-8"><a id="__codelineno-84-8" name="__codelineno-84-8" href="#__codelineno-84-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"intermediate.txt"</span><span class="p">]</span><span class="w">   </span><span class="c1"># depends on step1</span>
+</span><span id="__span-84-9"><a id="__codelineno-84-9" name="__codelineno-84-9" href="#__codelineno-84-9"></a><span class="c1"># ...</span>
 </span></code></pre></div>
 <p>No explicit dependency declaration is needed.</p>
 <hr />
 <h2 id="transform-unified-scatter-gather-operator"><code>transform</code> — Unified Scatter-Gather Operator<a class="headerlink" href="#transform-unified-scatter-gather-operator" title="Permanent link">#</a></h2>
 <p>The <code>transform</code> operator unifies split → map → combine patterns into a single rule declaration, similar to dplyr's <code>group_by() %&gt;% summarize()</code> or pandas' <code>groupby().apply()</code>.</p>
 <h3 id="structure">Structure<a class="headerlink" href="#structure" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-84-1"><a id="__codelineno-84-1" name="__codelineno-84-1" href="#__codelineno-84-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-84-2"><a id="__codelineno-84-2" name="__codelineno-84-2" href="#__codelineno-84-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_calling"</span>
-</span><span id="__span-84-3"><a id="__codelineno-84-3" name="__codelineno-84-3" href="#__codelineno-84-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
-</span><span id="__span-84-4"><a id="__codelineno-84-4" name="__codelineno-84-4" href="#__codelineno-84-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/sample.vcf.gz"</span><span class="p">]</span>
-</span><span id="__span-84-5"><a id="__codelineno-84-5" name="__codelineno-84-5" href="#__codelineno-84-5"></a>
-</span><span id="__span-84-6"><a id="__codelineno-84-6" name="__codelineno-84-6" href="#__codelineno-84-6"></a><span class="k">[rules.transform.split]</span>
-</span><span id="__span-84-7"><a id="__codelineno-84-7" name="__codelineno-84-7" href="#__codelineno-84-7"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
-</span><span id="__span-84-8"><a id="__codelineno-84-8" name="__codelineno-84-8" href="#__codelineno-84-8"></a><span class="n">values_from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.chromosomes"</span>
-</span><span id="__span-84-9"><a id="__codelineno-84-9" name="__codelineno-84-9" href="#__codelineno-84-9"></a>
-</span><span id="__span-84-10"><a id="__codelineno-84-10" name="__codelineno-84-10" href="#__codelineno-84-10"></a><span class="k">[rules.transform]</span>
-</span><span id="__span-84-11"><a id="__codelineno-84-11" name="__codelineno-84-11" href="#__codelineno-84-11"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"</span>
-</span><span id="__span-84-12"><a id="__codelineno-84-12" name="__codelineno-84-12" href="#__codelineno-84-12"></a><span class="n">cleanup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-84-13"><a id="__codelineno-84-13" name="__codelineno-84-13" href="#__codelineno-84-13"></a>
-</span><span id="__span-84-14"><a id="__codelineno-84-14" name="__codelineno-84-14" href="#__codelineno-84-14"></a><span class="k">[rules.transform.combine]</span>
-</span><span id="__span-84-15"><a id="__codelineno-84-15" name="__codelineno-84-15" href="#__codelineno-84-15"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk GatherVcfs $(for f in {chunks}; do echo </span><span class="se">\"</span><span class="s2">-I $f </span><span class="se">\"</span><span class="s2">; done) -O {output}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-85-1"><a id="__codelineno-85-1" name="__codelineno-85-1" href="#__codelineno-85-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-85-2"><a id="__codelineno-85-2" name="__codelineno-85-2" href="#__codelineno-85-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_calling"</span>
+</span><span id="__span-85-3"><a id="__codelineno-85-3" name="__codelineno-85-3" href="#__codelineno-85-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/sample.bam"</span><span class="p">]</span>
+</span><span id="__span-85-4"><a id="__codelineno-85-4" name="__codelineno-85-4" href="#__codelineno-85-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/sample.vcf.gz"</span><span class="p">]</span>
+</span><span id="__span-85-5"><a id="__codelineno-85-5" name="__codelineno-85-5" href="#__codelineno-85-5"></a>
+</span><span id="__span-85-6"><a id="__codelineno-85-6" name="__codelineno-85-6" href="#__codelineno-85-6"></a><span class="k">[rules.transform.split]</span>
+</span><span id="__span-85-7"><a id="__codelineno-85-7" name="__codelineno-85-7" href="#__codelineno-85-7"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
+</span><span id="__span-85-8"><a id="__codelineno-85-8" name="__codelineno-85-8" href="#__codelineno-85-8"></a><span class="n">values_from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.chromosomes"</span>
+</span><span id="__span-85-9"><a id="__codelineno-85-9" name="__codelineno-85-9" href="#__codelineno-85-9"></a>
+</span><span id="__span-85-10"><a id="__codelineno-85-10" name="__codelineno-85-10" href="#__codelineno-85-10"></a><span class="k">[rules.transform]</span>
+</span><span id="__span-85-11"><a id="__codelineno-85-11" name="__codelineno-85-11" href="#__codelineno-85-11"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"</span>
+</span><span id="__span-85-12"><a id="__codelineno-85-12" name="__codelineno-85-12" href="#__codelineno-85-12"></a><span class="n">cleanup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-85-13"><a id="__codelineno-85-13" name="__codelineno-85-13" href="#__codelineno-85-13"></a>
+</span><span id="__span-85-14"><a id="__codelineno-85-14" name="__codelineno-85-14" href="#__codelineno-85-14"></a><span class="k">[rules.transform.combine]</span>
+</span><span id="__span-85-15"><a id="__codelineno-85-15" name="__codelineno-85-15" href="#__codelineno-85-15"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk GatherVcfs $(for f in {chunks}; do echo </span><span class="se">\"</span><span class="s2">-I $f </span><span class="se">\"</span><span class="s2">; done) -O {output}"</span>
 </span></code></pre></div>
 <h3 id="split-configuration">Split Configuration<a class="headerlink" href="#split-configuration" title="Permanent link">#</a></h3>
 <table>
@@ -7482,43 +7492,43 @@ in a comparison — always a closed gate, never an unbound token. This makes
 <h3 id="modes">Modes<a class="headerlink" href="#modes" title="Permanent link">#</a></h3>
 <p><strong>Mode A: Split → Map → Combine</strong></p>
 <p>Classic scatter-gather with explicit combine command:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-85-1"><a id="__codelineno-85-1" name="__codelineno-85-1" href="#__codelineno-85-1"></a><span class="k">[rules.transform.split]</span>
-</span><span id="__span-85-2"><a id="__codelineno-85-2" name="__codelineno-85-2" href="#__codelineno-85-2"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
-</span><span id="__span-85-3"><a id="__codelineno-85-3" name="__codelineno-85-3" href="#__codelineno-85-3"></a><span class="n">values_from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.chromosomes"</span>
-</span><span id="__span-85-4"><a id="__codelineno-85-4" name="__codelineno-85-4" href="#__codelineno-85-4"></a>
-</span><span id="__span-85-5"><a id="__codelineno-85-5" name="__codelineno-85-5" href="#__codelineno-85-5"></a><span class="k">[rules.transform]</span>
-</span><span id="__span-85-6"><a id="__codelineno-85-6" name="__codelineno-85-6" href="#__codelineno-85-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"</span>
-</span><span id="__span-85-7"><a id="__codelineno-85-7" name="__codelineno-85-7" href="#__codelineno-85-7"></a>
-</span><span id="__span-85-8"><a id="__codelineno-85-8" name="__codelineno-85-8" href="#__codelineno-85-8"></a><span class="k">[rules.transform.combine]</span>
-</span><span id="__span-85-9"><a id="__codelineno-85-9" name="__codelineno-85-9" href="#__codelineno-85-9"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk GatherVcfs $(for f in {chunks}; do echo </span><span class="se">\"</span><span class="s2">-I $f </span><span class="se">\"</span><span class="s2">; done) -O {output}"</span>
-</span></code></pre></div>
-<p><strong>Mode B: Split → Map (No Combine)</strong></p>
-<p>Parallel processing without merging — each split produces independent output:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-86-1"><a id="__codelineno-86-1" name="__codelineno-86-1" href="#__codelineno-86-1"></a><span class="k">[rules.transform.split]</span>
 </span><span id="__span-86-2"><a id="__codelineno-86-2" name="__codelineno-86-2" href="#__codelineno-86-2"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
 </span><span id="__span-86-3"><a id="__codelineno-86-3" name="__codelineno-86-3" href="#__codelineno-86-3"></a><span class="n">values_from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.chromosomes"</span>
 </span><span id="__span-86-4"><a id="__codelineno-86-4" name="__codelineno-86-4" href="#__codelineno-86-4"></a>
 </span><span id="__span-86-5"><a id="__codelineno-86-5" name="__codelineno-86-5" href="#__codelineno-86-5"></a><span class="k">[rules.transform]</span>
-</span><span id="__span-86-6"><a id="__codelineno-86-6" name="__codelineno-86-6" href="#__codelineno-86-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"samtools flagstat {input} &gt; {output}"</span>
-</span><span id="__span-86-7"><a id="__codelineno-86-7" name="__codelineno-86-7" href="#__codelineno-86-7"></a><span class="c1"># No combine section</span>
+</span><span id="__span-86-6"><a id="__codelineno-86-6" name="__codelineno-86-6" href="#__codelineno-86-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -R {config.reference} -I {input} -L {chr} -O {output}"</span>
+</span><span id="__span-86-7"><a id="__codelineno-86-7" name="__codelineno-86-7" href="#__codelineno-86-7"></a>
+</span><span id="__span-86-8"><a id="__codelineno-86-8" name="__codelineno-86-8" href="#__codelineno-86-8"></a><span class="k">[rules.transform.combine]</span>
+</span><span id="__span-86-9"><a id="__codelineno-86-9" name="__codelineno-86-9" href="#__codelineno-86-9"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk GatherVcfs $(for f in {chunks}; do echo </span><span class="se">\"</span><span class="s2">-I $f </span><span class="se">\"</span><span class="s2">; done) -O {output}"</span>
+</span></code></pre></div>
+<p><strong>Mode B: Split → Map (No Combine)</strong></p>
+<p>Parallel processing without merging — each split produces independent output:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-87-1"><a id="__codelineno-87-1" name="__codelineno-87-1" href="#__codelineno-87-1"></a><span class="k">[rules.transform.split]</span>
+</span><span id="__span-87-2"><a id="__codelineno-87-2" name="__codelineno-87-2" href="#__codelineno-87-2"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chr"</span>
+</span><span id="__span-87-3"><a id="__codelineno-87-3" name="__codelineno-87-3" href="#__codelineno-87-3"></a><span class="n">values_from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"config.chromosomes"</span>
+</span><span id="__span-87-4"><a id="__codelineno-87-4" name="__codelineno-87-4" href="#__codelineno-87-4"></a>
+</span><span id="__span-87-5"><a id="__codelineno-87-5" name="__codelineno-87-5" href="#__codelineno-87-5"></a><span class="k">[rules.transform]</span>
+</span><span id="__span-87-6"><a id="__codelineno-87-6" name="__codelineno-87-6" href="#__codelineno-87-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"samtools flagstat {input} &gt; {output}"</span>
+</span><span id="__span-87-7"><a id="__codelineno-87-7" name="__codelineno-87-7" href="#__codelineno-87-7"></a><span class="c1"># No combine section</span>
 </span></code></pre></div>
 <p><strong>Mode C: Split → Map → Aggregate</strong></p>
 <p>Automatic aggregation (concat or json_merge):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-87-1"><a id="__codelineno-87-1" name="__codelineno-87-1" href="#__codelineno-87-1"></a><span class="k">[rules.transform.split]</span>
-</span><span id="__span-87-2"><a id="__codelineno-87-2" name="__codelineno-87-2" href="#__codelineno-87-2"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chunk"</span>
-</span><span id="__span-87-3"><a id="__codelineno-87-3" name="__codelineno-87-3" href="#__codelineno-87-3"></a><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"5"</span>
-</span><span id="__span-87-4"><a id="__codelineno-87-4" name="__codelineno-87-4" href="#__codelineno-87-4"></a>
-</span><span id="__span-87-5"><a id="__codelineno-87-5" name="__codelineno-87-5" href="#__codelineno-87-5"></a><span class="k">[rules.transform]</span>
-</span><span id="__span-87-6"><a id="__codelineno-87-6" name="__codelineno-87-6" href="#__codelineno-87-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"process {input} &gt; {output}"</span>
-</span><span id="__span-87-7"><a id="__codelineno-87-7" name="__codelineno-87-7" href="#__codelineno-87-7"></a>
-</span><span id="__span-87-8"><a id="__codelineno-87-8" name="__codelineno-87-8" href="#__codelineno-87-8"></a><span class="k">[rules.transform.combine]</span>
-</span><span id="__span-87-9"><a id="__codelineno-87-9" name="__codelineno-87-9" href="#__codelineno-87-9"></a><span class="n">aggregate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-87-10"><a id="__codelineno-87-10" name="__codelineno-87-10" href="#__codelineno-87-10"></a><span class="n">method</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"concat"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a><span class="k">[rules.transform.split]</span>
+</span><span id="__span-88-2"><a id="__codelineno-88-2" name="__codelineno-88-2" href="#__codelineno-88-2"></a><span class="n">by</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"chunk"</span>
+</span><span id="__span-88-3"><a id="__codelineno-88-3" name="__codelineno-88-3" href="#__codelineno-88-3"></a><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"5"</span>
+</span><span id="__span-88-4"><a id="__codelineno-88-4" name="__codelineno-88-4" href="#__codelineno-88-4"></a>
+</span><span id="__span-88-5"><a id="__codelineno-88-5" name="__codelineno-88-5" href="#__codelineno-88-5"></a><span class="k">[rules.transform]</span>
+</span><span id="__span-88-6"><a id="__codelineno-88-6" name="__codelineno-88-6" href="#__codelineno-88-6"></a><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"process {input} &gt; {output}"</span>
+</span><span id="__span-88-7"><a id="__codelineno-88-7" name="__codelineno-88-7" href="#__codelineno-88-7"></a>
+</span><span id="__span-88-8"><a id="__codelineno-88-8" name="__codelineno-88-8" href="#__codelineno-88-8"></a><span class="k">[rules.transform.combine]</span>
+</span><span id="__span-88-9"><a id="__codelineno-88-9" name="__codelineno-88-9" href="#__codelineno-88-9"></a><span class="n">aggregate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-88-10"><a id="__codelineno-88-10" name="__codelineno-88-10" href="#__codelineno-88-10"></a><span class="n">method</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"concat"</span>
 </span></code></pre></div>
 <h3 id="cleanup">Cleanup<a class="headerlink" href="#cleanup" title="Permanent link">#</a></h3>
 <p>When <code>cleanup = true</code>, chunk files are automatically deleted after the whole run finishes successfully (empty chunk directories are removed too):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a><span class="k">[rules.transform]</span>
-</span><span id="__span-88-2"><a id="__codelineno-88-2" name="__codelineno-88-2" href="#__codelineno-88-2"></a><span class="n">cleanup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-89-1"><a id="__codelineno-89-1" name="__codelineno-89-1" href="#__codelineno-89-1"></a><span class="k">[rules.transform]</span>
+</span><span id="__span-89-2"><a id="__codelineno-89-2" name="__codelineno-89-2" href="#__codelineno-89-2"></a><span class="n">cleanup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span></code></pre></div>
 <p>Failed runs keep their chunks for debugging. Because chunk deletion makes the map outputs "missing", a re-run always recomputes the map rules — that is the disk-space trade-off of <code>cleanup = true</code>.</p>
 <h3 id="failure-and-retry-logic">Failure and Retry Logic<a class="headerlink" href="#failure-and-retry-logic" title="Permanent link">#</a></h3>
@@ -7537,75 +7547,75 @@ in a comparison — always a closed gate, never an unbound token. This makes
 <hr />
 <h2 id="multi-line-strings">Multi-line Strings<a class="headerlink" href="#multi-line-strings" title="Permanent link">#</a></h2>
 <p>Use triple quotes for multi-line shell commands:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-89-1"><a id="__codelineno-89-1" name="__codelineno-89-1" href="#__codelineno-89-1"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
-</span><span id="__span-89-2"><a id="__codelineno-89-2" name="__codelineno-89-2" href="#__codelineno-89-2"></a><span class="s2">mkdir -p results</span>
-</span><span id="__span-89-3"><a id="__codelineno-89-3" name="__codelineno-89-3" href="#__codelineno-89-3"></a><span class="s2">bwa mem -t {threads} ref.fa {input} | </span><span class="se">\</span>
-</span><span id="__span-89-4"><a id="__codelineno-89-4" name="__codelineno-89-4" href="#__codelineno-89-4"></a><span class="s2">  samtools sort -@ {threads} -o {output}</span>
-</span><span id="__span-89-5"><a id="__codelineno-89-5" name="__codelineno-89-5" href="#__codelineno-89-5"></a><span class="s2">"""</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-90-1"><a id="__codelineno-90-1" name="__codelineno-90-1" href="#__codelineno-90-1"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
+</span><span id="__span-90-2"><a id="__codelineno-90-2" name="__codelineno-90-2" href="#__codelineno-90-2"></a><span class="s2">mkdir -p results</span>
+</span><span id="__span-90-3"><a id="__codelineno-90-3" name="__codelineno-90-3" href="#__codelineno-90-3"></a><span class="s2">bwa mem -t {threads} ref.fa {input} | </span><span class="se">\</span>
+</span><span id="__span-90-4"><a id="__codelineno-90-4" name="__codelineno-90-4" href="#__codelineno-90-4"></a><span class="s2">  samtools sort -@ {threads} -o {output}</span>
+</span><span id="__span-90-5"><a id="__codelineno-90-5" name="__codelineno-90-5" href="#__codelineno-90-5"></a><span class="s2">"""</span>
 </span></code></pre></div>
 <hr />
 <h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-90-1"><a id="__codelineno-90-1" name="__codelineno-90-1" href="#__codelineno-90-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-90-2"><a id="__codelineno-90-2" name="__codelineno-90-2" href="#__codelineno-90-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ngs-pipeline"</span>
-</span><span id="__span-90-3"><a id="__codelineno-90-3" name="__codelineno-90-3" href="#__codelineno-90-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2.0.0"</span>
-</span><span id="__span-90-4"><a id="__codelineno-90-4" name="__codelineno-90-4" href="#__codelineno-90-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Complete NGS analysis pipeline"</span>
-</span><span id="__span-90-5"><a id="__codelineno-90-5" name="__codelineno-90-5" href="#__codelineno-90-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Shixiang Wang &lt;w_shixiang@163.com&gt;"</span>
-</span><span id="__span-90-6"><a id="__codelineno-90-6" name="__codelineno-90-6" href="#__codelineno-90-6"></a>
-</span><span id="__span-90-7"><a id="__codelineno-90-7" name="__codelineno-90-7" href="#__codelineno-90-7"></a><span class="k">[config]</span>
-</span><span id="__span-90-8"><a id="__codelineno-90-8" name="__codelineno-90-8" href="#__codelineno-90-8"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
-</span><span id="__span-90-9"><a id="__codelineno-90-9" name="__codelineno-90-9" href="#__codelineno-90-9"></a><span class="n">known_sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/known_sites.vcf.gz"</span>
-</span><span id="__span-90-10"><a id="__codelineno-90-10" name="__codelineno-90-10" href="#__codelineno-90-10"></a><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results"</span>
-</span><span id="__span-90-11"><a id="__codelineno-90-11" name="__codelineno-90-11" href="#__codelineno-90-11"></a>
-</span><span id="__span-90-12"><a id="__codelineno-90-12" name="__codelineno-90-12" href="#__codelineno-90-12"></a><span class="k">[defaults]</span>
-</span><span id="__span-90-13"><a id="__codelineno-90-13" name="__codelineno-90-13" href="#__codelineno-90-13"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-90-14"><a id="__codelineno-90-14" name="__codelineno-90-14" href="#__codelineno-90-14"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
-</span><span id="__span-90-15"><a id="__codelineno-90-15" name="__codelineno-90-15" href="#__codelineno-90-15"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/base.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-90-16"><a id="__codelineno-90-16" name="__codelineno-90-16" href="#__codelineno-90-16"></a>
-</span><span id="__span-90-17"><a id="__codelineno-90-17" name="__codelineno-90-17" href="#__codelineno-90-17"></a><span class="k">[report]</span>
-</span><span id="__span-90-18"><a id="__codelineno-90-18" name="__codelineno-90-18" href="#__codelineno-90-18"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">]</span>
-</span><span id="__span-90-19"><a id="__codelineno-90-19" name="__codelineno-90-19" href="#__codelineno-90-19"></a>
-</span><span id="__span-90-20"><a id="__codelineno-90-20" name="__codelineno-90-20" href="#__codelineno-90-20"></a><span class="k">[[rules]]</span>
-</span><span id="__span-90-21"><a id="__codelineno-90-21" name="__codelineno-90-21" href="#__codelineno-90-21"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-90-22"><a id="__codelineno-90-22" name="__codelineno-90-22" href="#__codelineno-90-22"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-90-23"><a id="__codelineno-90-23" name="__codelineno-90-23" href="#__codelineno-90-23"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/qc/{sample}_R1_fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-90-24"><a id="__codelineno-90-24" name="__codelineno-90-24" href="#__codelineno-90-24"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {config.results}/qc/ -t {threads}"</span>
-</span><span id="__span-90-25"><a id="__codelineno-90-25" name="__codelineno-90-25" href="#__codelineno-90-25"></a>
-</span><span id="__span-90-26"><a id="__codelineno-90-26" name="__codelineno-90-26" href="#__codelineno-90-26"></a><span class="k">[[rules]]</span>
-</span><span id="__span-90-27"><a id="__codelineno-90-27" name="__codelineno-90-27" href="#__codelineno-90-27"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
-</span><span id="__span-90-28"><a id="__codelineno-90-28" name="__codelineno-90-28" href="#__codelineno-90-28"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-90-29"><a id="__codelineno-90-29" name="__codelineno-90-29" href="#__codelineno-90-29"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-90-30"><a id="__codelineno-90-30" name="__codelineno-90-30" href="#__codelineno-90-30"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
-</span><span id="__span-90-31"><a id="__codelineno-90-31" name="__codelineno-90-31" href="#__codelineno-90-31"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
-</span><span id="__span-90-32"><a id="__codelineno-90-32" name="__codelineno-90-32" href="#__codelineno-90-32"></a><span class="p">]</span>
-</span><span id="__span-90-33"><a id="__codelineno-90-33" name="__codelineno-90-33" href="#__codelineno-90-33"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/fastp:0.23.4"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-90-34"><a id="__codelineno-90-34" name="__codelineno-90-34" href="#__codelineno-90-34"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --out2 {output[1]} --thread {threads}"</span>
-</span><span id="__span-90-35"><a id="__codelineno-90-35" name="__codelineno-90-35" href="#__codelineno-90-35"></a>
-</span><span id="__span-90-36"><a id="__codelineno-90-36" name="__codelineno-90-36" href="#__codelineno-90-36"></a><span class="k">[[rules]]</span>
-</span><span id="__span-90-37"><a id="__codelineno-90-37" name="__codelineno-90-37" href="#__codelineno-90-37"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-90-38"><a id="__codelineno-90-38" name="__codelineno-90-38" href="#__codelineno-90-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-90-39"><a id="__codelineno-90-39" name="__codelineno-90-39" href="#__codelineno-90-39"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
-</span><span id="__span-90-40"><a id="__codelineno-90-40" name="__codelineno-90-40" href="#__codelineno-90-40"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
-</span><span id="__span-90-41"><a id="__codelineno-90-41" name="__codelineno-90-41" href="#__codelineno-90-41"></a><span class="p">]</span>
-</span><span id="__span-90-42"><a id="__codelineno-90-42" name="__codelineno-90-42" href="#__codelineno-90-42"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-90-43"><a id="__codelineno-90-43" name="__codelineno-90-43" href="#__codelineno-90-43"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/alignment.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-90-44"><a id="__codelineno-90-44" name="__codelineno-90-44" href="#__codelineno-90-44"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} -R '@RG</span><span class="se">\\</span><span class="s2">tID:{sample}</span><span class="se">\\</span><span class="s2">tSM:{sample}' {config.reference} {input[0]} {input[1]} | samtools sort -o {output}"</span>
-</span><span id="__span-90-45"><a id="__codelineno-90-45" name="__codelineno-90-45" href="#__codelineno-90-45"></a>
-</span><span id="__span-90-46"><a id="__codelineno-90-46" name="__codelineno-90-46" href="#__codelineno-90-46"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-90-47"><a id="__codelineno-90-47" name="__codelineno-90-47" href="#__codelineno-90-47"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
-</span><span id="__span-90-48"><a id="__codelineno-90-48" name="__codelineno-90-48" href="#__codelineno-90-48"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-91-1"><a id="__codelineno-91-1" name="__codelineno-91-1" href="#__codelineno-91-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-91-2"><a id="__codelineno-91-2" name="__codelineno-91-2" href="#__codelineno-91-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ngs-pipeline"</span>
+</span><span id="__span-91-3"><a id="__codelineno-91-3" name="__codelineno-91-3" href="#__codelineno-91-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2.0.0"</span>
+</span><span id="__span-91-4"><a id="__codelineno-91-4" name="__codelineno-91-4" href="#__codelineno-91-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Complete NGS analysis pipeline"</span>
+</span><span id="__span-91-5"><a id="__codelineno-91-5" name="__codelineno-91-5" href="#__codelineno-91-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Shixiang Wang &lt;w_shixiang@163.com&gt;"</span>
+</span><span id="__span-91-6"><a id="__codelineno-91-6" name="__codelineno-91-6" href="#__codelineno-91-6"></a>
+</span><span id="__span-91-7"><a id="__codelineno-91-7" name="__codelineno-91-7" href="#__codelineno-91-7"></a><span class="k">[config]</span>
+</span><span id="__span-91-8"><a id="__codelineno-91-8" name="__codelineno-91-8" href="#__codelineno-91-8"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
+</span><span id="__span-91-9"><a id="__codelineno-91-9" name="__codelineno-91-9" href="#__codelineno-91-9"></a><span class="n">known_sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/known_sites.vcf.gz"</span>
+</span><span id="__span-91-10"><a id="__codelineno-91-10" name="__codelineno-91-10" href="#__codelineno-91-10"></a><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results"</span>
+</span><span id="__span-91-11"><a id="__codelineno-91-11" name="__codelineno-91-11" href="#__codelineno-91-11"></a>
+</span><span id="__span-91-12"><a id="__codelineno-91-12" name="__codelineno-91-12" href="#__codelineno-91-12"></a><span class="k">[defaults]</span>
+</span><span id="__span-91-13"><a id="__codelineno-91-13" name="__codelineno-91-13" href="#__codelineno-91-13"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-91-14"><a id="__codelineno-91-14" name="__codelineno-91-14" href="#__codelineno-91-14"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
+</span><span id="__span-91-15"><a id="__codelineno-91-15" name="__codelineno-91-15" href="#__codelineno-91-15"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/base.yaml"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-91-16"><a id="__codelineno-91-16" name="__codelineno-91-16" href="#__codelineno-91-16"></a>
+</span><span id="__span-91-17"><a id="__codelineno-91-17" name="__codelineno-91-17" href="#__codelineno-91-17"></a><span class="k">[report]</span>
+</span><span id="__span-91-18"><a id="__codelineno-91-18" name="__codelineno-91-18" href="#__codelineno-91-18"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">]</span>
+</span><span id="__span-91-19"><a id="__codelineno-91-19" name="__codelineno-91-19" href="#__codelineno-91-19"></a>
+</span><span id="__span-91-20"><a id="__codelineno-91-20" name="__codelineno-91-20" href="#__codelineno-91-20"></a><span class="k">[[rules]]</span>
+</span><span id="__span-91-21"><a id="__codelineno-91-21" name="__codelineno-91-21" href="#__codelineno-91-21"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
+</span><span id="__span-91-22"><a id="__codelineno-91-22" name="__codelineno-91-22" href="#__codelineno-91-22"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-91-23"><a id="__codelineno-91-23" name="__codelineno-91-23" href="#__codelineno-91-23"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/qc/{sample}_R1_fastqc.html"</span><span class="p">]</span>
+</span><span id="__span-91-24"><a id="__codelineno-91-24" name="__codelineno-91-24" href="#__codelineno-91-24"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {config.results}/qc/ -t {threads}"</span>
+</span><span id="__span-91-25"><a id="__codelineno-91-25" name="__codelineno-91-25" href="#__codelineno-91-25"></a>
+</span><span id="__span-91-26"><a id="__codelineno-91-26" name="__codelineno-91-26" href="#__codelineno-91-26"></a><span class="k">[[rules]]</span>
+</span><span id="__span-91-27"><a id="__codelineno-91-27" name="__codelineno-91-27" href="#__codelineno-91-27"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
+</span><span id="__span-91-28"><a id="__codelineno-91-28" name="__codelineno-91-28" href="#__codelineno-91-28"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-91-29"><a id="__codelineno-91-29" name="__codelineno-91-29" href="#__codelineno-91-29"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-91-30"><a id="__codelineno-91-30" name="__codelineno-91-30" href="#__codelineno-91-30"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
+</span><span id="__span-91-31"><a id="__codelineno-91-31" name="__codelineno-91-31" href="#__codelineno-91-31"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
+</span><span id="__span-91-32"><a id="__codelineno-91-32" name="__codelineno-91-32" href="#__codelineno-91-32"></a><span class="p">]</span>
+</span><span id="__span-91-33"><a id="__codelineno-91-33" name="__codelineno-91-33" href="#__codelineno-91-33"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/fastp:0.23.4"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-91-34"><a id="__codelineno-91-34" name="__codelineno-91-34" href="#__codelineno-91-34"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --out2 {output[1]} --thread {threads}"</span>
+</span><span id="__span-91-35"><a id="__codelineno-91-35" name="__codelineno-91-35" href="#__codelineno-91-35"></a>
+</span><span id="__span-91-36"><a id="__codelineno-91-36" name="__codelineno-91-36" href="#__codelineno-91-36"></a><span class="k">[[rules]]</span>
+</span><span id="__span-91-37"><a id="__codelineno-91-37" name="__codelineno-91-37" href="#__codelineno-91-37"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-91-38"><a id="__codelineno-91-38" name="__codelineno-91-38" href="#__codelineno-91-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-91-39"><a id="__codelineno-91-39" name="__codelineno-91-39" href="#__codelineno-91-39"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
+</span><span id="__span-91-40"><a id="__codelineno-91-40" name="__codelineno-91-40" href="#__codelineno-91-40"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
+</span><span id="__span-91-41"><a id="__codelineno-91-41" name="__codelineno-91-41" href="#__codelineno-91-41"></a><span class="p">]</span>
+</span><span id="__span-91-42"><a id="__codelineno-91-42" name="__codelineno-91-42" href="#__codelineno-91-42"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-91-43"><a id="__codelineno-91-43" name="__codelineno-91-43" href="#__codelineno-91-43"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/alignment.yaml"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-91-44"><a id="__codelineno-91-44" name="__codelineno-91-44" href="#__codelineno-91-44"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} -R '@RG</span><span class="se">\\</span><span class="s2">tID:{sample}</span><span class="se">\\</span><span class="s2">tSM:{sample}' {config.reference} {input[0]} {input[1]} | samtools sort -o {output}"</span>
+</span><span id="__span-91-45"><a id="__codelineno-91-45" name="__codelineno-91-45" href="#__codelineno-91-45"></a>
+</span><span id="__span-91-46"><a id="__codelineno-91-46" name="__codelineno-91-46" href="#__codelineno-91-46"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-91-47"><a id="__codelineno-91-47" name="__codelineno-91-47" href="#__codelineno-91-47"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
+</span><span id="__span-91-48"><a id="__codelineno-91-48" name="__codelineno-91-48" href="#__codelineno-91-48"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
 </span></code></pre></div>
 <hr />
 <h2 id="json-schema">JSON Schema<a class="headerlink" href="#json-schema" title="Permanent link">#</a></h2>
 <p>oxo-flow provides a comprehensive JSON Schema for the <code>.oxoflow</code> format. This can be used for automated validation in your CI/CD pipelines or for real-time autocompletion and error checking in your IDE (like VS Code or IntelliJ).</p>
 <h3 id="getting-the-schema">Getting the Schema<a class="headerlink" href="#getting-the-schema" title="Permanent link">#</a></h3>
 <p>You can output the schema directly from the CLI:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-91-1"><a id="__codelineno-91-1" name="__codelineno-91-1" href="#__codelineno-91-1"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>oxoflow.schema.json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-92-1"><a id="__codelineno-92-1" name="__codelineno-92-1" href="#__codelineno-92-1"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>oxoflow.schema.json
 </span></code></pre></div>
 <h3 id="ide-configuration-vs-code">IDE Configuration (VS Code)<a class="headerlink" href="#ide-configuration-vs-code" title="Permanent link">#</a></h3>
 <p>To enable validation in VS Code, add the following to your <code>settings.json</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-92-1"><a id="__codelineno-92-1" name="__codelineno-92-1" href="#__codelineno-92-1"></a><span class="nt">"yaml.schemas"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-2"><a id="__codelineno-92-2" name="__codelineno-92-2" href="#__codelineno-92-2"></a><span class="w">    </span><span class="nt">"https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json"</span><span class="p">:</span><span class="w"> </span><span class="s2">"*.oxoflow"</span>
-</span><span id="__span-92-3"><a id="__codelineno-92-3" name="__codelineno-92-3" href="#__codelineno-92-3"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-93-1"><a id="__codelineno-93-1" name="__codelineno-93-1" href="#__codelineno-93-1"></a><span class="nt">"yaml.schemas"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-93-2"><a id="__codelineno-93-2" name="__codelineno-93-2" href="#__codelineno-93-2"></a><span class="w">    </span><span class="nt">"https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json"</span><span class="p">:</span><span class="w"> </span><span class="s2">"*.oxoflow"</span>
+</span><span id="__span-93-3"><a id="__codelineno-93-3" name="__codelineno-93-3" href="#__codelineno-93-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>(Note: Although <code>.oxoflow</code> is TOML, many VS Code extensions can apply JSON schemas to multiple formats).</p>
 <hr />
@@ -7615,21 +7625,21 @@ checkpoint re-entry): after it completes, the engine reads its
 <code>checkpoint_manifest</code> — a TOML file the rule itself wrote — and re-expands
 the workflow with the new values. Every round is still a static plan, so
 previews stay deterministic and resumes reconstruct the same plan.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-93-1"><a id="__codelineno-93-1" name="__codelineno-93-1" href="#__codelineno-93-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-93-2"><a id="__codelineno-93-2" name="__codelineno-93-2" href="#__codelineno-93-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover"</span>
-</span><span id="__span-93-3"><a id="__codelineno-93-3" name="__codelineno-93-3" href="#__codelineno-93-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"discover.toml"</span><span class="p">]</span>
-</span><span id="__span-93-4"><a id="__codelineno-93-4" name="__codelineno-93-4" href="#__codelineno-93-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python discover.py &gt; discover.toml"</span>
-</span><span id="__span-93-5"><a id="__codelineno-93-5" name="__codelineno-93-5" href="#__codelineno-93-5"></a><span class="n">checkpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-93-6"><a id="__codelineno-93-6" name="__codelineno-93-6" href="#__codelineno-93-6"></a><span class="n">checkpoint_manifest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover.toml"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-94-1"><a id="__codelineno-94-1" name="__codelineno-94-1" href="#__codelineno-94-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-94-2"><a id="__codelineno-94-2" name="__codelineno-94-2" href="#__codelineno-94-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover"</span>
+</span><span id="__span-94-3"><a id="__codelineno-94-3" name="__codelineno-94-3" href="#__codelineno-94-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"discover.toml"</span><span class="p">]</span>
+</span><span id="__span-94-4"><a id="__codelineno-94-4" name="__codelineno-94-4" href="#__codelineno-94-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python discover.py &gt; discover.toml"</span>
+</span><span id="__span-94-5"><a id="__codelineno-94-5" name="__codelineno-94-5" href="#__codelineno-94-5"></a><span class="n">checkpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-94-6"><a id="__codelineno-94-6" name="__codelineno-94-6" href="#__codelineno-94-6"></a><span class="n">checkpoint_manifest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover.toml"</span>
 </span></code></pre></div>
 <p>The manifest declares new wildcard values — new samples and/or new
 experiment-control pairs in the same round:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-94-1"><a id="__codelineno-94-1" name="__codelineno-94-1" href="#__codelineno-94-1"></a><span class="k">[reentry]</span>
-</span><span id="__span-94-2"><a id="__codelineno-94-2" name="__codelineno-94-2" href="#__codelineno-94-2"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"batch"</span><span class="w">            </span><span class="c1"># optional; defaults to the workflow's first sample group</span>
-</span><span id="__span-94-3"><a id="__codelineno-94-3" name="__codelineno-94-3" href="#__codelineno-94-3"></a><span class="n">sample</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">]</span><span class="w">      </span><span class="c1"># appended (dedup) to that group</span>
-</span><span id="__span-94-4"><a id="__codelineno-94-4" name="__codelineno-94-4" href="#__codelineno-94-4"></a><span class="n">pairs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w">                  </span><span class="c1"># optional; appended (dedup by pair_id) to [[pairs]]</span>
-</span><span id="__span-94-5"><a id="__codelineno-94-5" name="__codelineno-94-5" href="#__codelineno-94-5"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pair_id</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"CASE_007"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"T7"</span><span class="p">,</span><span class="w"> </span><span class="n">normal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"N7"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor_type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"tumor"</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-94-6"><a id="__codelineno-94-6" name="__codelineno-94-6" href="#__codelineno-94-6"></a><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-95-1"><a id="__codelineno-95-1" name="__codelineno-95-1" href="#__codelineno-95-1"></a><span class="k">[reentry]</span>
+</span><span id="__span-95-2"><a id="__codelineno-95-2" name="__codelineno-95-2" href="#__codelineno-95-2"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"batch"</span><span class="w">            </span><span class="c1"># optional; defaults to the workflow's first sample group</span>
+</span><span id="__span-95-3"><a id="__codelineno-95-3" name="__codelineno-95-3" href="#__codelineno-95-3"></a><span class="n">sample</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">]</span><span class="w">      </span><span class="c1"># appended (dedup) to that group</span>
+</span><span id="__span-95-4"><a id="__codelineno-95-4" name="__codelineno-95-4" href="#__codelineno-95-4"></a><span class="n">pairs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w">                  </span><span class="c1"># optional; appended (dedup by pair_id) to [[pairs]]</span>
+</span><span id="__span-95-5"><a id="__codelineno-95-5" name="__codelineno-95-5" href="#__codelineno-95-5"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pair_id</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"CASE_007"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"T7"</span><span class="p">,</span><span class="w"> </span><span class="n">normal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"N7"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor_type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"tumor"</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-95-6"><a id="__codelineno-95-6" name="__codelineno-95-6" href="#__codelineno-95-6"></a><span class="p">]</span>
 </span></code></pre></div>
 <p>Pair entries mirror <code>[[pairs]]</code> fields: <code>pair_id</code> (required), <code>experiment</code>
 (required, alias <code>tumor</code>), <code>control</code> (alias <code>normal</code>), <code>experiment_type</code>
@@ -7674,16 +7684,16 @@ discovered value. This is the "checkpoint-lite" variant of re-entry — the
 discovered values come from the file system, not from a manifest the rule
 wrote (which is what makes it work for rules whose file counts are unknown
 ahead of time, e.g. interval scatters or contig-aware variant calling).</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-95-1"><a id="__codelineno-95-1" name="__codelineno-95-1" href="#__codelineno-95-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-95-2"><a id="__codelineno-95-2" name="__codelineno-95-2" href="#__codelineno-95-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"split"</span>
-</span><span id="__span-95-3"><a id="__codelineno-95-3" name="__codelineno-95-3" href="#__codelineno-95-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/chunks/{i}.txt"</span>
-</span><span id="__span-95-4"><a id="__codelineno-95-4" name="__codelineno-95-4" href="#__codelineno-95-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"for i in 1 2 3; do echo $i &gt; results/chunks/$i.txt; done"</span>
-</span><span id="__span-95-5"><a id="__codelineno-95-5" name="__codelineno-95-5" href="#__codelineno-95-5"></a>
-</span><span id="__span-95-6"><a id="__codelineno-95-6" name="__codelineno-95-6" href="#__codelineno-95-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-95-7"><a id="__codelineno-95-7" name="__codelineno-95-7" href="#__codelineno-95-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"collect"</span><span class="w">                       </span><span class="c1"># deferred: no {i} instances at plan time</span>
-</span><span id="__span-95-8"><a id="__codelineno-95-8" name="__codelineno-95-8" href="#__codelineno-95-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/chunks/{i}.txt"</span><span class="p">]</span>
-</span><span id="__span-95-9"><a id="__codelineno-95-9" name="__codelineno-95-9" href="#__codelineno-95-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/merged/{i}.txt"</span><span class="p">]</span>
-</span><span id="__span-95-10"><a id="__codelineno-95-10" name="__codelineno-95-10" href="#__codelineno-95-10"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cat {input} &gt; {output}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1" href="#__codelineno-96-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-96-2"><a id="__codelineno-96-2" name="__codelineno-96-2" href="#__codelineno-96-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"split"</span>
+</span><span id="__span-96-3"><a id="__codelineno-96-3" name="__codelineno-96-3" href="#__codelineno-96-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/chunks/{i}.txt"</span>
+</span><span id="__span-96-4"><a id="__codelineno-96-4" name="__codelineno-96-4" href="#__codelineno-96-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"for i in 1 2 3; do echo $i &gt; results/chunks/$i.txt; done"</span>
+</span><span id="__span-96-5"><a id="__codelineno-96-5" name="__codelineno-96-5" href="#__codelineno-96-5"></a>
+</span><span id="__span-96-6"><a id="__codelineno-96-6" name="__codelineno-96-6" href="#__codelineno-96-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-96-7"><a id="__codelineno-96-7" name="__codelineno-96-7" href="#__codelineno-96-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"collect"</span><span class="w">                       </span><span class="c1"># deferred: no {i} instances at plan time</span>
+</span><span id="__span-96-8"><a id="__codelineno-96-8" name="__codelineno-96-8" href="#__codelineno-96-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/chunks/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-96-9"><a id="__codelineno-96-9" name="__codelineno-96-9" href="#__codelineno-96-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/merged/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-96-10"><a id="__codelineno-96-10" name="__codelineno-96-10" href="#__codelineno-96-10"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cat {input} &gt; {output}"</span>
 </span></code></pre></div>
 <p><code>split</code> produces <code>results/chunks/1.txt</code>, <code>results/chunks/2.txt</code>,
 <code>results/chunks/3.txt</code>; the engine instantiates <code>collect_1</code>, <code>collect_2</code>,
@@ -7699,27 +7709,44 @@ domain per sample instance, and consumers instantiate over the union.</p>
 <li><code>{config.x}</code> in the pattern resolves from the workflow config before the
   scan; discovered files are literals, so exact-match edge inference works
   as usual.</li>
+<li>A <code>[[values]]</code> wildcard in the pattern is <strong>not</strong> fresh — it is a
+  plan-time bound dimension (issue #296). The producer fans out per value
+  with the pattern baked per instance, the pattern is registered
+  producer-side in the DAG (so a per-value consumer's materialized input
+  exact-matches its own producer instance), and a pattern whose wildcards
+  are all bound this way skips the runtime scan entirely — the static
+  instances already are the domain. Mixed patterns
+  (<code>results/{assembler}/{chunk}.txt</code>) compose: the values dimension bakes
+  per instance while the fresh wildcard stays runtime-discovered, and the
+  deferred consumers instantiate over the union with both bindings.</li>
 <li>Plan time: a consumer referencing a fresh wildcard has an empty domain and
-  instantiates <strong>nothing</strong>; it is deferred whole (its own
-  <code>[[values]]</code>/<code>[[pairs]]</code>/sample fan-out is baked from the producer's
-  discovered bindings). A consumer declared <strong>before</strong> its producer is
-  legal but warned. Referencing two producers' fresh wildcards in one rule
-  is a v1 error; a chain — a rule that is both consumer and producer of
-  fresh wildcards — is supported.</li>
+  instantiates <strong>nothing</strong>; it is deferred whole. Wildcards shared with the
+  producer's pattern ride the discovered bindings; <code>[[values]]</code> tables the
+  consumer references on its own project as an extra Cartesian dimension at
+  instantiation, under the same plan-time semantics as a static fan-out —
+  <code>wildcard_constraints</code> filtered and per-instance <code>when</code> gates evaluated,
+  so gated-off combos never become instances (issue #296 follow-up). A
+  consumer declared <strong>before</strong> its producer is legal but warned.
+  Referencing two producers' fresh wildcards in one rule is a v1 error; a
+  chain — a rule that is both consumer and producer of fresh wildcards —
+  is supported.</li>
 <li>Runtime: when a producer <strong>instance</strong> completes, the engine scans its
   pattern and unions the discovered values into the producer template's
   domain. When <strong>all</strong> of the producer's instances have completed, the
-  deferred consumers are instantiated (one instance per domain value,
-  deterministically named <code>consumer_&lt;values&gt;</code>), and the new instances are
-  inserted forward into the remaining plan — forward-safety comes from
-  completion ordering, not DAG topology, exactly like checkpoint re-entry.</li>
+  deferred consumers are instantiated (one instance per domain value × own
+  values binding, deterministically named <code>consumer_&lt;own values&gt;_&lt;values&gt;</code>,
+  with <code>expand_inputs</code> patterns materialized into concrete inputs), and the
+  new instances are inserted forward into the remaining plan —
+  forward-safety comes from completion ordering, not DAG topology, exactly
+  like checkpoint re-entry.</li>
 <li>Interaction with <code>resume</code>: the discovered domains are persisted
-  (persist-first, before fan-out). A resume replays the <strong>partial</strong>
-  persisted domain to instantiate consumers for the producer instances
-  that already succeeded; when a failed instance is retried and succeeds,
-  the fan-out is idempotent and only the new values extend the consumer
-  set — partial progress across a resume is preserved, and the final
-  consumer set equals the union of all per-instance discoveries.</li>
+  (persist-first, before fan-out). A resume replays the persisted domain
+  and instantiates the deferred consumers only when <strong>every</strong> producer
+  instance is already completed; when a failed instance still has to
+  re-run, its consumers stay pending and the live runtime pass
+  instantiates them from the final domain union — the final consumer set
+  equals the union of all per-instance discoveries, never a partial
+  slice.</li>
 <li>Zero discoveries after producer success is <strong>loud</strong>: a warning is emitted
   and the consumers stay uninstantiated (a later producer instance may
   still contribute). A producer <strong>failure</strong> leaves the consumers
@@ -7733,15 +7760,15 @@ domain per sample instance, and consumers instantiate over the union.</p>
 <p>Post <code>workflow_started</code> / <code>workflow_completed</code> / <code>workflow_failed</code> events
 to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
 the transport counterpart of the <code>on_complete</code> / <code>on_error</code> shell hooks.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1" href="#__codelineno-96-1"></a><span class="k">[webhook]</span>
-</span><span id="__span-96-2"><a id="__codelineno-96-2" name="__codelineno-96-2" href="#__codelineno-96-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
-</span><span id="__span-96-3"><a id="__codelineno-96-3" name="__codelineno-96-3" href="#__codelineno-96-3"></a><span class="c1"># method = "POST"                  # POST (default) | PUT | GET</span>
-</span><span id="__span-96-4"><a id="__codelineno-96-4" name="__codelineno-96-4" href="#__codelineno-96-4"></a><span class="c1"># events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed</span>
-</span><span id="__span-96-5"><a id="__codelineno-96-5" name="__codelineno-96-5" href="#__codelineno-96-5"></a><span class="c1"># headers = { Authorization = "Bearer …" }</span>
-</span><span id="__span-96-6"><a id="__codelineno-96-6" name="__codelineno-96-6" href="#__codelineno-96-6"></a><span class="c1"># secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)</span>
-</span><span id="__span-96-7"><a id="__codelineno-96-7" name="__codelineno-96-7" href="#__codelineno-96-7"></a><span class="c1"># signature_scheme = "hmac-sha256"</span>
-</span><span id="__span-96-8"><a id="__codelineno-96-8" name="__codelineno-96-8" href="#__codelineno-96-8"></a><span class="c1"># timeout_secs = 30</span>
-</span><span id="__span-96-9"><a id="__codelineno-96-9" name="__codelineno-96-9" href="#__codelineno-96-9"></a><span class="c1"># max_retries = 3</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-97-1"><a id="__codelineno-97-1" name="__codelineno-97-1" href="#__codelineno-97-1"></a><span class="k">[webhook]</span>
+</span><span id="__span-97-2"><a id="__codelineno-97-2" name="__codelineno-97-2" href="#__codelineno-97-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
+</span><span id="__span-97-3"><a id="__codelineno-97-3" name="__codelineno-97-3" href="#__codelineno-97-3"></a><span class="c1"># method = "POST"                  # POST (default) | PUT | GET</span>
+</span><span id="__span-97-4"><a id="__codelineno-97-4" name="__codelineno-97-4" href="#__codelineno-97-4"></a><span class="c1"># events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed</span>
+</span><span id="__span-97-5"><a id="__codelineno-97-5" name="__codelineno-97-5" href="#__codelineno-97-5"></a><span class="c1"># headers = { Authorization = "Bearer …" }</span>
+</span><span id="__span-97-6"><a id="__codelineno-97-6" name="__codelineno-97-6" href="#__codelineno-97-6"></a><span class="c1"># secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)</span>
+</span><span id="__span-97-7"><a id="__codelineno-97-7" name="__codelineno-97-7" href="#__codelineno-97-7"></a><span class="c1"># signature_scheme = "hmac-sha256"</span>
+</span><span id="__span-97-8"><a id="__codelineno-97-8" name="__codelineno-97-8" href="#__codelineno-97-8"></a><span class="c1"># timeout_secs = 30</span>
+</span><span id="__span-97-9"><a id="__codelineno-97-9" name="__codelineno-97-9" href="#__codelineno-97-9"></a><span class="c1"># max_retries = 3</span>
 </span></code></pre></div>
 <table>
 <thead>
