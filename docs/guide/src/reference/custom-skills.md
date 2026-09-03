@@ -5,7 +5,7 @@ oxo-flow's AI layer combines three skill mechanisms:
 | Layer | Source | Status |
 |---|---|---|
 | Built-in bioSkills | 562 curated Agent Skills compiled into the binary | ✅ active (domain-matched injection, `lookup_skill`) |
-| Pipeline knowledge graph | 79 workflow skills / 469 literature-backed transitions | ✅ active (`lookup_pipeline`) |
+| Pipeline knowledge graph | 78 workflow skills / 465 literature-backed transitions | ✅ active (`lookup_pipeline`) |
 | **User-defined skills** | `.skill.toml` or `SKILL.md` files you write | ✅ knowledge skills, ✅ MCP tool skills |
 
 This page documents the user-defined layer.

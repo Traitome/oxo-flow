@@ -72,9 +72,9 @@ curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
 ```
 
 **Visibility levels** (`link` / `workspace`) are stored on the share record.
-Currently the share link is consumed only through the
-[import API](#import) below — there is no browser page at the share URL, and
-visibility/membership checks are not yet enforced on import.
+The share URL opens a public read-only landing page (see
+[Share Landing Pages](#share-landing-pages) below); programmatic consumption
+goes through the [import API](#import) below.
 
 ## Import
 

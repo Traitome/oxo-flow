@@ -52,7 +52,7 @@ All built-in placeholders (`{input}`, `{output}`, `{threads}`, `{memory}`, `{con
 
 ```bash
 $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
-✓ examples/gallery/01_hello_world.oxoflow — 1 rules, 0 dependencies
+✓ examples/gallery/01_hello_world.oxoflow — 1 rule, 0 dependencies
 ```
 
 ### Dry-Run

@@ -53,7 +53,7 @@ This example writes the fan-in inputs out explicitly to keep it minimal. In real
 
 ```bash
 $ oxo-flow validate examples/gallery/03_parallel_samples.oxoflow
-✓ examples/gallery/03_parallel_samples.oxoflow — 3 rules, 1 dependency
+✓ examples/gallery/03_parallel_samples.oxoflow — 3 rules, 2 dependencies
 ```
 
 ### DAG Structure

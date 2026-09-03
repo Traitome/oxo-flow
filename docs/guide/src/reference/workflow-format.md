@@ -360,8 +360,10 @@ touching the source file also triggers a rebuild, and rules that consume the
 artifact through declared `input` paths (plus their downstream) are
 invalidated so their outputs are regenerated.
 
-When `reference_dir` is set, four standard indexes are auto-derived without
-explicit `[[references]]` blocks: BWA, Bowtie2, STAR, and HISAT2.
+When `reference_dir` is set, eight standard indexes are auto-derived without
+explicit `[[references]]` blocks: samtools faidx, BWA, BWA-MEM2, Bowtie2,
+minimap2, STAR, HISAT2, and the GATK sequence dictionary (see the
+[auto-derivation table](#auto-derivation-from-reference_dir) below).
 
 Use `--skip-ref-build` to skip automatic reference building.
 
@@ -504,7 +506,7 @@ sections = ["universal", "workflow-info", "commands", "clinical-compliance"]
 |---|---|---|
 | `template` | String | Report template: the built-in name `"report.html"`, or a template file path (workflow directory first, then cwd). Applies to HTML output only; a render failure warns and falls back to the default renderer |
 | `format` | Array | Parsed but **not supported yet** — setting it makes `report` warn (or fail under `--strict`); select the output format with `-f` instead |
-| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`, `software-versions`, `rule-captions`, `aggregate-metrics` (run `oxo-flow report --list-sections` for the live list) |
+| `sections` | Array | Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: `universal`, `execution-status`, `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`, `file-manifest`, `environment`, `metrics`, `sample-matrix`, `provenance`, `task-summary`, `software-versions`, `rule-captions`, `aggregate-metrics` — 15 in total (run `oxo-flow report --list-sections` for the live list) |
 
 ### How Sections Work
 
@@ -1595,7 +1597,7 @@ control    = "CTRL_02"
 |---|---|---|---|
 | `pair_id` | String | **Yes** | Unique identifier for this pair |
 | `experiment` | String | **Yes** | Experiment sample name (alias: `tumor`) |
-| `control` | String | **Yes** | Matched control sample name (alias: `normal`) |
+| `control` | String | No | Matched control sample name (alias: `normal`) |
 | `experiment_type` | String | No | Optional cohort label (alias: `tumor_type`) |
 | `metadata` | Table | No | Arbitrary key-value pairs (each key becomes a wildcard) |
 | `when` | String | No | Pair-level gate evaluated at plan time: while it evaluates `false`, the pair declares **no** rule instances. Uses the same condition vocabulary as rule `when` (`config.<key>` truthiness/comparisons, `&&`/`\|\|`/`!`, parentheses, `file_exists(...)`). A `config.<key>` reference with no matching `[config]` key evaluates `false` (the unbound→false stance) — a plan-time warning flags the referenced key so a typo does not silently drop the pair's whole rule set |
@@ -1951,8 +1953,9 @@ PE1       PE           AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
   the gate is closed, so samples without the data evaluate false instead
   of running.
 - A `{meta.<column>}` reference in a rule that never fans out (no
-  sample-like binding) is an error at execution time (residual
-  placeholder).
+  sample-like binding) is left as a residual placeholder — the engine logs
+  a **warning** at execution time and the literal text remains in the
+  rendered command.
 
 ```toml
 [[rules]]
@@ -2590,7 +2593,7 @@ url = "https://hooks.example.com/oxo"
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `url` | String | **Yes** | Webhook endpoint URL |
+| `url` | String | — (required) | Webhook endpoint URL |
 | `method` | String | `POST` | HTTP method (`POST`/`PUT`/`GET`) |
 | `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed`, `rule_completed`, `rule_failed` |
 | `headers` | Table | `{}` | Custom request headers |

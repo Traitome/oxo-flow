@@ -278,7 +278,7 @@ checkout is needed).
 ## Notes
 
 - **Version**: the desktop crate repeats the workspace version
-  (`0.16.0`) by value — it is outside the workspace, so it does not
+  (`0.17.0`) by value — it is outside the workspace, so it does not
   inherit `[workspace.package]`; bump it together with the rest on
   release.
 - **Data directory**: the desktop app keeps all state in

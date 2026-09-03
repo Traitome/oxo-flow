@@ -103,7 +103,7 @@ compiled, licensed, and audited in isolation.
 |---|---|---|---|
 | `oxo-flow-core` | library | — | The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting |
 | `oxo-flow-ai` | library | — | AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system |
-| `oxo-flow-web` | library | core, ai | REST/WebSocket server: 10 domains, storage backends, SSE broadcast, OpenAPI |
+| `oxo-flow-web` | library | core, ai | REST/WebSocket server: 9 domains, storage backends, SSE broadcast, OpenAPI |
 | `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 30 subcommands, run loop, human rendering |
 
 ```mermaid
@@ -462,7 +462,7 @@ subsequent runs skip straight to wrapping.
 
 ## Web Platform
 
-The web crate is a **domain-driven modular monolith**: ten business
+The web crate is a **domain-driven modular monolith**: nine business
 domains behind one axum router, with HTTP confined to the edge of each
 domain.
 

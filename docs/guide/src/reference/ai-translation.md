@@ -63,7 +63,7 @@ Suggest parameter optimizations for speed, cost, or sensitivity.
 
 ```
 Input:  { pipeline_id, goal: "speed"|"cost"|"sensitivity" }
-Output: { optimized_toml, changes, estimated_impact }
+Output: { optimized_toml, changes, estimated: { time_saved, memory_reduction } }
 ```
 
 ## Provider Architecture
@@ -120,8 +120,8 @@ These functions look like AI but are 100% rule-based and deterministic:
 
 | Function | Method | Why Not AI |
 |----------|--------|-----------|
-| File format detection | Magic bytes + extension | 100% accurate |
-| Reference genome discovery | Path traversal + checksum | Deterministic |
+| File format detection | Extension matching (+ paired-end naming) | Deterministic |
+| Reference genome discovery | File existence in fixed search dirs | Deterministic |
 | Pipeline template matching | Keyword scoring | Reproducible |
 | Failure classification | Error patterns + exit codes | Rule-based |
 | DAG optimization | Topological sort + critical path | Math problem |

@@ -193,7 +193,7 @@ and detects the scheduler (`slurm`/`pbs`/`lsf`/`sge`) with its version.
 Unknown fields in the config file are rejected loudly, not silently
 ignored.
 
-## Multi-Tenancy (v0.11 hardening)
+## Multi-Tenancy
 
 Team/HPC modes scope every resource to the acting user:
 

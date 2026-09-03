@@ -42,7 +42,7 @@ Traditional "bulk" RNA-seq measures the average expression across thousands of c
 - **Regulatory Networks** — Infer gene regulatory relationships from co-expression across cells
 
 !!! note "Auxiliary files"
-    This workflow expects a few user-provided files next to the `.oxoflow` definition: `scripts/seurat_analysis.R` (QC, normalization, clustering, UMAP), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. They are omitted from the gallery to keep the example focused on the workflow structure.
+    This workflow references a few helper files that ship with the gallery: `scripts/seurat_analysis.R` (QC, normalization, clustering, UMAP), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. Browse them in [examples/gallery/](https://github.com/Traitome/oxo-flow/tree/main/examples/gallery) alongside the `.oxoflow` definition.
 
 ### Computational Challenges
 
@@ -58,12 +58,12 @@ scRNA-seq workflows are significantly more resource-intensive than bulk RNA-seq:
 
 ```bash
 $ oxo-flow validate examples/gallery/09_single_cell_rnaseq.oxoflow
-✓ examples/gallery/09_single_cell_rnaseq.oxoflow — 3 rules, 3 dependencies
+✓ examples/gallery/09_single_cell_rnaseq.oxoflow — 3 rules, 2 dependencies
 ```
 
 ### Run
 
-Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--sample` on the CLI). CellRanger expects standard 10x demultiplexed FASTQs under `raw/`, named `{sample}_S1_L001_R1_001.fastq.gz` / `..._R2_001.fastq.gz`; `--sample={sample}` selects the matching files:
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--samples` on the CLI). CellRanger expects standard 10x demultiplexed FASTQs under `raw/`, named `{sample}_S1_L001_R1_001.fastq.gz` / `..._R2_001.fastq.gz`; `--sample={sample}` in the CellRanger command selects the matching files:
 
 ```bash
 oxo-flow run examples/gallery/09_single_cell_rnaseq.oxoflow -j 2

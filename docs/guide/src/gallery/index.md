@@ -80,7 +80,7 @@ Every workflow in this gallery is validated as part of oxo-flow's continuous int
 
 ```
 $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
-✓ examples/gallery/01_hello_world.oxoflow — 1 rules, 0 dependencies
+✓ examples/gallery/01_hello_world.oxoflow — 1 rule, 0 dependencies
 
 $ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 ✓ examples/gallery/08_multiomics_integration.oxoflow — 8 rules, 7 dependencies

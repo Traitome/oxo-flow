@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.16.0
+# oxo-flow 0.17.0
 ```
 
 !!! tip "Updating"
@@ -125,7 +125,7 @@ Desktop users may prefer the `.deb` / `.rpm` / `.AppImage` /
 Images are published to GitHub Container Registry automatically on every release and every push to `main`.
 Release images are multi-arch (`linux/amd64` + `linux/arm64`) and are assembled from the
 SHA256-verified release binaries. `:latest` moves only after the release image passes a health
-smoke test, `:<major.minor>` (e.g. `:0.16`) tracks the newest patch of a minor line, and `:main`
+smoke test, `:<major.minor>` (e.g. `:0.17`) tracks the newest patch of a minor line, and `:main`
 is a multi-arch dev build compiled from source:
 
 ```bash
@@ -133,8 +133,8 @@ is a multi-arch dev build compiled from source:
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
 # Pin a specific release (or track a minor line)
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17
 
 # CLI one-shot usage — mount your workflow directory
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \

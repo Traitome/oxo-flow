@@ -30,12 +30,19 @@ The top-level report container:
 
 ```rust
 pub struct Report {
+    pub schema_version: u32,                 // = 1 (issue #83 WS3)
+    pub command: String,                     // = "report"
     pub title: String,
-    pub generated_at: DateTime<Utc>,
+    pub generated_at: Option<DateTime<Utc>>, // None under --no-timestamps;
+                                             // pinned via SOURCE_DATE_EPOCH/--ci
     pub workflow_name: String,
     pub workflow_version: String,
     pub sections: Vec<ReportSection>,
     pub metadata: HashMap<String, String>,
+    // Provenance fields (absent for template-only reports / non-git workflows):
+    pub checkpoint_path: Option<String>,
+    pub workflow_path: Option<String>,
+    pub workflow_git_sha: Option<String>,
 }
 ```
 

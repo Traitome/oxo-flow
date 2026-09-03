@@ -33,7 +33,7 @@ use oxo_flow_core::plugin::PluginRegistry;
 
 let mut registry = PluginRegistry::default();
 registry.register_rule(Box::new(MyPlugin));
-registry.add_trusted_key("key-001", "your-secret-key");
+registry.trusted_keys.insert("key-001".into(), "your-secret-key".into());
 ```
 
 ### 3. Declare in your workflow
@@ -84,7 +84,7 @@ skipped, while unsigned plugins and plugins with signatures but no
 configured trusted keys are loaded with a warning:
 
 ```rust
-registry.add_trusted_key("key-001", "shared-secret-key");
+registry.trusted_keys.insert("key-001".into(), "shared-secret-key".into());
 registry.discover(Some(project_dir))?; // invalid signatures are skipped
 ```
 
@@ -97,11 +97,19 @@ impl PluginRegistry {
     pub fn register_rule(&mut self, plugin: Box<dyn RulePlugin>);
     pub fn register_executor(&mut self, plugin: Box<dyn ExecutorPlugin>);
     pub fn register_report(&mut self, plugin: Box<dyn ReportPlugin>);
-    pub fn add_trusted_key(&mut self, key_id: &str, key: &str);
     pub fn discover(&mut self, project_dir: Option<&Path>) -> Result<usize>;
     pub fn find_rule(&self, rule_type: &str) -> Option<&dyn RulePlugin>;
     pub fn find_executor(&self, backend: &str) -> Option<&dyn ExecutorPlugin>;
     pub fn find_report(&self, renderer: &str) -> Option<&dyn ReportPlugin>;
+}
+
+// Public fields (constructed via PluginRegistry::default()):
+pub struct PluginRegistry {
+    pub rule_plugins: HashMap<String, Box<dyn RulePlugin>>,
+    pub executor_plugins: HashMap<String, Box<dyn ExecutorPlugin>>,
+    pub report_plugins: HashMap<String, Box<dyn ReportPlugin>>,
+    pub manifests: Vec<PluginManifest>,
+    pub trusted_keys: HashMap<String, String>,
 }
 ```
 
@@ -117,27 +125,13 @@ pub struct PluginsConfig {
 ```
 
 
-## Dynamic Loading (Subprocess Protocol)
+## Subprocess Output Contract
 
-oxo-flow uses a **subprocess-based plugin protocol** — the safe, portable
-alternative to shared-library loading. Plugins are standalone executables
-that communicate via JSON over stdin/stdout.
+oxo-flow avoids shared-library loading (no unsafe code). A `PluginOutput`
+struct defines the JSON shape a plugin executable may emit on stdout, so a
+manifest can eventually hand command construction to an external process —
+plugins written in any language can produce it:
 
-### Protocol
-
-**Input** (stdin, JSON):
-```json
-{
-  "rule": "my_analysis",
-  "inputs": ["raw/sample.fq"],
-  "outputs": ["results/output.txt"],
-  "command": "custom_tool --input raw/sample.fq > results/output.txt",
-  "config": {"reference": "/data/ref.fa"},
-  "params": {}
-}
-```
-
-**Output** (stdout, JSON):
 ```json
 {
   "success": true,
@@ -148,43 +142,15 @@ that communicate via JSON over stdin/stdout.
 }
 ```
 
-### Executing a plugin
-
 ```rust
-use oxo_flow_core::plugin::{execute_plugin_subprocess, PluginInput};
-
-let input = PluginInput {
-    rule: "my_rule".into(),
-    inputs: vec!["in.txt".into()],
-    outputs: vec!["out.txt".into()],
-    command: Some("custom_tool {input} > {output}".into()),
-    config: HashMap::new(),
-    params: HashMap::new(),
-};
-
-let output = execute_plugin_subprocess(
-    Path::new("/path/to/plugin"),
-    &input,
-    30, // timeout seconds
-).await?;
+use oxo_flow_core::plugin::PluginOutput;
 ```
 
-### Writing a plugin
-
-Plugins can be written in any language. A minimal Python plugin:
-
-```python
-#!/usr/bin/env python3
-import sys, json
-
-input_data = json.load(sys.stdin)
-# Transform the command
-command = input_data.get("command", "").replace("{input}", input_data["inputs"][0])
-command = command.replace("{output}", input_data["outputs"][0])
-
-output = {"success": True, "command": command, "errors": [], "logs": [], "exit_code": 0}
-json.dump(output, sys.stdout)
-```
+`success` and `command` are the fields the engine would act on; `errors`,
+`logs`, and `exit_code` carry diagnostics. Note that as of v0.17.0 this
+contract is defined but not yet wired into rule execution — declared rule
+plugins today go through `command_template` in the manifest instead, and
+there is no engine-side runner that invokes plugin executables yet.
 
 
 ## See Also

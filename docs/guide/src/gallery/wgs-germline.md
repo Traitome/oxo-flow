@@ -7,7 +7,7 @@ A complete whole-genome sequencing (WGS) germline variant calling pipeline follo
     - Twelve-rule cohort DAG with a branching VQSR path
     - Cohort joint genotyping with CombineGVCFs
     - Per-sample rule expansion and `expand_inputs` fan-in
-    - Mixed environments (conda, docker, singularity)
+    - Mixed environments (conda, singularity)
     - Clinical-grade variant annotation with VEP
     - Report configuration with provenance tracking
 
@@ -31,9 +31,10 @@ graph TD
 
 Edges are shown as realized after per-sample expansion (for example,
 `haplotype_caller` → `combine_gvcfs` exists because `expand_inputs`
-resolves the three per-sample GVCFs). In the unexpanded template DAG
-(`oxo-flow graph`), `combine_gvcfs` is a root rule — its inputs arrive
-via `expand_inputs`, not file-path inference. See
+resolves the three per-sample GVCFs). Note that the unexpanded template
+DAG (`oxo-flow graph`) already contains an edge from `combine_gvcfs` to
+`haplotype_caller` — `expand_inputs` patterns register template-level
+dataflow even before per-sample paths materialize. See
 [Fan-out vs Fan-in](../reference/wildcards.md#fan-out-vs-fan-in) for
 how the two expansion mechanisms differ.
 
@@ -60,7 +61,12 @@ how the two expansion mechanisms differ.
 ```
 
 !!! note "Read Group Escape Sequences"
-    The `\\t` in the read group string (`-R '@RG\\tID:...'`) is a double-escaped tab character. TOML requires `\\` to represent a literal backslash, so the shell receives `\t`; inside single quotes it passes the two characters through literally, and bwa-mem2 itself converts the `\t` escape to a real tab when it writes the read group header into the SAM — the delimiter it expects between read group fields.
+    The shell here builds the read group with `printf '@RG\tID:...'` —
+    note the single `\t` in the TOML source. Inside the `"""` TOML string
+    a `\t` escape becomes a real TAB character, so the shell's `printf`
+    receives an actual tab in the format string and emits it verbatim.
+    bwa-mem2 writes that read group line into the SAM header with real
+    tabs — the delimiter it expects between read group fields.
 
 ```toml
 [[rules]]
@@ -327,11 +333,26 @@ memory = "16G"
 conda = "envs/vep.yaml"
 
 [report]
-sections = ["universal", "execution-status", "failure-diagnosis", "workflow-info", "commands", "file-manifest", "environment", "provenance", "task-summary"]
-# [report].template is consumed for HTML output ("report.html" built-in or a
-# template file path); [report].format is still unsupported — `report` warns
-# when it is set (see docs/guide/src/commands/report.md)
+# template: reserved — supply a real Tera template file path to use one
+# template = "germline_report"
+format = ["html", "json"]
+sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
 ```
+
+!!! note "About `[report]` in this workflow"
+    The `[report]` block above is copied verbatim from the example file.
+    `[report].format` is parsed but not consumed — the `report` command
+    warns when it is set and selects the format via `--format`/`-f`
+    instead. `[report].sections` acts as a whitelist filter over the
+    engine's built-in section IDs (`universal`, `execution-status`,
+    `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
+    `rule-captions`, `file-manifest`, `environment`, `metrics`,
+    `aggregate-metrics`, `sample-matrix`, `provenance`,
+    `task-summary`, `software-versions`). Of the six free-form names here, only
+    `provenance` matches a built-in ID — so a report generated from
+    this workflow would contain just the provenance section. See
+    [the report command](../commands/report.md) for the supported
+    surface.
 
 ### Sample Expansion
 
@@ -387,7 +408,7 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
 
 ```bash
 $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
-✓ examples/gallery/07_wgs_germline.oxoflow — 12 rules, 15 dependencies
+✓ examples/gallery/07_wgs_germline.oxoflow — 12 rules, 14 dependencies
 ```
 
 ### Resource Summary
@@ -395,7 +416,7 @@ $ oxo-flow validate examples/gallery/07_wgs_germline.oxoflow
 | Rule | Threads | Memory | Environment |
 |------|---------|--------|-------------|
 | fastp_qc | 8 | 16G | conda |
-| bwa_mem2_align | 16 | 32G | docker |
+| bwa_mem2_align | 16 | 32G | conda |
 | mark_duplicates | 4 | 16G | singularity |
 | base_recalibration | 4 | 16G | singularity |
 | haplotype_caller | 4 | 16G | singularity |

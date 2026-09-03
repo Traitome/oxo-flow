@@ -17,11 +17,12 @@ shell = "cp {input[0]} {output[0]}"
 ```
 
 When the pipeline engine encounters an `s3://` or `gs://` URI, it
-detects the remote scheme and logs a warning — the executor does not
-yet stage remote files into the workdir or upload outputs back (see
-[Current Limitations](#current-limitations)). The storage module is
-usable today as a library API: callers can resolve URIs and read,
-write, stage, or upload objects programmatically through the
+detects the remote scheme and stages the file into the workdir before
+the rule runs, then uploads rule outputs with remote URIs back to the
+bucket after the rule succeeds (see
+[Remote staging and upload](#remote-staging-and-upload)). The storage module is also usable
+as a library API: callers can resolve URIs and read, write, stage, or
+upload objects programmatically through the
 [`StorageBackend`](#storage-backend-api) trait.
 
 ### Prerequisites
@@ -33,25 +34,12 @@ Enable them at build time:
 cargo build --release --features "s3-storage,gcs-storage"
 ```
 
-> The example workflows below illustrate the URI syntax only — remote
-> URIs are not yet staged or uploaded by the executor (see
-> [Current Limitations](#current-limitations)).
-
 ## AWS S3
 
-The S3 backend uses the official `aws-sdk-s3` Rust SDK with the standard
-AWS credential chain.  No additional configuration is required beyond
-what the AWS SDK normally reads.
-
-### Credential Resolution
-
-The SDK discovers credentials in this order:
-
-1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-   `AWS_SESSION_TOKEN`)
-2. `~/.aws/credentials` (standard AWS config file)
-3. Web identity tokens
-4. Instance metadata (EC2, ECS)
+The S3 backend uses the official `aws-sdk-s3` Rust SDK. Credentials are
+resolved **from environment variables only** — the SDK's broader chain
+(shared credentials files, web identity tokens, instance metadata) is not
+consulted.
 
 When using MinIO or LocalStack for testing, set `AWS_ENDPOINT_URL` to
 point to your local S3-compatible service:

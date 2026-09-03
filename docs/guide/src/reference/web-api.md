@@ -294,7 +294,7 @@ Execution flags are forwarded to the CLI executor:
 - `targets` (array of strings, optional) maps to `-t` per entry.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
-  [Cluster Connections](#cluster-connections--remote-execution)).
+  [Cluster Connections](#cluster-connections-remote-execution)).
 
 ### List Runs
 

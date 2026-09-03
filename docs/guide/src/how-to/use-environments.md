@@ -131,18 +131,18 @@ fastp = "0.23.4"
 
 ### Reference in a rule
 
-The `pixi` value is the pixi **environment name** (the default environment
-in `pixi.toml` is named `default`), not a file path:
+The `pixi` value is the path to the **manifest file** (`pixi.toml`),
+relative to the workflow root:
 
 ```toml
 [[rules]]
 name = "fastqc"
-environment = { pixi = "default" }
+environment = { pixi = "pixi.toml" }
 shell = "fastqc input.fastq.gz -o qc/"
 ```
 
-oxo-flow runs `pixi install -e default` once, then wraps the command as
-`pixi run -e default <command>`.
+oxo-flow runs `pixi install --manifest-path pixi.toml` once, then wraps the
+command as `pixi run --manifest-path pixi.toml <command>`.
 
 ---
 
