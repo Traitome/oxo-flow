@@ -988,7 +988,7 @@ jobs:
       - name: Publish oxo-flow-ai
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-ai/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -1005,7 +1005,7 @@ jobs:
       - name: Publish oxo-flow-web
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-web/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -1022,7 +1022,7 @@ jobs:
       - name: Publish oxo-flow-cli
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-cli/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -1684,6 +1684,7 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
+            ~/.cargo/git/db
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
