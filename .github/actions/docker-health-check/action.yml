@@ -1,0 +1,64 @@
+name: Docker health check
+description: Run a container image and wait for the oxo-flow health endpoint to respond.
+
+inputs:
+  image:
+    description: Container image reference to run.
+    required: true
+  container-name:
+    description: Temporary container name used for the smoke test.
+    required: true
+  label:
+    description: Human-readable label for success and failure messages.
+    required: true
+  port:
+    description: Container port to expose on localhost.
+    required: false
+    default: "3000"
+  path:
+    description: HTTP path to poll on the started container.
+    required: false
+    default: "/api/health"
+  expected-substring:
+    description: Response substring that marks the container healthy.
+    required: false
+    default: '"status":"ok"'
+  max-attempts:
+    description: Maximum poll attempts before failing.
+    required: false
+    default: "20"
+  delay-seconds:
+    description: Delay between poll attempts.
+    required: false
+    default: "3"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        IMAGE='${{ inputs.image }}'
+        CONTAINER='${{ inputs.container-name }}'
+        LABEL='${{ inputs.label }}'
+        PORT='${{ inputs.port }}'
+        PATH_SUFFIX='${{ inputs.path }}'
+        EXPECTED='${{ inputs.expected-substring }}'
+        MAX_ATTEMPTS='${{ inputs.max-attempts }}'
+        DELAY_SECONDS='${{ inputs.delay-seconds }}'
+
+        docker run -d --name "${CONTAINER}" -p "${PORT}:${PORT}" "${IMAGE}"
+
+        for _ in $(seq 1 "${MAX_ATTEMPTS}"); do
+          if curl -fsS "http://localhost:${PORT}${PATH_SUFFIX}" | grep -Fq -- "${EXPECTED}"; then
+            echo "${LABEL} healthy"
+            docker rm -f "${CONTAINER}" > /dev/null
+            exit 0
+          fi
+          sleep "${DELAY_SECONDS}"
+        done
+
+        echo "::error::${LABEL} did not become healthy"
+        docker logs "${CONTAINER}" || true
+        docker rm -f "${CONTAINER}" > /dev/null || true
+        exit 1
