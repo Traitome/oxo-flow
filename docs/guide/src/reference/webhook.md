@@ -68,7 +68,7 @@ The `json` payload is a standard HTTP POST request with `Content-Type: applicati
     "exit_code": 1,
     "error": "bwa: command not found"
   },
-  "version": "0.17.0"
+  "version": "0.17.1"
 }
 ```
 

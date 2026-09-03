@@ -11,7 +11,7 @@ oxo-flow run pipeline.oxoflow -j 8
 ```
 
 ```
-oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
 DAG: 5 rules in execution order
   1. fastqc
   2. trim_reads
@@ -207,7 +207,7 @@ A **DAG** is a mathematical representation of your workflow. It is a "map" that 
 
 ## Project Status
 
-oxo-flow is under active development. The current release (`v0.17.0`) includes the complete core engine, CLI, and web API. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
+oxo-flow is under active development. The current release (`v0.17.1`) includes the complete core engine, CLI, and web API. See the [Changelog](./development/changelog.md) for release history and the [Contributing guide](./development/contributing.md) if you want to get involved.
 
 ---
 

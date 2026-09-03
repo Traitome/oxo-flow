@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.17.0
+# oxo-flow 0.17.1
 ```
 
 !!! tip "Updating"
@@ -90,8 +90,8 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
 === "Linux (x86_64)"
 
     ```bash
-    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.0/oxo-flow-v0.17.0-x86_64-unknown-linux-gnu.tar.gz
-    tar xzf oxo-flow-v0.17.0-x86_64-unknown-linux-gnu.tar.gz
+    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
+    tar xzf oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
     chmod +x oxo-flow
     mv oxo-flow ~/.local/bin/
     ```
@@ -99,8 +99,8 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
 === "macOS (Apple Silicon)"
 
     ```bash
-    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.0/oxo-flow-v0.17.0-aarch64-apple-darwin.tar.gz
-    tar xzf oxo-flow-v0.17.0-aarch64-apple-darwin.tar.gz
+    curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/oxo-flow-v0.17.1-aarch64-apple-darwin.tar.gz
+    tar xzf oxo-flow-v0.17.1-aarch64-apple-darwin.tar.gz
     chmod +x oxo-flow
     mv oxo-flow /usr/local/bin/  # Or another folder in your PATH
     ```
@@ -109,7 +109,7 @@ Pre-built binaries are available from the [GitHub Releases](https://github.com/T
 release):
 
 ```bash
-curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.0/SHA256SUMS.txt
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt --ignore-missing
 ```
 
@@ -133,7 +133,7 @@ is a multi-arch dev build compiled from source:
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
 # Pin a specific release (or track a minor line)
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.1
 docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17
 
 # CLI one-shot usage — mount your workflow directory

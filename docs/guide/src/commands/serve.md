@@ -68,7 +68,7 @@ POST /oxo-flow/api/pipelines/validate
 ## Output
 
 ```
-oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 ```
 
@@ -169,7 +169,7 @@ curl http://127.0.0.1:8080/api/health
 ```json
 {
   "status": "ok",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "mode": "personal",
   "uptime_secs": 12,
   "components": {

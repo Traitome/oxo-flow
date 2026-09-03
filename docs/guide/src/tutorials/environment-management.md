@@ -218,7 +218,7 @@ oxo-flow env list
 ```
 
 ```
-oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
 Available environment backends:
   ✓ system
   ✓ mamba
@@ -236,7 +236,7 @@ oxo-flow env check my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.17.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
   ✓ align (docker)
   ✓ call_variants (conda)
   ✓ plot_results (venv)
