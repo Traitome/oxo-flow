@@ -39,6 +39,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  NODE_VERSION: "22"
   RELEASE_TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
 
 jobs:
@@ -46,6 +47,7 @@ jobs:
   sync-version:
     name: Sync version from tag
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: >-
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
@@ -368,6 +370,7 @@ jobs:
   test:
     name: Test (fmt, clippy, test)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version]
     if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
     permissions:
@@ -462,6 +465,7 @@ jobs:
   build-linux:
     name: Build Linux (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [test]
     # Skip on pull_request events — the test job already validates compilation.
     # Build and package are only needed for releases and main-branch pushes.
@@ -543,6 +547,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     needs: [test]
     # Skip on pull_request events — macOS runners are slow and expensive.
     if: >-
@@ -604,7 +609,9 @@ jobs:
       - name: Setup Node (frontend build for the desktop bundle)
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Build frontend (SPA assets ship inside the app bundle)
         shell: bash
@@ -666,6 +673,7 @@ jobs:
     name: GitHub Release
     needs: [sync-version, build-linux, build-macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
@@ -695,6 +703,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Setup Node (frontend rebuild for Linux desktop bundles)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Stage stable "latest" CLI tarballs
         shell: bash
@@ -909,6 +924,7 @@ jobs:
     # never touch the crates.io registry.
     needs: [sync-version, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -1024,6 +1040,7 @@ jobs:
   docker-build:
     name: Docker (build)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Need sync-version explicitly: checkout uses its updated_sha output, and
     # GHA only exposes needs.<job>.outputs when <job> is listed in needs.
     needs: [sync-version, test]
@@ -1078,6 +1095,7 @@ jobs:
   docker-build-release:
     name: Docker (build release, no publish)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [test, release]
     if: >-
       always() &&
@@ -1148,6 +1166,7 @@ jobs:
   docker-publish-main-amd64:
     name: Docker (build :main amd64 → ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version, test, docker-build]
     if: >-
       always() &&
@@ -1225,6 +1244,7 @@ jobs:
     # under QEMU emulation would take hours, which is why :main used to ship
     # amd64-only (issue #297 item 9).
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     needs: [sync-version, test, docker-build]
     if: >-
       always() &&
@@ -1297,6 +1317,7 @@ jobs:
   docker-publish:
     name: Docker (publish :main manifest to ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [sync-version, test, docker-publish-main-amd64, docker-publish-main-arm64]
     if: >-
       always() &&
@@ -1371,6 +1392,7 @@ jobs:
   docker-publish-release-amd64:
     name: Docker (build release amd64 → ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version, test, release]
     if: >-
       always() &&
@@ -1462,6 +1484,7 @@ jobs:
     # Native arm64 runner (free for public repos) — QEMU-emulated npm +
     # apt under a multi-arch buildx job previously ran for hours.
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     needs: [sync-version, test, release]
     if: >-
       always() &&
@@ -1541,6 +1564,7 @@ jobs:
   docker-publish-release:
     name: Docker (publish release to ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [sync-version, test, release, docker-publish-release-amd64, docker-publish-release-arm64]
     if: >-
       always() &&
@@ -1643,6 +1667,7 @@ jobs:
   frontend:
     name: Frontend (build + e2e)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [test]
     if: always() && needs.test.result == 'success'
     permissions:
@@ -1681,7 +1706,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -1718,6 +1745,7 @@ jobs:
   deploy-pages:
     name: Deploy versioned documentation (mike)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test]
     if: >-
       always() &&
