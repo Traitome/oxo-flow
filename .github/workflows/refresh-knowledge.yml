@@ -32,6 +32,7 @@ jobs:
   refresh:
     name: Refresh embedded knowledge
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Run refresh scripts
@@ -45,11 +46,22 @@ jobs:
           for script in scripts/refresh-knowledge/*.py; do
             [ -f "$script" ] || continue
             echo "::group::Running ${script}"
-            if timeout 600 python3 "$script"; then
+            script_name="$(basename "$script")"
+            timeout_seconds=600
+            case "$script_name" in
+              refresh_biotools.py)
+                # The recent scheduled run 33486771020 hit the old 10-minute
+                # cap after ~350/666 pages even though the script was healthy;
+                # let this full-corpus crawl finish without weakening the
+                # per-script timeout for the faster refreshers.
+                timeout_seconds=1800
+                ;;
+            esac
+            if timeout "${timeout_seconds}" python3 "$script"; then
               echo "OK: ${script}"
             else
               rc=$?
-              echo "::error::Refresh script failed: ${script} (exit ${rc})"
+              echo "::error::Refresh script failed: ${script} (exit ${rc}, timeout ${timeout_seconds}s)"
               FAILED="${FAILED:+${FAILED} }${script}"
             fi
             echo "::endgroup::"

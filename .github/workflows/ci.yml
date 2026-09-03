@@ -39,6 +39,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  NODE_VERSION: "22"
   RELEASE_TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
 
 jobs:
@@ -46,6 +47,7 @@ jobs:
   sync-version:
     name: Sync version from tag
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: >-
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
@@ -368,6 +370,7 @@ jobs:
   test:
     name: Test (fmt, clippy, test)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version]
     if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
     permissions:
@@ -462,6 +465,7 @@ jobs:
   build-linux:
     name: Build Linux (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [test]
     # Skip on pull_request events — the test job already validates compilation.
     # Build and package are only needed for releases and main-branch pushes.
@@ -543,10 +547,12 @@ jobs:
     permissions:
       contents: read
     runs-on: ${{ matrix.runner }}
-    needs: [test]
+    timeout-minutes: 90
+    needs: [test, frontend-assets]
     # Skip on pull_request events — macOS runners are slow and expensive.
     if: >-
       always() && needs.test.result == 'success' &&
+      needs.frontend-assets.result == 'success' &&
       github.event_name != 'pull_request' &&
       inputs.publish_images_only != true
     # A cancelled/unavailable runner must not block feature-branch runs,
@@ -598,20 +604,25 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-${{ matrix.target }}-
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
 
-      - name: Setup Node (frontend build for the desktop bundle)
-        uses: actions/setup-node@v4
+      - name: Cache build artifacts
+        uses: actions/cache@v4
         with:
-          node-version: 22
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-${{ matrix.target }}-
 
-      - name: Build frontend (SPA assets ship inside the app bundle)
+      - name: Restore built frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-static
+          path: /tmp/frontend-static
+
+      - name: Unpack built frontend assets
         shell: bash
-        run: |
-          cd frontend
-          npm ci
-          npm run build
+        run: tar -C crates/oxo-flow-web -xzf /tmp/frontend-static/frontend-static.tar.gz
 
       - name: Build release binaries
         run: |
@@ -664,13 +675,15 @@ jobs:
     permissions:
       contents: write
     name: GitHub Release
-    needs: [sync-version, build-linux, build-macos]
+    needs: [sync-version, frontend-assets, build-linux, build-macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
       inputs.publish_images_only != true &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.frontend-assets.result == 'success' &&
       needs.build-linux.result == 'success' &&
       needs.build-macos.result == 'success'
     steps:
@@ -695,6 +708,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Validate required release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in \
+            "artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" \
+            "artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-web-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" \
+            "artifacts/binaries-x86_64-apple-darwin/oxo-flow-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" \
+            "artifacts/binaries-aarch64-apple-darwin/oxo-flow-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
+          do
+            if [ ! -f "${artifact}" ]; then
+              echo "::error::Missing required release artifact: ${artifact}"
+              exit 1
+            fi
+          done
+          echo "required release artifacts present"
+
+      - name: Restore built frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-static
+          path: /tmp/frontend-static
+
+      - name: Unpack built frontend assets
+        shell: bash
+        run: tar -C crates/oxo-flow-web -xzf /tmp/frontend-static/frontend-static.tar.gz
 
       - name: Stage stable "latest" CLI tarballs
         shell: bash
@@ -731,9 +771,6 @@ jobs:
             deb-root/usr/share/pixmaps
           tar -xzf artifacts/binaries-x86_64-unknown-linux-gnu/oxo-flow-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz \
             -C deb-root/usr/bin
-          # The SPA build output was produced by build-macos (not an artifact);
-          # rebuild it here so the deb is self-contained.
-          cd frontend && npm ci && npm run build && cd ..
           cp -r crates/oxo-flow-web/static deb-root/usr/share/oxo-flow/static
           # Desktop entry + icon (app menu integration, same treatment the
           # macOS bundle got: launcher opens the local web interface).
@@ -909,6 +946,7 @@ jobs:
     # never touch the crates.io registry.
     needs: [sync-version, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -967,12 +1005,15 @@ jobs:
       # crates.io sparse-index propagation typically completes within 30-60 s.
       # We use 60 s to give a comfortable margin before dependent crates publish.
       - name: Wait for crates.io index (oxo-flow-core)
-        run: sleep 60
+        uses: ./.github/actions/wait-for-crates-io
+        with:
+          crate: oxo-flow-core
+          version: ${{ env.RELEASE_TAG }}
 
       - name: Publish oxo-flow-ai
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-ai/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -984,12 +1025,15 @@ jobs:
           fi
 
       - name: Wait for crates.io index (oxo-flow-ai)
-        run: sleep 60
+        uses: ./.github/actions/wait-for-crates-io
+        with:
+          crate: oxo-flow-ai
+          version: ${{ env.RELEASE_TAG }}
 
       - name: Publish oxo-flow-web
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-web/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -1001,12 +1045,15 @@ jobs:
           fi
 
       - name: Wait for crates.io index (oxo-flow-web)
-        run: sleep 60
+        uses: ./.github/actions/wait-for-crates-io
+        with:
+          crate: oxo-flow-web
+          version: ${{ env.RELEASE_TAG }}
 
       - name: Publish oxo-flow-cli
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           STATUS=$(curl -sf "https://crates.io/api/v1/crates/oxo-flow-cli/${VERSION}" \
             -H "User-Agent: oxo-flow-ci/1.0 (github.com/Traitome/oxo-flow)" \
             -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
@@ -1024,6 +1071,7 @@ jobs:
   docker-build:
     name: Docker (build)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Need sync-version explicitly: checkout uses its updated_sha output, and
     # GHA only exposes needs.<job>.outputs when <job> is listed in needs.
     needs: [sync-version, test]
@@ -1051,20 +1099,11 @@ jobs:
           docker build --build-arg "VERSION=$VERSION" -t oxo-flow:ci .
 
       - name: Smoke-test the container (health endpoint)
-        run: |
-          docker run -d --name oxo-flow-ci -p 3000:3000 oxo-flow:ci
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "container healthy"
-              docker rm -f oxo-flow-ci > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::container did not become healthy"
-          docker logs oxo-flow-ci || true
-          docker rm -f oxo-flow-ci > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: oxo-flow:ci
+          container-name: oxo-flow-ci
+          label: container
 
   # Validation leg for the release channel: builds Dockerfile.release from
   # release artifacts (download → verify → assemble → serve). Dispatch-only.
@@ -1078,6 +1117,7 @@ jobs:
   docker-build-release:
     name: Docker (build release, no publish)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [test, release]
     if: >-
       always() &&
@@ -1110,20 +1150,11 @@ jobs:
           TAG: ${{ inputs.tag }}
 
       - name: Smoke-test the release image (health endpoint)
-        run: |
-          docker run -d --name oxo-flow-release-ci -p 3000:3000 oxo-flow-release:ci
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "release image healthy"
-              docker rm -f oxo-flow-release-ci > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::release image did not become healthy"
-          docker logs oxo-flow-release-ci || true
-          docker rm -f oxo-flow-release-ci > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: oxo-flow-release:ci
+          container-name: oxo-flow-release-ci
+          label: release image
 
   # ─── Docker: publish the image to ghcr.io (GitHub Packages) ───────────────
   # Two channels with distinct jobs:
@@ -1148,6 +1179,7 @@ jobs:
   docker-publish-main-amd64:
     name: Docker (build :main amd64 → ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version, test, docker-build]
     if: >-
       always() &&
@@ -1202,22 +1234,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=main-amd64
 
       - name: Smoke-test :main-amd64 (native)
-        run: |
-          set -euo pipefail
-          docker pull "${IMAGE}:main-amd64"
-          docker run -d --name oxo-flow-main-amd64 -p 3000:3000 "${IMAGE}:main-amd64"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "main-amd64 healthy"
-              docker rm -f oxo-flow-main-amd64 > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::main-amd64 image did not become healthy"
-          docker logs oxo-flow-main-amd64 || true
-          docker rm -f oxo-flow-main-amd64 > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:main-amd64
+          container-name: oxo-flow-main-amd64
+          label: main-amd64
 
   docker-publish-main-arm64:
     name: Docker (build :main arm64 → ghcr.io)
@@ -1225,6 +1246,7 @@ jobs:
     # under QEMU emulation would take hours, which is why :main used to ship
     # amd64-only (issue #297 item 9).
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     needs: [sync-version, test, docker-build]
     if: >-
       always() &&
@@ -1277,26 +1299,16 @@ jobs:
           cache-to: type=gha,mode=max,scope=main-arm64
 
       - name: Smoke-test :main-arm64 (native)
-        run: |
-          set -euo pipefail
-          docker pull "${IMAGE}:main-arm64"
-          docker run -d --name oxo-flow-main-arm64 -p 3000:3000 "${IMAGE}:main-arm64"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "main-arm64 healthy"
-              docker rm -f oxo-flow-main-arm64 > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::main-arm64 image did not become healthy"
-          docker logs oxo-flow-main-arm64 || true
-          docker rm -f oxo-flow-main-arm64 > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:main-arm64
+          container-name: oxo-flow-main-arm64
+          label: main-arm64
 
   docker-publish:
     name: Docker (publish :main manifest to ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [sync-version, test, docker-publish-main-amd64, docker-publish-main-arm64]
     if: >-
       always() &&
@@ -1336,21 +1348,11 @@ jobs:
           docker buildx imagetools inspect "${IMAGE}:main"
 
       - name: Smoke-test the pushed image (health endpoint)
-        run: |
-          docker pull "${IMAGE}:main"
-          docker run -d --name oxo-flow-pub -p 3000:3000 "${IMAGE}:main"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "published image healthy"
-              docker rm -f oxo-flow-pub > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::published image did not become healthy"
-          docker logs oxo-flow-pub || true
-          docker rm -f oxo-flow-pub > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:main
+          container-name: oxo-flow-pub
+          label: published image
 
   # Release channel: assembles the image from the prebuilt release binaries
   # (no cargo build) on native amd64 + arm64 runners in parallel, then a
@@ -1371,6 +1373,7 @@ jobs:
   docker-publish-release-amd64:
     name: Docker (build release amd64 → ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sync-version, test, release]
     if: >-
       always() &&
@@ -1440,28 +1443,18 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-amd64
 
       - name: Smoke-test :${{ env.VERSION }}-amd64 (native)
-        run: |
-          set -euo pipefail
-          docker pull "${IMAGE}:${VERSION}-amd64"
-          docker run -d --name oxo-flow-rel-amd64 -p 3000:3000 "${IMAGE}:${VERSION}-amd64"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "release-amd64 healthy"
-              docker rm -f oxo-flow-rel-amd64 > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::release-amd64 image did not become healthy"
-          docker logs oxo-flow-rel-amd64 || true
-          docker rm -f oxo-flow-rel-amd64 > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:${{ env.VERSION }}-amd64
+          container-name: oxo-flow-rel-amd64
+          label: release-amd64
 
   docker-publish-release-arm64:
     name: Docker (build release arm64 → ghcr.io)
     # Native arm64 runner (free for public repos) — QEMU-emulated npm +
     # apt under a multi-arch buildx job previously ran for hours.
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     needs: [sync-version, test, release]
     if: >-
       always() &&
@@ -1521,26 +1514,16 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-arm64
 
       - name: Smoke-test :${{ env.VERSION }}-arm64 (native)
-        run: |
-          set -euo pipefail
-          docker pull "${IMAGE}:${VERSION}-arm64"
-          docker run -d --name oxo-flow-rel-arm64 -p 3000:3000 "${IMAGE}:${VERSION}-arm64"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "release-arm64 healthy"
-              docker rm -f oxo-flow-rel-arm64 > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::release-arm64 image did not become healthy"
-          docker logs oxo-flow-rel-arm64 || true
-          docker rm -f oxo-flow-rel-arm64 > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:${{ env.VERSION }}-arm64
+          container-name: oxo-flow-rel-arm64
+          label: release-arm64
 
   docker-publish-release:
     name: Docker (publish release to ghcr.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [sync-version, test, release, docker-publish-release-amd64, docker-publish-release-arm64]
     if: >-
       always() &&
@@ -1601,21 +1584,11 @@ jobs:
           docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
       - name: Smoke-test the pushed image (health endpoint, native arch)
-        run: |
-          docker pull "${IMAGE}:${VERSION}"
-          docker run -d --name oxo-flow-pub -p 3000:3000 "${IMAGE}:${VERSION}"
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-              echo "published release image healthy"
-              docker rm -f oxo-flow-pub > /dev/null
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::published release image did not become healthy"
-          docker logs oxo-flow-pub || true
-          docker rm -f oxo-flow-pub > /dev/null || true
-          exit 1
+        uses: ./.github/actions/docker-health-check
+        with:
+          image: ${{ env.IMAGE }}:${{ env.VERSION }}
+          container-name: oxo-flow-pub
+          label: published release image
 
       - name: Promote :latest and :<major.minor> (smoke-gated, both arches)
         run: |
@@ -1639,10 +1612,11 @@ jobs:
           docker buildx imagetools create -t "${IMAGE}:${MAJOR_MINOR}" "${IMAGE}:${VERSION}"
           echo "promoted ${IMAGE}:${VERSION} → :latest and :${MAJOR_MINOR}"
 
-  # ─── Frontend: build + e2e (Playwright against the real server) ──────────
-  frontend:
-    name: Frontend (build + e2e)
+  # ─── Frontend: lint/build once, then run Playwright against the real server ─
+  frontend-assets:
+    name: Frontend (lint + build assets)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test]
     if: always() && needs.test.result == 'success'
     permissions:
@@ -1650,38 +1624,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
-
-      - name: Cache build artifacts
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
-
-      - name: Build the web server (Playwright spawns it)
-        run: |
-          # Build ONLY what Playwright's webServer runs (`cargo run -p
-          # oxo-flow-web`). Adding -p oxo-flow-cli unifies features over
-          # both packages, so the e2e spawn recompiles feature-sensitive
-          # deps (libsqlite3-sys/reqwest/rustls) with the web-only feature
-          # set — a ~53s cold build that blew the old 60s webServer
-          # timeout (live: actions run 32327397451).
-          cargo build -p oxo-flow-web
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -1706,6 +1653,78 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Pack built frontend assets
+        run: tar -C crates/oxo-flow-web -czf /tmp/frontend-static.tar.gz static
+
+      - name: Upload built frontend assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-static
+          path: /tmp/frontend-static.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  frontend:
+    name: Frontend (e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [test, frontend-assets]
+    if: always() && needs.test.result == 'success' && needs.frontend-assets.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
+
+      - name: Build the web server (Playwright spawns it)
+        run: |
+          # Build ONLY what Playwright's webServer runs (`cargo run -p
+          # oxo-flow-web`). Adding -p oxo-flow-cli unifies features over
+          # both packages, so the e2e spawn recompiles feature-sensitive
+          # deps (libsqlite3-sys/reqwest/rustls) with the web-only feature
+          # set — a ~53s cold build that blew the old 60s webServer
+          # timeout (live: actions run 32327397451).
+          cargo build -p oxo-flow-web
+
+      - name: Restore built frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-static
+          path: /tmp/frontend-static
+
+      - name: Unpack built frontend assets
+        shell: bash
+        run: tar -C crates/oxo-flow-web -xzf /tmp/frontend-static/frontend-static.tar.gz
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
       - name: Install Playwright browsers
         working-directory: frontend
         run: npx playwright install --with-deps chromium
@@ -1718,6 +1737,7 @@ jobs:
   deploy-pages:
     name: Deploy versioned documentation (mike)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test]
     if: >-
       always() &&
