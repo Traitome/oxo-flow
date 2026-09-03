@@ -1308,10 +1308,11 @@ jobs:
           # so the version comes from the tag input instead (same fallback
           # as the docker-build-release validation leg).
           if [ -n "$SYNC_VERSION" ]; then
-            echo "VERSION=$SYNC_VERSION" >> "$GITHUB_ENV"
+            VERSION="$SYNC_VERSION"
           else
-            echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+            VERSION="${TAG#v}"
           fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Publishing version: $VERSION"
         env:
           SYNC_VERSION: ${{ needs.sync-version.outputs.version }}
