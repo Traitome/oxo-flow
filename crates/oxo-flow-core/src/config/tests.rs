@@ -6831,6 +6831,134 @@ fn output_pattern_fully_bound_by_values_needs_no_discovery() {
     let mut fresh = spades.clone();
     fresh.output_pattern = Some("results/spades/{part}.txt".to_string());
     assert!(config.output_pattern_needs_discovery(&fresh));
+
+    // A residual DOTTED token ({values.x}/{config.x}/{meta.x}) is invisible
+    // to the wildcard extractor but still means "never baked" — discovery
+    // (or at least its zero-match warning) must stay loud.
+    let mut dotted = spades.clone();
+    dotted.output_pattern = Some("results/{values.assembler}/part.txt".to_string());
+    assert!(config.output_pattern_needs_discovery(&dotted));
+}
+
+#[test]
+fn output_pattern_deferred_consumer_own_values_respect_constraints() {
+    // Plan-time parity, part 1: `wildcard_constraints` filter the projected
+    // own-values combos exactly as they filter the plan-time fan-out — a
+    // combo the static workflow would never create must not appear because
+    // the rule happened to be deferred.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-constr.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-constr"
+
+        [wildcard_constraints]
+        caller = "^(freebayes|bcftools)$"
+
+        [[values]]
+        name = "caller"
+        values = ["freebayes", "bcftools", "deepvariant"]
+
+        [[rules]]
+        name = "assemble"
+        output_pattern = "results/asm/{chunk}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "call"
+        input = ["results/asm/{chunk}.txt"]
+        output = ["vcfs/{caller}/{chunk}.vcf"]
+        shell = "cp {input} {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let path = dir.path().join("results/asm/1.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "x").unwrap();
+    let instance = config.get_rule("assemble").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    config.contribute_output_pattern_domain("assemble", combos);
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    let mut sorted = new_names.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec!["call_caller_bcftools_1", "call_caller_freebayes_1"],
+        "deepvariant is constraint-filtered out of the projection"
+    );
+}
+
+#[test]
+fn output_pattern_deferred_consumer_expand_inputs_declared_variables_win() {
+    // Plan-time parity, part 2: a declared `variables` reference in an
+    // expand_inputs pattern keeps its cohort-gather semantics at runtime —
+    // the deferred instance's own binding must not collapse the pattern to
+    // a single file.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("v296-declared.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "v296-declared"
+
+        [config]
+        all_parts = "1,2,3"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/chunks/{part}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "rollup"
+        input = []
+        expand_inputs = [
+            { pattern = "results/chunks/{part}.txt", variables = { part = "config.all_parts" } }
+        ]
+        output = ["results/all.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    for part in ["1", "2", "3"] {
+        let path = dir.path().join(format!("results/chunks/{part}.txt"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, part).unwrap();
+    }
+    let instance = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    config.contribute_output_pattern_domain("split", combos);
+
+    let new_names = config.expand_output_pattern_consumers().unwrap();
+    assert_eq!(new_names.len(), 3);
+    let r = config.get_rule("rollup_1").expect("instance");
+    assert_eq!(
+        r.input.to_vec(),
+        vec![
+            "results/chunks/1.txt",
+            "results/chunks/2.txt",
+            "results/chunks/3.txt"
+        ],
+        "the declared config-parts gather survives runtime instantiation"
+    );
 }
 
 #[test]
@@ -6993,14 +7121,12 @@ fn output_pattern_deferred_consumer_projects_own_values_dimension() {
     sorted.sort();
     assert_eq!(
         sorted,
-        vec![
-            "call_caller_bcftools_1",
-            "call_caller_bcftools_2",
-            "call_caller_freebayes_1",
-            "call_caller_freebayes_2",
-        ],
-        "one instance per own value × discovered chunk"
+        vec!["call_caller_freebayes_1", "call_caller_freebayes_2"],
+        "one instance per surviving own value × discovered chunk — \
+         the bcftools combos are gated off at instantiation, exactly as \
+         the plan-time values fan-out would have dropped them"
     );
+    assert!(config.get_rule("call_caller_bcftools_1").is_none());
     let fb = config
         .get_rule("call_caller_freebayes_1")
         .expect("instance");
@@ -7014,22 +7140,9 @@ fn output_pattern_deferred_consumer_projects_own_values_dimension() {
         Some("freebayes"),
         "the projected binding is recorded for downstream attribution"
     );
-    // `when` bakes from the MERGED combo (own values + producer domain) —
-    // bake-only, mirroring the runtime path: the execution-time re-check
-    // prunes the gated-off instances.
-    assert_eq!(
-        config
-            .get_rule("call_caller_bcftools_1")
-            .and_then(|r| r.when.clone()),
-        Some("'bcftools' != 'bcftools'".to_string()),
-        "the own-dimension binding is baked into when for execution-time pruning"
-    );
-    assert_eq!(
-        config
-            .get_rule("call_caller_freebayes_1")
-            .and_then(|r| r.when.clone()),
-        Some("'freebayes' != 'bcftools'".to_string())
-    );
+    // Survivors carry the per-instance `when` baked from the MERGED combo
+    // (own values + producer domain) for the execution-time re-check.
+    assert_eq!(fb.when.as_deref(), Some("'freebayes' != 'bcftools'"));
     assert!(config.pending_output_pattern.is_empty());
 }
 

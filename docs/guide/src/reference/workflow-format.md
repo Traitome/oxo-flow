@@ -2537,10 +2537,13 @@ Semantics:
   instantiates **nothing**; it is deferred whole. Wildcards shared with the
   producer's pattern ride the discovered bindings; `[[values]]` tables the
   consumer references on its own project as an extra Cartesian dimension at
-  instantiation (issue #296 follow-up). A consumer declared **before** its
-  producer is legal but warned. Referencing two producers' fresh wildcards
-  in one rule is a v1 error; a chain — a rule that is both consumer and
-  producer of fresh wildcards — is supported.
+  instantiation, under the same plan-time semantics as a static fan-out —
+  `wildcard_constraints` filtered and per-instance `when` gates evaluated,
+  so gated-off combos never become instances (issue #296 follow-up). A
+  consumer declared **before** its producer is legal but warned.
+  Referencing two producers' fresh wildcards in one rule is a v1 error; a
+  chain — a rule that is both consumer and producer of fresh wildcards —
+  is supported.
 - Runtime: when a producer **instance** completes, the engine scans its
   pattern and unions the discovered values into the producer template's
   domain. When **all** of the producer's instances have completed, the
@@ -2551,12 +2554,13 @@ Semantics:
   forward-safety comes from completion ordering, not DAG topology, exactly
   like checkpoint re-entry.
 - Interaction with `resume`: the discovered domains are persisted
-  (persist-first, before fan-out). A resume replays the **partial**
-  persisted domain to instantiate consumers for the producer instances
-  that already succeeded; when a failed instance is retried and succeeds,
-  the fan-out is idempotent and only the new values extend the consumer
-  set — partial progress across a resume is preserved, and the final
-  consumer set equals the union of all per-instance discoveries.
+  (persist-first, before fan-out). A resume replays the persisted domain
+  and instantiates the deferred consumers only when **every** producer
+  instance is already completed; when a failed instance still has to
+  re-run, its consumers stay pending and the live runtime pass
+  instantiates them from the final domain union — the final consumer set
+  equals the union of all per-instance discoveries, never a partial
+  slice.
 - Zero discoveries after producer success is **loud**: a warning is emitted
   and the consumers stay uninstantiated (a later producer instance may
   still contribute). A producer **failure** leaves the consumers

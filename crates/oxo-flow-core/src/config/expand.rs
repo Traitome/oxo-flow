@@ -2183,13 +2183,6 @@ impl WorkflowConfig {
     // Runtime-discovered output fan-out (issue #227 item 5)
     // -----------------------------------------------------------------------
 
-    /// Scan the filesystem for the files this producer instance has just
-    /// created. The instance's BAKED `output_pattern` (bound wildcards
-    /// already resolved, `{config.x}` expanded from the workflow config)
-    /// is matched against the tree rooted at `root`; every discovered
-    /// combo is merged with the instance's own bindings (`[[values]]` /
-    /// `[[pairs]]`) so the FULL wildcard map is reconstructed — the
-    /// per-sample union source for downstream consumers.
     /// The `[[values]]` tables this rule references — its fan-out
     /// dimension set, in declaration order. The trigger text is the
     /// rule's consumer fields plus its own `output_pattern` (issue #296):
@@ -2271,20 +2264,30 @@ impl WorkflowConfig {
         Ok(value_combos)
     }
 
-    /// Whether a producer instance's baked output_pattern still carries
-    /// wildcards for the runtime discovery pass to enumerate (issue #296).
-    /// A fully-bound pattern — every wildcard consumed by plan-time
+    /// Whether a producer instance's baked output_pattern still carries a
+    /// placeholder for the runtime discovery pass to enumerate (issue
+    /// #296). A fully-bound pattern — every wildcard consumed by plan-time
     /// fan-out, e.g. a `[[values]]`-only reference — is a static contract:
     /// the plan-time instances already ARE the domain and plan-time
     /// consumers hold their DAG edges, so running discovery on it can only
-    /// emit the spurious "matched no files" warning.
+    /// emit the spurious "matched no files" warning. Any residual brace
+    /// token (including dotted `{values.x}` / `{config.x}` / `{meta.x}`
+    /// forms the wildcard extractor does not see) keeps discovery on so
+    /// the scan — or at minimum its zero-match warning — stays loud.
     pub fn output_pattern_needs_discovery(&self, instance: &Rule) -> bool {
         instance
             .output_pattern
             .as_deref()
-            .is_some_and(|p| !crate::wildcard::extract_wildcards(p).is_empty())
+            .is_some_and(|p| p.contains('{'))
     }
 
+    /// Scan the filesystem for the files this producer instance has just
+    /// created. The instance's BAKED `output_pattern` (bound wildcards
+    /// already resolved, `{config.x}` expanded from the workflow config)
+    /// is matched against the tree rooted at `root`; every discovered
+    /// combo is merged with the instance's own bindings (`[[values]]` /
+    /// `[[pairs]]`) so the FULL wildcard map is reconstructed — the
+    /// per-sample union source for downstream consumers.
     pub fn discover_output_pattern_files(
         &self,
         instance: &Rule,
@@ -2419,41 +2422,94 @@ impl WorkflowConfig {
             });
             // The consumer's OWN `[[values]]` dimension (issue #296
             // follow-up): a deferred template skips plan-time fan-out, so
-            // project its tables here. Tables already bound by the
-            // producer's domain are excluded — shared wildcards ride the
-            // discovered combos, and projecting them again would contradict
-            // those bindings.
-            let bound_keys: std::collections::HashSet<&str> = domain
-                .iter()
-                .flat_map(|combo| combo.keys())
-                .map(String::as_str)
-                .collect();
+            // project its tables here, mirroring the plan-time branches —
+            // constraints filtered, per-instance `when` gates evaluated.
+            // Tables the producer's PATTERN declares are excluded: their
+            // wildcards ride the pattern suffixes and arrive bound in
+            // every combo.
             let own_tables: Vec<ValueGroup> = self
                 .active_value_tables_for_rule(&consumer)
                 .into_iter()
-                .filter(|table| !bound_keys.contains(table.name.as_str()))
+                .filter(|table| !pattern_wildcards.iter().any(|w| w == &table.name))
                 .collect();
             let own_table_refs: Vec<&ValueGroup> = own_tables.iter().collect();
-            let own_combos = self.cartesian_value_combos(&own_table_refs)?;
-            // Precompute the naming suffixes so the owned table set can be
-            // dropped before the `&mut self` bookkeeping below.
-            let own_dimensions: Vec<(crate::wildcard::WildcardValues, String)> = own_combos
+            // Plan-time parity: constraint-filter the projected combos
+            // exactly as the values fan-out branches do.
+            let compiled_constraints = self
+                .wildcard_constraints
                 .iter()
-                .map(|own| (own.clone(), value_instance_suffix(own, &own_table_refs)))
+                .map(|(name, pattern)| {
+                    regex::Regex::new(pattern)
+                        .map(|re| (name.clone(), re))
+                        .map_err(|e| OxoFlowError::Wildcard {
+                            rule: String::new(),
+                            message: format!(
+                                "invalid regex constraint '{pattern}' for wildcard '{name}': {e}"
+                            ),
+                        })
+                })
+                .collect::<Result<HashMap<_, _>>>()?;
+            let own_combos: Vec<crate::wildcard::WildcardValues> = self
+                .cartesian_value_combos(&own_table_refs)?
+                .into_iter()
+                .filter(|combo| {
+                    crate::wildcard::validate_wildcard_constraints_compiled(
+                        combo,
+                        &compiled_constraints,
+                    )
+                    .is_ok()
+                })
+                .collect();
+            // `config_values` is loop-invariant (mirrors `self.config`).
+            let config_values: HashMap<String, toml::Value> = self
+                .config
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             // Values-major nesting mirrors the plan-time fan-out branches.
-            for (own, own_suffix) in &own_dimensions {
+            for own in &own_combos {
                 for combo in &sorted {
-                    // Merge the producer-domain binding with the consumer's
-                    // own values binding — disjoint by construction.
+                    // Per-combo projection: keys the producer combo already
+                    // binds come from the combo itself, so a table covered
+                    // by only SOME producer instances still projects for
+                    // the uncovered slice instead of vanishing.
                     let mut merged = combo.clone();
-                    merged.extend(own.clone());
+                    merged.extend(
+                        own.iter()
+                            .filter(|(k, _)| !combo.contains_key(*k))
+                            .map(|(k, v)| (k.clone(), v.clone())),
+                    );
+                    // Plan-time parity: evaluate the per-instance `when`
+                    // gate (both namespaces baked first) — non-matching
+                    // combos never become instances; survivors carry the
+                    // baked verdict for the execution-time re-check.
+                    let mut baked_when = consumer.when.clone();
+                    if let Some(ref when) = consumer.when
+                        && (when.contains("wildcard.") || when.contains("{meta."))
+                    {
+                        let combo_values = Self::expansion_when_context(&merged);
+                        let baked = Self::bake_wildcard_when(when, &merged);
+                        let baked = Self::bake_meta_when(&baked, &self.metadata, &merged);
+                        if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                            &baked,
+                            &config_values,
+                            &combo_values,
+                            self.base_dir.as_deref(),
+                        ) {
+                            continue;
+                        }
+                        baked_when = Some(baked);
+                    }
+                    // Naming suffix from the EFFECTIVE bindings: a table
+                    // carried by the producer combo names the instance with
+                    // the combo's value, a projected one with its own.
+                    let own_suffix = value_instance_suffix(&merged, &own_table_refs);
                     if let Some(name) = self.instantiate_output_pattern_consumer(
                         &consumer,
                         &merged,
-                        own,
-                        own_suffix,
+                        &own_suffix,
                         &pattern_wildcards,
+                        baked_when,
                     )? {
                         new_names.push(name);
                     }
@@ -2499,16 +2555,17 @@ impl WorkflowConfig {
     }
 
     /// Build, register, and file one deferred-consumer instance from a
-    /// merged binding combo (producer domain ⊕ own values). Returns the
-    /// instance name, or `None` for the idempotent no-op case (see
+    /// merged binding combo (producer domain ⊕ own values). `baked_when`
+    /// carries the caller's evaluated-and-baked `when` verdict. Returns
+    /// the instance name, or `None` for the idempotent no-op case (see
     /// [`Self::consumer_instance_name`]).
     fn instantiate_output_pattern_consumer(
         &mut self,
         consumer: &Rule,
         merged: &crate::wildcard::WildcardValues,
-        own: &crate::wildcard::WildcardValues,
         own_suffix: &str,
         pattern_wildcards: &[String],
+        baked_when: Option<String>,
     ) -> Result<Option<String>> {
         let Some(name) =
             self.consumer_instance_name(consumer, merged, own_suffix, pattern_wildcards)?
@@ -2528,14 +2585,15 @@ impl WorkflowConfig {
         if let Some(ref op) = consumer.output_pattern {
             instance.output_pattern = Some(expand_rule_shell(op, merged));
         }
-        if let Some(ref when) = consumer.when
-            && when.contains("wildcard.")
-        {
-            instance.when = Some(Self::bake_wildcard_when(when, merged));
-        }
+        instance.when = baked_when;
         expand_command_text_fields(&mut instance, consumer, |s| expand_rule_shell(s, merged));
         self.apply_instance_meta(&mut instance, merged);
-        self.bake_expand_inputs_bindings(&mut instance, merged);
+        // Record the FULL binding set BEFORE materializing: the
+        // expand_inputs pass resolves unbound pattern keys from it
+        // (declared `variables` still win), and downstream chains reading
+        // `instance_bindings` see the same bindings the instance text was
+        // baked from.
+        self.expansion_values.insert(name.clone(), merged.clone());
         self.materialize_expand_inputs(&mut instance);
         // Readiness attribution (issue #63): the producer-pattern
         // wildcard bindings of this instance.
@@ -2546,34 +2604,10 @@ impl WorkflowConfig {
         if !samples.is_empty() {
             self.expansion_samples.insert(name.clone(), samples);
         }
-        if !own.is_empty() {
-            self.expansion_values.insert(name.clone(), own.clone());
-        }
         self.expansion_templates
             .insert(name.clone(), consumer.name.clone());
         self.rules.push(instance);
         Ok(Some(name))
-    }
-
-    /// Bake the instance's bound wildcards into its `expand_inputs`
-    /// patterns (mirroring `input` / `output`): the producer-domain keys
-    /// live only in the merged combo, so without this the gather never
-    /// resolves. The materialization pass then handles the remaining
-    /// config-variable references.
-    fn bake_expand_inputs_bindings(
-        &self,
-        instance: &mut Rule,
-        merged: &crate::wildcard::WildcardValues,
-    ) {
-        for exp in &mut instance.expand_inputs {
-            let is_wildcarded = crate::wildcard::has_wildcards(&exp.pattern)
-                || crate::wildcard::contains_values_namespace(&exp.pattern);
-            if is_wildcarded
-                && let Ok(baked) = crate::wildcard::expand_pattern(&exp.pattern, merged)
-            {
-                exp.pattern = crate::wildcard::expand_values_namespace(&baked, merged);
-            }
-        }
     }
 
     /// Resolve split values from SplitConfig.
