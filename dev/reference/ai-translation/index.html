@@ -3893,7 +3893,7 @@ explanation.</p>
 <h3 id="post-apiaioptimize">POST /api/ai/optimize<a class="headerlink" href="#post-apiaioptimize" title="Permanent link">#</a></h3>
 <p>Suggest parameter optimizations for speed, cost, or sensitivity.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Input:  { pipeline_id, goal: "speed"|"cost"|"sensitivity" }
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Output: { optimized_toml, changes, estimated_impact }
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Output: { optimized_toml, changes, estimated: { time_saved, memory_reduction } }
 </span></code></pre></div>
 <h2 id="provider-architecture">Provider Architecture<a class="headerlink" href="#provider-architecture" title="Permanent link">#</a></h2>
 <p>The AI layer uses an enum-based dispatch system:</p>
@@ -3975,12 +3975,12 @@ the deterministic core API implements after human confirmation.</p>
 <tbody>
 <tr>
 <td>File format detection</td>
-<td>Magic bytes + extension</td>
-<td>100% accurate</td>
+<td>Extension matching (+ paired-end naming)</td>
+<td>Deterministic</td>
 </tr>
 <tr>
 <td>Reference genome discovery</td>
-<td>Path traversal + checksum</td>
+<td>File existence in fixed search dirs</td>
 <td>Deterministic</td>
 </tr>
 <tr>

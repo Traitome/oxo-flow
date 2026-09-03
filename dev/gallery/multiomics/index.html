@@ -4166,7 +4166,7 @@
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>✓<span class="w"> </span>examples/gallery/08_multiomics_integration.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">8</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">7</span><span class="w"> </span>dependencies
 </span></code></pre></div>
 <h3 id="run">Run<a class="headerlink" href="#run" title="Permanent link">#</a></h3>
-<p>Samples come from the <code>[[sample_groups]]</code> block in the workflow file (edit the list to match your data, or pass <code>--sample</code> on the CLI). Each sample needs all three input pairs on disk under <code>wgs/</code>, <code>rnaseq/</code>, and <code>methyl/</code>:</p>
+<p>Samples come from the <code>[[sample_groups]]</code> block in the workflow file (edit the list to match your data, or pass <code>--samples</code> on the CLI). Each sample needs all three input pairs on disk under <code>wgs/</code>, <code>rnaseq/</code>, and <code>methyl/</code>:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/08_multiomics_integration.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">2</span>
 </span></code></pre></div>
 <p><code>-j 2</code> lets the engine submit up to two rules concurrently; the resource pool schedules the rest by thread capacity.</p>
@@ -4186,7 +4186,7 @@
 <td>wgs_align</td>
 <td>16</td>
 <td>32G</td>
-<td>docker</td>
+<td>conda</td>
 <td>WGS</td>
 </tr>
 <tr>

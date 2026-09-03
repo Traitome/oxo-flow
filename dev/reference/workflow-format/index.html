@@ -4862,8 +4862,10 @@ Editing the build/source/output, changing a referenced config value, or
 touching the source file also triggers a rebuild, and rules that consume the
 artifact through declared <code>input</code> paths (plus their downstream) are
 invalidated so their outputs are regenerated.</p>
-<p>When <code>reference_dir</code> is set, four standard indexes are auto-derived without
-explicit <code>[[references]]</code> blocks: BWA, Bowtie2, STAR, and HISAT2.</p>
+<p>When <code>reference_dir</code> is set, eight standard indexes are auto-derived without
+explicit <code>[[references]]</code> blocks: samtools faidx, BWA, BWA-MEM2, Bowtie2,
+minimap2, STAR, HISAT2, and the GATK sequence dictionary (see the
+<a href="#auto-derivation-from-reference_dir">auto-derivation table</a> below).</p>
 <p>Use <code>--skip-ref-build</code> to skip automatic reference building.</p>
 <h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">[[references]]</span>
@@ -5121,7 +5123,7 @@ disk space matters.</p>
 <tr>
 <td><code>sections</code></td>
 <td>Array</td>
-<td>Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: <code>universal</code>, <code>execution-status</code>, <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>, <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>, <code>task-summary</code>, <code>software-versions</code>, <code>rule-captions</code>, <code>aggregate-metrics</code> (run <code>oxo-flow report --list-sections</code> for the live list)</td>
+<td>Report sections to include. If empty (or omitted), all applicable generators run. Available built-in IDs: <code>universal</code>, <code>execution-status</code>, <code>failure-diagnosis</code>, <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>, <code>file-manifest</code>, <code>environment</code>, <code>metrics</code>, <code>sample-matrix</code>, <code>provenance</code>, <code>task-summary</code>, <code>software-versions</code>, <code>rule-captions</code>, <code>aggregate-metrics</code> — 15 in total (run <code>oxo-flow report --list-sections</code> for the live list)</td>
 </tr>
 </tbody>
 </table>
@@ -6771,7 +6773,7 @@ per combination:</p>
 <tr>
 <td><code>control</code></td>
 <td>String</td>
-<td><strong>Yes</strong></td>
+<td>No</td>
 <td>Matched control sample name (alias: <code>normal</code>)</td>
 </tr>
 <tr>
@@ -7082,8 +7084,9 @@ column:</p>
   the gate is closed, so samples without the data evaluate false instead
   of running.</li>
 <li>A <code>{meta.&lt;column&gt;}</code> reference in a rule that never fans out (no
-  sample-like binding) is an error at execution time (residual
-  placeholder).</li>
+  sample-like binding) is left as a residual placeholder — the engine logs
+  a <strong>warning</strong> at execution time and the literal text remains in the
+  rendered command.</li>
 </ul>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2" href="#__codelineno-75-2"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
@@ -7783,7 +7786,7 @@ the transport counterpart of the <code>on_complete</code> / <code>on_error</code
 <tr>
 <td><code>url</code></td>
 <td>String</td>
-<td><strong>Yes</strong></td>
+<td>— (required)</td>
 <td>Webhook endpoint URL</td>
 </tr>
 <tr>

@@ -3838,8 +3838,10 @@ workflow file</strong>:</p>
 </span></code></pre></div>
 <ul>
 <li>Semicolon-separated <code>host=mirror</code> pairs; host matching is
-  case-insensitive and port-agnostic (<code>localhost:5000/…</code> is never
-  rewritten).</li>
+  case-insensitive and port-agnostic. A registry port is stripped before
+  matching, so <code>localhost:5000/…</code> is treated as the <code>localhost</code> namespace
+  and <strong>is rewritten</strong> when <code>localhost</code> itself is mapped (e.g.
+  <code>localhost=mirror.example.com</code>).</li>
 <li>A first path segment without a dot or colon (<code>uhrigs/arriba</code>) is the
   docker.io <em>namespace</em> and follows the docker.io mapping, keeping its
   full path.</li>

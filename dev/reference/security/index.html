@@ -3354,10 +3354,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#detected-secret-types" class="md-nav__link">
+  <a href="#detected-secret-patterns" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Detected Secret Types
+        Detected Secret Patterns
       
     </span>
   </a>
@@ -3767,10 +3767,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#detected-secret-types" class="md-nav__link">
+  <a href="#detected-secret-patterns" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Detected Secret Types
+        Detected Secret Patterns
       
     </span>
   </a>
@@ -3878,7 +3878,7 @@
 </tr>
 <tr>
 <td>Remote code execution</td>
-<td><code>curl/wget \| sh/bash/sudo</code></td>
+<td><code>curl/wget ... \| sh/bash/dash</code></td>
 <td>E011</td>
 </tr>
 <tr>
@@ -3912,20 +3912,16 @@
 <td>Backtick command substitution</td>
 </tr>
 <tr>
-<td><code>&gt;/dev/</code> redirects</td>
-<td>Redirect to /dev/ detected</td>
-</tr>
-<tr>
-<td><code>eval</code></td>
-<td>eval usage detected</td>
-</tr>
-<tr>
-<td><code>rm -rf /</code> (in shell)</td>
+<td><code>rm -rf</code></td>
 <td>Dangerous recursive deletion</td>
 </tr>
 <tr>
 <td><code>chmod 777</code></td>
 <td>Overly permissive chmod</td>
+</tr>
+<tr>
+<td><code>eval</code></td>
+<td>eval usage detected</td>
 </tr>
 <tr>
 <td><code>curl/wget</code> piped to shell or <code>&amp;&amp; bash</code></td>
@@ -3966,50 +3962,58 @@
 <hr />
 <h2 id="layer-3-secret-credential-scanning">Layer 3 — Secret &amp; Credential Scanning<a class="headerlink" href="#layer-3-secret-credential-scanning" title="Permanent link">#</a></h2>
 <p>Hardcoded credentials in workflow TOML content are detected by the <code>oxo-flow lint</code> command (<code>format::scan_for_secrets</code>), which emits S008 warnings; it does not block execution.</p>
-<h3 id="detected-secret-types">Detected Secret Types<a class="headerlink" href="#detected-secret-types" title="Permanent link">#</a></h3>
+<h3 id="detected-secret-patterns">Detected Secret Patterns<a class="headerlink" href="#detected-secret-patterns" title="Permanent link">#</a></h3>
+<p><code>scan_for_secrets</code> does case-insensitive substring matching against exactly
+nine patterns — finding one emits an S008 warning naming it:</p>
 <table>
 <thead>
 <tr>
 <th>Pattern</th>
-<th>Examples</th>
+<th>Warning message</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>API keys / tokens</td>
-<td><code>API_KEY=sk-&lt;YOUR-KEY&gt;</code>, <code>AUTH_TOKEN=&lt;YOUR-KEY&gt;</code></td>
+<td><code>AKIA</code></td>
+<td>Possible AWS Access Key</td>
 </tr>
 <tr>
-<td>Passwords</td>
-<td><code>password = "hunter2"</code>, <code>pwd = "..."</code></td>
+<td><code>sk-</code></td>
+<td>Possible Stripe/OpenAI secret key</td>
 </tr>
 <tr>
-<td>Anthropic keys</td>
-<td><code>sk-ant-api03-...</code>, <code>sk-proj-...</code></td>
+<td><code>ghp_</code></td>
+<td>Possible GitHub personal access token</td>
 </tr>
 <tr>
-<td>OpenAI / DeepSeek keys</td>
-<td><code>sk-&lt;32+ chars&gt;</code></td>
+<td><code>glpat-</code></td>
+<td>Possible GitLab personal access token</td>
 </tr>
 <tr>
-<td>GitHub tokens</td>
-<td><code>ghp_...</code>, <code>gho_...</code>, <code>ghu_...</code>, <code>ghs_...</code>, <code>ghr_...</code></td>
+<td><code>password</code></td>
+<td>Possible password in configuration</td>
 </tr>
 <tr>
-<td>AWS keys</td>
-<td><code>AKIA...</code>, <code>ASIA...</code></td>
+<td><code>secret</code></td>
+<td>Possible secret in configuration</td>
 </tr>
 <tr>
-<td>Private keys (PEM)</td>
-<td><code>-----BEGIN RSA PRIVATE KEY-----</code></td>
+<td><code>api_key</code></td>
+<td>Possible API key in configuration</td>
 </tr>
 <tr>
-<td>DB connection strings</td>
-<td><code>postgresql://user:pass@host/db</code></td>
+<td><code>access_token</code></td>
+<td>Possible access token in configuration</td>
+</tr>
+<tr>
+<td><code>private_key</code></td>
+<td>Possible private key in configuration</td>
 </tr>
 </tbody>
 </table>
-<p>Secret values are <strong>redacted</strong> in findings — only the first and last 4 characters are shown.</p>
+<p>The scanner matches the raw substrings above (e.g. any <code>sk-</code> prefix, not a
+length-validated key shape), so both true positives and some false positives
+survive — review the flagged lines yourself.</p>
 <p>Additionally, workflow config values declared with <code>sensitive = true</code> in a <code>[config]</code> definition are masked as <code>***</code> in logs, <code>--help</code>, and error output.</p>
 <hr />
 <h2 id="layer-4-rate-limiting">Layer 4 — Rate Limiting<a class="headerlink" href="#layer-4-rate-limiting" title="Permanent link">#</a></h2>

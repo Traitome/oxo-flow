@@ -4152,9 +4152,10 @@ must gate the rule.</p>
 <p>Use <code>oxo-flow dry-run</code> to preview the execution plan:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>my-pipeline.oxoflow
 </span></code></pre></div>
-<p>Note that dry-run does <strong>not</strong> evaluate <code>when</code> conditions — all rules appear in
-the plan. <code>when</code> is evaluated at execution time: rules whose condition is false
-are skipped and reported as <code>Skipped</code> in the run output.</p>
+<p>Note that dry-run <strong>does</strong> evaluate <code>when</code> conditions: rules whose condition
+is false appear in the plan marked <code>[skip: when condition false]</code>, and the
+summary counts them under <code>will skip</code>. At execution time the same rules are
+skipped and reported as <code>Skipped</code> in the run output.</p>
 <h2 id="full-example">Full Example<a class="headerlink" href="#full-example" title="Permanent link">#</a></h2>
 <p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/11_conditional_workflow.oxoflow"><code>examples/gallery/11_conditional_workflow.oxoflow</code></a> for a complete WGS/WES adaptive pipeline that demonstrates most <code>when</code> expression types (truthiness, string comparisons, <code>&amp;&amp;</code>, <code>&gt;=</code>).</p>
 

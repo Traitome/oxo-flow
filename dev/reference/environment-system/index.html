@@ -4302,7 +4302,11 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 <li><strong>Detection</strong>: Checks for <code>python3</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses <code>requirements.txt</code> file</li>
 <li><strong>Activation</strong>: Creates a venv (if needed) and activates it before the command</li>
-<li><strong>Caching</strong>: Venvs are stored in a cache directory keyed by the requirements hash</li>
+<li><strong>Caching</strong>: Venvs are stored in a cache directory keyed by the declared
+  venv spec (<code>venv:&lt;path&gt;</code> — the venv path you declared in the rule), not by
+  a hash of the requirements content. Editing <code>requirements.txt</code> in place
+  does not by itself invalidate the cache; bump the venv path or clear the
+  cache to force a rebuild.</li>
 </ul>
 <h3 id="hpc-modules">HPC Modules<a class="headerlink" href="#hpc-modules" title="Permanent link">#</a></h3>
 <ul>
@@ -4339,7 +4343,8 @@ only ever be lost.</p>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">conda_prefix</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">mamba_prefix</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
 </span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">venv_requirements</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="p">}</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">gpus</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>In TOML:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Only one backend per rule — uncomment the one you need:</span>
@@ -4364,12 +4369,12 @@ only ever be lost.</p>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Validate all environments in a workflow</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
-<p>The <code>env check</code> command verifies:</p>
-<ol>
-<li>The backend type is available on the system</li>
-<li>The specification file exists (for conda YAML, pixi TOML, requirements.txt)</li>
-<li>The image reference is syntactically valid (for Docker/Singularity)</li>
-</ol>
+<p>The <code>env check</code> command calls the resolver's <code>validate_spec</code> for each rule's
+environment, which verifies <strong>backend availability on the current system</strong>
+(e.g. the conda/pixi/docker/singularity binary exists and is runnable; pixi
+additionally requires a <code>pixi.toml</code> in the current directory). It does not
+re-check spec files or image reference syntax — <code>validate</code> and <code>lint</code> cover
+declaration-level checks.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>

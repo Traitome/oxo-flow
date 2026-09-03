@@ -4480,7 +4480,7 @@
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">WorkflowDag</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="n">graph</span><span class="p">:</span><span class="w"> </span><span class="nc">DiGraph</span><span class="o">&lt;</span><span class="n">DagNode</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="o">&gt;</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="n">name_to_node</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">NodeIndex</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="n">output_to_node</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">NodeIndex</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="n">output_to_node</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">NodeIndex</span><span class="o">&gt;&gt;</span><span class="p">,</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DagNode</span><span class="w"> </span><span class="p">{</span>
@@ -4491,7 +4491,7 @@
 <ul>
 <li><code>graph</code> — a directed graph where nodes are <code>DagNode</code> (rule name + index) and edges are dependencies</li>
 <li><code>name_to_node</code> — maps rule names to their graph node indices for O(1) lookup</li>
-<li><code>output_to_node</code> — maps output file patterns to the rule node that produces them</li>
+<li><code>output_to_node</code> — maps output file patterns to <strong>all</strong> nodes producing that output (a <code>Vec</code>, since several rules may declare the same output pattern)</li>
 </ul>
 <hr />
 <h2 id="building-the-dag">Building the DAG<a class="headerlink" href="#building-the-dag" title="Permanent link">#</a></h2>
@@ -4514,7 +4514,9 @@
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">order</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">execution_order</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">// ["fastqc", "trim_reads", "align", "multiqc"]</span>
 </span></code></pre></div>
-<p>The implementation uses Kahn's algorithm (BFS-based topological sort), which also serves as a second cycle-detection pass.</p>
+<p>The implementation uses petgraph's <code>toposort</code> (a DFS-based topological
+sort), which also serves as a second cycle-detection pass — a cycle is
+reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowError::CycleDetected</code>.</p>
 <hr />
 <h2 id="target-aware-execution">Target-Aware Execution<a class="headerlink" href="#target-aware-execution" title="Permanent link">#</a></h2>
 <h3 id="execution_order_for_targets"><code>execution_order_for_targets()</code><a class="headerlink" href="#execution_order_for_targets" title="Permanent link">#</a></h3>
@@ -4696,11 +4698,6 @@
 <td>Terminal rules (no downstream dependents)</td>
 </tr>
 <tr>
-<td><code>orphan_rules()</code></td>
-<td><code>Vec&lt;&amp;str&gt;</code></td>
-<td>Rules with neither inputs nor outputs connected to others</td>
-</tr>
-<tr>
 <td><code>dependencies(name)</code></td>
 <td><code>Vec&lt;String&gt;</code></td>
 <td>Direct upstream dependencies of a rule</td>
@@ -4785,14 +4782,12 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 </span></code></pre></div>
 <p>Use these to understand workflow structure: root rules are your entry points (typically consuming raw data), and leaf rules produce your final deliverables.</p>
 <h3 id="orphan-rules">Orphan Rules<a class="headerlink" href="#orphan-rules" title="Permanent link">#</a></h3>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">orphans</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dag</span><span class="p">.</span><span class="n">orphan_rules</span><span class="p">();</span><span class="w">  </span><span class="c1">// Rules not connected to any other rule</span>
-</span></code></pre></div>
-<p>Orphan rules have no dependencies and no dependents — they are isolated islands in the DAG. This is often a configuration mistake (misspelled input/output file paths) rather than intentional. Run <code>oxo-flow validate</code> to check for orphans — they will still execute but may indicate wiring errors.</p>
+<p>The <code>WorkflowDag</code> API has no orphan query. <code>oxo-flow validate</code> does flag orphan rules — rules whose inputs match no other rule's outputs and that look like wiring mistakes (misspelled paths) — as lint warnings; they still execute but may indicate configuration errors.</p>
 <h3 id="output-collision-detection">Output Collision Detection<a class="headerlink" href="#output-collision-detection" title="Permanent link">#</a></h3>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">warnings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">WorkflowDag</span><span class="p">::</span><span class="n">detect_output_collisions</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rules</span><span class="p">);</span>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">warnings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">WorkflowDag</span><span class="p">::</span><span class="n">detect_output_collisions</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rules</span><span class="p">);</span>
 </span></code></pre></div>
 <p>When multiple rules produce outputs with overlapping wildcard patterns (e.g., two rules both produce <code>{sample}.vcf</code>), this function emits warnings. Output collisions can cause non-deterministic behavior or data corruption:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf' with overlapping wildcards
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf' with overlapping wildcards
 </span></code></pre></div>
 <p>Resolve by giving each rule distinct output paths (e.g., <code>caller_a/{sample}.vcf</code>, <code>caller_b/{sample}.vcf</code>).</p>
 <hr />
@@ -4875,7 +4870,7 @@ starvation <strong>impossible</strong>, not merely unlikely:</p>
 <li><strong>The wait is visible.</strong> After 60 seconds of waiting, the run log
    emits, for each waiting rule:</li>
 </ol>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
 </span></code></pre></div>
 <p>For workflows that still wait: remove the shared-group claim (give each
 rule set its own group), restore the missing <code>depends_on</code> edge so
@@ -4951,7 +4946,7 @@ flags these with warning W019).</p>
 <li>The DAG is immutable once built — modifications require rebuilding from rules</li>
 <li>Wildcard patterns are matched literally during DAG construction; expansion happens at execution time</li>
 <li>The petgraph <code>DiGraph</code> provides efficient graph traversal with O(V + E) topological sort</li>
-<li>Cycle detection uses petgraph's topological sort (Kahn's algorithm); DFS is used only to reconstruct the cycle path for error messages</li>
+<li>Cycle detection uses petgraph's DFS-based <code>toposort</code>; the DFS walk is also used to reconstruct the cycle path for error messages</li>
 </ul>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>

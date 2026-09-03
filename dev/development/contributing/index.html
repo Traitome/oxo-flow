@@ -4200,7 +4200,7 @@
 <h2 id="development-setup">Development Setup<a class="headerlink" href="#development-setup" title="Permanent link">#</a></h2>
 <h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">#</a></h3>
 <ul>
-<li><strong>Rust 1.85+</strong> (edition 2024) — <a href="https://rustup.rs">rustup.rs</a></li>
+<li><strong>Rust 1.98+</strong> (edition 2024, <code>rust-version = "1.98.0"</code>) — <a href="https://rustup.rs">rustup.rs</a></li>
 <li><strong>Git 2.x+</strong></li>
 <li><strong>MkDocs 1.5+</strong> (optional, for docs) — <code>pip install mkdocs-material</code></li>
 </ul>
@@ -4231,7 +4231,8 @@ run that flakes under CI load is a test bug, not an engine bug; fix
 the window before adding retries.</p>
 <h3 id="run-all-ci-checks-locally">Run All CI Checks Locally<a class="headerlink" href="#run-all-ci-checks-locally" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>ci
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Runs: cargo fmt --check, cargo clippy -D warnings, cargo build, cargo test</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#       cargo build, cargo test, schema-drift, cargo audit, frontend-lint</span>
 </span></code></pre></div>
 <hr />
 <h2 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">#</a></h2>
@@ -4262,7 +4263,7 @@ the window before adding retries.</p>
 </tr>
 <tr>
 <td><strong>Linting</strong></td>
-<td><code>cargo clippy -- -D warnings</code> — all warnings are errors</td>
+<td><code>cargo clippy --workspace --all-targets -- -D warnings</code> — all warnings are errors</td>
 </tr>
 <tr>
 <td><strong>Error handling</strong></td>
@@ -4296,12 +4297,15 @@ the window before adding retries.</p>
 <h3 id="3-run-ci-checks">3. Run CI checks<a class="headerlink" href="#3-run-ci-checks" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>ci
 </span></code></pre></div>
-<p>All four checks must pass:</p>
+<p>All seven checks must pass:</p>
 <ul class="task-list">
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo fmt -- --check</code></li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo clippy --workspace -- -D warnings</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo clippy --workspace --all-targets -- -D warnings</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo build --workspace</code></li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo test --workspace</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>schema-drift</code> (OpenAPI spec matches code)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>cargo audit</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> <code>frontend-lint</code></li>
 </ul>
 <h3 id="4-commit-with-conventional-commits">4. Commit with Conventional Commits<a class="headerlink" href="#4-commit-with-conventional-commits" title="Permanent link">#</a></h3>
 <p>We use <a href="https://www.conventionalcommits.org/">Conventional Commits</a> for automated changelog generation:</p>
@@ -4355,11 +4359,11 @@ the window before adding retries.</p>
 </tr>
 <tr>
 <td>Web API tests</td>
-<td><code>crates/oxo-flow-web/src/lib.rs</code></td>
+<td><code>crates/oxo-flow-web/tests/</code> (plus unit tests in <code>src/</code>)</td>
 </tr>
 <tr>
 <td>CLI tests</td>
-<td><code>crates/oxo-flow-cli/src/main.rs</code></td>
+<td><code>crates/oxo-flow-cli/tests/</code> (plus unit tests in <code>src/</code>)</td>
 </tr>
 </tbody>
 </table>

@@ -4039,8 +4039,11 @@ their declared limit (issue #67 §4):</p>
 <li>A rule is flagged when <code>actual ≥ 80% × limit</code> — a conservative threshold
   because the peak is <strong>sampled every 200 ms</strong> across the rule's process
   subtree, not an exact <code>getrusage</code> maximum; sub-interval spikes can be
-  missed. Cluster-executed rules carry no measurement (<code>None</code>), and legacy
-  checkpoints degrade to an empty list.</li>
+  missed. Cluster-executed rules carry the scheduler accounting store's
+  peak RSS when it reports one (SLURM <code>sacct</code>'s max <code>MaxRSS</code> across task
+  rows); the value is <code>None</code> only for schedulers without accounting
+  (e.g. LSF) or a missing accounting row. Legacy checkpoints degrade to
+  an empty list.</li>
 </ul>
 <h2 id="extending-the-pattern-library">Extending the Pattern Library<a class="headerlink" href="#extending-the-pattern-library" title="Permanent link">#</a></h2>
 <p>Add new patterns in <code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>

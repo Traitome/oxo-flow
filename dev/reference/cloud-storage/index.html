@@ -3248,17 +3248,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#credential-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Credential Resolution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#example-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3784,17 +3773,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#credential-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Credential Resolution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#example-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3931,35 +3909,23 @@ through its pluggable storage backend system.</p>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cp {input[0]} {output[0]}"</span>
 </span></code></pre></div>
 <p>When the pipeline engine encounters an <code>s3://</code> or <code>gs://</code> URI, it
-detects the remote scheme and logs a warning — the executor does not
-yet stage remote files into the workdir or upload outputs back (see
-<a href="#current-limitations">Current Limitations</a>). The storage module is
-usable today as a library API: callers can resolve URIs and read,
-write, stage, or upload objects programmatically through the
+detects the remote scheme and stages the file into the workdir before
+the rule runs, then uploads rule outputs with remote URIs back to the
+bucket after the rule succeeds (see
+<a href="#remote-staging-and-upload">Remote staging and upload</a>). The storage module is also usable
+as a library API: callers can resolve URIs and read, write, stage, or
+upload objects programmatically through the
 <a href="#storage-backend-api"><code>StorageBackend</code></a> trait.</p>
 <h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">#</a></h3>
 <p>Both backends are feature-gated and are <strong>not</strong> included by default.
 Enable them at build time:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--features<span class="w"> </span><span class="s2">"s3-storage,gcs-storage"</span>
 </span></code></pre></div>
-<blockquote>
-<p>The example workflows below illustrate the URI syntax only — remote
-URIs are not yet staged or uploaded by the executor (see
-<a href="#current-limitations">Current Limitations</a>).</p>
-</blockquote>
 <h2 id="aws-s3">AWS S3<a class="headerlink" href="#aws-s3" title="Permanent link">#</a></h2>
-<p>The S3 backend uses the official <code>aws-sdk-s3</code> Rust SDK with the standard
-AWS credential chain.  No additional configuration is required beyond
-what the AWS SDK normally reads.</p>
-<h3 id="credential-resolution">Credential Resolution<a class="headerlink" href="#credential-resolution" title="Permanent link">#</a></h3>
-<p>The SDK discovers credentials in this order:</p>
-<ol>
-<li>Environment variables (<code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>,
-   <code>AWS_SESSION_TOKEN</code>)</li>
-<li><code>~/.aws/credentials</code> (standard AWS config file)</li>
-<li>Web identity tokens</li>
-<li>Instance metadata (EC2, ECS)</li>
-</ol>
+<p>The S3 backend uses the official <code>aws-sdk-s3</code> Rust SDK. Credentials are
+resolved <strong>from environment variables only</strong> — the SDK's broader chain
+(shared credentials files, web identity tokens, instance metadata) is not
+consulted.</p>
 <p>When using MinIO or LocalStack for testing, set <code>AWS_ENDPOINT_URL</code> to
 point to your local S3-compatible service:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_ENDPOINT_URL</span><span class="o">=</span>http://localhost:9000

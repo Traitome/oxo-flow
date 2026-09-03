@@ -3905,7 +3905,7 @@
 <li>Twelve-rule cohort DAG with a branching VQSR path</li>
 <li>Cohort joint genotyping with CombineGVCFs</li>
 <li>Per-sample rule expansion and <code>expand_inputs</code> fan-in</li>
-<li>Mixed environments (conda, docker, singularity)</li>
+<li>Mixed environments (conda, singularity)</li>
 <li>Clinical-grade variant annotation with VEP</li>
 <li>Report configuration with provenance tracking</li>
 </ul>
@@ -3926,9 +3926,10 @@
     K --&gt; L[annotate_variants]</code></pre>
 <p>Edges are shown as realized after per-sample expansion (for example,
 <code>haplotype_caller</code> → <code>combine_gvcfs</code> exists because <code>expand_inputs</code>
-resolves the three per-sample GVCFs). In the unexpanded template DAG
-(<code>oxo-flow graph</code>), <code>combine_gvcfs</code> is a root rule — its inputs arrive
-via <code>expand_inputs</code>, not file-path inference. See
+resolves the three per-sample GVCFs). Note that the unexpanded template
+DAG (<code>oxo-flow graph</code>) already contains an edge from <code>combine_gvcfs</code> to
+<code>haplotype_caller</code> — <code>expand_inputs</code> patterns register template-level
+dataflow even before per-sample paths materialize. See
 <a href="../../reference/wildcards/#fan-out-vs-fan-in">Fan-out vs Fan-in</a> for
 how the two expansion mechanisms differ.</p>
 <p><strong>Steps:</strong></p>
@@ -4272,7 +4273,12 @@ how the two expansion mechanisms differ.</p>
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Read Group Escape Sequences</p>
-<p>The <code>\\t</code> in the read group string (<code>-R '@RG\\tID:...'</code>) is a double-escaped tab character. TOML requires <code>\\</code> to represent a literal backslash, so the shell receives <code>\t</code>; inside single quotes it passes the two characters through literally, and bwa-mem2 itself converts the <code>\t</code> escape to a real tab when it writes the read group header into the SAM — the delimiter it expects between read group fields.</p>
+<p>The shell here builds the read group with <code>printf '@RG\tID:...'</code> —
+note the single <code>\t</code> in the TOML source. Inside the <code>"""</code> TOML string
+a <code>\t</code> escape becomes a real TAB character, so the shell's <code>printf</code>
+receives an actual tab in the format string and emits it verbatim.
+bwa-mem2 writes that read group line into the SAM header with real
+tabs — the delimiter it expects between read group fields.</p>
 </div>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"mark_duplicates"</span>
@@ -4535,11 +4541,27 @@ and the <a href="../../reference/workflow-format/#expand-inputs">field reference
 </span><span id="__span-2-153"><a id="__codelineno-2-153" name="__codelineno-2-153" href="#__codelineno-2-153"></a><span class="n">conda</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"envs/vep.yaml"</span>
 </span><span id="__span-2-154"><a id="__codelineno-2-154" name="__codelineno-2-154" href="#__codelineno-2-154"></a>
 </span><span id="__span-2-155"><a id="__codelineno-2-155" name="__codelineno-2-155" href="#__codelineno-2-155"></a><span class="k">[report]</span>
-</span><span id="__span-2-156"><a id="__codelineno-2-156" name="__codelineno-2-156" href="#__codelineno-2-156"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"execution-status"</span><span class="p">,</span><span class="w"> </span><span class="s2">"failure-diagnosis"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"commands"</span><span class="p">,</span><span class="w"> </span><span class="s2">"file-manifest"</span><span class="p">,</span><span class="w"> </span><span class="s2">"environment"</span><span class="p">,</span><span class="w"> </span><span class="s2">"provenance"</span><span class="p">,</span><span class="w"> </span><span class="s2">"task-summary"</span><span class="p">]</span>
-</span><span id="__span-2-157"><a id="__codelineno-2-157" name="__codelineno-2-157" href="#__codelineno-2-157"></a><span class="c1"># [report].template is consumed for HTML output ("report.html" built-in or a</span>
-</span><span id="__span-2-158"><a id="__codelineno-2-158" name="__codelineno-2-158" href="#__codelineno-2-158"></a><span class="c1"># template file path); [report].format is still unsupported — `report` warns</span>
-</span><span id="__span-2-159"><a id="__codelineno-2-159" name="__codelineno-2-159" href="#__codelineno-2-159"></a><span class="c1"># when it is set (see docs/guide/src/commands/report.md)</span>
+</span><span id="__span-2-156"><a id="__codelineno-2-156" name="__codelineno-2-156" href="#__codelineno-2-156"></a><span class="c1"># template: reserved — supply a real Tera template file path to use one</span>
+</span><span id="__span-2-157"><a id="__codelineno-2-157" name="__codelineno-2-157" href="#__codelineno-2-157"></a><span class="c1"># template = "germline_report"</span>
+</span><span id="__span-2-158"><a id="__codelineno-2-158" name="__codelineno-2-158" href="#__codelineno-2-158"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">,</span><span class="w"> </span><span class="s2">"json"</span><span class="p">]</span>
+</span><span id="__span-2-159"><a id="__codelineno-2-159" name="__codelineno-2-159" href="#__codelineno-2-159"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"summary"</span><span class="p">,</span><span class="w"> </span><span class="s2">"qc_metrics"</span><span class="p">,</span><span class="w"> </span><span class="s2">"coverage"</span><span class="p">,</span><span class="w"> </span><span class="s2">"variants"</span><span class="p">,</span><span class="w"> </span><span class="s2">"annotations"</span><span class="p">,</span><span class="w"> </span><span class="s2">"provenance"</span><span class="p">]</span>
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">About <code>[report]</code> in this workflow</p>
+<p>The <code>[report]</code> block above is copied verbatim from the example file.
+<code>[report].format</code> is parsed but not consumed — the <code>report</code> command
+warns when it is set and selects the format via <code>--format</code>/<code>-f</code>
+instead. <code>[report].sections</code> acts as a whitelist filter over the
+engine's built-in section IDs (<code>universal</code>, <code>execution-status</code>,
+<code>failure-diagnosis</code>, <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>,
+<code>rule-captions</code>, <code>file-manifest</code>, <code>environment</code>, <code>metrics</code>,
+<code>aggregate-metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
+<code>task-summary</code>, <code>software-versions</code>). Of the six free-form names here, only
+<code>provenance</code> matches a built-in ID — so a report generated from
+this workflow would contain just the provenance section. See
+<a href="../../commands/report/">the report command</a> for the supported
+surface.</p>
+</div>
 <h3 id="sample-expansion">Sample Expansion<a class="headerlink" href="#sample-expansion" title="Permanent link">#</a></h3>
 <p>The <code>[[sample_groups]]</code> table is the single source of truth for the cohort:</p>
 <ul>
@@ -4582,7 +4604,7 @@ compute failing at this step for scientific reasons.</p>
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/07_wgs_germline.oxoflow
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>✓<span class="w"> </span>examples/gallery/07_wgs_germline.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">12</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">15</span><span class="w"> </span>dependencies
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>✓<span class="w"> </span>examples/gallery/07_wgs_germline.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">12</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">14</span><span class="w"> </span>dependencies
 </span></code></pre></div>
 <h3 id="resource-summary">Resource Summary<a class="headerlink" href="#resource-summary" title="Permanent link">#</a></h3>
 <table>
@@ -4605,7 +4627,7 @@ compute failing at this step for scientific reasons.</p>
 <td>bwa_mem2_align</td>
 <td>16</td>
 <td>32G</td>
-<td>docker</td>
+<td>conda</td>
 </tr>
 <tr>
 <td>mark_duplicates</td>

@@ -3950,7 +3950,7 @@
 </ul>
 <div class="admonition note">
 <p class="admonition-title">Auxiliary files</p>
-<p>This workflow expects a few user-provided files next to the <code>.oxoflow</code> definition: <code>scripts/seurat_analysis.R</code> (QC, normalization, clustering, UMAP), <code>templates/sc_report.Rmd</code> (the report template), and the Conda environment files under <code>envs/</code>. They are omitted from the gallery to keep the example focused on the workflow structure.</p>
+<p>This workflow references a few helper files that ship with the gallery: <code>scripts/seurat_analysis.R</code> (QC, normalization, clustering, UMAP), <code>templates/sc_report.Rmd</code> (the report template), and the Conda environment files under <code>envs/</code>. Browse them in <a href="https://github.com/Traitome/oxo-flow/tree/main/examples/gallery">examples/gallery/</a> alongside the <code>.oxoflow</code> definition.</p>
 </div>
 <h3 id="computational-challenges">Computational Challenges<a class="headerlink" href="#computational-challenges" title="Permanent link">#</a></h3>
 <p>scRNA-seq workflows are significantly more resource-intensive than bulk RNA-seq:</p>
@@ -3962,10 +3962,10 @@
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/09_single_cell_rnaseq.oxoflow
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/09_single_cell_rnaseq.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">3</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">3</span><span class="w"> </span>dependencies
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/09_single_cell_rnaseq.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">3</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">2</span><span class="w"> </span>dependencies
 </span></code></pre></div>
 <h3 id="run">Run<a class="headerlink" href="#run" title="Permanent link">#</a></h3>
-<p>Samples come from the <code>[[sample_groups]]</code> block in the workflow file (edit the list to match your data, or pass <code>--sample</code> on the CLI). CellRanger expects standard 10x demultiplexed FASTQs under <code>raw/</code>, named <code>{sample}_S1_L001_R1_001.fastq.gz</code> / <code>..._R2_001.fastq.gz</code>; <code>--sample={sample}</code> selects the matching files:</p>
+<p>Samples come from the <code>[[sample_groups]]</code> block in the workflow file (edit the list to match your data, or pass <code>--samples</code> on the CLI). CellRanger expects standard 10x demultiplexed FASTQs under <code>raw/</code>, named <code>{sample}_S1_L001_R1_001.fastq.gz</code> / <code>..._R2_001.fastq.gz</code>; <code>--sample={sample}</code> in the CellRanger command selects the matching files:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/09_single_cell_rnaseq.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">2</span>
 </span></code></pre></div>
 <h2 id="further-reading">Further Reading<a class="headerlink" href="#further-reading" title="Permanent link">#</a></h2>

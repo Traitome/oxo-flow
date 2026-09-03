@@ -4300,15 +4300,15 @@ pulled verbatim and never shadowed by the retry.</p>
 </span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">fastp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"0.23.4"</span>
 </span></code></pre></div>
 <h3 id="reference-in-a-rule">Reference in a rule<a class="headerlink" href="#reference-in-a-rule" title="Permanent link">#</a></h3>
-<p>The <code>pixi</code> value is the pixi <strong>environment name</strong> (the default environment
-in <code>pixi.toml</code> is named <code>default</code>), not a file path:</p>
+<p>The <code>pixi</code> value is the path to the <strong>manifest file</strong> (<code>pixi.toml</code>),
+relative to the workflow root:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"default"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"pixi.toml"</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc input.fastq.gz -o qc/"</span>
 </span></code></pre></div>
-<p>oxo-flow runs <code>pixi install -e default</code> once, then wraps the command as
-<code>pixi run -e default &lt;command&gt;</code>.</p>
+<p>oxo-flow runs <code>pixi install --manifest-path pixi.toml</code> once, then wraps the
+command as <code>pixi run --manifest-path pixi.toml &lt;command&gt;</code>.</p>
 <hr />
 <h2 id="python-virtual-environments">Python Virtual Environments<a class="headerlink" href="#python-virtual-environments" title="Permanent link">#</a></h2>
 <h3 id="create-a-requirements-file">Create a requirements file<a class="headerlink" href="#create-a-requirements-file" title="Permanent link">#</a></h3>

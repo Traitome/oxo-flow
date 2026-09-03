@@ -4590,7 +4590,7 @@
 <td><code>--timeout</code></td>
 <td>—</td>
 <td><code>0</code> (disabled)</td>
-<td>Timeout per job in seconds</td>
+<td>Timeout per job in seconds, or a duration like <code>1h</code>/<code>30m</code></td>
 </tr>
 <tr>
 <td><code>--max-threads</code></td>
@@ -4637,7 +4637,7 @@
 <tr>
 <td><code>--max-submitted</code></td>
 <td>—</td>
-<td><code>N</code></td>
+<td>profile default (<code>50</code>)</td>
 <td>Cluster jobs in flight at once (overrides the profile's <code>max_submitted</code>)</td>
 </tr>
 <tr>
@@ -4679,7 +4679,7 @@
 <tr>
 <td><code>--samples</code></td>
 <td>—</td>
-<td><code>LIST</code></td>
+<td>all discovered samples</td>
 <td>Sample selection: <code>@path</code> <strong>replaces</strong> the workflow's samples from a samplesheet, <code>+@path</code> <strong>appends</strong> (same-name groups merge, new groups added); names <strong>filter</strong> (or <strong>declare</strong> when the workflow ships no samples), <code>first:N</code> (pilot) and <code>ready</code> (samples whose entry inputs are complete) <strong>filter</strong>. Repeatable, comma-separated</td>
 </tr>
 <tr>
@@ -4780,7 +4780,8 @@ outputs are pruned too. Naming a when-gated-false target explicitly
 reports it and aborts with "nothing to run" instead of planning a run
 that cannot produce output.</p>
 <h3 id="set-a-per-job-timeout">Set a per-job timeout<a class="headerlink" href="#set-a-per-job-timeout" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--timeout<span class="w"> </span><span class="m">3600</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># 3600 seconds, or equivalently:</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--timeout<span class="w"> </span>1h
 </span></code></pre></div>
 <h3 id="limit-resource-usage">Limit resource usage<a class="headerlink" href="#limit-resource-usage" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Use only 16 threads and 32GB memory</span>
