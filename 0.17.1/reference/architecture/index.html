@@ -1,0 +1,5118 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="oxo-flow Documentation — Rust-native bioinformatics pipeline engine">
+      
+      
+      
+        <link rel="canonical" href="https://traitome.github.io/oxo-flow/0.17.1/reference/architecture/">
+      
+      
+        <link rel="prev" href="../../commands/validate/">
+      
+      
+        <link rel="next" href="../workflow-format/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>System Architecture - oxo-flow</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#system-architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="oxo-flow" class="md-header__button md-logo" aria-label="oxo-flow" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            oxo-flow
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              System Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Traitome/oxo-flow" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Traitome/oxo-flow
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="oxo-flow" class="md-nav__button md-logo" aria-label="oxo-flow" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    oxo-flow
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Traitome/oxo-flow" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Traitome/oxo-flow
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://oxo-flow-community.github.io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Community
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/first-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your First Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/custom-scripts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing Custom Scripts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Variant Calling Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/environment-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Environment Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../gallery/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Gallery
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workflow Gallery
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/hello-world/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    01 — Hello World
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/file-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    02 — File Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/parallel-samples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    03 — Parallel Samples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/scatter-gather/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    04 — Scatter-Gather
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/environment-mgmt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    05 — Environment Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/rnaseq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    06 — RNA-seq Quantification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/wgs-germline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    07 — WGS Germline Calling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/multiomics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    08 — Multi-Omics Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/single-cell-rnaseq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    09 — Single-Cell RNA-seq
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/transform-operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    10 — Transform Operator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/conditional-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    11 — Conditional Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/cohort-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    12 — Cohort Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/simple-variant-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    13 — Germline Variant Calling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/paired-experiment-control/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    14 — Paired Experiment-Control
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/paired-experiment-control-pairs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    15 — Paired Experiment-Control (Pairs)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/16s-qiime2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    16 — 16S Amplicon (QIIME2)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-to Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-to Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/create-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Create a Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/web-editor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build on the Web Canvas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/use-environments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use Environments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-on-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run on a Cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/resource-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource Tuning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/generate-reports/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generate Reports
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/experiment-control-pairing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiment-Control Pairing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/cohort-sample-groups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cohort Sample Groups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/concurrent-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrent Runs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/conditional-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conditional Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/china-mirrors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    China Mirrors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/editor-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Editor Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/desktop-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Desktop App Packaging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/batch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    batch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/clean/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    clean
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/completions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    completions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/debug/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    debug
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    diff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/dry-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dry-run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/env/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    env
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/export/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/init/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    init
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    info
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    license
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/lint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/publish/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    publish
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/pull/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    pull
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/report/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    report
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/resume/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    resume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/serve/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    serve
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/test/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    test
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/touch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    touch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/validate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    validate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture & Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture & Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#design-pillars" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Pillars
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#system-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace Topology
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-core-engine-layered-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Core Engine: Layered Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Core Engine: Layered Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layer-2-workflow-definition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 2 — Workflow definition
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-3-planning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 3 — Planning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-4-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 4 — Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-5-platform-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 5 — Platform services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-expansion-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Expansion Engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling &amp; Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checkpoint-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint &amp; Resume
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-subsystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Subsystem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#web-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web Platform
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-subsystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI Subsystem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-cutting-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Cutting Design Decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cross-Cutting Design Decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dag-first-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG-first execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#planexecute-split" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan/execute split
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resources-as-constraints-not-hints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resources as constraints, not hints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-execution-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint = execution truth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#process-hygiene" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Process hygiene
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-typed-in-the-library-ergonomic-at-the-edge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors: typed in the library, ergonomic at the edge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-runtime-concurrency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Async runtime &amp; concurrency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#technology-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Technology Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflow-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../versioning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Versioning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wildcards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wildcards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dag-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAG Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dag-edit-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAG Edit API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../environment-system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Environment System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../china-mirrors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    China Network Mirrors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../execution-backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Backends
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reporting-system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reporting System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../webhook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-system-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web System Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-translation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Translation Layer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI-Powered CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluate the AI Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../diagnostics-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagnostics Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cloud-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cloud Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plugin-system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Licensing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Deployment
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/deploy-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#design-pillars" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Pillars
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#system-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace Topology
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-core-engine-layered-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Core Engine: Layered Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Core Engine: Layered Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layer-2-workflow-definition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 2 — Workflow definition
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-3-planning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 3 — Planning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-4-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 4 — Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-5-platform-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 5 — Platform services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-expansion-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Expansion Engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling &amp; Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checkpoint-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint &amp; Resume
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-subsystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Subsystem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#web-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web Platform
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-subsystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI Subsystem
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-cutting-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Cutting Design Decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cross-Cutting Design Decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dag-first-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAG-first execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#planexecute-split" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plan/execute split
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resources-as-constraints-not-hints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resources as constraints, not hints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-execution-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint = execution truth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#process-hygiene" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Process hygiene
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-typed-in-the-library-ergonomic-at-the-edge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors: typed in the library, ergonomic at the edge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-runtime-concurrency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Async runtime &amp; concurrency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#technology-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Technology Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/Traitome/oxo-flow/edit/main/docs/guide/src/reference/architecture.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="system-architecture">System Architecture<a class="headerlink" href="#system-architecture" title="Permanent link">#</a></h1>
+<p>oxo-flow is a Rust-native bioinformatics pipeline engine. Workflows are
+declared once, in a TOML <code>.oxoflow</code> file, and compiled into a directed
+acyclic graph before any compute runs. The engine fans rules out across
+samples, experiment pairs, and tool parameters, executes each step in a
+declared software environment under explicit resource limits, checkpoints
+every result for exact resume, and exposes the same engine through three
+front doors: a CLI, a web server with a browser workspace, and an
+AI-assistant layer grounded on deterministic core APIs.</p>
+<p>This page is the architectural map: how the crates are cut, how the engine
+is layered, and how a workflow travels from file to finished report. It is
+written top-down — each layer links to a dedicated reference page.</p>
+<hr />
+<h2 id="design-pillars">Design Pillars<a class="headerlink" href="#design-pillars" title="Permanent link">#</a></h2>
+<p>Six commitments shape every subsystem:</p>
+<ol>
+<li><strong>One declarative source of truth.</strong> The <code>.oxoflow</code> TOML file fully
+   describes the workflow: steps, wildcards, environments, resources,
+   gates. Nothing meaningful lives only in a script or a UI state.</li>
+<li><strong>Plan fully, then execute.</strong> Wildcard expansion, DAG construction,
+   cycle detection, and target selection all happen before the first job
+   starts. What can be decided statically is decided statically.</li>
+<li><strong>Hermetic per-rule environments.</strong> Every rule names its software
+   environment (conda, docker, …); the engine resolves, builds, caches,
+   and wraps it — tool versions never leak between steps.</li>
+<li><strong>Resources as first-class constraints.</strong> Threads, memory, GPU, and
+   custom pools are declared per rule and enforced by a scheduler that
+   waits instead of over-subscribing.</li>
+<li><strong>Resumable by construction.</strong> A checkpoint captures the execution
+   truth (per-rule state, wildcard domains, timings); resume replays it
+   and re-runs only what provably changed.</li>
+<li><strong>Observable and AI-native.</strong> Machine-readable status/graph/JSON
+   outputs on stdout, human logs on stderr, and an AI layer that explains
+   and edits workflows only through deterministic engine APIs.</li>
+</ol>
+<hr />
+<h2 id="system-context">System Context<a class="headerlink" href="#system-context" title="Permanent link">#</a></h2>
+<p>oxo-flow sits between the person defining the analysis and the machines
+running it. One engine, three interaction surfaces, a fully external
+execution substrate.</p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph actors["Actors"]
+        bio["Bioinformatician&lt;br/&gt;(terminal)"]
+        webuser["Analyst&lt;br/&gt;(browser)"]
+        agent["AI assistant&lt;br/&gt;(LLM agent)"]
+    end
+
+    subgraph surfaces["oxo-flow surfaces"]
+        cli["oxo-flow CLI&lt;br/&gt;30 subcommands"]
+        web["Web server&lt;br/&gt;axum + REST + SSE"]
+        ai["AI layer&lt;br/&gt;orchestrator + tools"]
+    end
+
+    subgraph world["Execution substrate"]
+        fs["Working directory&lt;br/&gt;inputs / outputs / logs"]
+        env["Environment engines&lt;br/&gt;conda · mamba · pixi&lt;br/&gt;docker · singularity&lt;br/&gt;venv · modules"]
+        hpc["HPC schedulers&lt;br/&gt;SLURM · PBS · SGE · LSF"]
+        obj["Object storage&lt;br/&gt;S3 · GCS"]
+        llm["LLM providers&lt;br/&gt;DeepSeek · Claude&lt;br/&gt;OpenAI-compatible · Ollama"]
+        git["Git remotes&lt;br/&gt;workflow repositories"]
+    end
+
+    bio --&gt; cli
+    webuser --&gt; web
+    cli -- "serve --open launches the server" --&gt; web
+    agent --&gt; ai
+    cli --&gt; ai
+
+    cli --&gt; fs
+    web --&gt; fs
+    cli --&gt; env
+    web --&gt; env
+    cli --&gt; hpc
+    cli --&gt; obj
+    web --&gt; obj
+    cli --&gt; git
+    web --&gt; git
+    ai --&gt; llm</code></pre>
+<p>The three surfaces are thin: they parse intent, call the engine, and
+render results. All semantics live in one core library, so a workflow
+behaves identically in a terminal, a browser, and an AI session.</p>
+<hr />
+<h2 id="workspace-topology">Workspace Topology<a class="headerlink" href="#workspace-topology" title="Permanent link">#</a></h2>
+<p>oxo-flow is a Cargo workspace. Dependency directions are strict and
+acyclic — <code>oxo-flow-ai</code> is deliberately standalone so the AI layer can be
+compiled, licensed, and audited in isolation.</p>
+<table>
+<thead>
+<tr>
+<th>Crate</th>
+<th>Kind</th>
+<th>Depends on</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>oxo-flow-core</code></td>
+<td>library</td>
+<td>—</td>
+<td>The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting</td>
+</tr>
+<tr>
+<td><code>oxo-flow-ai</code></td>
+<td>library</td>
+<td>—</td>
+<td>AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system</td>
+</tr>
+<tr>
+<td><code>oxo-flow-web</code></td>
+<td>library</td>
+<td>core, ai</td>
+<td>REST/WebSocket server: 9 domains, storage backends, SSE broadcast, OpenAPI</td>
+</tr>
+<tr>
+<td><code>oxo-flow-cli</code></td>
+<td>binary</td>
+<td>core, ai, web</td>
+<td>User-facing <code>oxo-flow</code> binary: 30 subcommands, run loop, human rendering</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TB
+    subgraph binary["Binary"]
+        CLI["oxo-flow-cli&lt;br/&gt;(crate oxo-flow)"]
+    end
+    subgraph servers["Server libraries"]
+        WEB["oxo-flow-web&lt;br/&gt;REST · SSE · OpenAPI"]
+    end
+    subgraph libs["Standalone libraries"]
+        CORE["oxo-flow-core&lt;br/&gt;the engine"]
+        AI["oxo-flow-ai&lt;br/&gt;providers · knowledge · tools"]
+    end
+    FE["frontend/&lt;br/&gt;React 19 + Vite SPA"]
+
+    CLI --&gt; CORE
+    CLI --&gt; AI
+    CLI --&gt; WEB
+    WEB --&gt; CORE
+    WEB --&gt; AI
+    FE -- "HTTP + SSE" --&gt; WEB</code></pre>
+<p>The AI crate never imports the engine. Where AI needs engine facts — a
+workflow's rules, a DAG, a dry-run preview — the CLI and web crates pass
+them in as data (see <a href="#ai-subsystem">AI Subsystem</a>).</p>
+<hr />
+<h2 id="the-core-engine-layered-model">The Core Engine: Layered Model<a class="headerlink" href="#the-core-engine-layered-model" title="Permanent link">#</a></h2>
+<p><code>oxo-flow-core</code> is organized as five layers. Dependencies point downward:
+the execution layer knows the planning layer's outputs, never the reverse.</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph L1["L1 · Interfaces"]
+        direction LR
+        cmd["CLI commands&lt;br/&gt;run · resume · dry-run&lt;br/&gt;validate · graph · …"]
+        api["Web domain handlers&lt;br/&gt;HTTP adapters"]
+    end
+
+    subgraph L2["L2 · Workflow definition"]
+        direction LR
+        model["config/&lt;br/&gt;parse · model&lt;br/&gt;expand · samples"]
+        rulem["rule.rs&lt;br/&gt;Rule · EnvironmentSpec&lt;br/&gt;Transform · Resources"]
+    end
+
+    subgraph L3["L3 · Planning"]
+        direction LR
+        dagm["dag.rs&lt;br/&gt;build · infer · order"]
+        plan["readiness · deep_check&lt;br/&gt;scientific_preflight&lt;br/&gt;config_impact"]
+    end
+
+    subgraph L4["L4 · Execution"]
+        direction LR
+        sched["scheduler.rs&lt;br/&gt;ResourcePool"]
+        exec["executor/&lt;br/&gt;process · checkpoint&lt;br/&gt;staging · rss · timeout"]
+        drv["backend/&lt;br/&gt;BackendDriver"]
+    end
+
+    subgraph L5["L5 · Platform services"]
+        direction LR
+        envm["environment.rs&lt;br/&gt;8 backends"]
+        storm["storage/&lt;br/&gt;local · s3 · gcs"]
+        clum["cluster.rs&lt;br/&gt;SLURM · PBS · SGE · LSF"]
+        misc["report · container&lt;br/&gt;webhook · git · format"]
+    end
+
+    L1 --&gt; L2
+    L2 --&gt; L3
+    L3 --&gt; L4
+    L4 --&gt; L5</code></pre>
+<h3 id="layer-2-workflow-definition">Layer 2 — Workflow definition<a class="headerlink" href="#layer-2-workflow-definition" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config/</code></td>
+<td><code>.oxoflow</code> TOML → <code>WorkflowConfig</code>: parsing, defaults, include composition, sample sheets, wildcard expansion, reference resolution</td>
+</tr>
+<tr>
+<td><code>rule.rs</code></td>
+<td>The rule record: inputs/outputs (list, map, dir patterns), shell/script, <code>when</code> gates, <code>[[transform]]</code> split→map→combine, <code>EnvironmentSpec</code>, <code>Resources</code></td>
+</tr>
+<tr>
+<td><code>wildcard.rs</code></td>
+<td>Pattern grammar (<code>{sample}</code>, <code>{values.name}</code>, <code>{config.x}</code>, <code>{meta.col}</code>), pattern→regex compilation, discovery walkers, Cartesian combination</td>
+</tr>
+<tr>
+<td><code>references.rs</code></td>
+<td><code>@reference</code> resolution against known databases</td>
+</tr>
+<tr>
+<td><code>deep_check.rs</code></td>
+<td>Static consistency checks beyond <code>validate</code> (D001–D004 codes)</td>
+</tr>
+<tr>
+<td><code>config_impact.rs</code></td>
+<td>Config-key → rule reference graph; fingerprints decide precise checkpoint invalidation</td>
+</tr>
+</tbody>
+</table>
+<h3 id="layer-3-planning">Layer 3 — Planning<a class="headerlink" href="#layer-3-planning" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dag.rs</code></td>
+<td><code>WorkflowDag</code>: output→producer registration (incl. <code>output_pattern</code>), exact-string + best-effort inference (glob, directory, template regex), topological order, parallel groups, cycle detection</td>
+</tr>
+<tr>
+<td><code>readiness.rs</code></td>
+<td>Per-sample readiness attribution: which samples a rule instance belongs to</td>
+</tr>
+<tr>
+<td><code>scientific_preflight.rs</code></td>
+<td>Deterministic, evidence-backed checks (GATK best practices and similar) that a design would fail <em>scientifically</em> — caught before hours of compute</td>
+</tr>
+<tr>
+<td><code>config_impact.rs</code></td>
+<td>What a config edit invalidates, precisely</td>
+</tr>
+</tbody>
+</table>
+<h3 id="layer-4-execution">Layer 4 — Execution<a class="headerlink" href="#layer-4-execution" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scheduler.rs</code></td>
+<td>Ready-set computation (priority descending, name ascending), ResourcePool accounting</td>
+</tr>
+<tr>
+<td><code>executor/process.rs</code></td>
+<td>Job execution: one process group per run (<code>pgid</code>), timeout, cancellation</td>
+</tr>
+<tr>
+<td><code>executor/checkpoint.rs</code></td>
+<td><code>CheckpointState</code>: per-rule status, wildcard domains, timings — the resume truth</td>
+</tr>
+<tr>
+<td><code>executor/staging.rs</code>, <code>content_cache.rs</code></td>
+<td>Input staging; content-addressed caching of completed work</td>
+</tr>
+<tr>
+<td><code>executor/rss.rs</code></td>
+<td>Peak-RSS sampling per job (reported in run reports)</td>
+</tr>
+<tr>
+<td><code>executor/workdir_lock.rs</code>, <code>env_create_lock.rs</code></td>
+<td>Concurrency guards: one writer per workdir; no concurrent env builds</td>
+</tr>
+<tr>
+<td><code>executor/output_invalidation.rs</code></td>
+<td>Output freshness evaluation against the checkpoint</td>
+</tr>
+<tr>
+<td><code>reentry.rs</code></td>
+<td>Checkpoint re-entry: re-expand the plan from templates, merge with recorded state</td>
+</tr>
+<tr>
+<td><code>backend/</code></td>
+<td><code>BackendDriver</code> executes a <code>ScheduledPlan</code> through an <code>ExecutorBackend</code> — the local executor and cluster submissions produce the same <code>JobRecord</code> stream</td>
+</tr>
+</tbody>
+</table>
+<h3 id="layer-5-platform-services">Layer 5 — Platform services<a class="headerlink" href="#layer-5-platform-services" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>environment.rs</code></td>
+<td>Backend trait + resolver for 8 environment kinds; content-hash env naming; setup-state cache</td>
+</tr>
+<tr>
+<td><code>storage/</code></td>
+<td>Staging and remote storage: <code>local</code>, <code>s3</code>, <code>gcs</code> behind one trait</td>
+</tr>
+<tr>
+<td><code>cluster.rs</code></td>
+<td>SLURM / PBS / SGE / LSF job-script generation with environment wrapping</td>
+</tr>
+<tr>
+<td><code>container.rs</code></td>
+<td>Dockerfile / Singularity definition generation</td>
+</tr>
+<tr>
+<td><code>report.rs</code>, <code>report_metrics/</code></td>
+<td>HTML + JSON run reports; per-rule metrics sections</td>
+</tr>
+<tr>
+<td><code>webhook.rs</code></td>
+<td><code>workflow_started</code> / <code>completed</code> / <code>failed</code> notifications</td>
+</tr>
+<tr>
+<td><code>git.rs</code></td>
+<td>Workflow-repo clone/pull with mirror fallback; git-ref-as-version</td>
+</tr>
+<tr>
+<td><code>software_versions.rs</code></td>
+<td>Tool-version capture for reproducibility statements</td>
+</tr>
+<tr>
+<td><code>result.rs</code>, <code>format.rs</code>, <code>plugin.rs</code>, <code>stage.rs</code></td>
+<td>Result registry, output formatting, plugin hooks, metro-map stage inference</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="workflow-lifecycle">Workflow Lifecycle<a class="headerlink" href="#workflow-lifecycle" title="Permanent link">#</a></h2>
+<p>The configuration moves through a type-state machine — the compiler
+refuses to execute an unvalidated workflow, because <code>WorkflowState&lt;S&gt;</code>
+wraps the config and only exposes the transitions you have earned:</p>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; Parsed: parse the .oxoflow TOML
+    Parsed --&gt; Validated: validate — schema, unknown keys, rule references, cycles
+    Validated --&gt; Ready: prepare — defaults, environments, includes
+    Ready --&gt; Expanded: expand wildcards, fan out, bake gates
+    Expanded --&gt; Executed: run loop — scheduler + executor
+    Expanded --&gt; Expanded: runtime output_pattern fan-out
+    Executed --&gt; [*]: report + checkpoint</code></pre>
+<p>Two properties follow from this encoding:</p>
+<ul>
+<li><strong>Validation is not optional.</strong> A <code>Ready</code> workflow has already passed
+  every static check; the run loop never re-validates.</li>
+<li><strong>Re-expansion is safe.</strong> Templates are preserved on first expansion
+  (<code>rule_templates</code>), so checkpoint re-entry re-runs expansion from the
+  original definitions and merges with recorded state.</li>
+</ul>
+<hr />
+<h2 id="the-expansion-engine">The Expansion Engine<a class="headerlink" href="#the-expansion-engine" title="Permanent link">#</a></h2>
+<p>Expansion is where a declarative workflow becomes concrete instances. It
+is also the engine's most opinionated design: <strong>all fan-out dimensions
+are declared, none are discovered by accident.</strong></p>
+<p>A rule can fan out along four dimensions:</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Source</th>
+<th>Declared by</th>
+<th>Fan-out</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sample groups</td>
+<td><code>[[sample_groups]]</code> / sample sheets</td>
+<td><code>{sample}</code>, <code>{group}</code>, metadata columns</td>
+<td>plan time</td>
+</tr>
+<tr>
+<td>Experiment pairs</td>
+<td><code>[[pairs]]</code></td>
+<td><code>{pair_id}</code>, <code>{experiment}</code>, <code>{control}</code>, pair metadata</td>
+<td>plan time</td>
+</tr>
+<tr>
+<td>Parameter values</td>
+<td><code>[[values]]</code> / <code>values_from</code></td>
+<td><code>{name}</code> or <code>{values.name}</code> — in inputs, outputs, shell, <code>when</code>, <code>expand_inputs</code>, <strong>or <code>output_pattern</code></strong></td>
+<td>plan time</td>
+</tr>
+<tr>
+<td>Runtime outputs</td>
+<td><code>output_pattern</code></td>
+<td>fresh <code>{wildcards}</code> not bound by any table above</td>
+<td>after the producer completes</td>
+</tr>
+</tbody>
+</table>
+<pre class="mermaid"><code>flowchart TB
+    tmpl["Rule template"] --&gt; scan{"Trigger scan:&lt;br/&gt;which dimensions bind?"}
+
+    scan -- "sample / pair / values&lt;br/&gt;wildcards bound" --&gt; static["Plan-time fan-out"]
+    scan -- "fresh wildcards&lt;br/&gt;(output_pattern only)" --&gt; defer["Defer whole rule&lt;br/&gt;(pending consumers)"]
+
+    static --&gt; cart["Cartesian product&lt;br/&gt;constraints filtered&lt;br/&gt;when-gates evaluated&lt;br/&gt;&amp; baked per instance"]
+    cart --&gt; inst["Concrete instances&lt;br/&gt;expansion_samples / _values / _pairs&lt;br/&gt;recorded for attribution"]
+
+    defer --&gt; wait["Wait for producer&lt;br/&gt;instances to complete"]
+    wait --&gt; disc["Runtime discovery:&lt;br/&gt;scan baked pattern on disk&lt;br/&gt;merge producer bindings"]
+    disc --&gt; union["Domain union per template&lt;br/&gt;(dedup by combo key,&lt;br/&gt;persisted to checkpoint)"]
+    union --&gt; instantiate["Instantiate consumers:&lt;br/&gt;per domain combo × own values&lt;br/&gt;expand_inputs materialized"]
+    instantiate --&gt; rebuild["DAG rebuilt,&lt;br/&gt;instances join the plan"]
+
+    inst --&gt; dag["Plan DAG"]
+    rebuild --&gt; dag</code></pre>
+<p>Guarantees the engine enforces here:</p>
+<ul>
+<li><strong>Bound wildcards never stay literal.</strong> A wildcard bound by a table is
+  baked into every instance; a wildcard bound by nothing is either a
+  fresh output_pattern wildcard (deferred) or a plan-time warning.</li>
+<li><strong>Fresh wildcards have one producer</strong> (v1). A bare redeclaration is a
+  validation error; a chained consumer-producer is legal.</li>
+<li><strong>Per-instance <code>when</code> gates are evaluated at plan time</strong> (with
+  <code>wildcard.*</code> / <code>{meta.*}</code> baked into the survivors), so the planned
+  instance set equals the executed set — no phantom jobs.</li>
+<li><strong>Runtime fan-out is idempotent.</strong> Discovered domains are persisted
+  before consumers instantiate; resume replays them without re-running
+  the producer.</li>
+</ul>
+<hr />
+<h2 id="execution-pipeline">Execution Pipeline<a class="headerlink" href="#execution-pipeline" title="Permanent link">#</a></h2>
+<p>A <code>run</code> travels through the engine like this (the <code>resume</code> path rejoins
+at the checkpoint restore):</p>
+<pre class="mermaid"><code>sequenceDiagram
+    autonumber
+    participant U as User
+    participant C as CLI run loop
+    participant E as Expansion
+    participant D as Plan DAG
+    participant S as Scheduler
+    participant X as Executor
+    participant V as Environment
+    participant K as Checkpoint
+
+    U-&gt;&gt;C: oxo-flow run wf.oxoflow -j 8
+    C-&gt;&gt;E: parse → validate → expand_wildcards
+    E--&gt;&gt;C: concrete rule instances
+    C-&gt;&gt;D: WorkflowDag::from_rules
+    D--&gt;&gt;C: topological execution order
+    C-&gt;&gt;K: restore checkpoint (resume) / init
+
+    loop until plan drains
+        C-&gt;&gt;S: ready set (deps satisfied)
+        S-&gt;&gt;S: priority order · resource wait/reserve
+        S-&gt;&gt;X: spawn job (own process group)
+        X-&gt;&gt;V: resolve → setup? → wrap command
+        V--&gt;&gt;X: wrapped command
+        X-&gt;&gt;X: run · monitor · timeout · peak-RSS
+        X-&gt;&gt;K: persist status + provenance
+        X--&gt;&gt;C: JobRecord
+
+        alt producer with output_pattern finished
+            C-&gt;&gt;C: discover files → domain union
+            C-&gt;&gt;E: instantiate deferred consumers
+            C-&gt;&gt;D: rebuild DAG, append to order
+        end
+    end
+
+    C-&gt;&gt;K: finalize checkpoint
+    C--&gt;&gt;U: summary · report · webhook</code></pre>
+<p>Forward-safety — new instances joining a plan that is already running —
+comes from completion ordering, not DAG topology: consumers of runtime
+domains are only created once every producer instance has succeeded, and
+they enter the plan exactly where checkpoint re-entry inserts replayed
+rules.</p>
+<hr />
+<h2 id="scheduling-resources">Scheduling &amp; Resources<a class="headerlink" href="#scheduling-resources" title="Permanent link">#</a></h2>
+<p>The scheduler never over-subscribes. When a job's requirements cannot be
+met, it waits; when they are impossible on this machine, it fails fast
+and names the conflict.</p>
+<pre class="mermaid"><code>flowchart LR
+    ready["Ready set&lt;br/&gt;(priority ↓, name ↑)"] --&gt; check{"ResourcePool:&lt;br/&gt;threads + memory&lt;br/&gt;available?"}
+    check -- yes --&gt; reserve["Reserve"]
+    check -- "no, but satisfiable later" --&gt; wait["Queue &amp; wait&lt;br/&gt;(holder diagnostics,&lt;br/&gt;priority aging)"]
+    wait --&gt; check
+    check -- "impossible request&lt;br/&gt;(&gt; total threads/memory)" --&gt; fastfail["Fail fast:&lt;br/&gt;ResourceGroupExhausted&lt;br/&gt;names the rule"]
+    reserve --&gt; run["Execute job"]
+    run --&gt; release["Release resources&lt;br/&gt;(success · failure · timeout)"]
+    release --&gt; ready</code></pre>
+<p>Resources are declarative (<code>threads</code>, <code>memory</code>, <code>gpu</code>, custom groups) and
+enforced per job; <code>threads &lt;= 1</code> is the documented "unset" sentinel, and
+every runtime read goes through <code>effective_threads()</code> / <code>effective_memory()</code>
+so defaults, profiles, and cluster profiles compose deterministically.</p>
+<hr />
+<h2 id="checkpoint-resume">Checkpoint &amp; Resume<a class="headerlink" href="#checkpoint-resume" title="Permanent link">#</a></h2>
+<p>The checkpoint is the execution truth — the run loop never trusts the
+filesystem alone. Rule states, discovered wildcard domains, per-rule
+timings, and input manifests live in one JSON document, persisted
+first and replayed on resume.</p>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; Pending
+    Pending --&gt; Running: deps satisfied, resources reserved
+    Running --&gt; Success: exit 0, outputs verified
+    Running --&gt; Failed: nonzero exit, timeout, residual placeholder
+    Failed --&gt; Running: resume retries
+    Pending --&gt; Skipped: upstream when-gate false or target pruned
+    Success --&gt; Invalidated: input mtime/content change, config edit, workflow ref change
+    Invalidated --&gt; Running: re-expansion re-runs only the invalid set
+    Success --&gt; [*]</code></pre>
+<p>Invalidation is precise, not conservative:</p>
+<ul>
+<li><strong>Content-addressed cache keys</strong> hash the inputs that matter, so a
+  touched-but-identical input does not re-trigger work.</li>
+<li><strong><code>config_impact</code> fingerprints</strong> map a config edit to exactly the rules
+  that reference the changed key.</li>
+<li><strong>Input manifests</strong> record path + size + mtime of every consumed file;
+  checkpoint re-entry re-validates them.</li>
+<li><strong>Discovered domains are replayed</strong> — consumers of a runtime fan-out
+  re-instantiate without re-running their producer.</li>
+</ul>
+<hr />
+<h2 id="environment-subsystem">Environment Subsystem<a class="headerlink" href="#environment-subsystem" title="Permanent link">#</a></h2>
+<p>Every rule names an environment; the engine treats software provenance as
+part of the workflow, not the machine. One trait, eight backends, one
+cache.</p>
+<pre class="mermaid"><code>classDiagram
+    class EnvironmentBackend {
+        &lt;&lt;trait&gt;&gt;
+        +wrap_command(cmd, spec) String
+        +setup_command(spec) String
+        +setup_command_with_opts(spec, prefix) String
+    }
+    class Conda
+    class Mamba
+    class Pixi
+    class Docker
+    class Singularity
+    class Venv
+    class Modules
+    class System
+    EnvironmentBackend &lt;|.. Conda
+    EnvironmentBackend &lt;|.. Mamba
+    EnvironmentBackend &lt;|.. Pixi
+    EnvironmentBackend &lt;|.. Docker
+    EnvironmentBackend &lt;|.. Singularity
+    EnvironmentBackend &lt;|.. Venv
+    EnvironmentBackend &lt;|.. Modules
+    EnvironmentBackend &lt;|.. System</code></pre>
+<p>Resolution precedence: rule <code>environment</code> → rule <code>env_group</code> (a named
+<code>[env_groups]</code> entry) → <code>[defaults].environment</code>. Setup is locked per
+environment (concurrent first uses do not race the build), env names are
+content-hashed for file-backed specs (edits build a fresh env instead of
+silently reusing a stale one), and setup state is cached and persisted so
+subsequent runs skip straight to wrapping.</p>
+<hr />
+<h2 id="web-platform">Web Platform<a class="headerlink" href="#web-platform" title="Permanent link">#</a></h2>
+<p>The web crate is a <strong>domain-driven modular monolith</strong>: nine business
+domains behind one axum router, with HTTP confined to the edge of each
+domain.</p>
+<pre class="mermaid"><code>flowchart LR
+    spa["React SPA&lt;br/&gt;(frontend/)"] -- "REST + SSE" --&gt; router["axum router&lt;br/&gt;server.rs"]
+
+    subgraph domains["Domains (handlers → service → core)"]
+        direction TB
+        wf["workflow"]
+        exe["execution · diagnostics"]
+        dage["dag (edit + undo)"]
+        aim["ai · chat"]
+        rest["auth · collaboration&lt;br/&gt;clusters · observability"]
+    end
+
+    router --&gt; domains
+    domains --&gt; core["oxo-flow-core"]
+    domains --&gt; store["StorageBackend&lt;br/&gt;SQLite (default)&lt;br/&gt;PostgreSQL (feature)"]
+    domains -- "events" --&gt; sse["SSE bus&lt;br/&gt;run_completed · run_failed"]
+    sse -- "live updates" --&gt; spa
+    domains --&gt; openapi["OpenAPI spec&lt;br/&gt;(generated, drift-gated)"]</code></pre>
+<p>Key principles:</p>
+<ul>
+<li>Each domain's <code>service.rs</code> has <strong>zero HTTP dependency</strong> — pure Rust
+  functions over core types; <code>handlers.rs</code> only parses requests and
+  serializes responses.</li>
+<li><strong>Dependency direction:</strong> <code>handlers.rs → service.rs → oxo_flow_core</code>.
+  The AI domain calls other domains' services, never their handlers.</li>
+<li>Real-time state reaches the SPA through an SSE bus (<code>run_completed</code>,
+  <code>run_failed</code>, execution events), not polling.</li>
+<li>The OpenAPI schema is generated from the code and gated in CI against
+  drift — the published API contract cannot rot silently.</li>
+</ul>
+<hr />
+<h2 id="ai-subsystem">AI Subsystem<a class="headerlink" href="#ai-subsystem" title="Permanent link">#</a></h2>
+<p><code>oxo-flow-ai</code> is a standalone library (it does not depend on the engine)
+with three moving parts: providers, an agent loop, and an embedded
+knowledge base. The CLI and web crates act as adapters that hand the AI
+layer engine facts as data.</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph providers["Providers"]
+        direction LR
+        deepseek["DeepSeek"]
+        claude["Claude"]
+        oai["OpenAI-compatible&lt;br/&gt;(Groq · Azure · …)"]
+        ollama["Ollama (local)"]
+        noop["Noop / scripted&lt;br/&gt;(deterministic replay)"]
+    end
+
+    orchestrator["Agent orchestrator&lt;br/&gt;tool-call loop · context compression&lt;br/&gt;repair on malformed calls"]
+
+    subgraph knowledge["Embedded knowledge bases"]
+        direction LR
+        bio["Bioconda tools&lt;br/&gt;bio.tools overlay"]
+        nf["nf-core modules&lt;br/&gt;commercial tools"]
+        edam["EDAM terms&lt;br/&gt;pipeline graph"]
+        skills["bioSkills&lt;br/&gt;skill graph docs"]
+    end
+
+    tools["Builtin tools&lt;br/&gt;grounded on engine output:&lt;br/&gt;validate · dry-run · explain"]
+    mcp["MCP bridge&lt;br/&gt;(external tool servers)"]
+
+    providers --&gt; orchestrator
+    orchestrator --&gt; tools
+    orchestrator -- "retrieval" --&gt; knowledge
+    orchestrator --&gt; mcp</code></pre>
+<p>Design invariants:</p>
+<ul>
+<li><strong>Grounded, not creative.</strong> Every engine-facing claim (validation
+  verdicts, DAG facts, dry-run previews) comes from deterministic core
+  APIs; the model writes prose and proposals, the engine computes truth.</li>
+<li><strong>Deterministic replay.</strong> Sessions record tool calls; the <code>scripted</code>
+  provider replays them for tests and evals without network access.</li>
+<li><strong>Skills are explicit.</strong> Prompt-injection bundles activate only when
+  declared in <code>[ai]</code> skills — discoverable, auditable, versioned.</li>
+<li><strong>Versioned knowledge.</strong> The embedded corpora regenerate through CI
+  generators on a monthly freshness gate.</li>
+</ul>
+<hr />
+<h2 id="cross-cutting-design-decisions">Cross-Cutting Design Decisions<a class="headerlink" href="#cross-cutting-design-decisions" title="Permanent link">#</a></h2>
+<h3 id="dag-first-execution">DAG-first execution<a class="headerlink" href="#dag-first-execution" title="Permanent link">#</a></h3>
+<p>All workflows compile to a DAG before execution: dependencies resolved up
+front, cycles rejected before compute is wasted, parallel groups known,
+execution order deterministic. Edge inference is <strong>exact-string first</strong>
+(template outputs ↔ inputs), then strictly best-effort (globs, declared
+directories, template regexes) — unresolved inputs keep the legacy
+no-edge behavior, never an error.</p>
+<h3 id="planexecute-split">Plan/execute split<a class="headerlink" href="#planexecute-split" title="Permanent link">#</a></h3>
+<p>Everything static happens before the first job: expansion, gating,
+ordering, target pruning, preflight. The run loop's only surprise is the
+declared one — runtime <code>output_pattern</code> fan-out, which inserts instances
+forward under completion-ordering guarantees. <code>dry-run</code> shares the same
+planning code and previews the checkpoint state a real run would produce.</p>
+<h3 id="resources-as-constraints-not-hints">Resources as constraints, not hints<a class="headerlink" href="#resources-as-constraints-not-hints" title="Permanent link">#</a></h3>
+<p>Check → reserve → execute → release, with fast failure on impossible
+requests and queueing (with aging) on contention. The same declaration
+drives local concurrency, cluster submissions, and the web runner.</p>
+<h3 id="environment-isolation">Environment isolation<a class="headerlink" href="#environment-isolation" title="Permanent link">#</a></h3>
+<p>Resolve → setup (locked, content-hashed, cached) → wrap → execute. Per
+rule, per run, reproducible; <code>oxo-flow env</code> inspects the resolved state.</p>
+<h3 id="checkpoint-execution-truth">Checkpoint = execution truth<a class="headerlink" href="#checkpoint-execution-truth" title="Permanent link">#</a></h3>
+<p>Status, domains, manifests, timings — persisted first, replayed on
+resume, invalidated precisely. <code>resume</code> re-runs only what provably
+changed; <code>status --json</code> exposes the same document for automation.</p>
+<h3 id="process-hygiene">Process hygiene<a class="headerlink" href="#process-hygiene" title="Permanent link">#</a></h3>
+<p>Each run executes in its own process group (<code>pgid</code>) — cancellation kills
+the whole tree, orphans cannot outlive the run. Workdir locks serialize
+writers; environment builds are locked globally.</p>
+<h3 id="errors-typed-in-the-library-ergonomic-at-the-edge">Errors: typed in the library, ergonomic at the edge<a class="headerlink" href="#errors-typed-in-the-library-ergonomic-at-the-edge" title="Permanent link">#</a></h3>
+<p><code>oxo-flow-core</code> returns typed <code>OxoFlowError</code> variants (thiserror) that
+callers can match on; the CLI presents them with suggestions and exits
+non-zero. Diagnostics engines (CLI + web) map raw logs to known failure
+patterns with fixes.</p>
+<h3 id="async-runtime-concurrency">Async runtime &amp; concurrency<a class="headerlink" href="#async-runtime-concurrency" title="Permanent link">#</a></h3>
+<p>The executor runs each job as a tokio task; the resource pool lives
+behind an async mutex. Concurrency is bounded by <code>-j</code> and by resources —
+never by "however many tasks happened to spawn".</p>
+<hr />
+<h2 id="technology-stack">Technology Stack<a class="headerlink" href="#technology-stack" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Technology</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Language</td>
+<td>Rust (edition 2024, <code>unsafe</code> forbidden in core)</td>
+</tr>
+<tr>
+<td>Async runtime</td>
+<td>tokio</td>
+</tr>
+<tr>
+<td>CLI framework</td>
+<td>clap (derive macros)</td>
+</tr>
+<tr>
+<td>Web framework</td>
+<td>axum + SSE</td>
+</tr>
+<tr>
+<td>Persistence</td>
+<td>SQLite (embedded) · PostgreSQL (feature-gated)</td>
+</tr>
+<tr>
+<td>Serialization</td>
+<td>serde + toml (workflows), JSON (checkpoints/reports)</td>
+</tr>
+<tr>
+<td>Templating</td>
+<td>Tera (reports)</td>
+</tr>
+<tr>
+<td>Graph algorithms</td>
+<td>petgraph</td>
+</tr>
+<tr>
+<td>Logging / tracing</td>
+<td>tracing (stderr; stdout stays machine-readable)</td>
+</tr>
+<tr>
+<td>Error handling</td>
+<td>thiserror (libraries) + anyhow (binary)</td>
+</tr>
+<tr>
+<td>Frontend</td>
+<td>React 19 + Vite SPA</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
+<ul>
+<li><a href="../workflow-format/">Workflow Format</a> — the declarative language itself</li>
+<li><a href="../wildcards/">Wildcards</a> — pattern grammar and expansion semantics</li>
+<li><a href="../dag-engine/">DAG Engine</a> — edge inference and ordering in depth</li>
+<li><a href="../environment-system/">Environment System</a> — backend resolution and caching</li>
+<li><a href="../execution-backends/">Execution Backends</a> — local vs cluster execution</li>
+<li><a href="../cloud-storage/">Cloud Storage</a> — staging and S3/GCS</li>
+<li><a href="../versioning/">Workflow Versioning</a> — git-ref-as-version semantics</li>
+<li><a href="../web-system-architecture/">Web System Architecture</a> — the web platform in depth</li>
+<li><a href="../ai-cli/">AI CLI</a> — using the AI layer from the terminal</li>
+<li><a href="../reporting-system/">Reporting System</a> — run reports and metrics</li>
+<li><a href="../diagnostics-engine/">Diagnostics Engine</a> — error pattern library</li>
+<li><a href="../glossary/">Glossary</a> — shared vocabulary</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../commands/validate/" class="md-footer__link md-footer__link--prev" aria-label="Previous: validate">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                validate
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../workflow-format/" class="md-footer__link md-footer__link--next" aria-label="Next: Workflow Format">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Workflow Format
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/Traitome/oxo-flow" target="_blank" rel="noopener" title="oxo-flow on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://oxo-flow-community.github.io/" target="_blank" rel="noopener" title="oxo-flow-community catalog" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M256 0a64 64 0 1 1 0 128 64 64 0 1 1 0-128m96 312c0 25-12.7 47-32 59.9V464c0 26.5-21.5 48-48 48h-32c-26.5 0-48-21.5-48-48v-92.1C172.7 359 160 337 160 312v-40c0-53 43-96 96-96s96 43 96 96zM96 32a56 56 0 1 1 0 112 56 56 0 1 1 0-112m16 240v32c0 32.5 12.1 62.1 32 84.7V464c0 1.2 0 2.5.1 3.7-8.5 7.6-19.7 12.3-32.1 12.3H80c-26.5 0-48-21.5-48-48v-56.6c-19.1-11-32-31.7-32-55.4v-32c0-53 43-96 96-96 12.7 0 24.8 2.5 35.9 6.9-12.6 21.4-19.9 46.4-19.9 73.1m256 192v-75.3c19.9-22.5 32-52.2 32-84.7v-32c0-26.7-7.3-51.6-19.9-73.1 11.1-4.5 23.2-6.9 35.9-6.9 53 0 96 43 96 96v32c0 23.7-12.9 44.4-32 55.4V432c0 26.5-21.5 48-48 48h-32c-12.3 0-23.6-4.6-32.1-12.3 0-1.2.1-2.5.1-3.7m48-432a56 56 0 1 1 0 112 56 56 0 1 1 0-112"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.annotate", "content.action.edit", "content.tabs.link", "content.tooltips", "navigation.instant", "navigation.instant.progress", "navigation.tracking", "navigation.indexes", "navigation.top", "navigation.footer", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
