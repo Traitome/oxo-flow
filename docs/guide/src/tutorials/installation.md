@@ -43,7 +43,7 @@ Verify the installation:
 
 ```bash
 oxo-flow --version
-# oxo-flow 0.16.0
+# oxo-flow 0.17.0
 ```
 
 !!! tip "Updating"
@@ -133,8 +133,8 @@ is a multi-arch dev build compiled from source:
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
 # Pin a specific release (or track a minor line)
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16.0
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.16
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.0
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17
 
 # CLI one-shot usage — mount your workflow directory
 docker run --rm -v "$PWD:/work" -w /work ghcr.io/traitome/oxo-flow:latest \
