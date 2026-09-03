@@ -20,16 +20,15 @@ for the design rationale).
 
 ```bash
 # 1. Capture AI outputs for the approved gold rows
-python3 eval/scripts/capture_tool.py --out outputs/tool_answers.csv
-python3 eval/scripts/capture_workflow.py workflow --out outputs/workflows --oxo-flow target/debug/oxo-flow
+python3 eval/scripts/capture_tool.py --out outputs/tool_answers.csv --trials 5
+python3 eval/scripts/capture_workflow.py workflow --out outputs/workflows --oxo-flow target/debug/oxo-flow --trials 5
 
 # 2. Judge them
 python3 eval/scripts/runner.py tool --captures outputs/tool_answers.csv
 python3 eval/scripts/runner.py workflow --captures outputs/workflows --oxo-flow target/debug/oxo-flow
 ```
 
-Results land in `eval/results.csv`; each row carries the per-metric
-scores and an `overall` mean.
+Results land in `eval/results.csv`; each row is one judged trial with per-metric scores and an `overall` mean. The runner also writes `eval/results.items.csv` (per-item aggregates with `pass@k`) and `eval/results.summary.json` (dataset-level summary, breakdowns, and capture manifest).
 
 Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol.
 
@@ -43,12 +42,10 @@ CSV path); `rule.csv` and `workflow.csv` are drafted from the gallery and the
 [oxo-flow-community](https://github.com/oxo-flow-community) workflows.
 Every row carries a `provenance_url` pointing at its primary source.
 
-Rows start at `review_status = draft` and are **skipped** by capture and
-runner until a human reviewer approves them — the benchmark only runs on
-human-verified gold. See `eval/schema.md` for the full column contracts
-and the review workflow (students and friends review the gold set, not
-the AI outputs, by comparing each row with its provenance link).
+Rows start at `review_status = draft` and are **skipped** by capture and runner until a human reviewer approves them — the benchmark only runs on human-verified gold. If no approved rows exist, the harness now fails fast instead of silently emitting an empty report. See `eval/schema.md` for the full column contracts and the publication-track review workflow.
 
 The deterministic grounding half of the tool layer is additionally
 guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —
 no API key required, runs on every push.
+
+Capture manifests record git SHA, gold/knowledge hashes, provider/model identity, sampling settings, timestamps, and per-trial metadata so later analysis can be audited and reproduced.

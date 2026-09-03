@@ -20,9 +20,9 @@ eval/
     workflow.csv          # workflow-layer items (drafted from real workflows)
   scripts/
     gen_tool_csv.py       # regenerate tool.csv from the embedded knowledge base
-    capture_tool.py       # tool layer: prompt the AI per item -> answers.csv
-    capture_workflow.py   # rule/workflow layers: generate .oxoflow files
-    runner.py             # judge captures against gold -> results.csv
+    capture_tool.py       # tool layer: prompt the AI per item/trial -> answers.csv + manifest
+    capture_workflow.py   # rule/workflow layers: generate per-trial .oxoflow files + manifests
+    runner.py             # judge captures -> detailed CSV + per-item CSV + summary JSON
     common.py             # shared stdlib helpers
 ```
 
@@ -37,12 +37,13 @@ runner.py ───────────────────────�
 ```
 
 1. **Capture** — run the AI surface against each approved gold row:
-   - tool layer: `python3 eval/scripts/capture_tool.py --out outputs/tool_answers.csv`
-   - rule layer: `python3 eval/scripts/capture_workflow.py rule --out outputs/rules`
-   - workflow layer: `python3 eval/scripts/capture_workflow.py workflow --out outputs/workflows --oxo-flow target/debug/oxo-flow`
+   - tool layer: `python3 eval/scripts/capture_tool.py --out outputs/tool_answers.csv --trials 5`
+   - rule layer: `python3 eval/scripts/capture_workflow.py rule --out outputs/rules --trials 5`
+   - workflow layer: `python3 eval/scripts/capture_workflow.py workflow --out outputs/workflows --oxo-flow target/debug/oxo-flow --trials 5`
+
+   Each capture command writes trial-aware artifacts plus a JSON manifest recording git SHA, gold/knowledge hashes, provider/model identity, decoding settings, timestamps, and per-trial metadata.
 2. **Judge** — `python3 eval/scripts/runner.py <layer> --captures <dir-or-csv> [--oxo-flow target/debug/oxo-flow]`
-   produces `eval/results.csv` with per-item sub-scores (0..1) and an
-   `overall` mean.
+   writes three outputs by default: detailed per-trial `eval/results.csv`, per-item aggregate `eval/results.items.csv`, and dataset summary `eval/results.summary.json`.
 3. **Review disagreements** — every judge is deterministic and documented
    in `runner.py`; a human should spot-check rows with low scores (both
    "AI wrong" and "gold wrong" are possible findings).
@@ -56,16 +57,14 @@ the oxo-flow-community repositories. Every row carries a `provenance_url`
 pointing at the primary source (bioconda recipe, nf-core module, vendor
 page, or the reference workflow file).
 
-Rows start at `review_status = draft` and are skipped by capture/runner
-until a human reviewer approves them (see the review workflow in
-`schema.md`). `--include-unreviewed` overrides this for previewing.
+Rows start at `review_status = draft` and are skipped by capture/runner until a human reviewer approves them (see the review workflow in `schema.md`). If zero approved rows exist, capture/judging now aborts with a clear error instead of silently producing an empty benchmark. `--include-unreviewed` is still available for preview-only dry runs and must not be reported as final benchmark data.
 
 ## What each layer measures
 
 | Layer | Metrics (sub-scores) |
 |---|---|
 | tool | `name_match`, `version_match`, `no_hallucination` (negative samples) |
-| rule | `tool_present`, `version_pinned` (must be a real version: the gold reference pin or one the KB/gallery envs attest), `key_params`, `io_declared`, `validate_pass`, `resources_ok` |
+| rule | `tool_present`, `version_pinned` (must be a real version: the gold reference pin or one the KB/gallery envs attest), `key_params`, `io_declared`, `validate_pass`, `resources_declared`, `resources_in_range` |
 | workflow | `validate_pass`, `lint_pass`, `step_coverage`, `tool_coverage`, `edge_coverage`, `output_coverage` |
 
 The deterministic grounding half of the tool layer is additionally
@@ -90,3 +89,10 @@ between the old and new CSV is itself a record of what the refresh
 changed.
 
 `build_workflow_gold.py` similarly regenerates `eval/gold/workflow.csv` by default (or a caller-supplied `--out` path) so workflow-layer drafts stay reproducible in-repo instead of being written to a temporary filesystem path.
+
+## Reporting semantics
+
+- Detailed CSVs are **per trial**, not per item.
+- `results.items.csv` reports per-item means, standard deviations, and `pass@k` (whether any captured trial reached `overall = 1.0`).
+- `results.summary.json` records dataset-level means/stdevs, difficulty/query-type breakdowns, the capture manifest, and a comparability note that mixed query types may average different metric counts.
+- Negative tool items now require both an explicit rejection (for example `not found`) and the absence of any suggested known tool, reducing false credit for hallucinated fallback guesses.

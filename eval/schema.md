@@ -7,9 +7,7 @@ claude`): every row carries a `provenance_url` pointing at the primary
 source the answer was derived from, so a human reviewer (student, friend)
 can verify each row against the source without trusting the draft.
 
-Reviewers edit only the review columns; `eval/scripts/runner.py` scores
-only rows with `review_status = approved` unless run with
-`--include-unreviewed`.
+Reviewers edit only the review columns; `eval/scripts/runner.py` scores only rows with `review_status = approved` unless run with `--include-unreviewed`. When no approved rows exist, the harness now exits with an explicit error instead of silently emitting an empty report.
 
 ## Common columns (all three CSVs)
 
@@ -44,8 +42,7 @@ query asks for one, a version).
 | `provenance_url` | Primary source (bioconda recipe / nf-core module / vendor page) |
 | `provenance_date` | ISO date the source value was read (from `knowledge_meta.json`) |
 
-Judging (runner): tool-name token match, version match (when asked),
-and — for `negative` items — that the answer does not hallucinate a tool.
+Judging (runner): tool-name token match, version match (when asked), and — for `negative` items — that the answer explicitly rejects the fake tool without suggesting a known fallback tool.
 
 ## 2. `rule.csv` — single-rule generation
 
@@ -67,9 +64,7 @@ oxo-flow workflow. Gold answers derive from gallery or community workflows.
 | `reference_workflow` | `examples/gallery/06_rnaseq_quantification.oxoflow` or a community repo |
 | `reference_rule` | Rule name inside the reference workflow |
 
-Judging (runner): tool present in shell, version pinned and existing in the
-embedded knowledge base, key params matched by regex, inputs/outputs
-declared, resources inside the range, `oxo-flow validate` exit code.
+Judging (runner): tool present in shell, version pinned and existing in the embedded knowledge base, key params matched by regex, inputs/outputs declared by normalized path-suffix matching, resources explicitly declared, resources inside the allowed range, and `oxo-flow validate` exit code.
 
 ## 3. `workflow.csv` — end-to-end workflow generation
 
@@ -90,22 +85,12 @@ workflow repositories.
 | `reference_file` | Path to the reference workflow |
 | `provenance_url` | Source of the gold steps (repo file URL) |
 
-Judging (runner): `validate` + `lint` exit codes, step-name coverage
-(expected steps matched against generated rule names, loose token match),
-tool coverage, DAG-edge coverage (edges inferred from declared inputs and
-outputs), and output-pattern coverage. See `eval/README.md` for the exact
-scoring formulas.
+Judging (runner): `validate` + `lint` exit codes, step-name coverage (including namespaced rules such as `qc::fastqc`), tool coverage, DAG-edge coverage inferred from normalized input/output path suffixes, and output-pattern coverage. See `eval/README.md` for the exact scoring formulas.
 
-## Review workflow (for students/friends)
+## Review workflow (publication-track)
 
-1. Open the CSV in a spreadsheet editor (Excel/Numbers/LibreOffice all
-   handle RFC 4180; Google Sheets imports it directly).
-2. For each row: click `provenance_url` and compare the gold answer with
-   the source. If the draft is right, set `review_status = approved` and
-   fill `reviewer`/`review_date`.
-3. If the draft is wrong, fix the gold columns, set
-   `review_status = corrected`, and describe the change in
-   `review_comment` — one sentence is enough.
-4. If the item itself is bad (ambiguous, unverifiable), set
-   `review_status = rejected` and say why in `review_comment`.
-5. Rows left at `draft` are skipped by the runner (see `--include-unreviewed`).
+1. Open the CSV in a spreadsheet editor (Excel/Numbers/LibreOffice all handle RFC 4180; Google Sheets imports it directly).
+2. For each row: click `provenance_url` and compare the gold answer with the source. Only mark `review_status = approved` when the row is scientifically unambiguous and the cited source still matches the gold fields. Fill `reviewer` and `review_date`.
+3. If the draft is wrong, fix the gold columns, set `review_status = corrected`, and describe the change in `review_comment`.
+4. If the item is ambiguous, unverifiable, or depends on hidden local context, set `review_status = rejected` and explain why in `review_comment`.
+5. Rows left at `draft` are excluded from final reporting. `--include-unreviewed` is for previewing harness behavior only and must not be presented as the benchmark result.

@@ -5,12 +5,14 @@ third-party packages, deterministic behavior.
 """
 
 import csv
+import hashlib
 import json
 import os
 import re
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GOLD_DIR = os.path.join(REPO_ROOT, "eval", "gold")
@@ -26,14 +28,96 @@ DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_OLLAMA_MODEL = "llama3"
 
 
+# ── Generic helpers ──────────────────────────────────────────────────────────
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sha256_text(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def gold_csv_path(layer, override=None):
+    return os.path.abspath(override or os.path.join(GOLD_DIR, f"{layer}.csv"))
+
+
+def manifest_path(out_path):
+    out_path = os.path.abspath(out_path)
+    if out_path.endswith(os.sep) or (not os.path.splitext(out_path)[1]):
+        return os.path.join(out_path, "manifest.json")
+    stem, _ = os.path.splitext(out_path)
+    return stem + ".manifest.json"
+
+
+def summary_json_path(out_path):
+    out_path = os.path.abspath(out_path)
+    stem, ext = os.path.splitext(out_path)
+    return stem + ".summary.json" if ext else os.path.join(out_path, "summary.json")
+
+
+def item_summary_csv_path(out_path):
+    out_path = os.path.abspath(out_path)
+    stem, ext = os.path.splitext(out_path)
+    return stem + ".items.csv" if ext else os.path.join(out_path, "items.csv")
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def repo_commit():
+    code, out, _ = run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=30)
+    return out.strip() if code == 0 else "unknown"
+
+
+def repo_dirty():
+    code, out, _ = run(["git", "status", "--porcelain"], cwd=REPO_ROOT, timeout=30)
+    return bool(out.strip()) if code == 0 else None
+
+
+def knowledge_digest():
+    h = hashlib.sha256()
+    for root, _, files in os.walk(KNOWLEDGE_DIR):
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, KNOWLEDGE_DIR).replace(os.sep, "/")
+            h.update(rel.encode("utf-8"))
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    h.update(chunk)
+    return h.hexdigest()
+
+
+def provider_public_config(provider):
+    return {
+        "kind": provider["kind"],
+        "api_url": provider["api_url"],
+        "model": provider["model"],
+    }
+
+
 # ── Gold-set loading ────────────────────────────────────────────────────────
 
-def load_gold(layer, include_unreviewed=False):
+def load_gold(layer, include_unreviewed=False, gold_path=None):
     """Load a gold CSV, optionally restricted to approved rows."""
-    path = os.path.join(GOLD_DIR, f"{layer}.csv")
+    path = gold_csv_path(layer, gold_path)
     with open(path, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     if include_unreviewed:
+        if not rows:
+            raise SystemExit(f"no {layer} rows found in {path}")
         return rows
     approved = [r for r in rows if r.get("review_status") == "approved"]
     skipped = len(rows) - len(approved)
@@ -41,6 +125,11 @@ def load_gold(layer, include_unreviewed=False):
         print(
             f"note: skipping {skipped} unreviewed {layer} row(s); "
             f"pass --include-unreviewed to judge them anyway"
+        )
+    if not approved:
+        raise SystemExit(
+            f"no approved {layer} gold rows found in {path}; complete human review "
+            f"or pass --include-unreviewed for preview-only runs"
         )
     return approved
 
@@ -67,6 +156,20 @@ def bioconda_versions():
     return versions
 
 
+def known_tool_names():
+    names = set()
+    for file_name in (
+        "bioconda_tools.jsonl",
+        "commercial_tools.jsonl",
+        "biotools_overlay.jsonl",
+        "nfcore_modules.jsonl",
+    ):
+        for row in load_jsonl(file_name):
+            if row.get("n"):
+                names.add(row["n"])
+    return names
+
+
 def gallery_version_pins():
     """Tool -> set of versions pinned in examples/gallery/envs/*.yaml."""
     pins = {}
@@ -88,13 +191,7 @@ def gallery_version_pins():
 
 
 def known_version_pins(kb_versions):
-    """Union of gallery env pins and the KB latest version, per tool.
-
-    The rule-layer version judge credits a pin that matches the gold
-    reference pin or any version this union attests — so correct older
-    pins (gallery fastp 0.23.4) are not penalized against the KB latest
-    (1.3.6), while fabricated pins still score zero.
-    """
+    """Union of gallery env pins and the KB latest version, per tool."""
     pins = gallery_version_pins()
     for tool, ver in kb_versions.items():
         pins.setdefault(tool, set()).add(ver)
@@ -201,7 +298,7 @@ def _claude_payload(messages, model, max_tokens, temperature):
     }
 
 
-def chat(messages, provider, max_tokens=2048, temperature=0.2):
+def chat(messages, provider, max_tokens=2048, temperature=0.2, seed=None):
     """One non-streaming chat call against the configured provider."""
     kind = provider["kind"]
     api_url = provider["api_url"]
@@ -209,9 +306,10 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2):
     model = provider["model"]
     try:
         if kind == "claude":
+            payload = _claude_payload(messages, model, max_tokens, temperature)
             data = _json_request(
                 _ensure_claude_messages_url(api_url),
-                _claude_payload(messages, model, max_tokens, temperature),
+                payload,
                 {
                     "Content-Type": "application/json",
                     "x-api-key": api_key,
@@ -222,35 +320,79 @@ def chat(messages, provider, max_tokens=2048, temperature=0.2):
             text = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
             if not text:
                 raise KeyError("missing Claude text content")
-            return text.strip()
+            return {
+                "content": text.strip(),
+                "meta": {
+                    "response_id": data.get("id", ""),
+                    "response_model": data.get("model", model),
+                    "stop_reason": data.get("stop_reason", ""),
+                    "usage": data.get("usage", {}),
+                    "seed": seed,
+                    "seed_supported": False,
+                },
+            }
 
         if kind == "ollama":
+            options = {"temperature": temperature}
+            if seed is not None:
+                options["seed"] = seed
             data = _json_request(
                 api_url.rstrip("/") + "/api/chat",
                 {
                     "model": model,
                     "messages": _openai_messages(messages),
                     "stream": False,
-                    "options": {"temperature": temperature},
+                    "options": options,
                 },
                 {"Content-Type": "application/json"},
             )
-            return data["message"]["content"].strip()
+            return {
+                "content": data["message"]["content"].strip(),
+                "meta": {
+                    "response_model": data.get("model", model),
+                    "stop_reason": data.get("done_reason", ""),
+                    "usage": {
+                        "prompt_eval_count": data.get("prompt_eval_count"),
+                        "eval_count": data.get("eval_count"),
+                        "total_duration": data.get("total_duration"),
+                        "load_duration": data.get("load_duration"),
+                        "prompt_eval_duration": data.get("prompt_eval_duration"),
+                        "eval_duration": data.get("eval_duration"),
+                    },
+                    "seed": seed,
+                    "seed_supported": True,
+                },
+            }
 
+        body = {
+            "model": model,
+            "messages": _openai_messages(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if seed is not None:
+            body["seed"] = seed
         data = _json_request(
             _ensure_openai_chat_url(api_url),
-            {
-                "model": model,
-                "messages": _openai_messages(messages),
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
+            body,
             {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + api_key,
             },
         )
-        return data["choices"][0]["message"]["content"].strip()
+        choice = data["choices"][0]
+        return {
+            "content": choice["message"]["content"].strip(),
+            "meta": {
+                "response_id": data.get("id", ""),
+                "response_model": data.get("model", model),
+                "system_fingerprint": data.get("system_fingerprint", ""),
+                "stop_reason": choice.get("finish_reason", ""),
+                "usage": data.get("usage", {}),
+                "seed": seed,
+                "seed_supported": True,
+            },
+        }
     except (urllib.error.URLError, KeyError, IndexError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"{kind} chat completion failed: {exc}") from exc
 
@@ -268,21 +410,47 @@ def name_present(name, text):
     return norm(name) in norm(text)
 
 
+def step_tokens(text):
+    return [norm(part) for part in re.split(r"[:/_.-]+", text) if norm(part)]
+
+
 def loose_step_match(gold_step, candidate_name):
-    """Loose match between an expected step name and a generated rule name.
+    """Loose but structure-aware match between expected and generated rule names."""
+    g_full = norm(gold_step)
+    c_full = norm(candidate_name)
+    if not g_full or not c_full:
+        return False
+    if g_full == c_full:
+        return True
+    g_last = norm(gold_step.split("::")[-1])
+    c_last = norm(candidate_name.split("::")[-1])
+    if g_last and c_last and g_last == c_last:
+        return True
+    g_tokens = step_tokens(gold_step)
+    c_tokens = step_tokens(candidate_name)
+    if not g_tokens or not c_tokens:
+        return False
+    short, long = (g_tokens, c_tokens) if len(g_tokens) <= len(c_tokens) else (c_tokens, g_tokens)
+    return len(short) >= 2 and all(token in long for token in short)
 
-    True when one normalized name contains the other (e.g. gold
-    "star_align" vs generated "star_alignment").
-    """
-    g, c = norm(gold_step), norm(candidate_name)
-    return bool(g) and bool(c) and (g in c or c in g)
+
+def path_parts(path):
+    """Normalize a path pattern but keep directory structure."""
+    normalized = re.sub(r"\{[^}]*\}", "X", path.replace("\\", "/"))
+    parts = [norm(part) for part in normalized.split("/") if part not in ("", ".")]
+    return [part for part in parts if part]
 
 
-def wildcard_norm(path):
-    """Normalize a path pattern: {tokens} -> X, strip directories."""
-    path = re.sub(r"\{[^}]*\}", "X", path)
-    base = os.path.basename(path)
-    return norm(base) if base else norm(path)
+def path_matches(expected, declared):
+    """True when normalized paths match exactly or by full suffix."""
+    exp_parts = path_parts(expected)
+    dec_parts = path_parts(declared)
+    if not exp_parts or not dec_parts:
+        return False
+    if exp_parts == dec_parts:
+        return True
+    short, long = (exp_parts, dec_parts) if len(exp_parts) <= len(dec_parts) else (dec_parts, exp_parts)
+    return long[-len(short):] == short
 
 
 # ── Process helpers ─────────────────────────────────────────────────────────
