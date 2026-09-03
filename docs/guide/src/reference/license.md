@@ -69,7 +69,7 @@ The license is prominently displayed in three locations:
 
 ```
 X-OxoFlow-License: oxo-flow v0.17.0 — oxo-flow-core, oxo-flow-cli: Apache 2.0. oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL). Free for academic use. Commercial use requires authorization. Contact: Shixiang Wang <w_shixiang@163.com>.
-X-OxoFlow-Version: 0.10.2
+X-OxoFlow-Version: 0.17.0
 ```
 
 ## Key Principles
