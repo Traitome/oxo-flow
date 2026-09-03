@@ -1321,6 +1321,8 @@ jobs:
       contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v4
+
       # repository_owner is "Traitome" (uppercase) but ghcr requires lowercase
       # image paths — force it down (${VAR,,} bash lowercase).
       - name: Compute image name
@@ -1539,6 +1541,8 @@ jobs:
       contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v4
+
       # repository_owner is "Traitome" (uppercase) but ghcr requires lowercase
       # image paths — force it down (${VAR,,} bash lowercase).
       - name: Compute image name
