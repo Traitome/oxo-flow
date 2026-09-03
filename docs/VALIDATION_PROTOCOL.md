@@ -104,9 +104,9 @@ This protocol covers:
 
 | Test ID | OQ-3.1 |
 | ------- | ------ |
-| **Objective** | Verify environments can be created for all rules. |
-| **Procedure** | Run `oxo-flow env create <workflow.oxoflow>` |
-| **Acceptance criteria** | All environments are created without errors. |
+| **Objective** | Verify environments for all rules are resolvable and ready to use. |
+| **Procedure** | Run `oxo-flow env check <workflow.oxoflow>` |
+| **Acceptance criteria** | All declared environments are reported ready without errors. |
 | **Result** | |
 | **Pass / Fail** | |
 
