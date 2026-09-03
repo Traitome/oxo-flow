@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Build eval/gold/workflow.csv — workflow-layer gold set (38 items)."""
-import csv, json
+import argparse
+import csv
+import json
+import os
 
 GALLERY_URL = "https://github.com/Traitome/oxo-flow/blob/main/examples/gallery"
 COMM_URL = "https://github.com/oxo-flow-community"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_OUT = os.path.join(REPO_ROOT, "eval", "gold", "workflow.csv")
 
 def j(x):
     return json.dumps(x, ensure_ascii=True)
@@ -580,16 +585,25 @@ add("wf-038",
      "variants/ivar/consensus/bcftools/pangolin/{sample}.pangolin.csv"],
     "oxo-flow-viralrecon", "main.oxoflow", "hard", "(subset; 51 rules total)")
 
-# ------------------------------ write CSV ------------------------------
-out = "/tmp/oxo-eval-bench/eval/gold/workflow.csv"
-cols = ["id", "layer", "requirement_text", "expected_steps", "expected_tools",
-        "expected_dag_edges", "expected_outputs", "must_validate", "must_lint",
-        "reference_repo", "reference_file", "provenance_url", "difficulty",
-        "gold_draft_by", "review_status", "reviewer", "review_comment", "review_date"]
-with open(out, "w", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=cols, quoting=csv.QUOTE_MINIMAL)
-    w.writeheader()
-    for r in rows:
-        w.writerow(r)
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", default=DEFAULT_OUT, help="output workflow gold CSV path")
+    args = ap.parse_args()
 
-print(f"wrote {len(rows)} rows to {out}")
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    cols = ["id", "layer", "requirement_text", "expected_steps", "expected_tools",
+            "expected_dag_edges", "expected_outputs", "must_validate", "must_lint",
+            "reference_repo", "reference_file", "provenance_url", "difficulty",
+            "gold_draft_by", "review_status", "reviewer", "review_comment", "review_date"]
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols, quoting=csv.QUOTE_MINIMAL)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+    print(f"wrote {len(rows)} rows to {out}")
+
+
+if __name__ == "__main__":
+    main()

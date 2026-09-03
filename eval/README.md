@@ -76,10 +76,7 @@ required, runs on every push.
 
 ## Provider resolution
 
-Capture scripts resolve the AI provider exactly like the CLI:
-`OXO_FLOW_AI_PROVIDER` + `<KIND>_API_KEY` env vars, falling back to
-`~/.oxo-flow/ai_config.json` (`provider`/`api_key`/`api_url`/`model`
-keys). No keys are stored in this repository.
+Capture scripts resolve the AI provider exactly like the CLI: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OLLAMA_HOST`, etc.), then `~/.oxo-flow/ai_config.json` (`provider`/`api_key`/`api_url`/`model`). The harness now supports Claude (Anthropic Messages API), OpenAI-compatible backends, DeepSeek, and local Ollama without storing keys in this repository.
 
 ## Regenerating tool.csv after a knowledge refresh
 
@@ -91,3 +88,5 @@ The script pulls versions and dates from the embedded knowledge base, so
 a refreshed knowledge base produces an updated gold set — and the diff
 between the old and new CSV is itself a record of what the refresh
 changed.
+
+`build_workflow_gold.py` similarly regenerates `eval/gold/workflow.csv` by default (or a caller-supplied `--out` path) so workflow-layer drafts stay reproducible in-repo instead of being written to a temporary filesystem path.

@@ -5,12 +5,10 @@ third-party packages, deterministic behavior.
 """
 
 import csv
-import gzip
 import json
 import os
 import re
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 
@@ -18,8 +16,14 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GOLD_DIR = os.path.join(REPO_ROOT, "eval", "gold")
 KNOWLEDGE_DIR = os.path.join(REPO_ROOT, "crates", "oxo-flow-ai", "src", "knowledge")
 
+DEFAULT_CLAUDE_URL = "https://api.anthropic.com"
 DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com/v1"
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
+DEFAULT_OLLAMA_MODEL = "llama3"
 
 
 # ── Gold-set loading ────────────────────────────────────────────────────────
@@ -100,54 +104,155 @@ def known_version_pins(kb_versions):
 # ── AI provider resolution (mirrors the CLI: env > ~/.oxo-flow/ai_config.json) ──
 
 def resolve_provider():
-    """Return (api_url, api_key, model) or None when unconfigured."""
-    kind = os.environ.get("OXO_FLOW_AI_PROVIDER", "")
-    api_key = os.environ.get(f"{kind.upper()}_API_KEY", "") if kind else ""
+    """Return provider config dict or None when unconfigured/disabled."""
+    kind = os.environ.get("OXO_FLOW_AI_PROVIDER", "").strip().lower()
+    api_key = os.environ.get("OXO_FLOW_AI_API_KEY", "")
     api_url = os.environ.get("OXO_FLOW_AI_API_URL", "")
     model = os.environ.get("OXO_FLOW_AI_MODEL", "")
 
-    if not api_key:
-        path = os.path.expanduser("~/.oxo-flow/ai_config.json")
-        if not os.path.exists(path):
-            return None
+    cfg = {}
+    path = os.path.expanduser("~/.oxo-flow/ai_config.json")
+    if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             cfg = json.load(fh)
-        kind = kind or cfg.get("provider", "")
-        api_key = cfg.get("api_key", "")
-        api_url = api_url or cfg.get("api_url", "")
-        model = model or cfg.get("model", "")
 
-    if not kind or not api_key:
+    if not kind:
+        kind = str(cfg.get("provider", "")).strip().lower()
+    if kind in ("", "disabled"):
         return None
-    if not api_url:
-        api_url = DEFAULT_DEEPSEEK_URL if kind == "deepseek" else DEFAULT_OPENAI_URL
-    return api_url, api_key, model or "default"
+
+    if kind == "claude":
+        api_key = api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN", "") or cfg.get("api_key", "")
+        api_url = api_url or os.environ.get("ANTHROPIC_BASE_URL", "") or cfg.get("api_url", "")
+        model = model or os.environ.get("ANTHROPIC_MODEL", "") or cfg.get("model", "")
+        api_url = api_url or DEFAULT_CLAUDE_URL
+        model = model or DEFAULT_CLAUDE_MODEL
+    elif kind == "openai":
+        api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or cfg.get("api_key", "")
+        api_url = api_url or os.environ.get("OPENAI_BASE_URL", "") or cfg.get("api_url", "")
+        model = model or os.environ.get("OPENAI_MODEL", "") or cfg.get("model", "")
+        api_url = api_url or DEFAULT_OPENAI_URL
+        model = model or DEFAULT_OPENAI_MODEL
+    elif kind == "deepseek":
+        api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "") or cfg.get("api_key", "")
+        api_url = api_url or os.environ.get("DEEPSEEK_BASE_URL", "") or cfg.get("api_url", "")
+        model = model or os.environ.get("DEEPSEEK_MODEL", "") or cfg.get("model", "")
+        api_url = api_url or DEFAULT_DEEPSEEK_URL
+        model = model or DEFAULT_DEEPSEEK_MODEL
+    elif kind == "ollama":
+        api_url = api_url or os.environ.get("OLLAMA_HOST", "") or cfg.get("api_url", "")
+        model = model or os.environ.get("OLLAMA_MODEL", "") or cfg.get("model", "")
+        api_url = api_url or DEFAULT_OLLAMA_URL
+        model = model or DEFAULT_OLLAMA_MODEL
+        api_key = ""
+    else:
+        return None
+
+    if kind != "ollama" and not api_key:
+        return None
+    return {"kind": kind, "api_url": api_url, "api_key": api_key, "model": model}
 
 
-def chat(messages, api_url, api_key, model, max_tokens=2048, temperature=0.2):
-    """One chat-completion call against an OpenAI-compatible endpoint."""
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-    ).encode()
+def _json_request(url, body, headers, timeout=120):
     req = urllib.request.Request(
-        f"{api_url.rstrip('/')}/chat/completions",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
+        url,
+        data=json.dumps(body).encode(),
+        headers=headers,
     )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def _ensure_openai_chat_url(api_url):
+    api_url = api_url.rstrip("/")
+    if api_url.endswith("/chat/completions"):
+        return api_url
+    if api_url.endswith("/v1"):
+        return api_url + "/chat/completions"
+    return api_url + "/v1/chat/completions"
+
+
+def _ensure_claude_messages_url(api_url):
+    api_url = api_url.rstrip("/")
+    if api_url.endswith("/v1/messages"):
+        return api_url
+    if api_url.endswith("/v1"):
+        return api_url + "/messages"
+    return api_url + "/v1/messages"
+
+
+def _openai_messages(messages):
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
+def _claude_payload(messages, model, max_tokens, temperature):
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    convo = [
+        {"role": m["role"], "content": m["content"]}
+        for m in messages
+        if m.get("role") in ("user", "assistant")
+    ]
+    return {
+        "model": model,
+        "system": "\n\n".join(system_parts),
+        "messages": convo,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+
+def chat(messages, provider, max_tokens=2048, temperature=0.2):
+    """One non-streaming chat call against the configured provider."""
+    kind = provider["kind"]
+    api_url = provider["api_url"]
+    api_key = provider["api_key"]
+    model = provider["model"]
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.load(resp)
+        if kind == "claude":
+            data = _json_request(
+                _ensure_claude_messages_url(api_url),
+                _claude_payload(messages, model, max_tokens, temperature),
+                {
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            blocks = data.get("content") or []
+            text = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
+            if not text:
+                raise KeyError("missing Claude text content")
+            return text.strip()
+
+        if kind == "ollama":
+            data = _json_request(
+                api_url.rstrip("/") + "/api/chat",
+                {
+                    "model": model,
+                    "messages": _openai_messages(messages),
+                    "stream": False,
+                    "options": {"temperature": temperature},
+                },
+                {"Content-Type": "application/json"},
+            )
+            return data["message"]["content"].strip()
+
+        data = _json_request(
+            _ensure_openai_chat_url(api_url),
+            {
+                "model": model,
+                "messages": _openai_messages(messages),
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + api_key,
+            },
+        )
         return data["choices"][0]["message"]["content"].strip()
     except (urllib.error.URLError, KeyError, IndexError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"chat completion failed: {exc}") from exc
+        raise RuntimeError(f"{kind} chat completion failed: {exc}") from exc
 
 
 # ── Text-matching helpers ───────────────────────────────────────────────────

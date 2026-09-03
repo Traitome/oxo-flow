@@ -31,12 +31,15 @@ python3 eval/scripts/runner.py workflow --captures outputs/workflows --oxo-flow 
 Results land in `eval/results.csv`; each row carries the per-metric
 scores and an `overall` mean.
 
+Capture uses the same provider resolution order as oxo-flow itself: `OXO_FLOW_AI_PROVIDER`, generic `OXO_FLOW_AI_*` overrides, provider-specific env vars (Anthropic/OpenAI/DeepSeek/Ollama), then `~/.oxo-flow/ai_config.json`. This keeps benchmark captures aligned with the real CLI/web AI surfaces instead of assuming only one wire protocol.
+
 ## Gold set and human review
 
 The gold answers live in `eval/gold/*.csv`. `tool.csv` is generated
 deterministically from the embedded knowledge base
-(`python3 eval/scripts/gen_tool_csv.py`); `rule.csv` and `workflow.csv`
-are drafted from the gallery and the
+(`python3 eval/scripts/gen_tool_csv.py`); `workflow.csv` can be regenerated
+with `python3 eval/scripts/build_workflow_gold.py` (defaulting to the in-repo
+CSV path); `rule.csv` and `workflow.csv` are drafted from the gallery and the
 [oxo-flow-community](https://github.com/oxo-flow-community) workflows.
 Every row carries a `provenance_url` pointing at its primary source.
 

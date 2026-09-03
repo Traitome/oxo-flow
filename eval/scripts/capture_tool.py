@@ -47,8 +47,6 @@ def main():
             "no AI provider configured: set OXO_FLOW_AI_PROVIDER and the API "
             "key env var, or run 'oxo-flow ai setup'"
         )
-    api_url, api_key, model = provider
-
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -59,9 +57,7 @@ def main():
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": row["query"]},
                 ],
-                api_url,
-                api_key,
-                model,
+                provider,
             )
             writer.writerow([row["id"], row["query"], answer])
             print(f"[{i}/{len(rows)}] {row['id']}: {answer[:80]!r}")

@@ -48,7 +48,6 @@ def capture_rules(rows, out_dir):
     provider = common.resolve_provider()
     if provider is None:
         sys.exit("no AI provider configured (see capture_tool.py help)")
-    api_url, api_key, model = provider
     os.makedirs(out_dir, exist_ok=True)
     for i, row in enumerate(rows, 1):
         task = row["task_description"]
@@ -59,9 +58,7 @@ def capture_rules(rows, out_dir):
                 {"role": "system", "content": RULE_SYSTEM_PROMPT},
                 {"role": "user", "content": task},
             ],
-            api_url,
-            api_key,
-            model,
+            provider,
         )
         path = os.path.join(out_dir, f"{row['id']}.oxoflow")
         with open(path, "w", encoding="utf-8") as fh:
