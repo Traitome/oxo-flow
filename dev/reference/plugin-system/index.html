@@ -4041,7 +4041,7 @@ plugins written in any language can produce it:</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">plugin</span><span class="p">::</span><span class="n">PluginOutput</span><span class="p">;</span>
 </span></code></pre></div>
 <p><code>success</code> and <code>command</code> are the fields the engine would act on; <code>errors</code>,
-<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.17.0 this
+<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.17.1 this
 contract is defined but not yet wired into rule execution — declared rule
 plugins today go through <code>command_template</code> in the manifest instead, and
 there is no engine-side runner that invokes plugin executables yet.</p>

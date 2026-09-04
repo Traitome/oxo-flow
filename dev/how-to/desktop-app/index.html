@@ -4168,10 +4168,10 @@ tarballs (built by CI, not by hand):</p>
 </tbody>
 </table>
 <h3 id="install-from-a-tarball">Install from a tarball<a class="headerlink" href="#install-from-a-tarball" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.17.0/oxo-flow-v0.17.0-x86_64-unknown-linux-gnu.tar.gz
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.17.0/SHA256SUMS.txt
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span>https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/SHA256SUMS.txt
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing<span class="w">   </span><span class="c1"># verify before you run it</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.17.0-x86_64-unknown-linux-gnu.tar.gz
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>tar<span class="w"> </span>xzf<span class="w"> </span>oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
 </span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">755</span><span class="w"> </span>oxo-flow<span class="w"> </span>/usr/local/bin/oxo-flow
 </span></code></pre></div>
 <p>Pick the target that matches the machine: <code>gnu</code> for glibc distributions,
@@ -4188,7 +4188,7 @@ checkout is needed).</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Version</strong>: the desktop crate repeats the workspace version
-  (<code>0.17.0</code>) by value — it is outside the workspace, so it does not
+  (<code>0.17.1</code>) by value — it is outside the workspace, so it does not
   inherit <code>[workspace.package]</code>; bump it together with the rest on
   release.</li>
 <li><strong>Data directory</strong>: the desktop app keeps all state in

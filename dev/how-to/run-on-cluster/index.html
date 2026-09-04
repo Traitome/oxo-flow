@@ -4150,9 +4150,9 @@
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span>
 </span></code></pre></div>
 <blockquote>
-<p><strong>Note on <code>gpu</code>:</strong> declare <code>gpu = 1</code> or higher. <code>gpu = 0</code> is treated as a
-present-but-zero value and generates directives like <code>#SBATCH --gres=gpu:0</code>
-— omit the field instead.</p>
+<p><strong>Note on <code>gpu</code>:</strong> <code>gpu = 0</code> means "no GPUs" — the engine omits the GPU
+directive entirely, exactly as if the field were absent. Only declare it
+when you need at least one GPU (<code>gpu = 1</code> or higher).</p>
 </blockquote>
 <h3 id="resource-fields">Resource fields<a class="headerlink" href="#resource-fields" title="Permanent link">#</a></h3>
 <table>
@@ -4503,12 +4503,26 @@ credentials); every run remains owned by the acting user.</p>
 <p>Or use oxo-flow's status command with a checkpoint file:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/checkpoint.json
 </span></code></pre></div>
-<p><code>oxo-flow cluster status</code> and <code>cluster cancel</code> take the <strong>backend and the
-scheduler job ids</strong> — there is no "show all my submissions" mode, so keep the
-ids the submit/run step printed:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span>
+<p><code>oxo-flow cluster status</code> answers two questions. <strong>With no ids</strong> it lists
+every job the scheduler currently reports for your user — the natural check
+right after a submit:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%t'</span>...
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span>job<span class="o">(</span>s<span class="o">)</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
 </span></code></pre></div>
+<p><strong>With ids</strong> (the ones submit/run printed) it answers exactly those,
+settling finished jobs from the scheduler's accounting store:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span><span class="m">12345</span>
+</span></code></pre></div>
+<p>Every cluster action resolves its backend the same way: the <code>--backend</code> /
+<code>-b</code> flag if given, then <code>$OXO_FLOW_CLUSTER_BACKEND</code>, then <code>slurm</code>. On a
+SLURM site you never type <code>-b</code>; on a PBS site set the environment variable
+once (<code>export OXO_FLOW_CLUSTER_BACKEND=pbs</code>). An explicit-but-typoed value
+is still rejected outright (<code>unknown cluster backend '…' — expected slurm,
+pbs, sge, or lsf</code>) — the default never swallows a bad name.</p>
 <hr />
 <h2 id="driver-defaults-and-the-cluster-profile-block">Driver Defaults and the <code>[cluster]</code> Profile Block<a class="headerlink" href="#driver-defaults-and-the-cluster-profile-block" title="Permanent link">#</a></h2>
 <p><code>run --profile</code> submits and tracks jobs through the backend driver, whose
@@ -4540,22 +4554,22 @@ built-in defaults are:</p>
 </tbody>
 </table>
 <p>Override them in the profile's <code>[cluster]</code> block:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">[cluster]</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
 </span></code></pre></div>
 <p><code>extra_args</code> entries are emitted as scheduler directives <strong>verbatim and
 unvalidated</strong> — a typo reaches the scheduler as written (the same applies to
-<code>cluster submit --extra-arg</code>). An unknown <code>--backend</code> value is rejected
-outright (<code>unknown cluster backend '…' — expected slurm, pbs, sge, or lsf</code>);
-nothing falls back to SLURM, so a typo cannot submit into the wrong
-scheduler.</p>
+<code>cluster submit --extra-arg</code>). Cluster CLI actions resolve <code>--backend</code> as
+flag &gt; <code>$OXO_FLOW_CLUSTER_BACKEND</code> &gt; <code>slurm</code> (see
+<a href="#monitoring-jobs">Monitoring Jobs</a>); the profile block's <code>backend</code> key
+remains required and is validated the same strict way.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
