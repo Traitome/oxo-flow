@@ -5351,7 +5351,7 @@ disk space matters.</p>
 <td><code>when</code></td>
 <td>String</td>
 <td>No</td>
-<td>Conditional expression — skip rule when <code>false</code>. May call read-only runtime functions (<code>reads_count</code>, <code>wc_lines</code>, <code>file_size</code>, <code>file_exists</code>) that inspect files in the run workdir; see <a href="#data-dependent-when-gates">Data-Dependent <code>when</code> Gates</a></td>
+<td>Conditional expression — skip rule when <code>false</code>. May call read-only runtime functions (<code>reads_count</code>, <code>wc_lines</code>, <code>file_size</code>, <code>file_exists</code>, <code>regex_extract</code>) that inspect files in the run workdir; see <a href="#data-dependent-when-gates">Data-Dependent <code>when</code> Gates</a></td>
 </tr>
 <tr>
 <td><code>envvars</code></td>
@@ -7259,6 +7259,11 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 <td>Data-dependent gates — count FASTQ records (4-line records, plain or <code>.gz</code>), text lines of the decompressed content (plain or <code>.gz</code>), or file bytes in the <strong>run workdir</strong> at execution time. See <a href="#data-dependent-when-gates">Data-Dependent <code>when</code> Gates</a></td>
 </tr>
 <tr>
+<td><code>regex_extract("path", "pattern", group?)</code></td>
+<td><code>regex_extract('alignment/{sample}.flagstat', '(\\d+) \\+ \\d+ mapped', 1) &gt; config.min_mapped_reads</code></td>
+<td>Data-dependent gate — parse an integer out of a text report's first regex match (issue #312). <code>group</code> defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030</td>
+</tr>
+<tr>
 <td><code>wildcard.&lt;key&gt; == "value"</code></td>
 <td><code>wildcard.control != ""</code></td>
 <td>Per-instance pair/group wildcard comparison (<code>pair_id</code>, <code>experiment</code>, <code>control</code>, <code>tumor</code>, <code>normal</code>, <code>experiment_type</code>, <code>tumor_type</code>, <code>group</code>, <code>sample</code>, plus any <code>metadata</code> keys declared on <code>[[pairs]]</code> / <code>[[sample_groups]]</code> and <code>[[values]]</code> table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing)</td>
@@ -7291,10 +7296,11 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 </tbody>
 </table>
 <h3 id="data-dependent-when-gates">Data-Dependent <code>when</code> Gates<a class="headerlink" href="#data-dependent-when-gates" title="Permanent link">#</a></h3>
-<p>The runtime functions <code>reads_count(path)</code>, <code>wc_lines(path)</code>, and
-<code>file_size(path)</code> let a <code>when</code> gate inspect files produced earlier in the
-same run (issue #282) — e.g. skip a variant caller on samples whose
-trimmed FASTQ has too few records:</p>
+<p>The runtime functions <code>reads_count(path)</code>, <code>wc_lines(path)</code>,
+<code>file_size(path)</code>, and <code>regex_extract(path, pattern, group?)</code> let a <code>when</code>
+gate inspect files produced earlier in the same run (issues #282/#312) —
+e.g. skip a variant caller on samples whose trimmed FASTQ has too few
+records:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1" href="#__codelineno-81-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2" href="#__codelineno-81-2"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_variants"</span>
 </span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3" href="#__codelineno-81-3"></a><span class="n">when</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">"reads_count('trimmed/{sample}.fq.gz') &gt; config.min_reads"</span>
@@ -7322,6 +7328,15 @@ trimmed FASTQ has too few records:</p>
   content for plain or gzip files (same <code>.gz</code> detection as <code>reads_count</code>);
   <code>file_size</code> returns the byte length. BAM/BGZF indexing is planned for
   a future release.</li>
+<li><strong>Regex extraction</strong> — <code>regex_extract(path, pattern, group?)</code> reads the
+  whole file (plain or <code>.gz</code>, up to 16 MiB) and takes the <strong>first</strong> regex
+  match; the captured text (group <code>0</code> = whole match by default, or an
+  explicit capture group) must parse as an integer. Matching is
+  line-oriented (<code>(?m)</code> is applied automatically), so <code>^</code> and <code>$</code> anchor
+  per line. Commas inside the pattern's <code>{}</code> quantifiers, <code>[]</code> character
+  classes, or quoted arguments do not split arguments. The extracted
+  value compares against literals and <code>config.*</code> thresholds exactly like
+  the counting functions.</li>
 <li><strong>Change tracking</strong> — recorded verdicts participate in config-change
   replay: changing a threshold referenced by such a gate (e.g.
   <code>config.min_reads</code>) re-evaluates only the instances whose verdict

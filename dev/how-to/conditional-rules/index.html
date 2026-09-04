@@ -4002,7 +4002,7 @@ the same no matter which directory you launch <code>oxo-flow</code> from. Absolu
 paths pass through unchanged.</p>
 <h3 id="data-dependent-gates-runtime-functions">Data-dependent gates (runtime functions)<a class="headerlink" href="#data-dependent-gates-runtime-functions" title="Permanent link">#</a></h3>
 <p><code>when</code> can also inspect files produced earlier in the same run — the gate
-becomes data-dependent (issue #282). Three read-only functions are
+becomes data-dependent (issue #282). Five read-only functions are
 available in <code>when</code> strings:</p>
 <table>
 <thead>
@@ -4027,6 +4027,11 @@ available in <code>when</code> strings:</p>
 <td><code>file_size(path)</code></td>
 <td>any file</td>
 <td>size in bytes</td>
+</tr>
+<tr>
+<td><code>regex_extract(path, pattern, group?)</code></td>
+<td>any text file</td>
+<td>integer parsed from the first regex match (group defaults to 0 = whole match; the captured text must be a number)</td>
 </tr>
 <tr>
 <td><code>file_exists(path)</code></td>
