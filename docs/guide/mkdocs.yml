@@ -93,6 +93,7 @@ markdown_extensions:
       toc_depth: 3
       permalink: "#"
   - tables
+  - meta
 
 extra:
   version:
@@ -114,6 +115,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - AI Agent Skill: SKILL.md
   - Community: https://oxo-flow-community.github.io/
   - Tutorials:
       - Installation: tutorials/installation.md
