@@ -2394,11 +2394,28 @@ impl ReportSectionGenerator for IoManifestGenerator {
                     outputs.push(vec![path.clone(), sha.clone(), size, mtime]);
                 }
 
+                // Chunk intermediates deleted by design at the end of a
+                // successful run (transform `cleanup = true`, issue #315 F2):
+                // listed with their recorded sha256 and a cleaned marker
+                // instead of a misleading missing status.
+                let mut cleaned: Vec<(&String, &String)> = cp.cleaned_checksums.iter().collect();
+                cleaned.sort_unstable();
+                for (path, sha) in cleaned {
+                    outputs.push(vec![
+                        path.clone(),
+                        format!("{sha} (cleaned by design)"),
+                        "-".into(),
+                        "-".into(),
+                    ]);
+                }
+
                 let mut note = String::from(
                     "Files recorded in the checkpoint when each rule completed \
                      (input manifests + output checksums). Inputs are listed with \
                      snapshot size/mtime; outputs with their recorded sha256 and \
-                     current on-disk size/mtime.",
+                     current on-disk size/mtime. Outputs marked \"cleaned by design\" \
+                     are transform chunk intermediates the engine deleted at the end \
+                     of a successful run.",
                 );
                 if inputs.is_empty() {
                     note.push_str(
@@ -3768,6 +3785,10 @@ mod tests {
         );
         cp.checksums
             .insert("out.bam".to_string(), "sha256:aaaa".to_string());
+        cp.cleaned_checksums.insert(
+            ".oxo-flow/chunks/chr/chr1.out".to_string(),
+            "sha256:cccc".to_string(),
+        );
         cp.input_manifests.insert(
             "align".to_string(),
             vec![crate::executor::checkpoint::InputManifestEntry {
@@ -4029,6 +4050,10 @@ shell = "echo hi"
         assert!(html.contains("in.fastq"));
         assert!(html.contains("out.bam"));
         assert!(html.contains("sha256:aaaa"));
+        // Cleaned chunk intermediates are listed with their marker, not as
+        // missing files (issue #315 F2).
+        assert!(html.contains(".oxo-flow/chunks/chr/chr1.out"));
+        assert!(html.contains("cleaned by design"));
         // No pattern-only tables when execution data exists (issue #83 P0-6).
         assert!(!html.contains(">Pattern<"));
     }

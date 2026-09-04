@@ -72,6 +72,7 @@ graph TD
     A --> C["align_sequences<br/>(docker)"]
     B --> D["analyze_results<br/>(conda)"]
     C --> D
+    D --> E["venv_sanity<br/>(venv)"]
 ```
 
 ## Running the Workflow
@@ -80,7 +81,7 @@ graph TD
 
 ```bash
 $ oxo-flow validate examples/gallery/05_conda_environments.oxoflow
-✓ examples/gallery/05_conda_environments.oxoflow — 4 rules, 4 dependencies
+✓ examples/gallery/05_conda_environments.oxoflow — 5 rules, 5 dependencies
 ```
 
 ### Check Available Environments

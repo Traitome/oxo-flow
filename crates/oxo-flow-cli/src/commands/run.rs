@@ -3537,6 +3537,37 @@ pub async fn run_command(
         let workdir_actual = workdir.as_ref().unwrap_or(&workdir_default);
         for rule in &config.rules {
             if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
+                // Migrate the chunk checksums BEFORE deleting the files
+                // (issue #315 F2): a checkpoint that lists already-deleted
+                // files as ordinary outputs would be an audit-trail lie —
+                // verify would report them missing. If the migration
+                // cannot be persisted, keep the files and skip the
+                // deletion entirely.
+                let mut migrated: Vec<String> = Vec::new();
+                for chunk in rule.input.iter() {
+                    if let Some(sha) = checkpoint.checksums.remove(&chunk.to_string()) {
+                        checkpoint.record_cleaned_checksum(&chunk.to_string(), sha);
+                        migrated.push(chunk.to_string());
+                    }
+                }
+                if migrated.is_empty() {
+                    continue;
+                }
+                if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to persist chunk migration — keeping chunk files"
+                    );
+                    // Roll the in-memory state back so a later save (e.g.
+                    // tombstoning) does not persist the migration without
+                    // the deletion.
+                    for path in &migrated {
+                        if let Some(sha) = checkpoint.cleaned_checksums.remove(path) {
+                            checkpoint.checksums.insert(path.clone(), sha);
+                        }
+                    }
+                    continue;
+                }
                 oxo_flow_core::executor::checkpoint::cleanup_transform_chunks(rule, workdir_actual)
                     .await;
             }
@@ -3572,32 +3603,56 @@ pub async fn run_command(
                 if expanded.contains('{') {
                     continue;
                 }
-                let resolved = workdir_actual.join(&expanded);
-                let removed = if resolved.is_dir() {
-                    std::fs::remove_dir_all(&resolved)
-                } else {
-                    std::fs::remove_file(&resolved)
-                };
-                if removed.is_ok() {
-                    deleted.push(expanded);
-                }
+                deleted.push(expanded);
             }
             if !deleted.is_empty() {
-                eprintln!(
-                    "  {} temporary outputs deleted for '{}' ({} file(s), regenerated on demand)",
-                    "⊘".dimmed(),
-                    rule.name,
-                    deleted.len()
-                );
                 new_tombstones.push((rule.name.clone(), deleted));
             }
         }
         if !new_tombstones.is_empty() {
-            for (rule, paths) in new_tombstones {
-                checkpoint.tombstones.insert(rule, paths);
+            // Same audit rule as chunk cleanup (issue #315 F2): persist
+            // tombstones + the cleaned migration BEFORE deleting, and skip
+            // the deletion when the persistence fails.
+            let mut rollback: Vec<String> = Vec::new();
+            for (rule, paths) in &new_tombstones {
+                checkpoint.tombstones.insert(rule.clone(), paths.clone());
+                for path in paths {
+                    if let Some(sha) = checkpoint.checksums.remove(path) {
+                        checkpoint.record_cleaned_checksum(path, sha);
+                        rollback.push(path.clone());
+                    }
+                }
             }
             if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
-                tracing::warn!(error = %e, "failed to save checkpoint after tombstoning");
+                tracing::warn!(
+                    error = %e,
+                    "failed to persist tombstone migration — keeping temporary outputs"
+                );
+                for (rule, _) in &new_tombstones {
+                    checkpoint.tombstones.remove(rule);
+                }
+                for path in &rollback {
+                    if let Some(sha) = checkpoint.cleaned_checksums.remove(path) {
+                        checkpoint.checksums.insert(path.clone(), sha);
+                    }
+                }
+            } else {
+                for (rule, paths) in &new_tombstones {
+                    for expanded in paths {
+                        let resolved = workdir_actual.join(expanded);
+                        let _ = if resolved.is_dir() {
+                            std::fs::remove_dir_all(&resolved)
+                        } else {
+                            std::fs::remove_file(&resolved)
+                        };
+                    }
+                    eprintln!(
+                        "  {} temporary outputs deleted for '{}' ({} file(s), regenerated on demand)",
+                        "⊘".dimmed(),
+                        rule,
+                        paths.len()
+                    );
+                }
             }
         }
     }

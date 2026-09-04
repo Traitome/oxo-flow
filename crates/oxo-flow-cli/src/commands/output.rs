@@ -1083,9 +1083,22 @@ fn print_checkpoint_diff(
         }
     }
 
-    // Output checksum changes (added / removed / changed).
-    for path in sorted_map_keys(&[&current.checksums, &other.checksums]) {
-        match (current.checksums.get(&path), other.checksums.get(&path)) {
+    // Output checksum changes (added / removed / changed). Each side merges
+    // `checksums` + `cleaned_checksums` (issue #315 F2): a chunk moved into
+    // the cleaned bucket is a bookkeeping change, not a file change — and a
+    // diff against a legacy checkpoint (whose chunks still sit under
+    // `checksums`) must not report spurious removals.
+    let merged = |cp: &oxo_flow_core::executor::checkpoint::CheckpointState| {
+        let mut map = cp.checksums.clone();
+        for (path, sha) in &cp.cleaned_checksums {
+            map.insert(path.clone(), format!("{sha} (cleaned by design)"));
+        }
+        map
+    };
+    let current_merged = merged(current);
+    let other_merged = merged(other);
+    for path in sorted_map_keys(&[&current_merged, &other_merged]) {
+        match (current_merged.get(&path), other_merged.get(&path)) {
             (Some(_), None) => lines.push(('+', format!("checksum: {path}"))),
             (None, Some(_)) => lines.push(('-', format!("checksum: {path}"))),
             (Some(a), Some(b)) if a != b => lines.push((

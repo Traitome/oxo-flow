@@ -298,15 +298,16 @@ fn gallery_05_conda_environments() {
     let toml = std::fs::read_to_string("examples/gallery/05_conda_environments.oxoflow").unwrap();
     let config = WorkflowConfig::parse(&toml).unwrap();
     assert_eq!(config.workflow.name, "environment-showcase");
-    assert_eq!(config.rules.len(), 4);
+    assert_eq!(config.rules.len(), 5);
 
     let dag = WorkflowDag::from_rules(&config.rules).unwrap();
     dag.validate().unwrap();
 
     let order = dag.execution_order().unwrap();
-    assert_eq!(order.len(), 4);
-    // analyze_results depends on both align_sequences and quality_check
-    assert_eq!(order.last().unwrap(), "analyze_results");
+    assert_eq!(order.len(), 5);
+    // venv_sanity consumes analyze_results' output, so it is the terminal
+    // rule (issue #315 F3: the venv backend the header promised is real now).
+    assert_eq!(order.last().unwrap(), "venv_sanity");
 }
 
 #[test]

@@ -52,8 +52,9 @@ Provenance Verify .oxo-flow/checkpoint.json
   ✓ output/sample1.vcf sha256:abc123...
   ✓ output/sample2.vcf sha256:def456...
   ✗ output/report.html (expected: sha256:xxx, actual: sha256:yyy)
+  ✓ .oxo-flow/chunks/chr/chr1.g.vcf.gz sha256:ccc... (cleaned by design)
 
-Summary: 2 matched, 1 mismatched, 0 missing
+Summary: 2 matched, 1 mismatched, 0 missing, 1 cleaned (by design)
 ```
 
 ## Notes
@@ -73,6 +74,14 @@ Summary: 2 matched, 1 mismatched, 0 missing
   the run host while outputs are read from the recorded run directory).
   For legacy checkpoints without a `workdir` field, the checkpoint's
   parent directory is used.
+- Transform chunk intermediates deleted by `transform.cleanup = true`
+  at the end of a successful run are recorded under `cleaned_checksums`
+  and reported as `cleaned (by design)` — they are excluded from the
+  missing/mismatched counts and never fail verification. The cleaned
+  count appears in the summary only when the checkpoint has any.
+  Checkpoints written by releases ≤ 0.17.1 record chunks under
+  `checksums` and still report them missing after cleanup — the
+  distinction exists only in checkpoints written by newer binaries.
 
 ### Verify without stored checksums
 
@@ -110,17 +119,20 @@ carries nothing else):
     "matched": 2,
     "mismatched": 1,
     "missing": 0,
+    "cleaned": 1,
     "entries": [
       {"file": "output/sample1.vcf", "status": "matched", "expected": "sha256:abc123...", "actual": "sha256:abc123..."},
-      {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"}
+      {"file": "output/report.html", "status": "mismatched", "expected": "sha256:xxx", "actual": "sha256:yyy"},
+      {"file": ".oxo-flow/chunks/chr/chr1.g.vcf.gz", "status": "cleaned", "expected": "sha256:ccc..."}
     ]
   }
 }
 ```
 
-`entries` is sorted by file path for byte-stable output. When the
-checkpoint has no stored checksums, the document is still emitted with a
-`note` field describing the degradation.
+`entries` is byte-stable: stored files first in sorted path order, then
+cleaned files in sorted path order. When the checkpoint has no stored
+checksums, the document is still emitted with a `note` field describing
+the degradation.
 
 ## See Also
 

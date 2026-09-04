@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One verified file's outcome, machine-readable for `--json`.
 #[derive(Debug, Serialize)]
 struct VerifyEntry {
     file: String,
-    /// `matched`, `mismatched`, or `missing`.
+    /// `matched`, `mismatched`, `missing`, or `cleaned`.
     status: &'static str,
     /// The checksum recorded in the checkpoint at run time.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +58,75 @@ impl VerifyEntry {
             note: None,
         }
     }
+    fn cleaned(file: &str, expected: &str) -> Self {
+        Self {
+            file: file.to_string(),
+            status: "cleaned",
+            expected: Some(expected.to_string()),
+            actual: None,
+            note: None,
+        }
+    }
+}
+
+/// Pure classification of recorded checksums against disk (unit-testable).
+///
+/// `cleaned` entries are outputs the engine deleted by design at the end
+/// of a successful run (transform chunk intermediates, `cleanup = true`,
+/// issue #315 F2) — reported as cleaned regardless of on-disk presence.
+/// Returns `(matched, mismatched, missing, cleaned, entries)` in a
+/// deterministic order: sorted `stored` files, then sorted `cleaned` files.
+fn verify_files(
+    stored: &HashMap<String, String>,
+    cleaned: &HashMap<String, String>,
+    workdir: &Path,
+) -> (usize, usize, usize, usize, Vec<VerifyEntry>) {
+    let mut matched = 0usize;
+    let mut mismatched = 0usize;
+    let mut missing = 0usize;
+    let mut cleaned_count = 0usize;
+    let mut entries: Vec<VerifyEntry> = Vec::new();
+
+    // Deterministic order: HashMap iteration is arbitrary, and both the
+    // human report and the JSON entries must be byte-stable (the same
+    // convention report sections follow, issue #83 P1-4).
+    let mut files_to_check: Vec<&String> = stored.keys().collect();
+    files_to_check.sort_unstable();
+
+    for file in files_to_check {
+        let expected = &stored[file];
+        let full_path = workdir.join(file);
+
+        if !full_path.exists() {
+            entries.push(VerifyEntry::missing(file, expected));
+            missing += 1;
+            continue;
+        }
+
+        match oxo_flow_core::executor::checkpoint::compute_file_checksum(&full_path) {
+            Ok(actual) if actual == *expected => {
+                entries.push(VerifyEntry::matched(file, expected, &actual));
+                matched += 1;
+            }
+            Ok(actual) => {
+                entries.push(VerifyEntry::mismatched(file, expected, &actual));
+                mismatched += 1;
+            }
+            Err(e) => {
+                entries.push(VerifyEntry::error(file, expected, &e.to_string()));
+                mismatched += 1;
+            }
+        }
+    }
+
+    let mut cleaned_files: Vec<&String> = cleaned.keys().collect();
+    cleaned_files.sort_unstable();
+    for file in cleaned_files {
+        entries.push(VerifyEntry::cleaned(file, &cleaned[file]));
+        cleaned_count += 1;
+    }
+
+    (matched, mismatched, missing, cleaned_count, entries)
 }
 
 /// Verify output file checksums stored in a checkpoint file.
@@ -104,25 +173,44 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     }
     eprintln!();
 
-    // Try embedded checksums first, then companion file
-    let stored_checksums: HashMap<String, String> = if let Some(checksums) =
-        checkpoint.get("checksums").and_then(|v| v.as_object())
-    {
-        checksums
-            .iter()
-            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-            .collect()
+    // Try embedded checksums first, then companion file. Non-string values
+    // are a hard parse error — silently coercing them to "" would falsify
+    // the audit trail without a diagnostic.
+    let mut stored_checksums: HashMap<String, String> = HashMap::new();
+    if let Some(checksums) = checkpoint.get("checksums").and_then(|v| v.as_object()) {
+        for (k, v) in checksums {
+            let s = v
+                .as_str()
+                .with_context(|| format!("checkpoint checksums value for '{k}' is not a string"))?;
+            stored_checksums.insert(k.clone(), s.to_string());
+        }
     } else {
         // Try companion file: checkpoint.checksums.json
         let companion = checkpoint_path.with_extension("checksums.json");
         if companion.exists() {
             let content = std::fs::read_to_string(&companion)
                 .context("failed to read companion checksums file")?;
-            serde_json::from_str(&content).context("failed to parse companion checksums file")?
-        } else {
-            HashMap::new()
+            stored_checksums = serde_json::from_str(&content)
+                .context("failed to parse companion checksums file")?;
         }
-    };
+    }
+
+    // Chunk outputs deleted by design at the end of a successful run
+    // (transform `cleanup = true`, issue #315 F2) — embedded under their
+    // own key, never in the companion file (which predates the
+    // cleaned/missing distinction).
+    let mut cleaned_checksums: HashMap<String, String> = HashMap::new();
+    if let Some(checksums) = checkpoint
+        .get("cleaned_checksums")
+        .and_then(|v| v.as_object())
+    {
+        for (k, v) in checksums {
+            let s = v.as_str().with_context(|| {
+                format!("checkpoint cleaned_checksums value for '{k}' is not a string")
+            })?;
+            cleaned_checksums.insert(k.clone(), s.to_string());
+        }
+    }
 
     // Output paths resolve against the workdir the run recorded in the
     // checkpoint (issue #68), NOT against the checkpoint's own directory:
@@ -146,7 +234,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     }
 
     // Determine which files to verify
-    if stored_checksums.is_empty() {
+    if stored_checksums.is_empty() && cleaned_checksums.is_empty() {
         // Fallback: try to discover output files from completed rules
         // Look for files matching rule output patterns in the workdir
         if let Some(completed) = checkpoint.get("completed_rules").and_then(|v| v.as_array()) {
@@ -177,6 +265,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                         "matched": 0,
                         "mismatched": 0,
                         "missing": 0,
+                        "cleaned": 0,
                         "entries": [],
                         "note": "No stored checksums found. Run workflow with --provenance to enable tracking.",
                     },
@@ -197,6 +286,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                     "matched": 0,
                     "mismatched": 0,
                     "missing": 0,
+                    "cleaned": 0,
                     "entries": [],
                     "note": "No completed rules or checksums found in the checkpoint.",
                 },
@@ -206,61 +296,64 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
         return Ok(());
     }
 
-    let mut matched = 0usize;
-    let mut mismatched = 0usize;
-    let mut missing = 0usize;
-    let mut entries: Vec<VerifyEntry> = Vec::new();
+    let (matched, mismatched, missing, cleaned, entries) =
+        verify_files(&stored_checksums, &cleaned_checksums, &workdir);
 
-    // Deterministic order: HashMap iteration is arbitrary, and both the
-    // human report and the JSON entries must be byte-stable (the same
-    // convention report sections follow, issue #83 P1-4).
-    let mut files_to_check: Vec<&String> = stored_checksums.keys().collect();
-    files_to_check.sort_unstable();
-
-    for file in files_to_check {
-        let expected = &stored_checksums[file];
-        let full_path = workdir.join(file);
-
-        if !full_path.exists() {
-            eprintln!("  {} {} (file missing)", "✗".red().bold(), file);
-            entries.push(VerifyEntry::missing(file, expected));
-            missing += 1;
-            continue;
-        }
-
-        match oxo_flow_core::executor::checkpoint::compute_file_checksum(&full_path) {
-            Ok(actual) if actual == *expected => {
-                eprintln!("  {} {} {}", "✓".green().bold(), file, actual.dimmed());
-                entries.push(VerifyEntry::matched(file, expected, &actual));
-                matched += 1;
-            }
-            Ok(actual) => {
-                eprintln!(
+    for entry in &entries {
+        match entry.status {
+            "matched" => eprintln!(
+                "  {} {} {}",
+                "✓".green().bold(),
+                entry.file,
+                entry.actual.as_deref().unwrap_or_default().dimmed()
+            ),
+            "missing" => eprintln!("  {} {} (file missing)", "✗".red().bold(), entry.file),
+            "cleaned" => eprintln!(
+                "  {} {} {} (cleaned by design)",
+                "✓".cyan().bold(),
+                entry.file,
+                entry.expected.as_deref().unwrap_or_default().dimmed()
+            ),
+            _ => match (&entry.expected, &entry.actual, &entry.note) {
+                (Some(expected), Some(actual), None) => eprintln!(
                     "  {} {} (expected: {}, actual: {})",
                     "✗".red().bold(),
-                    file,
+                    entry.file,
                     expected,
                     actual
-                );
-                entries.push(VerifyEntry::mismatched(file, expected, &actual));
-                mismatched += 1;
-            }
-            Err(e) => {
-                eprintln!("  {} {} (checksum error: {})", "✗".red().bold(), file, e);
-                entries.push(VerifyEntry::error(file, expected, &e.to_string()));
-                mismatched += 1;
-            }
+                ),
+                (_, _, Some(note)) => {
+                    eprintln!(
+                        "  {} {} (checksum error: {})",
+                        "✗".red().bold(),
+                        entry.file,
+                        note
+                    )
+                }
+                _ => eprintln!("  {} {} (mismatched)", "✗".red().bold(), entry.file),
+            },
         }
     }
 
     eprintln!();
-    eprintln!(
-        "{} {} matched, {} mismatched, {} missing",
-        "Summary:".bold(),
-        matched,
-        mismatched,
-        missing
-    );
+    if cleaned > 0 {
+        eprintln!(
+            "{} {} matched, {} mismatched, {} missing, {} cleaned (by design)",
+            "Summary:".bold(),
+            matched,
+            mismatched,
+            missing,
+            cleaned
+        );
+    } else {
+        eprintln!(
+            "{} {} matched, {} mismatched, {} missing",
+            "Summary:".bold(),
+            matched,
+            mismatched,
+            missing
+        );
+    }
 
     // Machine-readable verify result — stdout carries ONLY this document
     // in --json mode (the human report above stays on stderr).
@@ -272,6 +365,7 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
                 "matched": matched,
                 "mismatched": mismatched,
                 "missing": missing,
+                "cleaned": cleaned,
                 "entries": entries,
             },
         });
@@ -286,4 +380,58 @@ pub fn provenance_verify_command(checkpoint_path: PathBuf, json: bool) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_file(dir: &Path, name: &str, content: &str) -> String {
+        let path = dir.join(name);
+        fs::write(&path, content).unwrap();
+        oxo_flow_core::executor::checkpoint::compute_file_checksum(&path).unwrap()
+    }
+
+    #[test]
+    fn verify_files_classifies_matched_missing_and_cleaned() {
+        let dir = tempfile::tempdir().unwrap();
+        let good_sha = write_file(dir.path(), "good.txt", "hello\n");
+
+        let mut stored = HashMap::new();
+        stored.insert("good.txt".to_string(), good_sha);
+        stored.insert("gone.txt".to_string(), "sha256:dead".to_string());
+        let mut cleaned = HashMap::new();
+        cleaned.insert(
+            ".oxo-flow/chunks/chr/chr1.out".to_string(),
+            "sha256:beef".to_string(),
+        );
+
+        let (matched, mismatched, missing, cleaned_n, entries) =
+            verify_files(&stored, &cleaned, dir.path());
+        assert_eq!((matched, mismatched, missing, cleaned_n), (1, 0, 1, 1));
+        assert_eq!(entries.len(), 3);
+        let statuses: Vec<&str> = entries.iter().map(|e| e.status).collect();
+        assert!(statuses.contains(&"cleaned"));
+        assert!(statuses.contains(&"matched"));
+        assert!(statuses.contains(&"missing"));
+    }
+
+    #[test]
+    fn cleaned_entries_report_cleaned_even_when_file_still_exists() {
+        // A chunk whose file survived (e.g. the run failed before cleanup)
+        // is still "cleaned", never "matched" — its lifecycle is
+        // engine-governed either way (issue #315 F2).
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join(".oxo-flow/chunks");
+        fs::create_dir_all(&sub).unwrap();
+        let sha = write_file(&sub, "chr1.out", "data\n");
+
+        let mut cleaned = HashMap::new();
+        cleaned.insert(".oxo-flow/chunks/chr1.out".to_string(), sha);
+        let (matched, mismatched, missing, cleaned_n, entries) =
+            verify_files(&HashMap::new(), &cleaned, dir.path());
+        assert_eq!((matched, mismatched, missing, cleaned_n), (0, 0, 0, 1));
+        assert_eq!(entries[0].status, "cleaned");
+    }
 }
