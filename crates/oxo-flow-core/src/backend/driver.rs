@@ -934,6 +934,31 @@ impl BackendDriver {
                                 Some((f.submitted_at, observed_at)),
                                 acct,
                             )?;
+                            // Fail fast, mirroring the local executor's
+                            // abort-on-first-failure default (run.rs): the
+                            // remaining inflight entries are exactly this
+                            // failure's live siblings, and a run that can no
+                            // longer succeed must not keep billing for them.
+                            // Non-required failures leave the run salvageable
+                            // (record_outcome counts them separately), so
+                            // only a required rule's failure cancels.
+                            if plan.rules[&f.rule].rule.required {
+                                let siblings: Vec<(String, String, Option<String>)> = inflight
+                                    .iter()
+                                    .map(|(id, f)| {
+                                        (id.clone(), f.rule.clone(), f.array_base.clone())
+                                    })
+                                    .collect();
+                                if !siblings.is_empty() {
+                                    tracing::warn!(
+                                        rule = %f.rule,
+                                        job = %job_id,
+                                        cancelling = siblings.len(),
+                                        "required rule failed — cancelling remaining in-flight jobs"
+                                    );
+                                    self.cancel_inflight(&siblings).await?;
+                                }
+                            }
                             JobRecord {
                                 rule: f.rule.clone(),
                                 status: JobStatus::Failed,

@@ -34,8 +34,28 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file (for `submit`) |
-| `[JOB_IDS]...` | Cluster job IDs from a submit/run output — required for `status` (an empty job list is rejected); optional for `cancel` |
+| `[JOB_IDS]...` | Cluster job IDs from a submit/run output — for `status`: omitted, the command lists your queued jobs; given, it answers exactly those ids. Optional for `cancel` |
 | `<JOB_ID>` | Job ID (for `logs`) |
+
+---
+
+## Options
+
+Every action accepts `--backend` / `-b`:
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--backend` | `-b` | `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm` | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) — on a SLURM site you never need to type it |
+
+An **explicit** value is always validated — `-b slrm` fails with
+`unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf` rather
+than silently querying SLURM. The default applies only when the flag is
+omitted entirely. On a non-SLURM site set the default once in your shell
+profile:
+
+```bash
+export OXO_FLOW_CLUSTER_BACKEND=pbs   # or sge / lsf
+```
 
 ---
 
@@ -43,7 +63,6 @@ oxo-flow cluster <ACTION> [OPTIONS]
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--backend` | `-b` | *(required)* | Cluster backend (`slurm`, `pbs`, `sge`, `lsf`) |
 | `--queue` | `-q` | — | Partition / queue name |
 | `--account` | `-a` | — | Account / project name |
 | `--walltime` | — | — | Wall-time limit for every job (`24h`, `2d`, or `24:00:00`) |
@@ -148,16 +167,23 @@ submission line to review, e.g. `sbatch cluster_scripts/*.sh`.
 
 ### Check job status
 
-`status` needs at least one job id — an empty list is rejected, because
-querying a scheduler for "everything" is not what this command is for:
+With no ids, `status` lists **your** queued jobs (all jobs the scheduler
+reports for your user) — the natural first question after a submit:
 
 ```bash
-oxo-flow cluster status -b slurm 12345 12346
+$ oxo-flow cluster status
+Cluster: Executing 'squeue -u alice --noheader -o %i|%t'...
+Cluster: 2 queued job(s)
+  12345: running
+  12346: pending
 ```
 
-Unknown backends are rejected rather than guessed: `-b slrm` fails with
-`unknown cluster backend 'slrm' — expected slurm, pbs, sge, or lsf` instead of
-silently querying SLURM.
+Pass the ids the submit/run step printed to answer exactly those — including
+finished ones, which are settled from the scheduler's accounting store:
+
+```bash
+oxo-flow cluster status 12345 12346
+```
 
 ### Cancel specific jobs
 
@@ -360,10 +386,20 @@ Different backends use different dependency syntax:
   render layer the live submission path uses, so generated scripts and
   submitted scripts can never drift apart
 - The `logs/` directory referenced by the scripts' `--output` directives is
-  created before the scripts are written (slurmd opens that file at job
-  launch, before the script body runs)
+  created at submit time (both by `oxo-flow run --profile` and by the
+  engine's live submission path): schedulers open the script's `--output`
+  file at job launch, before the script body runs, so a missing directory
+  fails the job instantly. When you submit generated scripts yourself
+  (`cluster submit --dry-run` output), create the directory first.
 - Resource requirements (threads, memory, gpu) from the workflow are automatically translated to cluster directives
 - **Environment wrapping is applied automatically** — conda, docker, singularity, pixi, venv, and module environments are properly wrapped in the generated scripts
-- `status` and `cancel` actively execute native cluster commands (like `squeue`, `scancel`) and print their outputs directly
+- `status`, `cancel`, and `logs` actively execute native cluster commands
+  (`squeue`, `scancel`, …). `status` captures the scheduler's output and
+  parses it into one normalized state per job (pending / running /
+  completed / failed / cancelled / unknown); for ids you request explicitly,
+  jobs no longer in the queue fall back to the scheduler's accounting store
+  (`sacct`, `qstat -x`, `qacct`, `bacct`) so finished jobs report their real
+  final state instead of "not in the queue". The no-ids listing shows only
+  live (queued or running) jobs — that is what the scheduler itself reports.
 - Ensure the required environments (conda envs, docker images, etc.) are available on cluster nodes before submitting
 - Use `--with-dependencies` for workflows where rules depend on each other — this ensures proper execution order
