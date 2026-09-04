@@ -1249,7 +1249,8 @@ impl LocalExecutor {
             // kept instance's veto.
             //
             // The workdir-aware entry (issue #282) lets runtime file
-            // functions (`reads_count` / `wc_lines` / `file_size`) resolve
+            // functions (`reads_count` / `wc_lines` / `file_size` /
+            // `regex_extract`) resolve
             // relative paths against the run's workdir and decide on real
             // file contents; missing files fail closed here instead of
             // deferring like they do at plan time.
@@ -3193,7 +3194,8 @@ pub fn evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
 
 /// Condition evaluation in the **execution-time phase** (issue #282):
 /// runtime file-reading functions (`reads_count` / `wc_lines` /
-/// `file_size`) resolve relative paths against `workdir` — the run's
+/// `file_size` / `regex_extract`) resolve relative paths against
+/// `workdir` — the run's
 /// working directory, the same root every shell command runs in — and a
 /// referenced file that does not exist evaluates **false**: the gate
 /// decides the instance here (its producer already ran, so a missing file
@@ -3415,11 +3417,73 @@ fn evaluate_condition_inner(
             _ => Path::new(path).exists(),
         });
     }
+    // Runtime regex extraction (issue #312): `regex_extract(path, pattern,
+    // group?)` parses an integer out of a text report — the flagstat
+    // mapped-count and bcftools-stats record-count gates no counting fn
+    // can express. The captured text must parse as an integer (when-
+    // language comparisons are numeric); the group defaults to 0 (the
+    // whole match). Line-oriented (`(?m)`) so `^`/`$` anchor per line.
+    // Malformed CALLS defer at plan time like every other gate that
+    // cannot yet be established (the instance survives to the execution
+    // re-check) and fail closed at execution time.
+    if let Some(rest) = s.strip_prefix("regex_extract(")
+        && let Some(close) = find_matching_paren(rest)
+    {
+        let after = rest[close + 1..].trim();
+        let args = split_top_level_commas(&rest[..close]);
+        let parsed: Option<(&str, &str, usize)> = match args.as_slice() {
+            [p, pat] => Some((
+                strip_matching_quotes(p.trim()),
+                strip_matching_quotes(pat.trim()),
+                0,
+            )),
+            [p, pat, g] => {
+                let group = strip_matching_quotes(g.trim()).trim().parse::<usize>().ok();
+                group.map(|group| {
+                    (
+                        strip_matching_quotes(p.trim()),
+                        strip_matching_quotes(pat.trim()),
+                        group,
+                    )
+                })
+            }
+            _ => None,
+        };
+        let Some((raw_path, pattern, group)) = parsed else {
+            return if workdir.is_none() {
+                ConditionVerdict::Deferred
+            } else {
+                ConditionVerdict::No
+            };
+        };
+        // Compile FIRST — a malformed pattern fails before any file I/O.
+        let re = match regex::Regex::new(&format!("(?m){pattern}")) {
+            Ok(re) => re,
+            Err(_) => {
+                return if workdir.is_none() {
+                    ConditionVerdict::Deferred
+                } else {
+                    ConditionVerdict::No
+                };
+            }
+        };
+        let candidate =
+            match resolve_runtime_path(raw_path, wildcard_values, workdir, pending_outputs) {
+                Ok(candidate) => candidate,
+                Err(verdict) => return verdict,
+            };
+        let n = read_text_report(&candidate).and_then(|content| {
+            let caps = re.captures(&content)?;
+            caps.get(group)?.as_str().trim().parse::<i64>().ok()
+        });
+        return compare_runtime_count(n, after, config_values);
+    }
     // Runtime file-reading functions (issue #282): `reads_count(path)`,
     // `wc_lines(path)`, `file_size(path)` — a small pure-read stdlib so
     // `when` can gate on runtime-produced values, e.g.
     // `reads_count('{sample}/trimmed/{sample}.fq.gz') > config.min_reads`.
-    // Only these three names are recognized, only `when` strings reach this
+    // Only these three names are recognized by THIS loop (`regex_extract`
+    // above has its own multi-arg parser), only `when` strings reach this
     // evaluator, and each function just opens a file and counts — no shell,
     // no arbitrary code. `{wildcard}` tokens in the path expand against the
     // caller's wildcard context (unbound tokens cannot exist on disk and
@@ -3448,72 +3512,17 @@ fn evaluate_condition_inner(
         let arg = rest[1..1 + close].trim();
         let after = rest[close + 2..].trim();
         let raw_path = arg.trim_matches('"').trim_matches('\'');
-        let expanded = crate::wildcard::expand_pattern(raw_path, wildcard_values)
-            .unwrap_or_else(|_| raw_path.to_string());
-        let candidate = if Path::new(&expanded).is_absolute() {
-            PathBuf::from(&expanded)
-        } else {
-            workdir.map_or_else(|| PathBuf::from(&expanded), |root| root.join(&expanded))
-        };
-        // Plan-time deferral: the referenced output cannot exist yet, or it
-        // exists only as a previous run's leftover that this run's producer
-        // will overwrite (`pending_outputs`).
-        let exists = candidate.exists();
-        if workdir.is_none()
-            && (!exists
-                || pending_outputs.is_some_and(|pending| {
-                    pending.iter().any(|p| path_matches_output(p, &expanded))
-                }))
-        {
-            return ConditionVerdict::Deferred;
-        }
+        let candidate =
+            match resolve_runtime_path(raw_path, wildcard_values, workdir, pending_outputs) {
+                Ok(candidate) => candidate,
+                Err(verdict) => return verdict,
+            };
         let n = match name {
             "file_size" => std::fs::metadata(&candidate).ok().map(|md| md.len() as i64),
             "reads_count" => count_fastq_records(&candidate),
             _ => count_text_lines(&candidate),
         };
-        let Some(n) = n else {
-            // Missing or unreadable at the deciding phase: the producer has
-            // not delivered the file — fail closed.
-            return ConditionVerdict::No;
-        };
-        if after.is_empty() {
-            // Bare `reads_count('x')` — true when a non-empty value was
-            // read (consistent with bare `len(config.x)`).
-            return ConditionVerdict::decided(n > 0);
-        }
-        for op in &["==", "!=", ">=", "<=", ">", "<"] {
-            if let Some(rhs_text) = after.strip_prefix(op) {
-                let rhs_text = rhs_text.trim();
-                // The threshold is a number literal or a `config.*`
-                // reference (`> config.min_reads`) — typed config values
-                // are read directly, string values (e.g. merged from
-                // wildcard bindings) parse.
-                let rhs_num = if let Some(key) = rhs_text.strip_prefix("config.") {
-                    config_values
-                        .get(key.trim())
-                        .and_then(runtime_threshold_as_i64)
-                } else {
-                    rhs_text.parse::<i64>().ok()
-                };
-                let Some(rhs_num) = rhs_num else {
-                    // Unresolvable threshold (absent config key,
-                    // non-numeric): the gate cannot be established — the
-                    // same absent-key behavior as `compare_config_value`.
-                    return ConditionVerdict::No;
-                };
-                return ConditionVerdict::decided(match *op {
-                    "==" => n == rhs_num,
-                    "!=" => n != rhs_num,
-                    ">=" => n >= rhs_num,
-                    "<=" => n <= rhs_num,
-                    ">" => n > rhs_num,
-                    "<" => n < rhs_num,
-                    _ => false,
-                });
-            }
-        }
-        return ConditionVerdict::No;
+        return compare_runtime_count(n, after, config_values);
     }
     for op in &["==", "!=", ">=", "<=", ">", "<"] {
         if let Some(idx) = find_top_level_op(s, op) {
@@ -3647,30 +3656,238 @@ fn runtime_threshold_as_i64(value: &toml::Value) -> Option<i64> {
 /// Byte index of the `)` that balances the `(` implied by the caller's
 /// `strip_prefix("len(")` — i.e., relative to the string starting just
 /// after that `(`. Respects nesting and quoted strings.
-fn find_matching_paren(s: &str) -> Option<usize> {
+/// Quote-state tracking shared by the when-string scanners. A quote
+/// toggles its state only when NOT backslash-escaped: regex patterns
+/// legitimately contain escaped quotes (`\"mapped\"`), and treating them
+/// as delimiters desyncs the scanner (issue #312 review).
+#[derive(Default)]
+pub(crate) struct QuoteState {
+    in_double: bool,
+    in_single: bool,
+}
+
+impl QuoteState {
+    pub(crate) fn advance(&mut self, bytes: &[u8], i: usize) {
+        let b = bytes[i];
+        let escaped = i > 0 && bytes[i - 1] == b'\\';
+        match b {
+            b'"' if !escaped && !self.in_single => self.in_double = !self.in_double,
+            b'\'' if !escaped && !self.in_double => self.in_single = !self.in_single,
+            _ => {}
+        }
+    }
+    pub(crate) fn in_quote(&self) -> bool {
+        self.in_double || self.in_single
+    }
+}
+
+pub(crate) fn find_matching_paren(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth = 1i32;
-    let mut in_double = false;
-    let mut in_single = false;
+    let mut quotes = QuoteState::default();
     let n = bytes.len();
     let mut i = 0usize;
     while i < n {
+        quotes.advance(bytes, i);
         let b = bytes[i];
-        match b {
-            b'"' if !in_single => in_double = !in_double,
-            b'\'' if !in_double => in_single = !in_single,
-            b'(' if !in_double && !in_single => depth += 1,
-            b')' if !in_double && !in_single => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
+        if !quotes.in_quote() {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
         i += 1;
     }
     None
+}
+
+/// Split function arguments on top-level commas. Commas inside `()` groups,
+/// `{}` regex quantifiers (`\d{2,3}`), `[]` character classes, or quoted
+/// arguments do not split — the delimiter only counts at nesting depth
+/// zero, outside quotes (issue #312 review: `'AC=(\d+),AN=(\d+)'` is ONE
+/// argument).
+pub(crate) fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let bytes = s.as_bytes();
+    let mut quotes = QuoteState::default();
+    for (i, c) in s.char_indices() {
+        quotes.advance(bytes, i);
+        if quotes.in_quote() {
+            continue;
+        }
+        match c {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Strip an argument's wrapping quote pair — only a MATCHING pair of the
+/// same quote character is removed. A regex pattern whose first and last
+/// characters are the OTHER quote style keeps them (they are content:
+/// `"(\\d+)"` matches quoted numbers, and `'(\\d+)'` stays intact when
+/// authored under double quotes) (issue #312 review).
+pub(crate) fn strip_matching_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'\'' || first == b'"') && last == first {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+/// The when-string content OUTSIDE quoted arguments, one string per
+/// unquoted span (delimiter quotes and quoted content excluded). Used by
+/// the lint layer (issue #312): `config.<key>` text inside a
+/// `regex_extract` pattern argument is a string literal, not a variable
+/// reference.
+pub(crate) fn unquoted_spans(s: &str) -> Vec<String> {
+    let bytes = s.as_bytes();
+    let mut quotes = QuoteState::default();
+    let mut prev_in_quote = false;
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    for (i, c) in s.char_indices() {
+        quotes.advance(bytes, i);
+        let in_quote = quotes.in_quote();
+        if in_quote && !prev_in_quote {
+            spans.push(std::mem::take(&mut current));
+        } else if !in_quote {
+            current.push(c);
+        }
+        prev_in_quote = in_quote;
+    }
+    spans.push(current);
+    spans.retain(|s| !s.is_empty());
+    spans
+}
+
+/// Shared preamble of the runtime file-reading atoms (issues #282/#312):
+/// expand wildcards, resolve the path against the workdir, and apply the
+/// plan-time deferral rule (missing file, or a previous run's leftover
+/// this run's producer will overwrite). `Err(Deferred)` tells the caller
+/// to defer; otherwise the candidate path is returned.
+fn resolve_runtime_path(
+    raw_path: &str,
+    wildcard_values: &HashMap<String, String>,
+    workdir: Option<&std::path::Path>,
+    pending_outputs: Option<&[String]>,
+) -> std::result::Result<PathBuf, ConditionVerdict> {
+    let expanded = crate::wildcard::expand_pattern(raw_path, wildcard_values)
+        .unwrap_or_else(|_| raw_path.to_string());
+    let candidate = if Path::new(&expanded).is_absolute() {
+        PathBuf::from(&expanded)
+    } else {
+        workdir.map_or_else(|| PathBuf::from(&expanded), |root| root.join(&expanded))
+    };
+    // Plan-time deferral: the referenced output cannot exist yet, or it
+    // exists only as a previous run's leftover that this run's producer
+    // will overwrite (`pending_outputs`).
+    let exists = candidate.exists();
+    if workdir.is_none()
+        && (!exists
+            || pending_outputs
+                .is_some_and(|pending| pending.iter().any(|p| path_matches_output(p, &expanded))))
+    {
+        return Err(ConditionVerdict::Deferred);
+    }
+    Ok(candidate)
+}
+
+/// Read a text report for `regex_extract` (issue #312): transparent `.gz`
+/// decompression like the counting fns, bounded at 16 MiB (reports are
+/// small; the cap keeps every phase's read cheap and predictable).
+fn read_text_report(path: &Path) -> Option<String> {
+    const MAX_REPORT_BYTES: u64 = 16 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > MAX_REPORT_BYTES {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = String::new();
+    let read = if path.to_string_lossy().ends_with(".gz") {
+        use std::io::Read;
+        flate2::read::MultiGzDecoder::new(file)
+            .take(MAX_REPORT_BYTES + 1)
+            .read_to_string(&mut buf)
+    } else {
+        use std::io::Read;
+        file.take(MAX_REPORT_BYTES + 1).read_to_string(&mut buf)
+    };
+    read.ok()?;
+    if buf.len() as u64 > MAX_REPORT_BYTES {
+        return None;
+    }
+    Some(buf)
+}
+
+/// Shared comparison tail of the runtime file-reading atoms (issues #282
+/// and #312): compare a read value against number literals or `config.*`
+/// thresholds, fail-closed on missing/unparseable values.
+fn compare_runtime_count(
+    n: Option<i64>,
+    after: &str,
+    config_values: &HashMap<String, toml::Value>,
+) -> ConditionVerdict {
+    let Some(n) = n else {
+        // Missing or unreadable at the deciding phase: the producer has
+        // not delivered the file — fail closed.
+        return ConditionVerdict::No;
+    };
+    if after.is_empty() {
+        // Bare `reads_count('x')` — true when a non-empty value was read
+        // (consistent with bare `len(config.x)`).
+        return ConditionVerdict::decided(n > 0);
+    }
+    for op in &["==", "!=", ">=", "<=", ">", "<"] {
+        if let Some(rhs_text) = after.strip_prefix(op) {
+            let rhs_text = rhs_text.trim();
+            // The threshold is a number literal or a `config.*`
+            // reference (`> config.min_reads`) — typed config values are
+            // read directly, string values (e.g. merged from wildcard
+            // bindings) parse.
+            let rhs_num = if let Some(key) = rhs_text.strip_prefix("config.") {
+                config_values
+                    .get(key.trim())
+                    .and_then(runtime_threshold_as_i64)
+            } else {
+                rhs_text.parse::<i64>().ok()
+            };
+            let Some(rhs_num) = rhs_num else {
+                // Unresolvable threshold (absent config key, non-numeric):
+                // the gate cannot be established — the same absent-key
+                // behavior as `compare_config_value`.
+                return ConditionVerdict::No;
+            };
+            return ConditionVerdict::decided(match *op {
+                "==" => n == rhs_num,
+                "!=" => n != rhs_num,
+                ">=" => n >= rhs_num,
+                "<=" => n <= rhs_num,
+                ">" => n > rhs_num,
+                "<" => n < rhs_num,
+                _ => false,
+            });
+        }
+    }
+    ConditionVerdict::No
 }
 
 fn find_top_level_op(s: &str, op: &str) -> Option<usize> {
@@ -3678,24 +3895,20 @@ fn find_top_level_op(s: &str, op: &str) -> Option<usize> {
     let op_len = op_bytes.len();
     let bytes = s.as_bytes();
     let mut depth: i32 = 0;
-    let mut in_double = false;
-    let mut in_single = false;
+    let mut quotes = QuoteState::default();
     let n = bytes.len();
     let mut i = 0usize;
     while i < n {
+        quotes.advance(bytes, i);
         let b = bytes[i];
-        match b {
-            b'"' if !in_single => in_double = !in_double,
-            b'\'' if !in_double => in_single = !in_single,
-            b'(' if !in_double && !in_single => depth += 1,
-            b')' if !in_double && !in_single => depth -= 1,
-            _ => {}
+        if !quotes.in_quote() {
+            match b {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
         }
-        if !in_double
-            && !in_single
-            && depth == 0
-            && i + op_len <= n
-            && &bytes[i..i + op_len] == op_bytes
+        if !quotes.in_quote() && depth == 0 && i + op_len <= n && &bytes[i..i + op_len] == op_bytes
         {
             return Some(i);
         }

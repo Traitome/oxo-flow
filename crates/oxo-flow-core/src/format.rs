@@ -145,6 +145,67 @@ fn environment_field_value(env: &EnvironmentSpec, field: &str) -> String {
     value.unwrap_or_default().to_string()
 }
 
+/// W030: `regex_extract(path, pattern, group?)` call-shape checks for
+/// `when` strings (issue #312) — wrong arity, non-numeric group, or an
+/// uncompilable pattern is a silent always-false gate at execution time,
+/// so the authoring error must be loud at validate/lint time.
+fn lint_regex_extract_calls(when: &str, rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
+    let bytes = when.as_bytes();
+    let needle = b"regex_extract(";
+    let mut quotes = crate::executor::process::QuoteState::default();
+    let mut i = 0usize;
+    while i + needle.len() <= bytes.len() {
+        quotes.advance(bytes, i);
+        if !quotes.in_quote() && &bytes[i..i + needle.len()] == needle {
+            // The call spans multiple quoted arguments — parse the parens
+            // and args from the FULL string (the scanners are quote-aware).
+            // `find_matching_paren` scans text AFTER the opening paren.
+            let open = i + needle.len() - 1;
+            let Some(close) = crate::executor::process::find_matching_paren(&when[open + 1..])
+            else {
+                i += needle.len();
+                continue;
+            };
+            let parts =
+                crate::executor::process::split_top_level_commas(&when[open + 1..open + 1 + close]);
+            let mut reason: Option<String> = None;
+            if parts.len() != 2 && parts.len() != 3 {
+                reason = Some(format!("{} arguments (expected 2 or 3)", parts.len()));
+            }
+            if reason.is_none() && parts.len() == 3 {
+                let group = crate::executor::process::strip_matching_quotes(parts[2].trim()).trim();
+                if group.parse::<usize>().is_err() {
+                    reason = Some(format!("group '{}' is not a number", parts[2].trim()));
+                }
+            }
+            if reason.is_none() && parts.len() >= 2 {
+                let pattern = crate::executor::process::strip_matching_quotes(parts[1].trim());
+                if regex::Regex::new(&format!("(?m){pattern}")).is_err() {
+                    reason = Some("pattern does not compile".to_string());
+                }
+            }
+            if let Some(reason) = reason {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "when condition has a malformed regex_extract call: {reason} — the gate silently evaluates false at execution time"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W030".to_string(),
+                    suggestion: Some(
+                        "use regex_extract('path', 'pattern', group?) with a numeric group \
+                         (default 0 = whole match)"
+                            .to_string(),
+                    ),
+                });
+            }
+            i = open + 1 + close + 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let config_ref_re = regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex");
@@ -178,18 +239,29 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
         check("input path", input, &mut diagnostics);
     }
     if let Some(ref when) = rule.when {
-        for cap in when_ref_re.captures_iter(when) {
-            let key = &cap[1];
-            if config.get_config_value(key).is_none() {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    message: format!("when condition references undefined config variable '{key}'"),
-                    rule: Some(rule.name.clone()),
-                    code: "E005".to_string(),
-                    suggestion: Some(format!("define '{key}' in the [config] section")),
-                });
+        // Quote-aware scan (issue #312): `config.<key>` text inside a
+        // quoted argument — e.g. a `regex_extract` pattern matching a
+        // settings dump — is a string literal, not a variable reference.
+        for span in crate::executor::process::unquoted_spans(when) {
+            for cap in when_ref_re.captures_iter(&span) {
+                let key = &cap[1];
+                if config.get_config_value(key).is_none() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "when condition references undefined config variable '{key}'"
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E005".to_string(),
+                        suggestion: Some(format!("define '{key}' in the [config] section")),
+                    });
+                }
             }
         }
+        // W030 (issue #312): a malformed `regex_extract(...)` call is a
+        // silent always-false gate at execution time — authoring errors
+        // must be loud at validate/lint time.
+        lint_regex_extract_calls(when, rule, &mut diagnostics);
         // `len(config.<key>)` (issue #252): a length comparison against a
         // non-numeric literal is a silent always-false — flag it.
         let len_ref_re = regex::Regex::new(
@@ -2058,6 +2130,72 @@ mod tests {
         let result = validate_format(&config);
         assert!(!result.valid);
         assert!(result.errors().iter().any(|d| d.code == "E005"));
+    }
+
+    #[test]
+    fn e005_skips_config_text_inside_regex_extract_pattern() {
+        // Issue #312: `config.<key>` text inside a quoted regex pattern is
+        // a string literal (matching a settings dump), not a reference.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            when = "regex_extract('settings.log', 'config.min_reads = (\\d+)', 1) > 0"
+            shell = "echo hi"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().all(|d| d.code != "E005"),
+            "quoted pattern text must not trigger E005: {:?}",
+            result.errors()
+        );
+    }
+
+    #[test]
+    fn w030_flags_malformed_regex_extract_calls() {
+        // Issue #312: silent always-false gates must be loud authoring
+        // errors — wrong arity, non-numeric group, uncompilable pattern.
+        let base = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            min_reads = 5
+
+            [[rules]]
+            name = "{name}"
+            output = ["out.txt"]
+            when = "{when}"
+            shell = "echo hi"
+        "#;
+        for (name, when, expect_w030) in [
+            (
+                "ok",
+                r#"regex_extract('f.txt', '(\\d+) \\+ \\d+ mapped', 1) > config.min_reads"#,
+                false,
+            ),
+            ("arity", r#"regex_extract('f.txt', 'p', 1, 'x') > 0"#, true),
+            (
+                "bad_group",
+                r#"regex_extract('f.txt', '(\\d+)', 'x') > 0"#,
+                true,
+            ),
+            (
+                "bad_pattern",
+                r#"regex_extract('f.txt', '(\\d+', 1) > 0"#,
+                true,
+            ),
+        ] {
+            let toml = base.replace("{name}", name).replace("{when}", when);
+            let config = WorkflowConfig::parse(&toml).unwrap();
+            let result = validate_format(&config);
+            let has_w030 = result.warnings().iter().any(|d| d.code == "W030");
+            assert_eq!(has_w030, expect_w030, "{name}: {when}");
+        }
     }
 
     #[test]

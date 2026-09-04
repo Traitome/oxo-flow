@@ -58,7 +58,7 @@ paths pass through unchanged.
 ### Data-dependent gates (runtime functions)
 
 `when` can also inspect files produced earlier in the same run — the gate
-becomes data-dependent (issue #282). Three read-only functions are
+becomes data-dependent (issue #282). Five read-only functions are
 available in `when` strings:
 
 | Function | Reads | Returns |
@@ -66,6 +66,7 @@ available in `when` strings:
 | `reads_count(path)` | FASTQ (plain or `.gz`) | record count (lines ÷ 4, truncated) |
 | `wc_lines(path)` | any text file (plain or `.gz`) | line count of the decompressed content |
 | `file_size(path)` | any file | size in bytes |
+| `regex_extract(path, pattern, group?)` | any text file | integer parsed from the first regex match (group defaults to 0 = whole match; the captured text must be a number) |
 | `file_exists(path)` | — | 1/0 existence probe |
 
 ```toml

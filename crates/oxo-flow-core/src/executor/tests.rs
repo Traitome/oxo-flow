@@ -1090,6 +1090,149 @@ fn runtime_when_functions_count_real_files() {
 }
 
 #[test]
+fn regex_extract_reads_counts_from_text_reports() {
+    // Issue #312: `regex_extract(path, pattern, group?)` extracts an
+    // integer from a text report line — the flagstat mapped-count and
+    // bcftools-stats record-count gates that no 0.17 runtime fn could
+    // express.
+    use super::process::evaluate_condition_with_workdir_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+
+    // samtools flagstat: "100 + 0 mapped (100% : N/A)".
+    std::fs::write(
+        dir.path().join("flagstat.txt"),
+        "100 + 0 in total (QC-passed reads + QC-failed reads)\n\
+         100 + 0 mapped (100% : N/A)\n\
+         0 + 0 properly paired (0% : N/A)\n",
+    )
+    .unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('flagstat.txt', '(\\d+) \\+ 0 mapped', 1) == 100",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('flagstat.txt', '(\\d+) \\+ 0 mapped', 1) > 100",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // bcftools stats: "SN\t0\tnumber of records:\t42".
+    std::fs::write(
+        dir.path().join("stats.txt"),
+        "SN\t0\tnumber of samples:\t1\nSN\t0\tnumber of records:\t42\n",
+    )
+    .unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('stats.txt', 'number of records:\\s+(\\d+)', 1) == 42",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Group defaults to 0 (the whole match) — a pattern that matches a
+    // pure number needs no explicit group.
+    std::fs::write(dir.path().join("pure.txt"), "answer: 7\n").unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('pure.txt', '\\d+') == 7",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    // Explicit group 1 extracts the same value out of surrounding text.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('pure.txt', 'answer: (\\d+)', 1) == 7",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Bare call: truthiness = extracted value > 0.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('stats.txt', 'number of records:\\s+(\\d+)', 1)",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Config thresholds work like the other runtime fns.
+    let mut typed = HashMap::new();
+    typed.insert("min_mapped".to_string(), toml::Value::Integer(50));
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('flagstat.txt', '(\\d+) \\+ 0 mapped', 1) >= config.min_mapped",
+        &typed,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // Fail-closed at execution time: missing file, no match, non-numeric
+    // capture, and out-of-range group are all false.
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('missing.txt', '(\\d+)') > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('flagstat.txt', 'properly paired', 1) > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    std::fs::write(dir.path().join("words.txt"), "just words here\n").unwrap();
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('words.txt', '(\\w+)', 1) > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+    assert!(!evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('flagstat.txt', '(\\d+)', 9) > 0",
+        &config,
+        &empty,
+        Some(dir.path()),
+        None
+    ));
+
+    // The same missing file at PLAN time defers — the producer has not
+    // run yet.
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('missing.txt', '(\\d+)') > 0",
+        &config,
+        &empty,
+        None,
+        None
+    ));
+
+    // `{wildcard}` tokens expand like the other runtime fns.
+    let mut wildcards = HashMap::new();
+    wildcards.insert("sample".to_string(), "sample".to_string());
+    std::fs::write(dir.path().join("sample.flagstat.txt"), "9 + 0 mapped\n").unwrap();
+    assert!(evaluate_condition_with_workdir_and_base_dir(
+        "regex_extract('{sample}.flagstat.txt', '(\\d+) \\+ 0 mapped', 1) == 9",
+        &config,
+        &wildcards,
+        Some(dir.path()),
+        None
+    ));
+}
+
+#[test]
 fn wc_lines_decompresses_gzip_like_reads_count() {
     // Issue #282 review: `wc_lines` must decompress `.gz` inputs the same
     // way `reads_count` does — the count is of the decompressed content.
@@ -2692,5 +2835,134 @@ async fn meta_when_gate_runs_se_and_skips_pe_instances() {
             .iter()
             .all(|r| r.name != "trim_control_PE1" && r.name != "trim_control_X1"),
         "gated instances must not survive planning"
+    );
+}
+
+#[test]
+fn regex_extract_review_hardening_cases() {
+    // Issue #312 review regressions: quotes, commas and anchors inside
+    // pattern arguments; group-0 strictness; quoted numeric group; gz;
+    // zero-value truthiness; malformed-call phase semantics.
+    use super::process::evaluate_condition_with_workdir_and_base_dir;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = HashMap::new();
+    let empty = HashMap::new();
+    let ev = |expr: &str, wd: Option<&std::path::Path>| {
+        evaluate_condition_with_workdir_and_base_dir(expr, &config, &empty, wd, None)
+    };
+
+    // Escaped quotes inside the pattern do not desync the paren scanner
+    // (they are regex content, not when-string delimiters).
+    std::fs::write(dir.path().join("qc.txt"), "{\"mapped\": 80}\n").unwrap();
+    assert!(ev(
+        r#"regex_extract('qc.txt', '\"mapped\": (\d+)', 1) == 80"#,
+        Some(dir.path())
+    ));
+
+    // A comma at depth 0 INSIDE the quoted pattern is one argument.
+    std::fs::write(dir.path().join("f.txt"), "mapped: 80, total\n").unwrap();
+    assert!(ev(
+        r#"regex_extract('f.txt', 'mapped: (\d+), total', 1) == 80"#,
+        Some(dir.path())
+    ));
+
+    // Group 0 is the WHOLE match — embedded text does not silently fall
+    // back to capture group 1.
+    std::fs::write(dir.path().join("pure.txt"), "answer: 7\n").unwrap();
+    assert!(!ev(
+        r#"regex_extract('pure.txt', 'answer: (\d+)') == 7"#,
+        Some(dir.path())
+    ));
+
+    // A quoted numeric group parses (doc style).
+    assert!(ev(
+        r#"regex_extract('pure.txt', 'answer: (\d+)', '1') == 7"#,
+        Some(dir.path())
+    ));
+
+    // Zero-value bare call is falsy (n > 0 boundary pinned).
+    std::fs::write(dir.path().join("zero.txt"), "count: 0\n").unwrap();
+    assert!(!ev(
+        r#"regex_extract('zero.txt', 'count: (\d+)', 1)"#,
+        Some(dir.path())
+    ));
+
+    // Line-oriented matching: `^` anchors each line under (?m).
+    std::fs::write(
+        dir.path().join("anchor.txt"),
+        "total reads: 100\nmapped: 42\n",
+    )
+    .unwrap();
+    assert!(ev(
+        r#"regex_extract('anchor.txt', '^mapped: (\d+)', 1) == 42"#,
+        Some(dir.path())
+    ));
+
+    // Gzip reports decode like the sibling counting fns.
+    let gz_path = dir.path().join("stats.txt.gz");
+    let gz_file = std::fs::File::create(&gz_path).unwrap();
+    let mut enc = flate2::write::GzEncoder::new(gz_file, flate2::Compression::default());
+    std::io::Write::write_all(&mut enc, b"number of records:\t42\n").unwrap();
+    enc.finish().unwrap();
+    assert!(ev(
+        r#"regex_extract('stats.txt.gz', 'number of records:\s+(\d+)', 1) == 42"#,
+        Some(dir.path())
+    ));
+
+    // Malformed calls defer at plan time (the instance must survive for
+    // the execution re-check, never silently pruned) and fail closed at
+    // execution time.
+    for expr in [
+        r#"regex_extract('f.txt', 'p', 1, 'extra') > 0"#, // wrong arity
+        r#"regex_extract('f.txt', '(\d+', 1) > 0"#,       // uncompilable pattern
+        r#"regex_extract('f.txt', '(\d+)', 'x') > 0"#,    // non-numeric group
+    ] {
+        assert!(ev(expr, None), "plan time must defer: {expr}");
+        assert!(
+            !ev(expr, Some(dir.path())),
+            "execution must fail closed: {expr}"
+        );
+    }
+}
+
+#[test]
+fn unquoted_spans_exclude_quoted_arguments() {
+    // The lint layer's E005/W030 scans run on unquoted spans only.
+    let spans = super::process::unquoted_spans(
+        "config.a > 1 && regex_extract('x.txt', 'config.b = (\\d+)', 1) > 2",
+    );
+    // One span per unquoted stretch: before the path, between the args,
+    // and after the call.
+    assert_eq!(spans.len(), 3);
+    assert!(spans[0].contains("config.a"));
+    assert!(spans[2].contains("> 2"));
+    assert!(
+        !spans.iter().any(|s| s.contains("config.b")),
+        "quoted pattern text stays quoted"
+    );
+}
+
+#[test]
+fn strip_matching_quotes_keeps_cross_style_edge_quotes() {
+    // A pattern whose edge characters are the OTHER quote style keeps
+    // them — they are regex content.
+    assert_eq!(
+        super::process::strip_matching_quotes("'regex_content'"),
+        "regex_content"
+    );
+    assert_eq!(
+        super::process::strip_matching_quotes("\"(\\d+)\""),
+        "(\\d+)"
+    );
+    // Cross-style: single-quoted arg matching apostrophes, and a
+    // double-quoted arg wrapping single-quote content.
+    assert_eq!(
+        super::process::strip_matching_quotes("\"'(\\d+)'\""),
+        "'(\\d+)'"
+    );
+    assert_eq!(
+        super::process::strip_matching_quotes("unquoted"),
+        "unquoted"
     );
 }

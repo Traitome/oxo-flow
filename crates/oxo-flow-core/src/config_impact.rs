@@ -472,8 +472,9 @@ pub fn detect_config_changes(
 /// [`detect_config_changes`] with runtime-gate replay (issue #282).
 ///
 /// `workdir` is the run's working directory: runtime file functions in
-/// `when` strings (`reads_count` / `wc_lines` / `file_size`) resolve their
-/// relative paths against it, so a *threshold* change (e.g.
+/// `when` strings (`reads_count` / `wc_lines` / `file_size` /
+/// `regex_extract`) resolve their relative paths against it, so a
+/// *threshold* change (e.g.
 /// `config.min_reads`) re-evaluates each instance's gate on the files the
 /// previous run produced and flips/keeps the verdict like any other gate —
 /// instead of being vacuously true and needing `--force`. `config` supplies

@@ -595,7 +595,7 @@ memory = "32G"
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
 | `environment` | Table | No | Environment specification |
 | `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
-| `when` | String | No | Conditional expression — skip rule when `false`. May call read-only runtime functions (`reads_count`, `wc_lines`, `file_size`, `file_exists`) that inspect files in the run workdir; see [Data-Dependent `when` Gates](#data-dependent-when-gates) |
+| `when` | String | No | Conditional expression — skip rule when `false`. May call read-only runtime functions (`reads_count`, `wc_lines`, `file_size`, `file_exists`, `regex_extract`) that inspect files in the run workdir; see [Data-Dependent `when` Gates](#data-dependent-when-gates) |
 | `envvars` | Table | No | Dictionary of environment variables to inject |
 | `params` | Table | No | User-defined parameters for shell templates |
 | `pre_exec` | String | No | Command to run *before* the main shell command |
@@ -2055,6 +2055,7 @@ shell = "fastqc {input[0]} -o qc/"
 | `len(config.<key>)` | `len(config.gene_sets) > 0` | Element count comparison: array items, string characters, or table keys, compared against a whole number (`==`, `!=`, `>=`, `<=`, `>`, `<`). A missing key counts as 0. Bare `len(config.<key>)` is truthy when non-empty. Note a bare `config.<key>` array is truthy even when empty — `len(...) > 0` is the "list is non-empty" gate. Comparing against a non-numeric literal is a lint warning (W029) and always evaluates false |
 | `file_exists("path")` | `file_exists("panel.bed")` | File existence test. Relative paths resolve against the **workflow root** (the workflow file's directory), not the process working directory, and every evaluation site (plan time, execution re-check, config-change analysis) resolves the same way. In per-instance predicates (`wildcard.<key>` / `{meta.<column>}`) it is evaluated at **plan time** — the instance set is fixed when the DAG is built, so files produced mid-run cannot gate instances; express those with `{meta.*}` (plan-time bakeable) or an execution-time `config` gate instead |
 | `reads_count("path")` / `wc_lines("path")` / `file_size("path")` | `reads_count('trimmed/{sample}.fq.gz') > config.min_reads` | Data-dependent gates — count FASTQ records (4-line records, plain or `.gz`), text lines of the decompressed content (plain or `.gz`), or file bytes in the **run workdir** at execution time. See [Data-Dependent `when` Gates](#data-dependent-when-gates) |
+| `regex_extract("path", "pattern", group?)` | `regex_extract('alignment/{sample}.flagstat', '(\\d+) \\+ \\d+ mapped', 1) > config.min_mapped_reads` | Data-dependent gate — parse an integer out of a text report's first regex match (issue #312). `group` defaults to 0 (the whole match — the pattern must then match a bare number); use group 1+ to extract a number embedded in surrounding text (samtools flagstat's mapped count, bcftools-stats record counts). The captured text must parse as an integer; missing file / no match / non-numeric capture fail closed at execution time. Malformed calls (wrong arity, non-numeric group, uncompilable pattern) are flagged as W030 |
 | `wildcard.<key> == "value"` | `wildcard.control != ""` | Per-instance pair/group wildcard comparison (`pair_id`, `experiment`, `control`, `tumor`, `normal`, `experiment_type`, `tumor_type`, `group`, `sample`, plus any `metadata` keys declared on `[[pairs]]` / `[[sample_groups]]` and `[[values]]` table names) — evaluated per expansion combo at DAG build time; non-matching instances never enter the DAG (snakemake-style morphing) |
 | `{meta.<column>} == "value"` | `{meta.endedness} == 'SE'` | Per-instance sample-metadata comparison (see [Sample Metadata](#sample-metadata-metadata_file)) — baked and evaluated per instance at plan time; instances whose gate evaluates false never enter the DAG. A missing row or column renders `''` in a comparison (a closed gate) |
 | `!<expr>` | `!config.skip` | Logical NOT |
@@ -2064,10 +2065,11 @@ shell = "fastqc {input[0]} -o qc/"
 
 ### Data-Dependent `when` Gates
 
-The runtime functions `reads_count(path)`, `wc_lines(path)`, and
-`file_size(path)` let a `when` gate inspect files produced earlier in the
-same run (issue #282) — e.g. skip a variant caller on samples whose
-trimmed FASTQ has too few records:
+The runtime functions `reads_count(path)`, `wc_lines(path)`,
+`file_size(path)`, and `regex_extract(path, pattern, group?)` let a `when`
+gate inspect files produced earlier in the same run (issues #282/#312) —
+e.g. skip a variant caller on samples whose trimmed FASTQ has too few
+records:
 
 ```toml
 [[rules]]
@@ -2097,6 +2099,15 @@ shell = "caller --input {input[0]} --output {output[0]}"
   content for plain or gzip files (same `.gz` detection as `reads_count`);
   `file_size` returns the byte length. BAM/BGZF indexing is planned for
   a future release.
+- **Regex extraction** — `regex_extract(path, pattern, group?)` reads the
+  whole file (plain or `.gz`, up to 16 MiB) and takes the **first** regex
+  match; the captured text (group `0` = whole match by default, or an
+  explicit capture group) must parse as an integer. Matching is
+  line-oriented (`(?m)` is applied automatically), so `^` and `$` anchor
+  per line. Commas inside the pattern's `{}` quantifiers, `[]` character
+  classes, or quoted arguments do not split arguments. The extracted
+  value compares against literals and `config.*` thresholds exactly like
+  the counting functions.
 - **Change tracking** — recorded verdicts participate in config-change
   replay: changing a threshold referenced by such a gate (e.g.
   `config.min_reads`) re-evaluates only the instances whose verdict
