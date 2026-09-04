@@ -35,6 +35,29 @@ const EXTRA_COLORS: &[&str] = &[
     "#B6992D", "#6E6E6E",
 ];
 
+/// `(rule-name prefix, canonical stage)` pairs for ported workflows whose
+/// rules are namespaced as `module::rule` (e.g. `alignment::star_align`).
+/// The module is the workflow author's own grouping — the strongest signal
+/// after an explicit tag. Unknown prefixes fall through to keyword
+/// inference rather than becoming custom stages (module names are
+/// workflow-internal; the palette should stay canonical).
+const PREFIX_STAGES: &[(&str, &str)] = &[
+    ("fastq_qc", "qc"),
+    ("bam_qc", "qc"),
+    ("qc", "qc"),
+    ("alignment", "align"),
+    ("align", "align"),
+    ("trim", "trim"),
+    ("quantification", "quantify"),
+    ("quant", "quantify"),
+    ("variant", "variant"),
+    ("annotate", "annotate"),
+    ("annotation", "annotate"),
+    ("merge", "merge"),
+    ("report", "report"),
+    ("multiqc", "report"),
+];
+
 /// `(stage, keyword)` pairs for shell/script inference, matched against the
 /// lowercased command text. Order matters: more specific signals (a variant
 /// caller) win over generic ones (an aligner), mirroring `WorkflowDomain`.
@@ -134,7 +157,14 @@ pub fn detect_stage(rule: &Rule) -> String {
         }
     }
 
-    // 2. Command keyword inference.
+    // 2. Rule-name prefix (module namespace, e.g. `alignment::star_align`).
+    if let Some((prefix, _)) = rule.name.split_once("::")
+        && let Some((_, stage)) = PREFIX_STAGES.iter().find(|(p, _)| *p == prefix)
+    {
+        return (*stage).to_string();
+    }
+
+    // 3. Command keyword inference.
     let mut text = String::new();
     if let Some(shell) = &rule.shell {
         text.push_str(shell);
@@ -150,8 +180,43 @@ pub fn detect_stage(rule: &Rule) -> String {
         }
     }
 
-    // 3. Fallback.
+    // 4. Fallback.
     "generic".to_string()
+}
+
+/// Friendly section title for a module namespace (metro-map sections).
+/// Known modules get curated titles; unknown ones are title-cased.
+pub fn module_display(module: &str) -> String {
+    let curated = match module {
+        "fastq_qc" => "Read QC",
+        "bam_qc" => "BAM QC",
+        "alignment" => "Alignment",
+        "quantification" => "Quantification",
+        "prepare_genome" => "Reference preparation",
+        "bigwig" => "Coverage tracks",
+        "multiqc" => "Reporting",
+        "trim" => "Trimming",
+        "annotation" | "annotate" => "Annotation",
+        "variant" => "Variant calling",
+        "merge" => "Merge",
+        _ => return title_case(module),
+    };
+    curated.to_string()
+}
+
+/// `fastq_qc` → `Fastq qc` (fallback for unknown module names).
+fn title_case(module: &str) -> String {
+    module
+        .split('_')
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Human-readable display name for a stage.
@@ -216,6 +281,29 @@ mod tests {
     fn unknown_tag_kept_as_custom_stage() {
         let r = rule("impute_step", "impute2", vec!["imputation"]);
         assert_eq!(detect_stage(&r), "imputation");
+    }
+
+    #[test]
+    fn rule_name_prefix_inference() {
+        // Module namespaces map to canonical stages; the module is the
+        // workflow author's own grouping (stronger than shell keywords).
+        let r = rule("alignment::star_align", "echo unused", vec![]);
+        assert_eq!(detect_stage(&r), "align");
+        assert_eq!(detect_stage(&rule("fastq_qc::fq_lint", "echo", vec![])), "qc");
+        assert_eq!(
+            detect_stage(&rule("quantification::salmon_quant", "echo", vec![])),
+            "quantify"
+        );
+        // Unknown prefixes fall through to keyword inference, then generic.
+        let r2 = rule("mystery::step", "echo nothing matches", vec![]);
+        assert_eq!(detect_stage(&r2), "generic");
+    }
+
+    #[test]
+    fn module_display_curated_and_fallback() {
+        assert_eq!(module_display("fastq_qc"), "Read QC");
+        assert_eq!(module_display("prepare_genome"), "Reference preparation");
+        assert_eq!(module_display("novel_module"), "Novel Module");
     }
 
     #[test]
