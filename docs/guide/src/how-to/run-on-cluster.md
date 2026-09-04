@@ -50,9 +50,9 @@ memory = "32G"
 time_limit = "24h"
 ```
 
-> **Note on `gpu`:** declare `gpu = 1` or higher. `gpu = 0` is treated as a
-> present-but-zero value and generates directives like `#SBATCH --gres=gpu:0`
-> — omit the field instead.
+> **Note on `gpu`:** `gpu = 0` means "no GPUs" — the engine omits the GPU
+> directive entirely, exactly as if the field were absent. Only declare it
+> when you need at least one GPU (`gpu = 1` or higher).
 
 ### Resource fields
 
@@ -366,14 +366,32 @@ Or use oxo-flow's status command with a checkpoint file:
 oxo-flow status .oxo-flow/checkpoint.json
 ```
 
-`oxo-flow cluster status` and `cluster cancel` take the **backend and the
-scheduler job ids** — there is no "show all my submissions" mode, so keep the
-ids the submit/run step printed:
+`oxo-flow cluster status` answers two questions. **With no ids** it lists
+every job the scheduler currently reports for your user — the natural check
+right after a submit:
 
 ```bash
-oxo-flow cluster status -b slurm 12345 12346
-oxo-flow cluster cancel -b slurm 12345
+$ oxo-flow cluster status
+Cluster: Executing 'squeue -u alice --noheader -o %i|%t'...
+Cluster: 2 queued job(s)
+  12345: running
+  12346: pending
 ```
+
+**With ids** (the ones submit/run printed) it answers exactly those,
+settling finished jobs from the scheduler's accounting store:
+
+```bash
+oxo-flow cluster status 12345 12346
+oxo-flow cluster cancel 12345
+```
+
+Every cluster action resolves its backend the same way: the `--backend` /
+`-b` flag if given, then `$OXO_FLOW_CLUSTER_BACKEND`, then `slurm`. On a
+SLURM site you never type `-b`; on a PBS site set the environment variable
+once (`export OXO_FLOW_CLUSTER_BACKEND=pbs`). An explicit-but-typoed value
+is still rejected outright (`unknown cluster backend '…' — expected slurm,
+pbs, sge, or lsf`) — the default never swallows a bad name.
 
 ---
 
@@ -404,10 +422,10 @@ extra_args    = ["--exclusive", "--constraint=haswell"]  # verbatim scheduler ar
 
 `extra_args` entries are emitted as scheduler directives **verbatim and
 unvalidated** — a typo reaches the scheduler as written (the same applies to
-`cluster submit --extra-arg`). An unknown `--backend` value is rejected
-outright (`unknown cluster backend '…' — expected slurm, pbs, sge, or lsf`);
-nothing falls back to SLURM, so a typo cannot submit into the wrong
-scheduler.
+`cluster submit --extra-arg`). Cluster CLI actions resolve `--backend` as
+flag > `$OXO_FLOW_CLUSTER_BACKEND` > `slurm` (see
+[Monitoring Jobs](#monitoring-jobs)); the profile block's `backend` key
+remains required and is validated the same strict way.
 
 ---
 

@@ -102,6 +102,20 @@ pub fn parse_status_line(
             Some((id, status))
         }
         ClusterBackend::Sge => {
+            // The bare `qstat` table has whitespace columns with the state in
+            // field 4 ("job-ID prior qname ... state"), matching the shape
+            // PBS/LSF rows take above.
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() > 4 && fields[0].chars().all(|c| c.is_ascii_digit()) {
+                let status = match *fields.get(4)? {
+                    "r" | "t" => BackendJobStatus::Running,
+                    "qw" | "hqw" | "h" | "Rq" | "P" => BackendJobStatus::Pending,
+                    "d" | "dr" | "dt" | "dR" => BackendJobStatus::Completed,
+                    "Eqw" | "E" => BackendJobStatus::Failed,
+                    _ => BackendJobStatus::Unknown,
+                };
+                return Some((fields[0].to_string(), status));
+            }
             // qstat -j output pairs "job_number: N" with "state: r"; the
             // executor collects both lines — here we extract the number only.
             Some((
@@ -143,6 +157,52 @@ pub fn status_invocations(
             .map(|id| ("qstat", vec!["-j".to_string(), id.clone()]))
             .collect(),
     }
+}
+
+/// The invocations that list the CURRENT USER's jobs — the no-arguments
+/// `cluster status` view. `std::process::Command` performs no shell
+/// expansion, so the conventional `-u $USER` is resolved from the
+/// environment here; SGE and LSF scope a bare call to the invoking user on
+/// their own.
+pub fn my_jobs_invocations(backend: &ClusterBackend) -> Vec<(&'static str, Vec<String>)> {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_default();
+    match backend {
+        ClusterBackend::Slurm => vec![(
+            "squeue",
+            vec![
+                "-u".to_string(),
+                user,
+                "--noheader".to_string(),
+                "-o".to_string(),
+                "%i|%t".to_string(),
+            ],
+        )],
+        ClusterBackend::Pbs => vec![("qstat", vec!["-u".to_string(), user])],
+        ClusterBackend::Sge => vec![("qstat", Vec::new())],
+        ClusterBackend::Lsf => vec![("bjobs", Vec::new())],
+    }
+}
+
+/// Parse listing output — the scheduler's per-user table — into one
+/// `(job id, status)` per LIVE row.
+///
+/// Unlike [`status_report`] this answers per parsed row: the question here
+/// is "what is in my queue right now", so header lines are skipped (a PBS
+/// header's first field is the literal `Job id`, not a numeric id) and there
+/// is no requested-id list to anchor unknowns against.
+pub fn parse_job_listing(
+    backend: &ClusterBackend,
+    stdout: &str,
+) -> Vec<(String, BackendJobStatus)> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| parse_status_line(backend, line))
+        .filter(|(id, _)| id.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .collect()
 }
 
 /// The command that cancels a job, matching [`ClusterExecutor::cancel`] so
@@ -219,6 +279,80 @@ fn absolute_workdir(path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         std::env::current_dir().unwrap_or_default().join(path)
+    }
+}
+
+/// Log paths a rendered script directs its scheduler to open, in directive
+/// order: `(output, error)` — either may be absent.
+///
+/// Parsed from the script TEXT rather than re-derived from the rule: array
+/// scripts rewrite the directives to per-element patterns (`%A_%a`, `%I`)
+/// and `--extra-arg` lines can add more, so the script itself is the only
+/// source of truth for what the scheduler will open.
+fn script_log_paths(script: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in script.lines() {
+        let line = line.trim_start();
+        // The four directive prefixes, with the log path either after '='
+        // (SLURM `--output=`) or after a space (PBS/SGE/LSF `-o `/`-e `).
+        for (prefix, sep) in [
+            ("#SBATCH --output=", '='),
+            ("#SBATCH --error=", '='),
+            ("#PBS -o ", ' '),
+            ("#PBS -e ", ' '),
+            ("#$ -o ", ' '),
+            ("#$ -e ", ' '),
+            ("#BSUB -o ", ' '),
+            ("#BSUB -e ", ' '),
+        ] {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                // The path runs to the next separator (or end of line) —
+                // LSF appends nothing, but extra args on the same directive
+                // line must not become part of the path.
+                let raw = match rest.find(sep) {
+                    Some(idx) => &rest[..idx],
+                    None => rest,
+                };
+                // LSF's `-o` accepts %J-style patterns; whitespace never
+                // belongs in the path itself.
+                let raw = raw.split_whitespace().next().unwrap_or(raw);
+                if !raw.is_empty() {
+                    paths.push(PathBuf::from(raw));
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// Pre-create the directories a scheduler will open log files in.
+///
+/// Every backend opens the `--output`/`-o`/`-e` files at job LAUNCH, before
+/// the script body runs — the body's `mkdir -p logs` is too late (proven on
+/// a live SLURM cluster: a job into a fresh run dir failed instantly with
+/// "error: can't open ... logs/align.out"; the same job into a pre-made
+/// `logs/` completed). Resolve each directive path relative to the pinned
+/// working directory — the same resolution the scheduler does for
+/// `--chdir`/`-d`/`-wd`/`-cwd` — and create its parent.
+fn ensure_log_dirs(script: &str, workdir: &Path) {
+    let base = absolute_workdir(workdir);
+    for path in script_log_paths(script) {
+        let full = if path.is_absolute() {
+            path
+        } else {
+            base.join(path)
+        };
+        if let Some(parent) = full.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            // Never block submission on housekeeping: the scheduler may
+            // itself create the directory, and the old behavior was to
+            // create nothing at all.
+            eprintln!(
+                "warning: could not pre-create log dir {}: {e}",
+                parent.display()
+            );
+        }
     }
 }
 
@@ -379,6 +513,12 @@ impl super::ExecutorBackend for ClusterExecutor {
     }
 
     async fn submit(&self, script_path: &Path) -> Result<String> {
+        // The scheduler opens the script's log files before the body runs —
+        // pre-create their directories or a fresh run dir fails on launch
+        // (issue: engine never created `logs/`, sbatch jobs died instantly).
+        if let Ok(script) = std::fs::read_to_string(script_path) {
+            ensure_log_dirs(&script, &self.workdir);
+        }
         let mut args: Vec<&str> = Vec::new();
         if matches!(self.backend, ClusterBackend::Slurm) {
             args.push("--parsable");
@@ -928,6 +1068,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_status_line_sge() {
+        // The bare `qstat` table row (state in field 4) — what the
+        // no-arguments `cluster status` listing reads.
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Sge, "77  0.55500  align  me  r  batch"),
+            Some(("77".into(), BackendJobStatus::Running))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Sge, "78  0.55500  call  me  qw  batch"),
+            Some(("78".into(), BackendJobStatus::Pending))
+        );
+        // A `qstat -j` job_number line stays (id, unknown); the state pairs
+        // up in status_report's positional handling.
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Sge, "job_number: 99"),
+            Some(("99".into(), BackendJobStatus::Unknown))
+        );
+        // Neither shape.
+        assert_eq!(parse_status_line(&ClusterBackend::Sge, "garbage"), None);
+    }
+
+    #[test]
     fn parse_status_line_lsf() {
         let line = "12345  me  RUN  batch  1  1  8  Aug 14 12:00";
         assert_eq!(
@@ -976,6 +1138,89 @@ mod tests {
                 ("qstat", vec!["-j".to_string(), "101".to_string()]),
                 ("qstat", vec!["-j".to_string(), "202".to_string()]),
             ]
+        );
+    }
+
+    #[test]
+    fn my_jobs_invocations_scope_to_the_current_user() {
+        // std::process::Command does no shell expansion, so `-u $USER` is
+        // resolved from the environment at invocation-build time; SGE and
+        // LSF answer a bare call for the invoking user.
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .unwrap_or_default();
+        assert!(!user.is_empty(), "test environment must have USER/LOGNAME");
+        assert_eq!(
+            my_jobs_invocations(&ClusterBackend::Slurm),
+            vec![(
+                "squeue",
+                vec![
+                    "-u".to_string(),
+                    user.clone(),
+                    "--noheader".to_string(),
+                    "-o".to_string(),
+                    "%i|%t".to_string(),
+                ]
+            )]
+        );
+        assert_eq!(
+            my_jobs_invocations(&ClusterBackend::Pbs),
+            vec![("qstat", vec!["-u".to_string(), user])]
+        );
+        assert_eq!(
+            my_jobs_invocations(&ClusterBackend::Sge),
+            vec![("qstat", Vec::new())]
+        );
+        assert_eq!(
+            my_jobs_invocations(&ClusterBackend::Lsf),
+            vec![("bjobs", Vec::new())]
+        );
+    }
+
+    #[test]
+    fn parse_job_listing_reads_rows_and_skips_headers() {
+        let squeue = "101|PENDING\n202|RUNNING\n";
+        assert_eq!(
+            parse_job_listing(&ClusterBackend::Slurm, squeue),
+            vec![
+                ("101".to_string(), BackendJobStatus::Pending),
+                ("202".to_string(), BackendJobStatus::Running),
+            ]
+        );
+        // The qstat header's first field is the literal "Job id" — a
+        // non-numeric id, so the header never becomes a job row.
+        let qstat = "Job id      Name    User  Time Use S Queue\n\
+                      404.queue   align   me    0:00   R batch\n\
+                      405.queue   call    me    0:00   Q batch\n";
+        assert_eq!(
+            parse_job_listing(&ClusterBackend::Pbs, qstat),
+            vec![
+                ("404.queue".to_string(), BackendJobStatus::Running),
+                ("405.queue".to_string(), BackendJobStatus::Pending),
+            ]
+        );
+        // SGE's bare `qstat` table puts the state in field 4, like PBS.
+        let qstat_sge = "job-ID  prior   name       user         state\n\
+                         77      0.55500 align      me           r\n\
+                         78      0.55500 call       me           qw\n";
+        assert_eq!(
+            parse_job_listing(&ClusterBackend::Sge, qstat_sge),
+            vec![
+                ("77".to_string(), BackendJobStatus::Running),
+                ("78".to_string(), BackendJobStatus::Pending),
+            ]
+        );
+        // And a `qstat -j` pairing stays unknown-per-number as before — the
+        // table arm must not swallow it.
+        assert_eq!(
+            parse_job_listing(&ClusterBackend::Sge, "job_number: 99\n"),
+            vec![("99".to_string(), BackendJobStatus::Unknown)]
+        );
+        let bjobs = "JOBID   USER    STAT  QUEUE\n\
+                     12345   me      RUN   normal\n";
+        assert_eq!(
+            parse_job_listing(&ClusterBackend::Lsf, bjobs),
+            vec![("12345".to_string(), BackendJobStatus::Running)]
         );
     }
 
@@ -1074,6 +1319,74 @@ mod tests {
             script.starts_with("#!/bin/bash\n#SBATCH --chdir=/wf\n#SBATCH --array=1-2\n"),
             "the array range stays right after the new chdir directive: {script}"
         );
+    }
+
+    #[test]
+    fn script_log_paths_reads_every_backend_directive() {
+        let slurm = "#!/bin/bash\n\
+                     #SBATCH --output=logs/align.out\n\
+                     #SBATCH --error=logs/align.err\n";
+        assert_eq!(
+            script_log_paths(slurm),
+            vec![
+                PathBuf::from("logs/align.out"),
+                PathBuf::from("logs/align.err")
+            ]
+        );
+        // Array forms: the per-element pattern is one shared parent dir.
+        let array = "#SBATCH --output=logs/align.%A_%a.out\n#SBATCH --error=logs/align.%A_%a.err\n";
+        assert_eq!(script_log_paths(array).len(), 2);
+
+        let pbs = "#PBS -o logs/fastqc.out\n#PBS -e logs/fastqc.err\n";
+        assert_eq!(script_log_paths(pbs).len(), 2);
+        let sge = "#$ -o logs/align.out\n#$ -e logs/align.err\n";
+        assert_eq!(script_log_paths(sge).len(), 2);
+        let lsf = "#BSUB -o logs/sort.%I.out\n#BSUB -e logs/sort.%I.err\n";
+        assert_eq!(script_log_paths(lsf).len(), 2);
+
+        // Body lines that merely mention the directives stay untouched.
+        assert!(script_log_paths("# echo #SBATCH --output=x\ntrue\n").is_empty());
+    }
+
+    #[test]
+    fn ensure_log_dirs_creates_the_referenced_directory_before_submit() {
+        // Regression: a fresh run dir with no `logs/` made every backend's
+        // job die at launch — the scheduler opens the output file before the
+        // script body's `mkdir -p logs` runs.
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("fresh-run");
+        std::fs::create_dir(&run_dir).unwrap();
+        let script =
+            "#!/bin/bash\n#SBATCH --output=logs/align.out\n#SBATCH --error=logs/align.err\n";
+        ensure_log_dirs(script, &run_dir);
+        assert!(
+            run_dir.join("logs").is_dir(),
+            "logs/ must exist before the scheduler opens the file"
+        );
+
+        // Relative workdir resolves against the process cwd, matching the
+        // scheduler's --chdir handling.
+        ensure_log_dirs(script, Path::new("."));
+        // no return value; must not panic on a relative workdir
+    }
+
+    #[test]
+    fn ensure_log_dirs_tolerates_an_unreadable_or_missing_script() {
+        // submit() reads the script best-effort: a missing file must not
+        // block submission (the scheduler's own error is the truthful one).
+        let dir = tempfile::tempdir().unwrap();
+        ensure_log_dirs("", dir.path()); // empty script → no dirs
+        std::fs::set_permissions(
+            dir.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o555),
+        )
+        .unwrap();
+        ensure_log_dirs("#SBATCH --output=logs/x.out\n", dir.path()); // read-only base
+        std::fs::set_permissions(
+            dir.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
     }
 }
 

@@ -391,6 +391,9 @@ fn dry_run_will_run_set_equals_driver_submitted_set() {
 
 #[test]
 fn poll_timeout_cancels_inflight_jobs() {
+    // A rule that outlives the poll deadline (no failure involved — a
+    // failing required rule now cancels its siblings itself and settles
+    // the run before the deadline fires).
     let dir = tempfile::tempdir().unwrap();
     let workflow = r#"
 [workflow]
@@ -400,18 +403,11 @@ name = "timeout"
 name = "slow"
 shell = "sleep 30"
 output = ["slow.done"]
-
-[[rules]]
-name = "fail"
-shell = "exit 3"
-output = ["fail.done"]
 "#;
     std::fs::write(dir.path().join("wf.oxoflow"), workflow).unwrap();
     let state = tempfile::tempdir().unwrap();
     let run_dir = tempfile::tempdir().unwrap();
-    let to_run: HashSet<String> = ["slow".to_string(), "fail".to_string()]
-        .into_iter()
-        .collect();
+    let to_run: HashSet<String> = ["slow".to_string()].into_iter().collect();
     let err = run_driver(
         dir.path(),
         run_dir.path(),

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::backend::BackendJobStatus;
 use oxo_flow_core::backend::ExecutorBackend;
-use oxo_flow_core::cluster::ClusterBackend;
+use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use std::collections::HashMap;
@@ -20,6 +20,29 @@ fn parse_backend(name: &str) -> Result<ClusterBackend> {
     ClusterBackend::from_str(name).map_err(|_| {
         anyhow::anyhow!("unknown cluster backend '{name}' — expected slurm, pbs, sge, or lsf")
     })
+}
+
+/// Resolve the backend for a cluster action: the `--backend` flag wins,
+/// then `$OXO_FLOW_CLUSTER_BACKEND`, then SLURM — the overwhelmingly
+/// common scheduler, and the one `-b` used to be required for. An EXPLICIT
+/// value keeps [`parse_backend`]'s strict error, so a typo can never
+/// silently route to SLURM; only an omitted flag falls back.
+fn resolve_backend(flag: Option<&str>) -> Result<ClusterBackend> {
+    let env = std::env::var("OXO_FLOW_CLUSTER_BACKEND").ok();
+    resolve_backend_with(flag, env.as_deref())
+}
+
+/// The pure decision behind [`resolve_backend`], with the environment value
+/// injected — the test crate forbids `unsafe`, which rules out the
+/// `set_var` dance, and a pure function pins the precedence table anyway.
+fn resolve_backend_with(flag: Option<&str>, env: Option<&str>) -> Result<ClusterBackend> {
+    if let Some(name) = flag {
+        return parse_backend(name);
+    }
+    match env.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => parse_backend(name),
+        None => Ok(ClusterBackend::Slurm),
+    }
 }
 
 /// Human one-liner for the parsed status of one job.
@@ -62,6 +85,37 @@ fn query_status(
         }
     }
     Ok(report)
+}
+
+/// Ask the scheduler for the current user's live jobs and answer one
+/// `(id, status)` per listed row — the no-arguments `cluster status` view.
+/// Same execution seam as [`query_status`].
+fn query_my_jobs(
+    backend: &ClusterBackend,
+    run: impl Fn(&str, &[String]) -> Result<String>,
+) -> Result<Vec<(String, BackendJobStatus)>> {
+    // Every backend currently yields exactly one listing invocation, so
+    // this is a plain single call — the first answer is the answer.
+    let Some((program, args)) = oxo_flow_core::backend::cluster::my_jobs_invocations(backend)
+        .into_iter()
+        .next()
+    else {
+        return Ok(Vec::new());
+    };
+    eprintln!(
+        "{} Executing '{} {}'...",
+        "Cluster:".bold().cyan(),
+        program,
+        args.join(" ")
+    );
+    // A user listing has no per-requested-id contract: the rows the
+    // scheduler returns ARE the answer, so run the invocations inline
+    // rather than threading through the overwrite-only-non-Unknown
+    // machinery of query_status.
+    let listing = run(program, &args)?;
+    Ok(oxo_flow_core::backend::cluster::parse_job_listing(
+        backend, &listing,
+    ))
 }
 
 /// Emit the `oxo_submit` shell helper: submits a script and echoes the bare
@@ -237,7 +291,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
         } => {
             // The backend is validated before any workflow is read: a typo
             // must not cost a parse, let alone reach a queue.
-            let cluster_backend = parse_backend(&backend)?;
+            let cluster_backend = resolve_backend(backend.as_deref())?;
 
             let mut config = WorkflowConfig::from_file(&workflow)
                 .with_context(|| format!("failed to parse {}", workflow.display()))?;
@@ -352,14 +406,14 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 eprintln!(
                     "{} (dry-run) generating {} job scripts for {} rule instances — nothing is submitted",
                     "Cluster:".bold().yellow(),
-                    backend,
+                    cluster_backend,
                     order.len()
                 );
             } else {
                 eprintln!(
                     "{} Generating {} job scripts for {} rule instances",
                     "Cluster:".bold().cyan(),
-                    backend,
+                    cluster_backend,
                     order.len()
                 );
             }
@@ -481,13 +535,51 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
         }
 
         ClusterAction::Status { backend, job_ids } => {
-            let cluster_backend = parse_backend(&backend)?;
+            let cluster_backend = resolve_backend(backend.as_deref())?;
 
             if job_ids.is_empty() {
-                anyhow::bail!(
-                    "cluster status requires at least one job ID from a submit/run output — '{}' with an empty job list is not useful",
-                    oxo_flow_core::cluster::status_command(&cluster_backend)
+                // No ids: answer "what of MINE is in the queue right now" —
+                // the natural first question after a submit, and the one the
+                // old hard error left unanswered (the command used to bail
+                // with "requires at least one job ID").
+                let listing = query_my_jobs(&cluster_backend, |program, args| {
+                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    let output = match std::process::Command::new(program).args(&arg_refs).output()
+                    {
+                        Ok(out) => out,
+                        Err(e) => {
+                            eprintln!("  Is {program} installed on this system?");
+                            anyhow::bail!("Failed to execute status command: {e}");
+                        }
+                    };
+                    if !output.status.success() {
+                        // bjobs exits non-zero when the queue is empty;
+                        // treat that as an empty answer, not a failure.
+                        eprintln!(
+                            "{} exited {} (no jobs listed)",
+                            program,
+                            output.status.code().unwrap_or(-1)
+                        );
+                        return Ok(String::new());
+                    }
+                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                })?;
+
+                eprintln!(
+                    "{} {} queued job(s)",
+                    "Cluster:".bold().cyan(),
+                    listing.len()
                 );
+                for (id, status) in &listing {
+                    eprintln!("{}", status_line(id, *status));
+                }
+                // Machine-readable form on stdout, one `<id>\t<state>` per
+                // job — human output stays on stderr, the codebase-wide
+                // convention.
+                for (id, status) in &listing {
+                    println!("{id}\t{}", status.label());
+                }
+                return Ok(());
             }
             for (program, args) in
                 oxo_flow_core::backend::cluster::status_invocations(&cluster_backend, &job_ids)
@@ -500,7 +592,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 );
             }
 
-            let report = query_status(&cluster_backend, &job_ids, |program, args| {
+            let mut report = query_status(&cluster_backend, &job_ids, |program, args| {
                 let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 let output = match std::process::Command::new(program).args(&arg_refs).output() {
                     Ok(out) => out,
@@ -519,6 +611,39 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             })?;
 
             eprintln!("{} {} job(s):", "Cluster:".bold().cyan(), report.len());
+            // The live queue only answers for jobs still in it. A finished
+            // job is invisible to squeue/qstat, yet that is exactly the
+            // state a user asks about most — layer the accounting store
+            // over the Unknown verdicts, the same way the run driver does
+            // (see the executor's terminal_status and issue #244's
+            // no-slurmdbd story). A job with no accounting record either
+            // keeps its Unknown ("finished, or an unknown id") below.
+            let unknown: Vec<String> = report
+                .iter()
+                .filter(|(_, s)| *s == BackendJobStatus::Unknown)
+                .map(|(id, _)| id.clone())
+                .collect();
+            if !unknown.is_empty() {
+                let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
+                    cluster_backend,
+                    ClusterJobConfig {
+                        backend: cluster_backend,
+                        queue: None,
+                        account: None,
+                        walltime: None,
+                        extra_args: Vec::new(),
+                    },
+                );
+                for id in &unknown {
+                    if let Some(record) = executor.terminal_status(id).await {
+                        let entry = report
+                            .iter_mut()
+                            .find(|(rid, _)| rid == id)
+                            .expect("report came from the same id list");
+                        entry.1 = record.status;
+                    }
+                }
+            }
             for (id, status) in &report {
                 eprintln!("{}", status_line(id, *status));
             }
@@ -530,8 +655,9 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
         }
 
         ClusterAction::Cancel { backend, job_ids } => {
-            let cancel_cmd =
-                oxo_flow_core::backend::cluster::cancel_command(&parse_backend(&backend)?);
+            let cancel_cmd = oxo_flow_core::backend::cluster::cancel_command(&resolve_backend(
+                backend.as_deref(),
+            )?);
 
             if job_ids.is_empty() {
                 eprintln!(
@@ -573,7 +699,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             // Elapsed,MaxRSS`); PBS/SGE/LSF stay best-effort (qstat -f /
             // qacct / bacct) — the same per-scheduler contract the
             // BackendDriver uses.
-            let cluster_backend = parse_backend(&backend)?;
+            let cluster_backend = resolve_backend(backend.as_deref())?;
             let executor = oxo_flow_core::backend::cluster::ClusterExecutor::new(
                 cluster_backend,
                 oxo_flow_core::cluster::ClusterJobConfig {
@@ -604,9 +730,10 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cluster_command, parse_backend, query_status, status_line};
+    use super::{cluster_command, query_my_jobs, query_status, resolve_backend_with, status_line};
     use crate::ClusterAction;
     use oxo_flow_core::backend::BackendJobStatus;
+    use oxo_flow_core::cluster::ClusterBackend;
     use std::path::PathBuf;
 
     fn run(action: ClusterAction) -> anyhow::Result<()> {
@@ -634,7 +761,7 @@ mod tests {
     ) -> ClusterAction {
         ClusterAction::Submit {
             workflow,
-            backend: backend.to_string(),
+            backend: Some(backend.to_string()),
             queue: None,
             account: None,
             walltime: None,
@@ -650,18 +777,20 @@ mod tests {
     #[test]
     fn unknown_backend_is_rejected_for_every_action() {
         // A typo used to fall back to SLURM silently — submit scripts for the
-        // wrong scheduler, scancel where the user asked for qdel.
+        // wrong scheduler, scancel where the user asked for qdel. An EXPLICIT
+        // bad value must still be rejected even though an omitted flag now
+        // defaults to slurm.
         let cases = vec![
             ClusterAction::Status {
-                backend: "slrm".to_string(),
+                backend: Some("slrm".to_string()),
                 job_ids: vec!["1".to_string()],
             },
             ClusterAction::Cancel {
-                backend: "torque".to_string(),
+                backend: Some("torque".to_string()),
                 job_ids: vec!["1".to_string()],
             },
             ClusterAction::Logs {
-                backend: "ge".to_string(),
+                backend: Some("ge".to_string()),
                 job_id: "1".to_string(),
             },
         ];
@@ -698,8 +827,93 @@ mod tests {
     #[test]
     fn parse_backend_accepts_every_documented_name() {
         for name in ["slurm", "SLURM", "pbs", "sge", "lsf"] {
-            assert!(parse_backend(name).is_ok(), "{name} must resolve");
+            assert!(
+                resolve_backend_with(Some(name), None).is_ok(),
+                "{name} must resolve"
+            );
         }
+    }
+
+    #[test]
+    fn resolve_backend_falls_back_to_slurm_when_the_flag_is_omitted() {
+        // The -b flag used to be required on every cluster action; typing it
+        // on a SLURM site is pure ceremony. Omitted = slurm, unless the
+        // environment names another scheduler.
+        assert_eq!(
+            resolve_backend_with(None, None).unwrap(),
+            ClusterBackend::Slurm
+        );
+        assert_eq!(
+            resolve_backend_with(Some("sge"), Some("pbs")).unwrap(),
+            ClusterBackend::Sge
+        );
+    }
+
+    #[test]
+    fn resolve_backend_honors_the_environment_default() {
+        // A PBS-site user sets OXO_FLOW_CLUSTER_BACKEND once and never types
+        // -b again. Whitespace around the value is tolerated (export typos),
+        // an empty value falls through to the slurm default, and an explicit
+        // flag still wins over the environment.
+        assert_eq!(
+            resolve_backend_with(None, Some("pbs")).unwrap(),
+            ClusterBackend::Pbs
+        );
+        assert_eq!(
+            resolve_backend_with(Some("lsf"), Some("pbs")).unwrap(),
+            ClusterBackend::Lsf
+        );
+        assert_eq!(
+            resolve_backend_with(None, Some("  sge  ")).unwrap(),
+            ClusterBackend::Sge
+        );
+        assert_eq!(
+            resolve_backend_with(None, Some("")).unwrap(),
+            ClusterBackend::Slurm
+        );
+        assert_eq!(
+            resolve_backend_with(None, Some("   ")).unwrap(),
+            ClusterBackend::Slurm
+        );
+
+        // And a garbage environment value is an error naming the value —
+        // never a silent slurm fallback.
+        let msg = resolve_backend_with(None, Some("torque"))
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("unknown cluster backend 'torque'"), "{msg}");
+    }
+
+    #[test]
+    fn query_my_jobs_parses_the_listing() {
+        // The seam question: exactly the user-listing invocation, and the
+        // returned rows are parsed (id, status) — header lines skipped.
+        let listing = query_my_jobs(&ClusterBackend::Slurm, |program, args| {
+            assert_eq!(program, "squeue");
+            assert_eq!(args[0], "-u");
+            assert_eq!(args[2], "--noheader");
+            Ok("101|PENDING\n202|RUNNING\n".to_string())
+        })
+        .unwrap();
+        assert_eq!(
+            listing,
+            vec![
+                ("101".to_string(), BackendJobStatus::Pending),
+                ("202".to_string(), BackendJobStatus::Running),
+            ]
+        );
+    }
+
+    #[test]
+    fn query_my_jobs_surfaces_scheduler_failures() {
+        let err = query_my_jobs(&ClusterBackend::Slurm, |_, _| {
+            Err(anyhow::anyhow!("squeue: slurm_load_jobs error"))
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("slurm_load_jobs"),
+            "the scheduler's own words must reach the user: {err}"
+        );
     }
 
     #[test]

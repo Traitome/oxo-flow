@@ -319,6 +319,13 @@ fn slurm_gpu_directive(spec: &crate::rule::GpuSpec) -> String {
     }
 }
 
+/// A zero GPU count means "no GPUs" — every scheduler rejects or
+/// mis-accounts a request for 0 of a consumable (SLURM: `--gres=gpu:0`
+/// fails with Invalid generic resource; PBS/SGE/LSF take it literally).
+fn gpu_count_requested(count: u32) -> bool {
+    count > 0
+}
+
 fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) -> String {
     let mut lines = vec!["#!/bin/bash".to_string()];
     lines.push(format!("#SBATCH --job-name={}", rule.name));
@@ -334,7 +341,9 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
     // GPU handling - translate from resources.gpu or gpu_spec
     if let Some(ref spec) = rule.resources.gpu_spec {
         // Use detailed GPU spec (preferred)
-        lines.push(format!("#SBATCH --gres={}", slurm_gpu_directive(spec)));
+        if gpu_count_requested(spec.count) {
+            lines.push(format!("#SBATCH --gres={}", slurm_gpu_directive(spec)));
+        }
         // Add GPU memory constraint if specified
         if let Some(mem_gb) = spec.memory_gb {
             // Some SLURM configs support --mem-per-gpu
@@ -342,7 +351,9 @@ fn generate_slurm_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig
         }
     } else if let Some(gpu_count) = rule.resources.gpu {
         // Simple GPU count
-        lines.push(format!("#SBATCH --gres=gpu:{}", gpu_count));
+        if gpu_count_requested(gpu_count) {
+            lines.push(format!("#SBATCH --gres=gpu:{}", gpu_count));
+        }
     }
 
     // Per-rule walltime (override config walltime)
@@ -422,15 +433,19 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
 
     // GPU for PBS (site-specific format)
     if let Some(ref spec) = rule.resources.gpu_spec {
-        for directive in pbs_gpu_directive(spec) {
-            if directive.starts_with('#') {
-                // Comments go directly into the script
-                lines.push(directive);
-            } else {
-                resource_parts.push(directive);
+        if gpu_count_requested(spec.count) {
+            for directive in pbs_gpu_directive(spec) {
+                if directive.starts_with('#') {
+                    // Comments go directly into the script
+                    lines.push(directive);
+                } else {
+                    resource_parts.push(directive);
+                }
             }
         }
-    } else if let Some(gpu_count) = rule.resources.gpu {
+    } else if let Some(gpu_count) = rule.resources.gpu
+        && gpu_count_requested(gpu_count)
+    {
         resource_parts.push(format!("gpu={}", gpu_count));
     }
 
@@ -491,9 +506,13 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
 
     // GPU handling for SGE (site-specific)
     if let Some(ref spec) = rule.resources.gpu_spec {
-        resource_parts.push(format!("gpu={}", spec.count));
+        if gpu_count_requested(spec.count) {
+            resource_parts.push(format!("gpu={}", spec.count));
+        }
         // Model selection requires site-specific complex resource definition
-    } else if let Some(gpu_count) = rule.resources.gpu {
+    } else if let Some(gpu_count) = rule.resources.gpu
+        && gpu_count_requested(gpu_count)
+    {
         resource_parts.push(format!("gpu={}", gpu_count));
     }
 
@@ -554,7 +573,9 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     }
 
     // GPU handling for LSF
-    if let Some(gpu_count) = rule.resources.gpu {
+    if let Some(gpu_count) = rule.resources.gpu
+        && gpu_count_requested(gpu_count)
+    {
         lines.push(format!("#BSUB -gpu {}", gpu_count));
     }
 
@@ -1075,6 +1096,92 @@ mod tests {
             generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config);
 
         assert!(script.contains("#BSUB -gpu 2"));
+    }
+
+    #[test]
+    fn zero_gpu_requests_omit_the_directive_on_every_backend() {
+        // gpu = 0 means "no GPUs" — emitting `--gres=gpu:0` / `gpu=0`
+        // makes schedulers reject or mis-account the job (SLURM: Invalid
+        // generic resource). The directive must simply disappear.
+        let cases = [
+            (ClusterBackend::Slurm, "#SBATCH --gres=gpu:0"),
+            (ClusterBackend::Pbs, "gpu=0"),
+            (ClusterBackend::Sge, "gpu=0"),
+            (ClusterBackend::Lsf, "#BSUB -gpu 0"),
+        ];
+        for (backend, forbidden) in cases {
+            let rule = Rule {
+                name: "no_gpu".to_string(),
+                input: vec![].into(),
+                output: vec![].into(),
+                shell: Some("echo hello".to_string()),
+                script: None,
+                threads: Some(1),
+                memory: None,
+                resources: Resources {
+                    gpu: Some(0),
+                    ..Resources::default()
+                },
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 0,
+                target: false,
+                group: None,
+                description: None,
+                ..Default::default()
+            };
+            let config = ClusterJobConfig {
+                backend,
+                queue: None,
+                account: None,
+                walltime: None,
+                extra_args: vec![],
+            };
+            let script = generate_submit_script(&backend, &rule, "echo hello", &config);
+            assert!(
+                !script.contains(forbidden),
+                "{backend:?} script must not contain '{forbidden}':\n{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_count_gpu_spec_omits_the_directive_but_keeps_memory() {
+        // A spec with count = 0 and a memory floor still constrains GPU
+        // memory (mem-per-gpu applies to any GPU the site assigns).
+        let rule = Rule {
+            name: "mem_only".to_string(),
+            input: vec![].into(),
+            output: vec![].into(),
+            shell: Some("echo hello".to_string()),
+            script: None,
+            threads: Some(1),
+            memory: None,
+            resources: Resources {
+                gpu_spec: Some(crate::rule::GpuSpec {
+                    count: 0,
+                    model: Some("a100".to_string()),
+                    memory_gb: Some(40),
+                    ..Default::default()
+                }),
+                ..Resources::default()
+            },
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            ..Default::default()
+        };
+        let config = make_config();
+        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "echo hello", &config);
+        assert!(!script.contains("gres=gpu:0"), "\n{script}");
+        assert!(script.contains("#SBATCH --mem-per-gpu=40G"), "\n{script}");
     }
 
     // -- Per-rule walltime tests --------------------------------------------

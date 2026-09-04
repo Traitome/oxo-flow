@@ -845,14 +845,29 @@ fn cli_samples_subset_does_not_overwrite_gather_output() {
     );
 }
 
-/// `cluster status` with no job IDs must fail with a clear message instead
-/// of invoking the scheduler's status command with an empty list
-/// (issue #142 LOW).
+/// `cluster status` with no job IDs lists the user's scheduler jobs instead
+/// of erroring (issue #142 LOW follow-up): the listing asks `squeue -u $USER`,
+/// so it must never fall back to `squeue -j` with an empty id list. Wired to
+/// the mock scheduler so every returned row is `<id>\t<state>`.
 #[test]
-fn cli_cluster_status_requires_job_ids() {
+fn cli_cluster_status_without_ids_lists_users_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = dir.path().join("jobs").join("424242");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("state"), "RUNNING").unwrap();
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock-scheduler");
     oxo_flow_cmd()
-        .args(["cluster", "status", "-b", "slurm"])
+        .env("MOCK_SCHEDULER_DIR", dir.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixtures.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .args(["cluster", "status"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("requires at least one job ID"));
+        .success()
+        .stdout(predicate::str::starts_with("424242\trunning\n"));
 }

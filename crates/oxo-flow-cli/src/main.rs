@@ -897,8 +897,12 @@ pub enum ClusterAction {
     Submit {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: PathBuf,
-        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
-        backend: String,
+        #[arg(
+            short = 'b',
+            long,
+            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+        )]
+        backend: Option<String>,
         #[arg(short = 'q', long, help = "Cluster queue or partition name")]
         queue: Option<String>,
         #[arg(short = 'a', long, help = "Cluster billing account")]
@@ -940,24 +944,37 @@ pub enum ClusterAction {
         #[arg(long, help = "Generate job scripts with dependency support")]
         with_dependencies: bool,
     },
-    /// Show the status of submitted cluster jobs.
+    /// Show the status of submitted cluster jobs. Without job IDs, list the
+    /// user's jobs the scheduler currently reports.
     Status {
-        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
-        backend: String,
+        #[arg(
+            short = 'b',
+            long,
+            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+        )]
+        backend: Option<String>,
         #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
     /// Cancel submitted cluster jobs.
     Cancel {
-        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
-        backend: String,
+        #[arg(
+            short = 'b',
+            long,
+            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+        )]
+        backend: Option<String>,
         #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
         job_ids: Vec<String>,
     },
     /// Fetch logs for a submitted cluster job.
     Logs {
-        #[arg(short = 'b', long, help = "Cluster backend: slurm, pbs, sge, or lsf")]
-        backend: String,
+        #[arg(
+            short = 'b',
+            long,
+            help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
+        )]
+        backend: Option<String>,
         #[arg(value_name = "JOB_ID", help = "Cluster job ID")]
         job_id: String,
     },

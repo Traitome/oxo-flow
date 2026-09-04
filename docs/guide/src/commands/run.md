@@ -442,7 +442,9 @@ shared between the submitting host and the compute nodes.
 > **Not yet implemented.** The driver polls until every job reaches a
 > terminal state; it does not yet re-attach to jobs still in flight if the
 > driver exits, and Ctrl-C does not yet cancel submitted jobs. Until then,
-> use `oxo-flow cluster cancel <JOB_ID>...` to clean up an interrupted run.
+> use `oxo-flow cluster status` (no ids: lists your queued jobs) and
+> `oxo-flow cluster cancel <JOB_ID>...` to inspect or clean up an
+> interrupted run.
 
 Cluster scheduler submission (SLURM, PBS, SGE, LSF) is configured
 separately — see the [`cluster`](cluster.md) command.
