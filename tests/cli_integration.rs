@@ -810,7 +810,7 @@ fn cli_info_derives_catalog_metadata() {
         serde_json::from_slice(&output.stdout).expect("info must emit JSON to stdout by default");
     assert_eq!(meta["name"], "environment-showcase");
     assert_eq!(meta["version"], "1.0.0");
-    assert_eq!(meta["rule_count"], 4);
+    assert_eq!(meta["rule_count"], 5);
     // conda YAML file stems + docker image names (tag stripped), deduped+sortd
     assert_eq!(
         meta["tools"],
@@ -821,7 +821,7 @@ fn cli_info_derives_catalog_metadata() {
     assert_eq!(meta["resources"]["max_memory"], "16G");
     assert_eq!(
         meta["environments"],
-        serde_json::json!({"conda": 2, "docker": 1, "system": 1})
+        serde_json::json!({"conda": 2, "docker": 1, "system": 1, "venv": 1})
     );
     assert_eq!(meta["config_keys"], serde_json::json!([]));
     assert_eq!(meta["sample_groups"], serde_json::json!([]));
@@ -829,7 +829,7 @@ fn cli_info_derives_catalog_metadata() {
     assert_eq!(meta["references"], serde_json::json!([]));
     assert_eq!(
         meta["input_dirs"],
-        serde_json::json!(["aligned", "data", "qc"])
+        serde_json::json!(["aligned", "data", "qc", "results"])
     );
     assert_eq!(
         meta["output_dirs"],
@@ -894,10 +894,10 @@ fn cli_info_text_format_and_errors() {
         stdout.contains("Workflow: environment-showcase v1.0.0"),
         "{stdout}"
     );
-    assert!(stdout.contains("Rules: 4"), "{stdout}");
+    assert!(stdout.contains("Rules: 5"), "{stdout}");
     assert!(stdout.contains("Tools: analysis, bwa-mem2, qc"), "{stdout}");
     assert!(
-        stdout.contains("Environments: conda=2, docker=1, system=1"),
+        stdout.contains("Environments: conda=2, docker=1, system=1, venv=1"),
         "{stdout}"
     );
 

@@ -21,7 +21,7 @@ per task; follow the links for details on demand.
 | Canonical entry points | URL |
 |---|---|
 | Documentation | https://traitome.github.io/oxo-flow/ |
-| **This skill (site)** | https://traitome.github.io/oxo-flow/SKILL/ |
+| **This skill (site)** | https://traitome.github.io/oxo-flow/dev/SKILL/ (moves to `/SKILL/` at the next release; the root serves the newest tagged release) |
 | This skill (raw) | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/guide/src/SKILL.md |
 | Repository (dev context: AGENTS.md) | https://github.com/Traitome/oxo-flow |
 | Workflow JSON Schema | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/schema/oxoflow-v1.schema.json |
@@ -95,9 +95,11 @@ Seven stages, three approval gates. Every stage ends with a
   .oxo-flow/checkpoint.json` passes; spot-check logs for silent errors.
   (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
   existing files as missing — fall back to direct checksum comparison against
-  the checkpoint, or upgrade oxo-flow. Chunk intermediates deleted by a
-  transform rule's `cleanup = true` are expected to be reported missing —
-  they were cleaned by design, not lost.)
+  the checkpoint, or upgrade oxo-flow. From the release after 0.17.1,
+  transform chunk intermediates deleted by `cleanup = true` are reported as
+  `cleaned (by design)` — a separate bucket from `missing`, never a failure;
+  checkpoints written by older binaries still list them under `checksums`
+  and report them missing after cleanup.)
 - Judge against the Stage 0 success criteria. Performed by an evaluator
   role — **never the author of the workflow**.
 - Fail → back to Stage 2 with written findings.

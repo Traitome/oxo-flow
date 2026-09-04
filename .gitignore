@@ -50,6 +50,8 @@ hello.txt
 oxo-flow-clindet/
 oxo-flow-circrna/
 oxo-flow-venus/
+# Gallery 05 creates its venv under examples/envs/ at run time (issue #315)
+examples/envs/demo-venv/
 .playwright-mcp/
 
 # Test harness generated files and directories

@@ -89,49 +89,10 @@ impl Default for PackageConfig {
     }
 }
 
-/// Generate a `docker run` command string with resource limits.
-#[must_use]
 /// Returns `true` if a conda environment spec is a package specifier
 /// (e.g., "bioconda::fastp=0.23.4") rather than a YAML file path.
 fn is_package_specifier(env_spec: &str) -> bool {
     env_spec.contains("::") && !env_spec.ends_with(".yaml") && !env_spec.ends_with(".yml")
-}
-
-pub fn generate_docker_run_command(
-    image_name: &str,
-    resources: &crate::rule::Resources,
-    workdir: &str,
-) -> String {
-    let mut cmd = "docker run --rm".to_string();
-    if let Some(mem) = &resources.memory {
-        cmd.push_str(&format!(" --memory={mem}"));
-    }
-    // Same sentinel as the run path: threads == 1 means "unset", and an
-    // unset rule must not be pinned to a single CPU inside the image.
-    if resources.threads > 1 {
-        cmd.push_str(&format!(" --cpus={}", resources.threads));
-    }
-
-    // GPU support - use gpu_spec if available (more specific), fall back to gpu count
-    if let Some(ref spec) = resources.gpu_spec {
-        match &spec.model {
-            Some(model) => {
-                cmd.push_str(&format!(
-                    " --gpus \"device={},count={}\"",
-                    model, spec.count
-                ));
-            }
-            None => {
-                cmd.push_str(&format!(" --gpus {}", spec.count));
-            }
-        }
-    } else if let Some(gpu_count) = resources.gpu {
-        cmd.push_str(&format!(" --gpus {}", gpu_count));
-    }
-
-    cmd.push_str(&format!(" -v {workdir}:/data -w /data"));
-    cmd.push_str(&format!(" {image_name}"));
-    cmd
 }
 
 /// Write the environment-installation instructions shared by both single-stage
@@ -1406,54 +1367,6 @@ mod tests {
     }
 
     #[test]
-    fn generate_docker_run_command_basic() {
-        let resources = crate::rule::Resources {
-            threads: 4,
-            memory: Some("8G".to_string()),
-            gpu: None,
-            gpu_spec: None,
-            disk: None,
-            time_limit: None,
-            partition: None,
-            groups: std::collections::HashMap::new(),
-        };
-        let cmd = generate_docker_run_command("my-image:latest", &resources, "/data/project");
-        assert_eq!(
-            cmd,
-            "docker run --rm --memory=8G --cpus=4 -v /data/project:/data -w /data my-image:latest"
-        );
-    }
-
-    #[test]
-    fn generate_docker_run_command_no_memory() {
-        let resources = crate::rule::Resources {
-            threads: 2,
-            memory: None,
-            gpu: None,
-            gpu_spec: None,
-            disk: None,
-            time_limit: None,
-            partition: None,
-            groups: std::collections::HashMap::new(),
-        };
-        let cmd = generate_docker_run_command("img:1.0", &resources, "/work");
-        assert_eq!(
-            cmd,
-            "docker run --rm --cpus=2 -v /work:/data -w /data img:1.0"
-        );
-        assert!(!cmd.contains("--memory"));
-    }
-
-    #[test]
-    fn generate_docker_run_command_treats_threads_one_as_unset() {
-        // Run-path parity: an unset thread count must not become a 1-CPU
-        // cgroup quota (and `--cpus=0` would not even be a valid flag).
-        let unset = crate::rule::Resources::default();
-        let cmd = generate_docker_run_command("img:1.0", &unset, "/work");
-        assert!(!cmd.contains("--cpus"), "{cmd}");
-    }
-
-    #[test]
     fn multistage_with_rootless() {
         let workflow = WorkflowConfig::parse(
             r#"
@@ -1473,77 +1386,6 @@ mod tests {
         assert!(dockerfile.contains("AS builder"));
         assert!(dockerfile.contains("USER oxoflow"));
         assert!(dockerfile.contains("HEALTHCHECK"));
-    }
-
-    #[test]
-    fn generate_docker_run_basic() {
-        let resources = crate::rule::Resources::default();
-        let cmd = generate_docker_run_command("myimage:latest", &resources, "/data");
-        assert!(cmd.contains("docker run"));
-        assert!(cmd.contains("myimage:latest"));
-        assert!(cmd.contains("/data"));
-    }
-
-    // ── GPU container tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn generate_docker_run_command_with_gpu_count() {
-        let resources = crate::rule::Resources {
-            threads: 4,
-            memory: Some("16G".to_string()),
-            gpu: Some(2),
-            gpu_spec: None,
-            disk: None,
-            time_limit: None,
-            partition: None,
-            groups: std::collections::HashMap::new(),
-        };
-        let cmd = generate_docker_run_command("gpu-image:latest", &resources, "/data/project");
-        assert!(cmd.contains("--gpus 2"));
-        assert!(cmd.contains("--memory=16G"));
-        assert!(cmd.contains("--cpus=4"));
-    }
-
-    #[test]
-    fn generate_docker_run_command_with_gpu_spec() {
-        let resources = crate::rule::Resources {
-            threads: 8,
-            memory: Some("32G".to_string()),
-            gpu: None,
-            gpu_spec: Some(crate::rule::GpuSpec {
-                count: 4,
-                model: Some("A100".to_string()),
-                memory_gb: None,
-                compute_capability: None,
-            }),
-            disk: None,
-            time_limit: None,
-            partition: None,
-            groups: std::collections::HashMap::new(),
-        };
-        let cmd = generate_docker_run_command("cuda-image:latest", &resources, "/data/project");
-        assert!(cmd.contains("--gpus \"device=A100,count=4\""));
-    }
-
-    #[test]
-    fn generate_docker_run_command_gpu_spec_no_model() {
-        let resources = crate::rule::Resources {
-            threads: 2,
-            memory: None,
-            gpu: None,
-            gpu_spec: Some(crate::rule::GpuSpec {
-                count: 1,
-                model: None,
-                memory_gb: None,
-                compute_capability: None,
-            }),
-            disk: None,
-            time_limit: None,
-            partition: None,
-            groups: std::collections::HashMap::new(),
-        };
-        let cmd = generate_docker_run_command("gpu:latest", &resources, "/work");
-        assert!(cmd.contains("--gpus 1"));
     }
 
     #[test]

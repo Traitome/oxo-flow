@@ -68,3 +68,17 @@ echo '{"status": "complete", "qc": "pass", "aligned": true}' > {output[0]}
 
 [rules.environment]
 conda = "envs/analysis.yaml"
+
+[[rules]]
+name = "venv_sanity"
+input = ["results/analysis.json"]
+output = ["results/venv_check.txt"]
+description = "Per-rule venv backend: a dedicated virtualenv runs a stdlib-only sanity check"
+shell = """
+mkdir -p results
+python -c "import json,sys; a=json.load(open('results/analysis.json')); print('venv python:', sys.version.split()[0], '; analysis:', a['status'])" > {output[0]}
+"""
+
+[rules.environment]
+venv = "envs/demo-venv"
+venv_requirements = "envs/venv-requirements.txt"

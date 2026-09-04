@@ -885,6 +885,48 @@ fn quay_biocontainers_fallback(spec: &str) -> Option<String> {
     }
 }
 
+/// Clamp a declared CPU count to a hard limit (issue #315 F1). Docker
+/// rejects `--cpus` above the daemon's CPU count with a hard error, so
+/// oversubscribed declarations degrade gracefully instead of failing.
+fn clamp_cpus(declared: u32, limit: u32) -> u32 {
+    if declared > limit { limit } else { declared }
+}
+
+/// CPUs the docker daemon reports (`docker info`), cached per process.
+/// `None` when the daemon is unreachable or its output is unparseable.
+fn docker_daemon_cpus() -> Option<u32> {
+    static CACHE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| -> Option<u32> {
+        let out = std::process::Command::new("docker")
+            .args(["info", "--format", "{{.NCPU}}"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        std::str::from_utf8(&out.stdout).ok()?.trim().parse().ok()
+    })
+}
+
+/// Pure form of [`effective_cpu_limit`] for tests: `daemon` is the docker
+/// daemon's CPU count (or `None` when unreachable), `host` the local
+/// parallelism fallback.
+fn effective_cpu_limit_with(declared: u32, daemon: Option<u32>, host: u32) -> u32 {
+    let limit = daemon.unwrap_or(host);
+    clamp_cpus(declared, limit)
+}
+
+/// The `--cpus` limit for the docker run path: the daemon's own CPU count
+/// when reachable — the only limit docker actually validates (Docker
+/// Desktop quotas and remote `DOCKER_HOST` targets report fewer CPUs than
+/// the local machine) — with local parallelism as a conservative fallback.
+fn effective_cpu_limit(declared: u32) -> u32 {
+    let host = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(declared);
+    effective_cpu_limit_with(declared, docker_daemon_cpus(), host)
+}
+
 impl DockerBackend {
     /// Like [`EnvironmentBackend::wrap_command`], with GPU passthrough:
     /// `gpus` maps to docker's `--gpus <value>` (e.g. `"all"`, `"0"`),
@@ -921,11 +963,22 @@ impl DockerBackend {
             mem_arg = format!(" --memory {mem}");
         }
         let gpus_arg = gpus.map(|g| format!(" --gpus {g}")).unwrap_or_default();
-        // CPU limit parity with the exported-image path
-        // (`generate_docker_run_command` renders --cpus). threads == 1 is
-        // the documented "unset" sentinel, so an unset rule stays unlimited.
+        // CPU limit (issue #315 F1): threads == 1 is the documented
+        // "unset" sentinel, so an unset rule stays unlimited. Clamp to the
+        // docker daemon's CPU count — the daemon hard-rejects `--cpus`
+        // above its own view, so oversubscription degrades gracefully.
         let cpu_arg = match resources {
-            Some(res) if res.threads > 1 => format!(" --cpus {}", res.threads),
+            Some(res) if res.threads > 1 => {
+                let cpus = effective_cpu_limit(res.threads);
+                if cpus < res.threads {
+                    tracing::warn!(
+                        declared = res.threads,
+                        clamped = cpus,
+                        "docker --cpus clamped to the docker daemon's CPU count"
+                    );
+                }
+                format!(" --cpus {cpus}")
+            }
             _ => String::new(),
         };
 
@@ -1126,8 +1179,12 @@ impl EnvironmentBackend for VenvBackend {
     }
 
     fn is_available(&self) -> bool {
+        // The venv setup path needs `python3 -m venv` AND pip install, so
+        // probe the modules behind them — stock Debian/Ubuntu ships python3
+        // without python3-venv/ensurepip (issue #315 review): advertising
+        // "venv available" while every setup fails is a lie.
         std::process::Command::new("python3")
-            .arg("--version")
+            .args(["-c", "import ensurepip, venv"])
             .output()
             .is_ok_and(|o| o.status.success())
     }
@@ -3621,5 +3678,22 @@ mod tests {
         ] {
             assert!(!dir_glob_input_pattern(pattern), "{pattern} is exact");
         }
+    }
+
+    #[test]
+    fn cpu_limit_clamps_to_daemon_when_reachable() {
+        // issue #315 F1: the docker daemon validates --cpus against ITS
+        // CPU count (Docker Desktop quotas, remote DOCKER_HOST) — not the
+        // local machine's.
+        assert_eq!(effective_cpu_limit_with(8, Some(4), 16), 4);
+        assert_eq!(effective_cpu_limit_with(2, Some(4), 16), 2);
+    }
+
+    #[test]
+    fn cpu_limit_falls_back_to_local_parallelism() {
+        assert_eq!(effective_cpu_limit_with(8, None, 4), 4);
+        assert_eq!(effective_cpu_limit_with(2, None, 4), 2);
+        // Unknown limits never clamp.
+        assert_eq!(effective_cpu_limit_with(8, None, u32::MAX), 8);
     }
 }

@@ -635,19 +635,22 @@ mod tests {
 
         assert_eq!(meta["name"], "environment-showcase");
         assert_eq!(meta["version"], "1.0.0");
-        assert_eq!(meta["rule_count"], 4);
+        assert_eq!(meta["rule_count"], 5);
         assert_eq!(meta["tools"], json!(["analysis", "bwa-mem2", "qc"]));
         assert_eq!(meta["resources"]["max_threads"], 8);
         assert_eq!(meta["resources"]["max_memory"], "16G");
         assert_eq!(
             meta["environments"],
-            json!({"conda": 2, "docker": 1, "system": 1})
+            json!({"conda": 2, "docker": 1, "system": 1, "venv": 1})
         );
         assert_eq!(meta["config_keys"], json!([]));
         assert_eq!(meta["sample_groups"], json!([]));
         assert_eq!(meta["pairs"], json!([]));
         assert_eq!(meta["references"], json!([]));
-        assert_eq!(meta["input_dirs"], json!(["aligned", "data", "qc"]));
+        assert_eq!(
+            meta["input_dirs"],
+            json!(["aligned", "data", "qc", "results"])
+        );
         assert_eq!(
             meta["output_dirs"],
             json!(["aligned", "data", "qc", "results"])

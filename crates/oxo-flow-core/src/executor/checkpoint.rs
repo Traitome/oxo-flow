@@ -215,6 +215,14 @@ pub struct CheckpointState {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub checksums: HashMap<String, String>,
+    /// Checksums of outputs the engine deletes by design at the end of a
+    /// successful run (transform chunk intermediates with `cleanup = true`,
+    /// issue #315 F2). Preserved for the audit trail; `provenance verify`
+    /// reports them as "cleaned", never "missing". Absent in legacy
+    /// checkpoints, which keep the old behavior (empty = nothing cleaned).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub cleaned_checksums: HashMap<String, String>,
     /// Config value snapshot at the time rules completed.
     /// Maps config key → canonical value string (sensitive keys store a
     /// SHA-256 digest instead of the plaintext value). Compared against the
@@ -314,6 +322,7 @@ impl CheckpointState {
             workflow_git_sha: None,
             workdir: None,
             checksums: HashMap::new(),
+            cleaned_checksums: HashMap::new(),
             config_snapshot: HashMap::new(),
             rule_fingerprints: HashMap::new(),
             rule_fingerprints_no_input: HashMap::new(),
@@ -361,6 +370,14 @@ impl CheckpointState {
     /// Record a checksum for an output file (provenance tracking).
     pub fn record_checksum(&mut self, path: &str, checksum: String) {
         self.checksums.insert(path.to_string(), checksum);
+    }
+
+    /// Record a checksum for an output the engine deletes by design
+    /// (transform chunk intermediates with `cleanup = true`, issue #315 F2).
+    /// Kept out of `checksums` so `provenance verify` reports these as
+    /// "cleaned" instead of "missing".
+    pub fn record_cleaned_checksum(&mut self, path: &str, checksum: String) {
+        self.cleaned_checksums.insert(path.to_string(), checksum);
     }
 
     /// Record the input manifest for a rule (issue #72).
@@ -1238,14 +1255,20 @@ pub async fn cleanup_temp_outputs(rule: &Rule, workdir: &Path) {
 /// Deletes each chunk (the rule's inputs) and removes chunk directories
 /// that became empty as a result. Directories holding chunks from other
 /// rules are left untouched.
-pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) {
+///
+/// Returns the successfully deleted relative paths so the caller can move
+/// their checksums into the `cleaned_checksums` bucket (issue #315 F2) —
+/// deletion and record-migration happen in the same step.
+pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) -> Vec<String> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut deleted: Vec<String> = Vec::new();
     for chunk in rule.input.iter() {
         let path = workdir.join(chunk);
         if tokio::fs::try_exists(&path).await.ok() == Some(true) {
             match tokio::fs::remove_file(&path).await {
                 Ok(()) => {
                     tracing::debug!(file = %path.display(), "removed transform chunk");
+                    deleted.push(chunk.to_string());
                     if let Some(parent) = path.parent() {
                         dirs.push(parent.to_path_buf());
                     }
@@ -1265,6 +1288,7 @@ pub async fn cleanup_transform_chunks(rule: &Rule, workdir: &Path) {
     for dir in dirs {
         let _ = tokio::fs::remove_dir(&dir).await;
     }
+    deleted
 }
 
 #[cfg(test)]
@@ -1804,7 +1828,10 @@ mod tests {
             .await
             .unwrap();
 
-        cleanup_transform_chunks(&rule, &workdir).await;
+        let deleted = cleanup_transform_chunks(&rule, &workdir).await;
+        // The returned paths feed the caller's checksum migration
+        // (issue #315 F2): deletion and record-move happen together.
+        assert_eq!(deleted.len(), 2);
 
         assert!(!workdir.join(".oxo-flow/chunks/chr/chr1.g.vcf.gz").exists());
         assert!(!workdir.join(".oxo-flow/chunks/chr/chr2.g.vcf.gz").exists());
@@ -1816,6 +1843,31 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(&workdir).await;
     }
+
+    #[test]
+    fn cleaned_checksums_roundtrip_and_legacy_default() {
+        // issue #315 F2: cleaned chunk checksums serialize separately from
+        // normal checksums, and legacy checkpoints without the field read
+        // back empty (old behavior: chunks treated as ordinary outputs).
+        let mut state = CheckpointState::new();
+        state.record_cleaned_checksum(".oxo-flow/chunks/chr/chr1.out", "sha256:aaaa".into());
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("cleaned_checksums"));
+        assert!(!json.contains("\"checksums\""));
+
+        let back: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cleaned_checksums.len(), 1);
+        assert!(back.checksums.is_empty());
+
+        let legacy: CheckpointState = serde_json::from_str(
+            r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{},"checksums":{"a":"sha256:bb"}}"#,
+        )
+        .unwrap();
+        assert!(legacy.cleaned_checksums.is_empty());
+        assert_eq!(legacy.checksums.len(), 1);
+    }
+
     #[test]
     fn checkpoint_roundtrip_preserves_workdir() {
         // issue #68: resume must re-run from the same working directory the

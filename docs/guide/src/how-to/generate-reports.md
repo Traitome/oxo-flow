@@ -75,7 +75,7 @@ A generated report includes:
 | **Clinical Compliance** | Static capability statement — only for explicitly clinical workflows or when listed in `[report].sections`; generates no clinical data |
 | **Workflow Information** | Name, version, total rules, detected domain, `[config]` variables |
 | **Commands** | The commands that actually ran (expanded); declared templates with an explicit fallback label when no execution record exists |
-| **File Manifest** | Real files: checkpoint-recorded inputs (path, size, mtime) and outputs (sha256 + on-disk size/mtime) |
+| **File Manifest** | Real files: checkpoint-recorded inputs (path, size, mtime) and outputs (sha256 + on-disk size/mtime); transform chunk intermediates deleted by `cleanup = true` are listed with a "cleaned by design" marker instead of a missing status |
 | **Metrics** | QC metrics parsed from real tool outputs under the workdir (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), one subsection per tool × sample, with Pass/Warn/Fail flags — hidden when nothing parses |
 | **Sample Matrix** | Rule × sample status grid from the checkpoint's expanded instance names — hidden without a checkpoint or sample definitions |
 | **Resource Accounting** | Cluster accounting imported from an sacct CSV via `--acct` (Rule/State/Elapsed/CPU Time/Max RSS) |
