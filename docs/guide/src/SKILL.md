@@ -61,9 +61,9 @@ Seven stages, three approval gates. Every stage ends with a
 - `oxo-flow init` scaffolds the project; write the workflow TOML (+ scripts);
   keep it in git — versioning is reproducibility.
 - **Mandatory static gates, in order, before any compute:**
-  1. `oxo-flow validate --json` — structure, missing inputs, capacity
-  2. `oxo-flow dry-run --json` — expansion preview, resource audit, `-j` suggestion
-  3. `oxo-flow lint` — best practices
+  1. `oxo-flow validate --json <workflow.oxoflow>` — structure, missing inputs, capacity
+  2. `oxo-flow dry-run --json <workflow.oxoflow>` — expansion preview, resource audit, `-j` suggestion
+  3. `oxo-flow lint <workflow.oxoflow>` — best practices
 - Fix and re-run until clean; `oxo-flow graph` to eyeball the DAG.
   DAG edges match exact strings only — dir/glob inputs form no edges, so
   declare `depends_on` explicitly.
@@ -93,6 +93,9 @@ Seven stages, three approval gates. Every stage ends with a
 
 - Outputs exist, non-empty, plausible; `oxo-flow provenance verify
   .oxo-flow/checkpoint.json` passes; spot-check logs for silent errors.
+  (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
+  existing files as missing — fall back to direct checksum comparison against
+  the checkpoint, or upgrade oxo-flow.)
 - Judge against the Stage 0 success criteria. Performed by an evaluator
   role — **never the author of the workflow**.
 - Fail → back to Stage 2 with written findings.
@@ -102,7 +105,8 @@ Seven stages, three approval gates. Every stage ends with a
 - `oxo-flow report -f md -o REPORT.md --ci` (execution truth: real exit
   codes, checksums, expanded commands) + `-o report.json` copy.
 - **Receipt bundle:** `REPORT.md` + checkpoint JSON + provenance-verify
-  output + workflow git SHA + `--versions-yml versions.yml` + input manifest.
+  output + workflow git SHA + `--versions-yml versions.yml` (newer releases;
+  skip if the flag is rejected) + input manifest.
 - Optional archival: `oxo-flow export -f toml|docker|singularity`.
 - Done when: PI signs off against the original task.
 
