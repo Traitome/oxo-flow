@@ -4047,7 +4047,7 @@ stdout.</p>
 </tr>
 <tr>
 <td><strong>File Manifest</strong></td>
-<td>Real files: checkpoint-recorded inputs (path, size, mtime) and outputs (sha256 + on-disk size/mtime)</td>
+<td>Real files: checkpoint-recorded inputs (path, size, mtime) and outputs (sha256 + on-disk size/mtime); transform chunk intermediates deleted by <code>cleanup = true</code> are listed with a "cleaned by design" marker instead of a missing status</td>
 </tr>
 <tr>
 <td><strong>Metrics</strong></td>

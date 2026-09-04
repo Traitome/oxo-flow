@@ -3916,7 +3916,7 @@ per task; follow the links for details on demand.</p>
 </tr>
 <tr>
 <td><strong>This skill (site)</strong></td>
-<td>https://traitome.github.io/oxo-flow/SKILL/</td>
+<td>https://traitome.github.io/oxo-flow/dev/SKILL/ (moves to <code>/SKILL/</code> at the next release; the root serves the newest tagged release)</td>
 </tr>
 <tr>
 <td>This skill (raw)</td>
@@ -4004,9 +4004,11 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
   .oxo-flow/checkpoint.json</code> passes; spot-check logs for silent errors.
   (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
   existing files as missing — fall back to direct checksum comparison against
-  the checkpoint, or upgrade oxo-flow. Chunk intermediates deleted by a
-  transform rule's <code>cleanup = true</code> are expected to be reported missing —
-  they were cleaned by design, not lost.)</li>
+  the checkpoint, or upgrade oxo-flow. From the release after 0.17.1,
+  transform chunk intermediates deleted by <code>cleanup = true</code> are reported as
+  <code>cleaned (by design)</code> — a separate bucket from <code>missing</code>, never a failure;
+  checkpoints written by older binaries still list them under <code>checksums</code>
+  and report them missing after cleanup.)</li>
 <li>Judge against the Stage 0 success criteria. Performed by an evaluator
   role — <strong>never the author of the workflow</strong>.</li>
 <li>Fail → back to Stage 2 with written findings.</li>

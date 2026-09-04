@@ -3973,6 +3973,20 @@
 </span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a>
 </span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="k">[rules.environment]</span>
 </span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a><span class="n">conda</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"envs/analysis.yaml"</span>
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a>
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="k">[[rules]]</span>
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"venv_sanity"</span>
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/analysis.json"</span><span class="p">]</span>
+</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/venv_check.txt"</span><span class="p">]</span>
+</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Per-rule venv backend: a dedicated virtualenv runs a stdlib-only sanity check"</span>
+</span><span id="__span-0-78"><a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
+</span><span id="__span-0-79"><a id="__codelineno-0-79" name="__codelineno-0-79" href="#__codelineno-0-79"></a><span class="s2">mkdir -p results</span>
+</span><span id="__span-0-80"><a id="__codelineno-0-80" name="__codelineno-0-80" href="#__codelineno-0-80"></a><span class="s2">python -c "import json,sys; a=json.load(open('results/analysis.json')); print('venv python:', sys.version.split()[0], '; analysis:', a['status'])" &gt; {output[0]}</span>
+</span><span id="__span-0-81"><a id="__codelineno-0-81" name="__codelineno-0-81" href="#__codelineno-0-81"></a><span class="s2">"""</span>
+</span><span id="__span-0-82"><a id="__codelineno-0-82" name="__codelineno-0-82" href="#__codelineno-0-82"></a>
+</span><span id="__span-0-83"><a id="__codelineno-0-83" name="__codelineno-0-83" href="#__codelineno-0-83"></a><span class="k">[rules.environment]</span>
+</span><span id="__span-0-84"><a id="__codelineno-0-84" name="__codelineno-0-84" href="#__codelineno-0-84"></a><span class="n">venv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"envs/demo-venv"</span>
+</span><span id="__span-0-85"><a id="__codelineno-0-85" name="__codelineno-0-85" href="#__codelineno-0-85"></a><span class="n">venv_requirements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"envs/venv-requirements.txt"</span>
 </span></code></pre></div>
 <h2 id="key-concepts">Key Concepts<a class="headerlink" href="#key-concepts" title="Permanent link">#</a></h2>
 <h3 id="per-rule-environment-isolation">Per-Rule Environment Isolation<a class="headerlink" href="#per-rule-environment-isolation" title="Permanent link">#</a></h3>
@@ -4060,11 +4074,12 @@ resolve its environment declarations; see
     A["download_data&lt;br/&gt;(system)"] --&gt; B["quality_check&lt;br/&gt;(conda)"]
     A --&gt; C["align_sequences&lt;br/&gt;(docker)"]
     B --&gt; D["analyze_results&lt;br/&gt;(conda)"]
-    C --&gt; D</code></pre>
+    C --&gt; D
+    D --&gt; E["venv_sanity&lt;br/&gt;(venv)"]</code></pre>
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/05_conda_environments.oxoflow
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/05_conda_environments.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">4</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">4</span><span class="w"> </span>dependencies
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/05_conda_environments.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">5</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">5</span><span class="w"> </span>dependencies
 </span></code></pre></div>
 <h3 id="check-available-environments">Check Available Environments<a class="headerlink" href="#check-available-environments" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
