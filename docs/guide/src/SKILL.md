@@ -95,7 +95,9 @@ Seven stages, three approval gates. Every stage ends with a
   .oxo-flow/checkpoint.json` passes; spot-check logs for silent errors.
   (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
   existing files as missing — fall back to direct checksum comparison against
-  the checkpoint, or upgrade oxo-flow.)
+  the checkpoint, or upgrade oxo-flow. Chunk intermediates deleted by a
+  transform rule's `cleanup = true` are expected to be reported missing —
+  they were cleaned by design, not lost.)
 - Judge against the Stage 0 success criteria. Performed by an evaluator
   role — **never the author of the workflow**.
 - Fail → back to Stage 2 with written findings.
