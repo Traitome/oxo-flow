@@ -708,6 +708,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # Skip docker buildx build records (*.dockerbuild): the v4 download
+          # action has repeatedly stalled runner-side on these two artifacts
+          # and aborted the whole release (attempts 1-4 of the v0.17.2
+          # release, identical failure each time), while every binaries-*/
+          # and frontend-static artifact downloads fine. The release job
+          # consumes none of them (its `files:` globs only stage
+          # tar.gz/zip/dmg/deb/rpm/AppImage + SHA256SUMS.txt), so excluding
+          # them loses nothing and unblocks the release.
+          pattern: "binaries-*\nfrontend-static"
 
       - name: Validate required release artifacts
         shell: bash
