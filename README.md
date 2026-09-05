@@ -111,7 +111,7 @@ Pre-built images are published to GitHub Container Registry on every release (an
 docker run -d --name oxo-flow -p 3000:3000 ghcr.io/traitome/oxo-flow:latest
 
 # Pin a release (or track a minor line)
-docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.1
+docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17.2
 docker run -d -p 3000:3000 ghcr.io/traitome/oxo-flow:0.17
 
 # CLI one-shot usage (workflow files mounted from the host)

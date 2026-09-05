@@ -253,10 +253,10 @@ tarballs (built by CI, not by hand):
 ### Install from a tarball
 
 ```bash
-curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.1/SHA256SUMS.txt
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.2/oxo-flow-v0.17.2-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/Traitome/oxo-flow/releases/download/v0.17.2/SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt --ignore-missing   # verify before you run it
-tar xzf oxo-flow-v0.17.1-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow-v0.17.2-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 755 oxo-flow /usr/local/bin/oxo-flow
 ```
 
@@ -278,7 +278,7 @@ checkout is needed).
 ## Notes
 
 - **Version**: the desktop crate repeats the workspace version
-  (`0.17.1`) by value — it is outside the workspace, so it does not
+  (`0.17.2`) by value — it is outside the workspace, so it does not
   inherit `[workspace.package]`; bump it together with the rest on
   release.
 - **Data directory**: the desktop app keeps all state in

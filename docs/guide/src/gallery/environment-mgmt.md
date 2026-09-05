@@ -88,7 +88,7 @@ $ oxo-flow validate examples/gallery/05_conda_environments.oxoflow
 
 ```bash
 $ oxo-flow env list
-oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.2 — Rust-native bioinformatics pipeline engine
 Available environment backends:
   ✓ system
   ✓ mamba

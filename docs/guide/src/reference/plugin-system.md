@@ -147,7 +147,7 @@ use oxo_flow_core::plugin::PluginOutput;
 ```
 
 `success` and `command` are the fields the engine would act on; `errors`,
-`logs`, and `exit_code` carry diagnostics. Note that as of v0.17.1 this
+`logs`, and `exit_code` carry diagnostics. Note that as of v0.17.2 this
 contract is defined but not yet wired into rule execution — declared rule
 plugins today go through `command_template` in the manifest instead, and
 there is no engine-side runner that invokes plugin executables yet.

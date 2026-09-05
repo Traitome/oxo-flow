@@ -58,7 +58,7 @@ oxo-flow config get pipeline.oxoflow reference
 ## Output
 
 ```
-oxo-flow v0.17.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.17.2 — Rust-native bioinformatics pipeline engine
 Workflow Configuration:
   Name:    germline-wgs
   Version: 1.0.0
