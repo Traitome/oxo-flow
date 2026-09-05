@@ -79,7 +79,7 @@ oxo-flow graph pipeline.oxoflow -f mermaid -o pipeline.mmd
 
 ### Export an nf-metro metro map
 
-`metro` emits an [nf-metro](https://github.com/seqeralabs/nf-metro) definition — Mermaid `graph LR` extended with `%%metro` line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (inferred from shell keywords, or set explicitly via each rule's `tags`):
+`metro` emits an [nf-metro](https://github.com/seqeralabs/nf-metro) definition — Mermaid `graph LR` extended with `%%metro` line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (resolved per rule by explicit `tags`, module-name prefix, or shell/script keywords — see [Stage assignment](#metro-map-nf-metro) below):
 
 ```bash
 oxo-flow graph pipeline.oxoflow -f metro -o pipeline.mmd
@@ -227,19 +227,27 @@ graph LR
     n1 -->|generic| n2
 ```
 
-Each rule is assigned a *stage* that becomes a colored "metro line":
+Each rule is assigned a *stage* that becomes a colored "metro line",
+resolved by three matching tiers in priority order plus a fallback:
 
 - **Explicit**: the rule's first `tags` entry (e.g. `tags = ["align"]`),
   normalized through a small synonym table (`alignment` → `align`, etc.).
   Unknown tags become their own custom line.
+- **Module prefix**: the part of the rule name before `::` when it matches a
+  known stage prefix (`fastq_qc::trimgalore` → `qc`, `alignment::bwa_mem` →
+  `align`, `variant::gatk_hc` → `variant`, ...).
 - **Inferred**: keyword matching against the rule's `shell`/`script`
   commands — `fastqc`/`fastp` → QC/trim, `bwa`/`STAR` → align,
   `featureCounts`/`salmon` → quantify, `gatk`/`bcftools call` → variant,
   `multiqc` → report, and so on — with no match falling back to `generic`.
 
-With more than one stage, stations are grouped into `subgraph` sections (one
-per stage) and cross-stage edges are placed outside the sections as nf-metro
-requires.
+With more than one stage, stations are grouped into `subgraph` sections by
+**module namespace** (the `module::` prefix, one section per module — e.g.
+`fastq_qc::trimgalore` and `fastq_qc::fastqc` share a "Read QC" section) and
+falling back to the stage for rules without a `module::` prefix. Sections
+appear in workflow file order, so lines flow through them without loops;
+cross-section edges are placed outside the sections as nf-metro requires.
+Station labels drop the `module::` prefix.
 
 ---
 
