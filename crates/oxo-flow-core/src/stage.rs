@@ -289,7 +289,10 @@ mod tests {
         // workflow author's own grouping (stronger than shell keywords).
         let r = rule("alignment::star_align", "echo unused", vec![]);
         assert_eq!(detect_stage(&r), "align");
-        assert_eq!(detect_stage(&rule("fastq_qc::fq_lint", "echo", vec![])), "qc");
+        assert_eq!(
+            detect_stage(&rule("fastq_qc::fq_lint", "echo", vec![])),
+            "qc"
+        );
         assert_eq!(
             detect_stage(&rule("quantification::salmon_quant", "echo", vec![])),
             "quantify"
