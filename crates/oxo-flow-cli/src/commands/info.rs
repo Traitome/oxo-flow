@@ -281,8 +281,9 @@ fn declared_default(def: &oxo_flow_core::config::ConfigDef) -> Value {
     }
 }
 
-/// Does the rule reference the config key in its shell, script, I/O patterns
-/// (`{config.<key>}`), or `when` condition (brace-less `config.<key>`)?
+/// Does the rule reference the config key in its shell, script, I/O or
+/// expansion patterns (`{config.<key>}`), or `when` condition (brace-less
+/// `config.<key>`)?
 fn rule_uses_config(rule: &Rule, key: &str) -> bool {
     let braced = format!("{{config.{key}}}");
     let paths_use = |paths: &[String]| paths.iter().any(|path| path.contains(&braced));
@@ -290,6 +291,18 @@ fn rule_uses_config(rule: &Rule, key: &str) -> bool {
         || rule.script.as_deref().is_some_and(|s| s.contains(&braced))
         || paths_use(&rule.input.to_vec())
         || paths_use(&rule.output.to_vec())
+        || rule
+            .expand_inputs
+            .iter()
+            .any(|e| e.pattern.contains(&braced))
+        || rule
+            .input_groups
+            .iter()
+            .any(|g| g.pattern.contains(&braced))
+        || rule
+            .expand_inputs
+            .iter()
+            .any(|e| e.variables.values().any(|v| v.contains(&braced)))
     {
         return true;
     }
@@ -873,5 +886,80 @@ mod tests {
                 },
             ])
         );
+    }
+
+    #[test]
+    fn derive_meta_config_used_by_expand_inputs_and_groups() {
+        // {config.<key>} inside expand_inputs patterns / variables and
+        // input_groups patterns must count as usage too — community
+        // workflows (rnaseq cat_reads) feed config keys exclusively
+        // through these channels: reads_dir appears ONLY in the
+        // input_groups pattern, parts_dir ONLY in the expand_inputs
+        // pattern.
+        let dir = std::env::temp_dir().join(format!("oxo-info-expand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wf = dir.join("wf.oxoflow");
+        std::fs::write(
+            &wf,
+            r#"
+[workflow]
+name = "n"
+version = "1.0.0"
+
+[config]
+reads_dir = "raw"
+parts_dir = "parts"
+unused_key = "x"
+[[rules]]
+name = "cat_reads"
+input_groups = [
+    { pattern = "{config.reads_dir}/{sample}_R{read}.fastq.gz", group_by = "sample" },
+]
+output = ["merged/{sample}.fastq.gz"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "aggregate"
+input = []
+expand_inputs = [
+    { pattern = "{config.parts_dir}/*.txt", variables = {} },
+]
+output = ["all.txt"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "unused_user"
+input = []
+output = ["u.txt"]
+shell = "echo done > {output[0]}"
+"#,
+        )
+        .unwrap();
+        let meta = meta(wf.to_str().unwrap(), wf.to_str().unwrap());
+        let records = meta["config"].as_array().unwrap();
+        let used_by = |key: &str| -> Vec<String> {
+            records
+                .iter()
+                .find(|record| record["key"] == key)
+                .unwrap_or_else(|| panic!("{key} must appear in config records"))["used_by"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            used_by("reads_dir"),
+            vec!["cat_reads"],
+            "input_groups pattern is a usage site"
+        );
+        assert_eq!(
+            used_by("parts_dir"),
+            vec!["aggregate"],
+            "expand_inputs pattern is a usage site"
+        );
+        assert_eq!(used_by("unused_key"), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

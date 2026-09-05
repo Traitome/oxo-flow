@@ -711,179 +711,59 @@ impl WorkflowDag {
     /// nf-metro render workflow.mmd -o workflow.svg
     /// ```
     ///
-    /// Each rule becomes a station; each dependency becomes an edge carrying
-    /// the *source* rule's stage line. Stages are inferred per rule (see
-    /// [`crate::stage`]); distinct stages become distinct sections.
-    /// Break stage-level cycles by demoting inferred stages to "generic".
+    /// Each rule becomes a station (its `module::` prefix stripped — the
+    /// section already names the group); each dependency becomes an edge
+    /// carrying the *source* rule's stage line. Stages are inferred per rule
+    /// (see [`crate::stage`]) and become colored lines that flow through
+    /// multiple sections — the nf-core transit-map structure — while sections
+    /// follow the workflow's module namespaces in data-flow order.
     ///
-    /// The rule DAG is acyclic by construction, but the coarse stage labels can
-    /// make the stage flow circular (e.g. a mark-duplicates hub rule staged
-    /// differently from its consumers). Rules carrying an explicit `tags` stage
-    /// keep it (user intent wins); everything else may be demoted until the
-    /// stage graph is acyclic. Deterministic: each iteration removes one rule
-    /// from a non-generic stage, so the loop terminates.
-    fn break_stage_cycles(
-        graph: &DiGraph<DagNode, ()>,
-        rules: &[Rule],
-        node_stage: &mut HashMap<NodeIndex, String>,
-    ) {
-        loop {
-            // Stage-level edges, deduplicated.
-            let mut stage_edges: std::collections::HashSet<(String, String)> =
-                std::collections::HashSet::new();
-            for edge in graph.edge_indices() {
-                let (src, dst) = graph.edge_endpoints(edge).unwrap();
-                let s = node_stage[&src].clone();
-                let d = node_stage[&dst].clone();
-                if s != d {
-                    stage_edges.insert((s, d));
-                }
-            }
-
-            // Find one cycle in the stage graph (DFS with a path stack).
-            fn dfs(
-                current: &str,
-                edges: &std::collections::HashSet<(String, String)>,
-                stack: &mut Vec<String>,
-                on_stack: &mut std::collections::HashSet<String>,
-                visited: &mut std::collections::HashSet<String>,
-            ) -> Option<Vec<(String, String)>> {
-                if !on_stack.insert(current.to_string()) {
-                    // Cycle found: the segment from current..end of stack.
-                    let start = stack.iter().position(|s| s == current).unwrap_or(0);
-                    let cycle: Vec<(String, String)> = stack[start..]
-                        .windows(2)
-                        .map(|w| (w[0].clone(), w[1].clone()))
-                        .collect();
-                    let cycle = if cycle.is_empty() {
-                        vec![(current.to_string(), current.to_string())]
-                    } else {
-                        cycle
-                    };
-                    // Close the loop back to current.
-                    let mut cycle = cycle;
-                    if let Some(last) = stack.last()
-                        && *last != current
-                    {
-                        cycle.push((last.clone(), current.to_string()));
-                    }
-                    return Some(cycle);
-                }
-                if !visited.insert(current.to_string()) {
-                    on_stack.remove(current);
-                    return None;
-                }
-                stack.push(current.to_string());
-                for (s, d) in edges {
-                    if s == current
-                        && let Some(found) = dfs(d, edges, stack, on_stack, visited)
-                    {
-                        return Some(found);
-                    }
-                }
-                stack.pop();
-                on_stack.remove(current);
-                None
-            }
-
-            let mut cycle: Option<Vec<(String, String)>> = None;
-            let mut visited = std::collections::HashSet::new();
-            let all_stages: std::collections::HashSet<String> = stage_edges
-                .iter()
-                .flat_map(|(s, d)| [s.clone(), d.clone()])
-                .collect();
-            for start in all_stages {
-                let mut stack = Vec::new();
-                let mut on_stack = std::collections::HashSet::new();
-                if let Some(found) = dfs(
-                    &start,
-                    &stage_edges,
-                    &mut stack,
-                    &mut on_stack,
-                    &mut visited,
-                ) {
-                    cycle = Some(found);
-                    break;
-                }
-            }
-
-            let Some(cycle) = cycle else {
-                return; // acyclic — done
-            };
-
-            // Demote one inferred rule participating in the cycle: the source
-            // rule of the first cycle edge whose stage is not "generic".
-            let mut demoted = false;
-            for (s, d) in &cycle {
-                if *s == "generic" {
-                    continue;
-                }
-                for edge in graph.edge_indices() {
-                    let (a, b) = graph.edge_endpoints(edge).unwrap();
-                    if node_stage[&a] != *s || node_stage[&b] != *d {
-                        continue;
-                    }
-                    let rule_idx = graph[a].rule_index;
-                    let explicitly_tagged = rules.get(rule_idx).is_some_and(|r| !r.tags.is_empty());
-                    if !explicitly_tagged {
-                        node_stage.insert(a, "generic".to_string());
-                        demoted = true;
-                        break;
-                    }
-                }
-                if demoted {
-                    break;
-                }
-            }
-            if !demoted {
-                // Every participant is explicitly tagged or already generic —
-                // renderability beats stage fidelity: demote the first
-                // non-generic participant regardless.
-                for (s, _d) in &cycle {
-                    if *s == "generic" {
-                        continue;
-                    }
-                    for edge in graph.edge_indices() {
-                        let (a, _b) = graph.edge_endpoints(edge).unwrap();
-                        if node_stage[&a] == *s {
-                            node_stage.insert(a, "generic".to_string());
-                            demoted = true;
-                            break;
-                        }
-                    }
-                    if demoted {
-                        break;
-                    }
-                }
-            }
-            if !demoted {
-                return; // unreachable in practice; avoid an infinite loop
-            }
-        }
-    }
-
     pub fn to_metro(&self, rules: &[Rule]) -> Result<String> {
-        // Stage per node (fallback "generic" when `rule_index` is out of
-        // range — cannot happen for a DAG built from `rules`, but stay total).
-        let mut node_stage: HashMap<NodeIndex, String> = HashMap::new();
-        for node in self.graph.node_indices() {
-            let stage = rules
-                .get(self.graph[node].rule_index)
-                .map(crate::stage::detect_stage)
-                .unwrap_or_else(|| "generic".to_string());
-            node_stage.insert(node, stage);
-        }
-
-        // nf-metro rejects cyclic layouts: a hub rule staged differently
-        // from its consumers can make the STAGE flow circular even though
-        // the rule DAG is acyclic (live: community rnaseq). Demote inferred
-        // stages until the stage graph admits a topological order.
-        Self::break_stage_cycles(&self.graph, rules, &mut node_stage);
-
         let nodes = self.nodes_by_rule_index();
         let edges = self.sorted_edges();
 
-        // Stages in first-appearance order (deterministic).
+        // Two orthogonal groupings, mirroring nf-core's transit maps:
+        // - the LINE is the rule's stage (tags → module prefix → shell
+        //   keywords → generic) — the colored track an edge flows along;
+        // - the SECTION is the workflow's own module namespace
+        //   (`module::rule`), falling back to the stage for prefixless
+        //   rules. Sections follow the workflow file's data-flow order, so
+        //   the section graph is acyclic by construction — no cycle
+        //   demotion (which previously flooded "generic" on real
+        //   pipelines, live: community rnaseq).
+        let mut node_stage: HashMap<NodeIndex, String> = HashMap::new();
+        let mut node_section: HashMap<NodeIndex, String> = HashMap::new();
+        for node in &nodes {
+            let stage = rules
+                .get(self.graph[*node].rule_index)
+                .map(crate::stage::detect_stage)
+                .unwrap_or_else(|| "generic".to_string());
+            let section = self.graph[*node]
+                .name
+                .split_once("::")
+                .map(|(prefix, _)| prefix.to_string())
+                .unwrap_or_else(|| stage.clone());
+            node_stage.insert(*node, stage);
+            node_section.insert(*node, section);
+        }
+
+        // Sections and stages in first-appearance order (deterministic).
+        // A section's display comes from the module it groups, or from the
+        // stage itself for prefixless rules (custom stages keep their
+        // sanitized raw name).
+        let mut sections: Vec<(String, String)> = Vec::new();
+        for node in &nodes {
+            let section = &node_section[node];
+            if sections.iter().any(|(s, _)| s == section) {
+                continue;
+            }
+            let display = self.graph[*node]
+                .name
+                .split_once("::")
+                .map(|(prefix, _)| crate::stage::module_display(prefix))
+                .unwrap_or_else(|| crate::stage::stage_display(&node_stage[node]));
+            sections.push((section.clone(), display));
+        }
         let mut stages: Vec<String> = Vec::new();
         for node in &nodes {
             let stage = &node_stage[node];
@@ -906,38 +786,37 @@ impl WorkflowDag {
         out.push('\n');
         out.push_str("graph LR\n");
 
-        let multi_stage = stages.len() > 1;
-        let inner_indent = if multi_stage { "        " } else { "    " };
+        let multi_section = sections.len() > 1;
+        let inner_indent = if multi_section { "        " } else { "    " };
 
-        // Stations. With multiple stages, wrap each stage's stations in a
-        // section (`subgraph`) and place intra-stage edges inside it. Edges
-        // that cross sections must follow every `end` block (nf-metro rule),
-        // so we collect those and emit them last.
-        let mut inter_stage_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+        // Stations grouped into flow-ordered sections; intra-section edges
+        // inside their section, inter-section edges after every `end`
+        // (nf-metro rule).
+        let mut inter_section_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
 
-        for stage in &stages {
-            if multi_stage {
+        for (section, display) in &sections {
+            if multi_section {
                 out.push_str(&format!(
                     "    subgraph {} [{}]\n",
-                    sanitize_metro_id(stage),
-                    sanitize_mermaid_text(&crate::stage::stage_display(stage))
+                    sanitize_metro_id(section),
+                    sanitize_mermaid_text(display)
                 ));
             }
 
-            for node in nodes.iter().filter(|n| &node_stage[n] == stage) {
+            for node in nodes.iter().filter(|n| &node_section[n] == section) {
                 out.push_str(&format!(
                     "{inner_indent}n{}[\"{}\"]\n",
                     node.index(),
-                    sanitize_mermaid_label(&self.graph[*node].name)
+                    sanitize_mermaid_label(metro_station_label(&self.graph[*node].name))
                 ));
             }
 
             for &(src, dst) in &edges {
-                if node_stage[&src] != *stage {
+                if node_section[&src] != *section {
                     continue;
                 }
-                if node_stage[&dst] == *stage {
-                    // Intra-stage edge — inside this section.
+                if node_section[&dst] == *section {
+                    // Intra-section edge — inside this section.
                     out.push_str(&format!(
                         "{inner_indent}n{} -->|{}| n{}\n",
                         src.index(),
@@ -945,18 +824,18 @@ impl WorkflowDag {
                         dst.index()
                     ));
                 } else {
-                    // Edge leaving this stage — emit after all sections.
-                    inter_stage_edges.push((src, dst));
+                    // Edge leaving this section — emit after all sections.
+                    inter_section_edges.push((src, dst));
                 }
             }
 
-            if multi_stage {
+            if multi_section {
                 out.push_str("    end\n");
             }
         }
 
-        // Inter-stage edges.
-        for (src, dst) in inter_stage_edges {
+        // Inter-section edges.
+        for (src, dst) in inter_section_edges {
             out.push_str(&format!(
                 "    n{} -->|{}| n{}\n",
                 src.index(),
@@ -1181,6 +1060,13 @@ fn sanitize_mermaid_label(s: &str) -> String {
             c => c,
         })
         .collect()
+}
+
+/// Station label for the metro map: strip the `module::` namespace prefix —
+/// the section already names the group, so "alignment::star_align" reads
+/// "star_align" (nf-core transit-map labels are short process names).
+fn metro_station_label(name: &str) -> &str {
+    name.split_once("::").map_or(name, |(_, rest)| rest)
 }
 
 /// Sanitize text that appears in metro `%%metro line` directives or
@@ -2506,6 +2392,31 @@ mod tests {
         assert!(mmd.contains("n0[\"a\"]"));
         assert!(mmd.contains("n0 -->|generic| n1"));
         assert!(!mmd.contains("subgraph"));
+    }
+
+    #[test]
+    fn metro_export_module_namespaces_become_sections() {
+        // `module::rule` namespaces form flow-ordered sections (the nf-core
+        // structure), while the stage line flows through them; station
+        // labels drop the redundant module prefix.
+        let mut trim = make_rule("fastq_qc::trimgalore", vec!["reads.fq"], vec!["trimmed.fq"]);
+        trim.shell = Some("trim_galore reads.fq".to_string());
+        let mut align = make_rule(
+            "alignment::star_align",
+            vec!["trimmed.fq"],
+            vec!["mapped.bam"],
+        );
+        align.shell = Some("STAR --runThreadN 8".to_string());
+        let rules = vec![trim, align];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules).unwrap();
+        assert!(mmd.contains("subgraph fastq_qc [Read QC]"));
+        assert!(mmd.contains("subgraph alignment [Alignment]"));
+        // Station labels are the bare rule names (no `module::` prefix).
+        assert!(mmd.contains("n0[\"trimgalore\"]"));
+        assert!(mmd.contains("n1[\"star_align\"]"));
+        // The cross-section edge carries the SOURCE rule's stage line.
+        assert!(mmd.contains("n0 -->|qc| n1"));
     }
 
     #[test]
