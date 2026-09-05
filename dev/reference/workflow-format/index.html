@@ -6125,6 +6125,12 @@ in one step), library merging, and multi-file per-sample catalog steps.</p>
   inputs append after them in <code>{input}</code>.</li>
 <li>A group key with zero files instantiates <strong>nothing</strong> — the rule is
   skipped for that key with a warning (no instance = nothing to run).</li>
+<li>When the workflow declares a sample domain (<code>[[sample_groups]]</code>,
+  <code>sample_pattern</code>, or <code>[[pairs]]</code>), <code>group_by = "sample"</code> group keys
+  must be in that domain — keys outside it are pruned with a warning
+  (#246). A key whose value is an underscore-suffixed form of a declared
+  sample (<code>S1_REP1</code> for declared <code>S1</code>) is kept: replicate-suffix naming
+  folds by base id, the same convention the group pattern itself uses.</li>
 </ul>
 <p>v1 constraints: at most <strong>one</strong> <code>input_groups</code> entry per rule;
 <code>**</code> recursion is not supported in <code>pattern</code> (bare <code>*</code> globs within one
