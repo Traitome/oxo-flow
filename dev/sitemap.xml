@@ -2,386 +2,386 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/SKILL/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/ai/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/batch/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/clean/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/cluster/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/completions/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/config/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/debug/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/diff/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/dry-run/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/env/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/export/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/format/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/graph/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/info/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/init/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/license/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/lint/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/provenance/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/publish/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/pull/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/report/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/resume/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/run/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/schema/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/serve/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/status/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/template/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/test/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/touch/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/commands/validate/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/development/changelog/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/development/contributing/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/16s-qiime2/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/cohort-analysis/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/conditional-workflow/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/environment-mgmt/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/file-pipeline/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/hello-world/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/multiomics/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/paired-experiment-control-pairs/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/paired-experiment-control/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/parallel-samples/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/rnaseq/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/scatter-gather/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/simple-variant-calling/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/single-cell-rnaseq/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/transform-operator/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/gallery/wgs-germline/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/china-mirrors/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/cohort-sample-groups/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/collaboration/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/concurrent-runs/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/conditional-rules/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/create-workflow/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/deploy-modes/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/desktop-app/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/editor-setup/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/experiment-control-pairing/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/generate-reports/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/resource-tuning/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/run-on-cluster/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/troubleshooting/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/use-environments/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/how-to/web-editor/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/ai-cli/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/ai-eval/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/ai-translation/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/architecture/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/china-mirrors/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/cloud-storage/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/custom-skills/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/dag-edit-api/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/dag-engine/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/diagnostics-engine/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/environment-system/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/execution-backends/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/glossary/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/license/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/plugin-system/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/reporting-system/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/security/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/versioning/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/web-api/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/web-system-architecture/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/webhook/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/wildcards/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/reference/workflow-format/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/custom-scripts/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/environment-management/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/first-workflow/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/installation/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/quickstart/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://traitome.github.io/oxo-flow/dev/tutorials/variant-calling/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
 </urlset>
