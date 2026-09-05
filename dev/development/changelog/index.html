@@ -3600,6 +3600,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI/CD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3650,7 +3661,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cicd" class="md-nav__link">
+  <a href="#cicd_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         CI/CD
@@ -3781,6 +3792,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI/CD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3831,7 +3853,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cicd" class="md-nav__link">
+  <a href="#cicd_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         CI/CD
@@ -3932,9 +3954,14 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="0172-2026-09-05"><a href="https://github.com/Traitome/oxo-flow/compare/v0.17.1...v0.17.2">0.17.2</a> — 2026-09-05<a class="headerlink" href="#0172-2026-09-05" title="Permanent link">#</a></h2>
 <h3 id="bug-fixes">Bug Fixes<a class="headerlink" href="#bug-fixes" title="Permanent link">#</a></h3>
 <ul>
+<li>Report the W021 script-edge warning once instead of once per rule (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>config:</strong> Keep _REP<n>-suffixed group keys in the #246 sample-domain intersection (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Clamp docker --cpus to host CPUs and mark cleaned transform chunks in provenance (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>cluster:</strong> Harden SLURM lifecycle and streamline cluster CLI (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
+</ul>
+<h3 id="cicd">CI/CD<a class="headerlink" href="#cicd" title="Permanent link">#</a></h3>
+<ul>
+<li><strong>release:</strong> Skip dockerbuild build records in artifact download (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
 <h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">#</a></h3>
 <ul>
@@ -3945,6 +3972,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 <h3 id="features">Features<a class="headerlink" href="#features" title="Permanent link">#</a></h3>
 <ul>
+<li>Lint W031 — warn when a consumer expands a when-gated producer's output unconditionally (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Metro maps — module sections, stage lines, used_by expansion channels (<a href="https://github.com/Traitome/oxo-flow/pull/318">#318</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/318">#318</a>)</li>
 <li>Add regex_extract(path, pattern, group?) runtime when-fn (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -3955,7 +3983,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>GITHUB_ENV write is invisible to the same step in docker-publish-release (<a href="https://github.com/Traitome/oxo-flow/pull/304">#304</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/304">#304</a>)</li>
 <li>Scan output_pattern as a [[values]] fan-out trigger (#296) (<a href="https://github.com/Traitome/oxo-flow/pull/302">#302</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/302">#302</a>)</li>
 </ul>
-<h3 id="cicd">CI/CD<a class="headerlink" href="#cicd" title="Permanent link">#</a></h3>
+<h3 id="cicd_1">CI/CD<a class="headerlink" href="#cicd_1" title="Permanent link">#</a></h3>
 <ul>
 <li>Native multi-arch Docker release publish (drop QEMU thrash) (<a href="https://github.com/Traitome/oxo-flow/pull/307">#307</a>) (<a href="https://github.com/Copilot">@Copilot</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/307">#307</a>)</li>
 </ul>
@@ -4006,7 +4034,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>core:</strong> Report generators no longer panic under section filters (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>cli:</strong> Close shell-injection gaps and scheduler panic paths (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_1">CI/CD<a class="headerlink" href="#cicd_1" title="Permanent link">#</a></h3>
+<h3 id="cicd_2">CI/CD<a class="headerlink" href="#cicd_2" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>frontend:</strong> Npm audit gate + drop duplicate playwright dep; zero current advisories (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -4103,7 +4131,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>core:</strong> #142 H5/M4/M5 — transform required inheritance, profile max_array_size, per-element array logs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Persona-testing findings #142 — silent-failure traps, audit-path bugs, docs batch (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_2">CI/CD<a class="headerlink" href="#cicd_2" title="Permanent link">#</a></h3>
+<h3 id="cicd_3">CI/CD<a class="headerlink" href="#cicd_3" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>docs:</strong> Preserve landing page + static assets across mike deploys; landing links point at /latest/ (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>docs:</strong> Mike-based doc versioning (issue #176) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -4251,7 +4279,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>core:</strong> Resolve nested {config.x} references deterministically (<a href="https://github.com/Traitome/oxo-flow/pull/88">#88</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/88">#88</a>)</li>
 <li><strong>ai:</strong> Unify AI config path + accurate provider labels (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_3">CI/CD<a class="headerlink" href="#cicd_3" title="Permanent link">#</a></h3>
+<h3 id="cicd_4">CI/CD<a class="headerlink" href="#cicd_4" title="Permanent link">#</a></h3>
 <ul>
 <li>Enable workflow_dispatch to drive the full release pipeline (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>frontend:</strong> E2e webServer timeout + feature-unification warm-up fix (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -4324,7 +4352,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>core:</strong> Harden v0.13 features found by release review (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>ci:</strong> Publish rpm and AppImage to releases; docs: complete release asset docs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_4">CI/CD<a class="headerlink" href="#cicd_4" title="Permanent link">#</a></h3>
+<h3 id="cicd_5">CI/CD<a class="headerlink" href="#cicd_5" title="Permanent link">#</a></h3>
 <ul>
 <li>Publish stable-named latest CLI tarball in releases (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -4407,7 +4435,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>web:</strong> Unify run status vocabulary on completed (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Embed template gallery from crate-local templates/ so cargo publish works (issue #76 P1-3 follow-up) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_5">CI/CD<a class="headerlink" href="#cicd_5" title="Permanent link">#</a></h3>
+<h3 id="cicd_6">CI/CD<a class="headerlink" href="#cicd_6" title="Permanent link">#</a></h3>
 <ul>
 <li>Drop broken step PATH override in e2e job (env context PATH is empty in Actions) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Frontend build + e2e job gates the web UI (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -4604,7 +4632,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Apply_defaults must respect rule-level resources.threads/memory (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Deduplicate downstream rules in graph tree view (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_6">CI/CD<a class="headerlink" href="#cicd_6" title="Permanent link">#</a></h3>
+<h3 id="cicd_7">CI/CD<a class="headerlink" href="#cicd_7" title="Permanent link">#</a></h3>
 <ul>
 <li>Tolerate already-synced versions on re-tag (sync-version idempotency) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Install release target into the pinned toolchain (macOS builds) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5090,7 +5118,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Fix cargo fmt formatting in output directory creation (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
 <h2 id="054-2026-05-19"><a href="https://github.com/Traitome/oxo-flow/compare/v0.5.3...v0.5.4">0.5.4</a> — 2026-05-19<a class="headerlink" href="#054-2026-05-19" title="Permanent link">#</a></h2>
-<h3 id="cicd_7">CI/CD<a class="headerlink" href="#cicd_7" title="Permanent link">#</a></h3>
+<h3 id="cicd_8">CI/CD<a class="headerlink" href="#cicd_8" title="Permanent link">#</a></h3>
 <ul>
 <li>Remove Venus from build/publish/release pipeline (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -5210,7 +5238,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>executor:</strong> Remove duplicate resource release on failure (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Simplify build_script_command to avoid clippy warning (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="cicd_8">CI/CD<a class="headerlink" href="#cicd_8" title="Permanent link">#</a></h3>
+<h3 id="cicd_9">CI/CD<a class="headerlink" href="#cicd_9" title="Permanent link">#</a></h3>
 <ul>
 <li>Block pipeline on security audit failures (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -5406,7 +5434,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Path traversal protection in touch, overflow protection in duration parsing (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
-<h3 id="cicd_9">CI/CD<a class="headerlink" href="#cicd_9" title="Permanent link">#</a></h3>
+<h3 id="cicd_10">CI/CD<a class="headerlink" href="#cicd_10" title="Permanent link">#</a></h3>
 <ul>
 <li>Add Windows ARM64, i686 Windows, and ARMv7 Linux release targets (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
@@ -5440,7 +5468,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Initial plan (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
 <h2 id="011-2026-04-06"><a href="https://github.com/Traitome/oxo-flow/compare/v0.1.0...v0.1.1">0.1.1</a> — 2026-04-06<a class="headerlink" href="#011-2026-04-06" title="Permanent link">#</a></h2>
-<h3 id="cicd_10">CI/CD<a class="headerlink" href="#cicd_10" title="Permanent link">#</a></h3>
+<h3 id="cicd_11">CI/CD<a class="headerlink" href="#cicd_11" title="Permanent link">#</a></h3>
 <ul>
 <li>Replace deprecated macos-13 with macos-latest cross-compiling to x86_64 (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 <li>Fix release and crates.io publish being blocked by cancelled builds (<a href="https://github.com/Copilot">@Copilot</a>)</li>
@@ -5465,7 +5493,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Use workspace version inheritance for all crates, update CI sync-version (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
-<h3 id="cicd_11">CI/CD<a class="headerlink" href="#cicd_11" title="Permanent link">#</a></h3>
+<h3 id="cicd_12">CI/CD<a class="headerlink" href="#cicd_12" title="Permanent link">#</a></h3>
 <ul>
 <li>Skip heavy build jobs on pull_request events to prevent slow/cancelled runs (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 <li>Optimize CI workflow for reliable builds and crates.io publishing (<a href="https://github.com/Copilot">@Copilot</a>)</li>
