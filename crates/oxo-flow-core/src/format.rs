@@ -1139,73 +1139,6 @@ pub fn lint_format(
             });
         }
 
-        // W021: a script rule consumes another rule's declared output
-        // without any ordering edge. Scripts are opaque to the DAG builder
-        // — their file references form no edges — so the producer can race
-        // or starve the consumer (live: auto-sra's script rules polled
-        // 00_/01_/02_ directories for 90 minutes before the FIFO fair-
-        // dispatch exposed the missing depends_on). The check reads each
-        // script's CONTENT (relative to the workflow file) and matches the
-        // literal prefix of other rules' output patterns (up to the first
-        // wildcard; fully literal paths match whole). Excluded when the
-        // ordering already exists (depends_on or an inferred DAG edge).
-        // Without a script base dir (e.g. bare-config callers) the content
-        // scan is skipped — the script path itself is still matched.
-        {
-            let dag = crate::dag::WorkflowDag::from_rules(&config.rules).ok();
-            let has_edge = |rule: &crate::rule::Rule, producer: &str| {
-                rule.depends_on.iter().any(|d| d == producer)
-                    || dag.as_ref().is_some_and(|d| {
-                        d.dependencies(&rule.name)
-                            .map(|deps| deps.iter().any(|d| d == producer))
-                            .unwrap_or(false)
-                    })
-            };
-            for rule in &config.rules {
-                let Some(script_path) = rule.script.as_deref() else {
-                    continue;
-                };
-                let mut scanned = script_path.to_string();
-                if let Some(base) = script_base
-                    && let Ok(content) = std::fs::read_to_string(base.join(script_path))
-                {
-                    scanned.push('\n');
-                    scanned.push_str(&content);
-                }
-                for producer in &config.rules {
-                    if producer.name == rule.name || has_edge(rule, &producer.name) {
-                        continue;
-                    }
-                    for output in &producer.output {
-                        // The literal prefix up to the first wildcard; a
-                        // fully literal path matches itself. Prefixes under
-                        // 4 chars are too generic to flag.
-                        let prefix: &str = output
-                            .split(['{', '*', '['])
-                            .next()
-                            .unwrap_or(output)
-                            .trim_end_matches('/');
-                        if prefix.len() < 4 || !scanned.contains(prefix) {
-                            continue;
-                        }
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Warning,
-                            message: format!(
-                                "script of rule '{}' references output path '{}' of rule '{}' without an ordering edge",
-                                rule.name, output, producer.name
-                            ),
-                            rule: Some(rule.name.clone()),
-                            code: "W021".to_string(),
-                            suggestion: Some(format!(
-                                "add depends_on = [\"{}\"] to '{}' — script references form no DAG edges",
-                                producer.name, rule.name
-                            )),
-                        });
-                    }
-                }
-            }
-        }
-
         // W009: Very high thread count (>32) without memory specification
         if rule.effective_threads() > 32 && rule.effective_memory().is_none() {
             diagnostics.push(Diagnostic {
@@ -1462,6 +1395,193 @@ pub fn lint_format(
                         "declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder".to_string(),
                     ),
                 });
+            }
+        }
+    }
+
+    // W021: a script rule consumes another rule's declared output without
+    // any ordering edge. Scripts are opaque to the DAG builder — their file
+    // references form no edges — so the producer can race or starve the
+    // consumer (live: auto-sra's script rules polled 00_/01_/02_
+    // directories for 90 minutes before the FIFO fair-dispatch exposed the
+    // missing depends_on). The check reads each script's CONTENT (relative
+    // to the workflow file) and matches the literal prefix of other rules'
+    // output patterns (up to the first wildcard; fully literal paths match
+    // whole). Excluded when the ordering already exists (depends_on or an
+    // inferred DAG edge). Without a script base dir (e.g. bare-config
+    // callers) the content scan is skipped — the script path itself is
+    // still matched.
+    //
+    // This is a single cross-rule pass: it lived inside the per-rule loop
+    // until the duplication it caused was caught live (an N-rule workflow
+    // emitted the same diagnostic N times; pinned by
+    // lint_w021_script_edge_reported_once_regardless_of_rule_count).
+    {
+        let has_edge = |rule: &crate::rule::Rule, producer: &str| {
+            rule.depends_on.iter().any(|d| d == producer)
+                || dag.as_ref().is_some_and(|d| {
+                    d.dependencies(&rule.name)
+                        .map(|deps| deps.iter().any(|d| d == producer))
+                        .unwrap_or(false)
+                })
+        };
+        for rule in &config.rules {
+            let Some(script_path) = rule.script.as_deref() else {
+                continue;
+            };
+            let mut scanned = script_path.to_string();
+            if let Some(base) = script_base
+                && let Ok(content) = std::fs::read_to_string(base.join(script_path))
+            {
+                scanned.push('\n');
+                scanned.push_str(&content);
+            }
+            for producer in &config.rules {
+                if producer.name == rule.name || has_edge(rule, &producer.name) {
+                    continue;
+                }
+                for output in &producer.output {
+                    // The literal prefix up to the first wildcard; a
+                    // fully literal path matches itself. Prefixes under
+                    // 4 chars are too generic to flag.
+                    let prefix: &str = output
+                        .split(['{', '*', '['])
+                        .next()
+                        .unwrap_or(output)
+                        .trim_end_matches('/');
+                    if prefix.len() < 4 || !scanned.contains(prefix) {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "script of rule '{}' references output path '{}' of rule '{}' without an ordering edge",
+                            rule.name, output, producer.name
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "W021".to_string(),
+                        suggestion: Some(format!(
+                            "add depends_on = [\"{}\"] to '{}' — script references form no DAG edges",
+                            producer.name, rule.name
+                        )),
+                    });
+                }
+            }
+        }
+    }
+
+    // W031: consumer expands the full wildcard output of a when-gated
+    // producer without a when gate of its own (issue #319). When the
+    // producer's gate is off, the producer writes nothing, and the
+    // consumer's inputs cannot be resolved at plan time (dry-run `input ✗`)
+    // or the workflow fails outright. Live incidents from the 24-repo
+    // production audit: rnaseq multiqc unconditionally consuming pseudo
+    // aligner outputs (fixed as multiqc/multiqc_pseudo when-gated
+    // variants), clindet tumor-only prep reading paired-only metrics,
+    // eager hostremoval referencing mapper-gated outputs.
+    //
+    // Match key: the consumer's `input`/`expand_inputs` template equals a
+    // gated producer's `output` entry (or its `output_pattern`) after
+    // canonicalizing every `{...}` placeholder to `{}` — the same raw
+    // template equality the DAG builder's first inference step uses, so
+    // every flagged pair is a real template-level dataflow edge. Both
+    // sides must bear at least one wildcard: fully literal paths are the
+    // W020 concrete-existence territory, not unconditional expansion.
+    //
+    // Deliberate exclusions (issue #319):
+    // - consumer with any meaningful when gate — the when-gated variant
+    //   pair is the repair idiom, not the defect (a `when = "false"`
+    //   consumer never runs, so nothing breaks either);
+    // - optional consumers (`optional = true`, `"any"`) — the engine
+    //   skips/"any"-gates them on missing inputs by design, the declared
+    //   alternative-input pattern (eager samtools_filter idiom);
+    // - consumers with `input_groups` — the disk-discovery + declared
+    //   fallback idiom (atacseq baseline fallback) tolerates absence.
+    // depends_on-only relationships never reach this check: they match no
+    // input template against an output template.
+    {
+        /// Canonical form of a wildcard-bearing template: every `{...}`
+        /// placeholder replaced with `{}`. Returns `None` for literal
+        /// paths (no expansion to get wrong).
+        fn canonical_template(pattern: &str) -> Option<String> {
+            static PLACEHOLDER_RE: LazyLock<Regex> =
+                LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
+            if !pattern.contains('{') {
+                return None;
+            }
+            Some(PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned())
+        }
+
+        /// A `when` gate that can actually disable the rule. `None`,
+        /// empty, and the literal `true` leave the rule always-on;
+        /// `false` keeps the gate meaningful (the producer's files can
+        /// never exist — consumers still break, and a gated consumer
+        /// never runs — nothing breaks).
+        fn meaningful_gate(when: Option<&str>) -> bool {
+            when.map(str::trim)
+                .is_some_and(|w| !w.is_empty() && !w.eq_ignore_ascii_case("true"))
+        }
+
+        let mut gated_producer_templates: Vec<(&str, String, &str)> = Vec::new();
+        for producer in &config.rules {
+            if !meaningful_gate(producer.when.as_deref()) {
+                continue;
+            }
+            for output in producer.output.iter() {
+                if let Some(template) = canonical_template(output) {
+                    gated_producer_templates.push((&producer.name, template, output.as_str()));
+                }
+            }
+            if let Some(ref pattern) = producer.output_pattern
+                && let Some(template) = canonical_template(pattern)
+            {
+                gated_producer_templates.push((&producer.name, template, pattern.as_str()));
+            }
+        }
+
+        let mut flagged_pairs: std::collections::HashSet<(&str, &str)> =
+            std::collections::HashSet::new();
+        for consumer in &config.rules {
+            if meaningful_gate(consumer.when.as_deref())
+                || consumer.optional.is_optional()
+                || !consumer.input_groups.is_empty()
+            {
+                continue;
+            }
+            let mut consumer_templates: Vec<&str> = Vec::new();
+            consumer_templates.extend(consumer.input.iter().map(String::as_str));
+            consumer_templates.extend(
+                consumer
+                    .expand_inputs
+                    .iter()
+                    .map(|expand| expand.pattern.as_str()),
+            );
+            for consumer_input in consumer_templates {
+                let Some(consumer_template) = canonical_template(consumer_input) else {
+                    continue;
+                };
+                for (producer_name, producer_template, producer_output) in &gated_producer_templates
+                {
+                    if *producer_name == consumer.name
+                        || consumer_template != *producer_template
+                        || !flagged_pairs.insert((producer_name, consumer.name.as_str()))
+                    {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "producer '{producer_name}' is when-gated, but consumer '{}' expands its output '{producer_output}' unconditionally",
+                            consumer.name
+                        ),
+                        rule: Some(consumer.name.clone()),
+                        code: "W031".to_string(),
+                        suggestion: Some(format!(
+                            "split '{}' into when-gated variants (see the multiqc/multiqc_pseudo idiom) or add a when gate matching '{producer_name}'",
+                            consumer.name
+                        )),
+                    });
+                }
             }
         }
     }
@@ -4226,6 +4346,50 @@ mod tests {
     }
 
     #[test]
+    fn lint_w021_script_edge_reported_once_regardless_of_rule_count() {
+        // Regression: the script-edge scan used to run once per rule inside
+        // the per-rule loop, so an N-rule workflow emitted the same W021
+        // diagnostic N times (live-checked: 3 rules → 3 copies).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts/merge.py"),
+            "for f in 00_fastq/*.fastq.gz:\n    merge(f)\n",
+        )
+        .unwrap();
+        let toml = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "dump"
+            output = ["00_fastq/{sample}.fastq.gz"]
+            shell = "echo hi > 00_fastq/x.fastq.gz"
+
+            [[rules]]
+            name = "unrelated"
+            output = ["other/{sample}.txt"]
+            shell = "echo other"
+
+            [[rules]]
+            name = "merge"
+            script = "scripts/merge.py"
+            output = ["merged.fastq.gz"]
+        "#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        let diagnostics = lint_format(&config, Some(dir.path()));
+        let script_edge_hits = diagnostics
+            .iter()
+            .filter(|d| d.code == "W021" && d.rule.as_deref() == Some("merge"))
+            .count();
+        assert_eq!(
+            script_edge_hits, 1,
+            "the same script-edge violation must be reported exactly once: {diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn lint_no_w019_for_declared_outputs() {
         let toml = r#"
             [workflow]
@@ -4408,6 +4572,384 @@ mod tests {
         assert!(
             !diagnostics.iter().any(|d| d.code == "W025"),
             "resources-block keys must not be flagged"
+        );
+    }
+
+    // W031 (issue #319): a consumer that expands the full wildcard output of
+    // a when-gated producer, without a when gate of its own, leaves the
+    // consumer's inputs unresolvable at plan time whenever the gate is off
+    // (live: rnaseq multiqc vs pseudo-aligner producers, clindet tumor-only
+    // vs paired-only metrics, eager hostremoval vs mapper-gated outputs).
+    fn w031_count(diagnostics: &[Diagnostic]) -> usize {
+        diagnostics.iter().filter(|d| d.code == "W031").count()
+    }
+
+    #[test]
+    fn lint_w031_flags_ungated_consumer_of_gated_producer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "multiqc"
+            input = ["pseudo/{sample}/quant.sf"]
+            output = ["multiqc_report.html"]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            1,
+            "ungated consumer of a when-gated producer must warn exactly once: {diagnostics:?}"
+        );
+        let hit = diagnostics.iter().find(|d| d.code == "W031").unwrap();
+        assert_eq!(hit.rule.as_deref(), Some("multiqc"));
+        assert!(
+            hit.message.contains("salmon_quant") && hit.message.contains("quant.sf"),
+            "message must name the producer and the matched output: {}",
+            hit.message
+        );
+    }
+
+    #[test]
+    fn lint_w031_flags_expand_inputs_consumer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "multiqc"
+            output = ["multiqc_report.html"]
+            expand_inputs = [{ pattern = "pseudo/{sample}/quant.sf", variables = { sample = "config.samples" } }]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            1,
+            "expand_inputs templates must be matched like input templates: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_flags_output_pattern_producer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover_sets"
+            when = "config.run_discovery == true"
+            output_pattern = "sets/{set}.txt"
+            shell = "discover"
+
+            [[rules]]
+            name = "combine_sets"
+            input = ["sets/{set}.txt"]
+            output = ["combined.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            1,
+            "a when-gated producer's output_pattern must warn unmatched consumers: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_when_consumer_gated() {
+        // The variant-pair fix shape (rnaseq multiqc/multiqc_pseudo): both
+        // sides carry a when gate, so this is the repair, not the defect.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "multiqc_pseudo"
+            when = "config.pseudo_aligner == 'salmon'"
+            input = ["pseudo/{sample}/quant.sf"]
+            output = ["multiqc_pseudo.html"]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "a when-gated consumer is the variant idiom, not the defect: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_when_consumer_never_runs() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "legacy_multiqc"
+            when = "false"
+            input = ["pseudo/{sample}/quant.sf"]
+            output = ["legacy.html"]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "a rule that can never run has no plan-time input to break: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_optional_consumer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "extra_qc"
+            optional = true
+            input = ["pseudo/{sample}/quant.sf"]
+            output = ["extra_qc.txt"]
+            shell = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "optional rules are skipped on missing input by design: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_any_mode_consumer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "bwa_mem"
+            when = "config.mapper == 'bwa'"
+            output = ["align/{sample}.bam"]
+            shell = "bwa mem"
+
+            [[rules]]
+            name = "samtools_filter"
+            optional = "any"
+            input = ["align/{sample}.bam"]
+            output = ["filtered/{sample}.bam"]
+            shell = "samtools view -b {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "optional = 'any' is the declared alternative-input pattern: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_input_groups_fallback() {
+        // atacseq baseline-fallback idiom: the grouping declaration plus a
+        // declared fallback input tolerates an absent gated producer.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            when = "config.do_align == true"
+            output = ["bams/{sample}.bam"]
+            shell = "align"
+
+            [[rules]]
+            name = "prep"
+            input = ["bams/{sample}.bam"]
+            input_groups = [{ pattern = "bams/{sample}.bam", group_by = "sample" }]
+            output = ["prep/{sample}.txt"]
+            shell = "prep"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "input_groups consumers declare a disk-discovery fallback: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_ungated_producer() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            output = ["bams/{sample}.bam"]
+            shell = "align"
+
+            [[rules]]
+            name = "call"
+            input = ["bams/{sample}.bam"]
+            output = ["calls/{sample}.vcf"]
+            shell = "call"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "an ungated producer's output is always materialized: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_literal_paths() {
+        // Literal producer outputs consumed by literal inputs are the W020
+        // territory (concrete existence check), not wildcard expansion.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "report_step"
+            when = "config.with_report == true"
+            output = ["report.html"]
+            shell = "render"
+
+            [[rules]]
+            name = "publish"
+            input = ["report.html"]
+            output = ["published.txt"]
+            shell = "publish"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "fully literal paths involve no wildcard expansion: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_silent_for_unrelated_templates() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "align"
+            when = "config.do_align == true"
+            output = ["bams/{sample}.bam"]
+            shell = "align"
+
+            [[rules]]
+            name = "qc"
+            input = ["fastqc/{sample}_fastqc.html"]
+            output = ["qc_summary.txt"]
+            shell = "qc"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            0,
+            "different templates never unify, wildcard names aside: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_one_diagnostic_per_producer_consumer_pair() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf", "pseudo/{sample}/lib_format_counts.json"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "multiqc"
+            input = ["pseudo/{sample}/quant.sf", "pseudo/{sample}/lib_format_counts.json"]
+            output = ["multiqc_report.html"]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w031_count(&diagnostics),
+            1,
+            "multiple matched outputs of one producer must collapse to one warning: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w031_suggestion_points_to_variant_idiom() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "salmon_quant"
+            when = "config.pseudo_aligner == 'salmon'"
+            output = ["pseudo/{sample}/quant.sf"]
+            shell = "salmon quant"
+
+            [[rules]]
+            name = "multiqc"
+            input = ["pseudo/{sample}/quant.sf"]
+            output = ["multiqc_report.html"]
+            shell = "multiqc ."
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let hit = diagnostics.iter().find(|d| d.code == "W031").unwrap();
+        let suggestion = hit.suggestion.as_deref().unwrap_or_default();
+        assert!(
+            suggestion.contains("multiqc") && suggestion.contains("when"),
+            "the suggestion must name the consumer and the when-gate repair: {suggestion}"
         );
     }
 }
