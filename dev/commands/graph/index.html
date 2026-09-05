@@ -4193,7 +4193,7 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>mermaid<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
 </span></code></pre></div>
 <h3 id="export-an-nf-metro-metro-map">Export an nf-metro metro map<a class="headerlink" href="#export-an-nf-metro-metro-map" title="Permanent link">#</a></h3>
-<p><code>metro</code> emits an <a href="https://github.com/seqeralabs/nf-metro">nf-metro</a> definition — Mermaid <code>graph LR</code> extended with <code>%%metro</code> line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (inferred from shell keywords, or set explicitly via each rule's <code>tags</code>):</p>
+<p><code>metro</code> emits an <a href="https://github.com/seqeralabs/nf-metro">nf-metro</a> definition — Mermaid <code>graph LR</code> extended with <code>%%metro</code> line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (resolved per rule by explicit <code>tags</code>, module-name prefix, or shell/script keywords — see <a href="#metro-map-nf-metro">Stage assignment</a> below):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Render locally (requires nf-metro) or paste the .mmd content into the</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># online playground at https://seqeralabs.github.io/nf-metro/latest/playground/</span>
@@ -4310,19 +4310,27 @@ to preview it without installing anything:</p>
 </span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    n0 --&gt;|generic| n1
 </span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    n1 --&gt;|generic| n2
 </span></code></pre></div>
-<p>Each rule is assigned a <em>stage</em> that becomes a colored "metro line":</p>
+<p>Each rule is assigned a <em>stage</em> that becomes a colored "metro line",
+resolved by three matching tiers in priority order plus a fallback:</p>
 <ul>
 <li><strong>Explicit</strong>: the rule's first <code>tags</code> entry (e.g. <code>tags = ["align"]</code>),
   normalized through a small synonym table (<code>alignment</code> → <code>align</code>, etc.).
   Unknown tags become their own custom line.</li>
+<li><strong>Module prefix</strong>: the part of the rule name before <code>::</code> when it matches a
+  known stage prefix (<code>fastq_qc::trimgalore</code> → <code>qc</code>, <code>alignment::bwa_mem</code> →
+  <code>align</code>, <code>variant::gatk_hc</code> → <code>variant</code>, ...).</li>
 <li><strong>Inferred</strong>: keyword matching against the rule's <code>shell</code>/<code>script</code>
   commands — <code>fastqc</code>/<code>fastp</code> → QC/trim, <code>bwa</code>/<code>STAR</code> → align,
   <code>featureCounts</code>/<code>salmon</code> → quantify, <code>gatk</code>/<code>bcftools call</code> → variant,
   <code>multiqc</code> → report, and so on — with no match falling back to <code>generic</code>.</li>
 </ul>
-<p>With more than one stage, stations are grouped into <code>subgraph</code> sections (one
-per stage) and cross-stage edges are placed outside the sections as nf-metro
-requires.</p>
+<p>With more than one stage, stations are grouped into <code>subgraph</code> sections by
+<strong>module namespace</strong> (the <code>module::</code> prefix, one section per module — e.g.
+<code>fastq_qc::trimgalore</code> and <code>fastq_qc::fastqc</code> share a "Read QC" section) and
+falling back to the stage for rules without a <code>module::</code> prefix. Sections
+appear in workflow file order, so lines flow through them without loops;
+cross-section edges are placed outside the sections as nf-metro requires.
+Station labels drop the <code>module::</code> prefix.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
