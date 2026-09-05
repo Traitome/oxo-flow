@@ -3238,6 +3238,56 @@ fn input_groups_intersects_declared_sample_set() {
 }
 
 #[test]
+fn input_groups_keeps_replicate_suffix_group_keys() {
+    // The upstream groupTuple replicate convention names replicate samples
+    // `<base>_REP<n>` (S1_REP1 …) and groups their files by the BASE id —
+    // the group key (`S1`) is intentionally not a declared sample. A key
+    // that is an `_REP<n>`-suffixed form of a declared sample stays in the
+    // domain; genuinely unrelated keys are still pruned.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("reps.oxoflow");
+    // Files follow the replicate convention: the pattern's `{sample}`
+    // captures only the base id (`S1`), `{rep}` the replicate number.
+    for base in ["S1", "S2", "S9"] {
+        for rep in ["1", "2"] {
+            let path = dir
+                .path()
+                .join(format!("bams/{base}_REP{rep}.mLb.sorted.bam"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+        }
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "reps"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1_REP1", "S1_REP2", "S2_REP1"]
+
+        [[rules]]
+        name = "merge_replicates"
+        input_groups = [
+            { pattern = "bams/{sample}_REP{rep}.mLb.sorted.bam", group_by = "sample" }
+        ]
+        output = ["merged/{sample}.bam"]
+        shell = "cat {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let mut names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    names.sort();
+    // S1/S2 fold from their `_REP` members (keys are base ids, declared
+    // samples are `S1_REP1` …); S9's key matches nothing declared — pruned.
+    assert_eq!(names, vec!["merge_replicates_S1", "merge_replicates_S2"]);
+}
+
+#[test]
 fn input_groups_non_sample_group_key_keeps_filesystem_domain() {
     // The declared-set intersection applies ONLY when the group key is
     // the sample dimension (`group_by = "sample"`). Other keys
