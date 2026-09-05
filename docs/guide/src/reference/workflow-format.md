@@ -1114,6 +1114,12 @@ shell = "cat {input} > {output}"
   inputs append after them in `{input}`.
 - A group key with zero files instantiates **nothing** — the rule is
   skipped for that key with a warning (no instance = nothing to run).
+- When the workflow declares a sample domain (`[[sample_groups]]`,
+  `sample_pattern`, or `[[pairs]]`), `group_by = "sample"` group keys
+  must be in that domain — keys outside it are pruned with a warning
+  (#246). A key whose value is an underscore-suffixed form of a declared
+  sample (`S1_REP1` for declared `S1`) is kept: replicate-suffix naming
+  folds by base id, the same convention the group pattern itself uses.
 
 v1 constraints: at most **one** `input_groups` entry per rule;
 `**` recursion is not supported in `pattern` (bare `*` globs within one

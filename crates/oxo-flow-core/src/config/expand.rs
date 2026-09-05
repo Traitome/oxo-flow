@@ -1954,9 +1954,26 @@ impl WorkflowConfig {
                 )
                 .collect();
             if !declared.is_empty() {
+                // Replicate-suffix accommodation: the upstream groupTuple
+                // convention (`meta.id - ~/_REP\d+$/`) names replicate
+                // samples `<base>_REP<n>` and groups them by the BASE id —
+                // the group key (`S1`) is intentionally not a declared
+                // sample (`S1_REP1` is). A key is kept when some declared
+                // sample is that key plus an `_REP<n>` suffix.
+                let key_in_domain = |key: &str| -> bool {
+                    declared.contains(key)
+                        || declared.iter().any(|sample| {
+                            sample
+                                .strip_prefix(key)
+                                .and_then(|rest| rest.strip_prefix("_REP"))
+                                .is_some_and(|digits| {
+                                    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+                                })
+                        })
+                };
                 let stale: Vec<String> = grouped
                     .keys()
-                    .filter(|key| !declared.contains(key.as_str()))
+                    .filter(|key| !key_in_domain(key))
                     .cloned()
                     .collect();
                 for key in &stale {
