@@ -264,7 +264,11 @@ fn join(lines: &[String]) -> Option<String> {
     } else {
         lines.iter().map(|line| strip_banner_dashes(line)).collect()
     };
-    let description = kept.join(" ");
+    // Keep the author's line structure: a multi-line comment block is
+    // prose (a reference_dir layout list, a stage walk-through), and a
+    // single-run paragraph is unreadable in sites that render the
+    // description (live: circrna reference_dir read as one run-on line).
+    let description = kept.join("\n");
     if description.is_empty() {
         None
     } else {
@@ -286,13 +290,30 @@ mod tests {
     }
 
     #[test]
-    fn multi_line_block_joins_with_spaces_and_skips_empty_lines() {
+    fn multi_line_block_keeps_structure_and_skips_empty_lines() {
+        // A blank # line is skipped (no leading/inner blank), the author's
+        // line structure survives so prose layouts render readably (live:
+        // circrna's reference_dir layout comment folded to one run-on line
+        // when joined with spaces).
         let text = "[config]\n# Optional: pre-trained classifier\n#\n# for the 16S region.\nclassifier = \"\"\n";
         assert_eq!(
             extract_config_descriptions(text),
             BTreeMap::from([(
                 "classifier".to_string(),
-                "Optional: pre-trained classifier for the 16S region.".to_string()
+                "Optional: pre-trained classifier\nfor the 16S region.".to_string()
+            )])
+        );
+    }
+
+    #[test]
+    fn prose_layout_stays_multiline() {
+        let text = "[config]\n# reference_dir/ layout: genome.fa, genes.gtf\n# star/ index, bowtie2/ index.\nreference_dir = \"./reference\"\n";
+        assert_eq!(
+            extract_config_descriptions(text),
+            BTreeMap::from([(
+                "reference_dir".to_string(),
+                "reference_dir/ layout: genome.fa, genes.gtf\nstar/ index, bowtie2/ index."
+                    .to_string()
             )])
         );
     }

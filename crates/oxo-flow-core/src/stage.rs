@@ -228,10 +228,23 @@ pub fn module_display(module: &str) -> String {
     curated.to_string()
 }
 
-/// `fastq_qc` → `Fastq qc` (fallback for unknown module names).
+/// `fastq_qc` → `Fastq QC`, `91_wgs_callers` → `WGS Callers` (fallback for
+/// unknown module names).
+///
+/// Leading numeric stage prefixes are dropped (`01_preprocessing` →
+/// `Preprocessing`): they are file-organization noise on the map, not
+/// flow meaning, and stay on the page's module table if the author wants
+/// them. Known abbreviations normalize for readability — `qc` → `QC`,
+/// `wgs` → `WGS`, `snv` → `SNV`, `cnv` → `CNV`, `vcf`/`maf` → `VCF`/`MAF`,
+/// `rna`/`dna` → `RNA`/`DNA`, `sv` → `SV` — so a ported clindet map reads
+/// `Somatic Callers + Germline + WGS Callers` instead of
+/// `10 Somatic Callers + 20 Germline + 91 Wgs Callers`.
 fn title_case(module: &str) -> String {
-    module
-        .split('_')
+    let stripped =
+        module.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_' || c == '-' || c == '.');
+    let word_case = stripped
+        .split(['_', ' ', '-'])
+        .filter(|w| !w.is_empty())
         .map(|w| {
             let mut chars = w.chars();
             match chars.next() {
@@ -239,8 +252,28 @@ fn title_case(module: &str) -> String {
                 None => String::new(),
             }
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect::<Vec<_>>();
+    let normalized = word_case
+        .iter()
+        .map(|w| match w.to_ascii_lowercase().as_str() {
+            "qc" => "QC",
+            "wgs" => "WGS",
+            "snv" => "SNV",
+            "cnv" => "CNV",
+            "vcf" => "VCF",
+            "maf" => "MAF",
+            "vcf2maf" => "VCF2MAF",
+            "rna" => "RNA",
+            "dna" => "DNA",
+            "sv" => "SV",
+            _ => w.as_str(),
+        })
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        module.to_string()
+    } else {
+        normalized.join(" ")
+    }
 }
 
 /// Human-readable display name for a stage.
@@ -418,6 +451,24 @@ mod tests {
     fn canonical_colors_are_stable() {
         assert_eq!(stage_color("qc"), "#4C78A8");
         assert_eq!(stage_color("custom_thing"), stage_color("custom_thing"));
+    }
+
+    #[test]
+    fn module_display_reads_unknown_module_names_fluently() {
+        // Ported workflows number their module files; the map must read
+        // `91_wgs_callers` as `WGS Callers`, not raw file noise (live:
+        // community clindet's overview map read "10 Somatic Callers +
+        // 20 Germline + 91 Wgs Callers").
+        assert_eq!(module_display("01_preprocessing"), "Preprocessing");
+        assert_eq!(module_display("91_wgs_callers"), "WGS Callers");
+        assert_eq!(module_display("80_cnv"), "CNV");
+        assert_eq!(module_display("30_vcf_norm"), "VCF Norm");
+        assert_eq!(module_display("60_vcf2maf"), "VCF2MAF");
+        assert_eq!(module_display("00_common"), "Common");
+        assert_eq!(module_display("70_unpaired"), "Unpaired");
+        // Curated names and bare acronym modules still win.
+        assert_eq!(module_display("fastq_qc"), "Read QC");
+        assert_eq!(module_display("wgs"), "WGS");
     }
 
     #[test]
