@@ -159,6 +159,11 @@ replay them deterministically and revoke them when the rule is invalidated
 ## Notes
 
 - Checkpoint files are written automatically during `oxo-flow run` execution
+- `--timing` reads the per-rule benchmarks recorded in the checkpoint by
+  CLI runs (wall time, peak RSS) — no separate database is involved; web-
+  initiated runs keep their own records in the web service's database, and
+  their checkpoint timings are equally readable via `status` from the run's
+  workdir
 - Use `status` to inspect progress of long-running pipelines, especially on clusters
 - The checkpoint file is not updated after the pipeline completes — it reflects the state at the last write
 - Exits with code `0` regardless of the pipeline's success or failure
