@@ -4180,7 +4180,7 @@
 <tr>
 <td><code>--granularity &lt;LEVEL&gt;</code></td>
 <td></td>
-<td><code>metro</code> station zoom: <code>rule</code> (one station per rule, default), <code>process</code> (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), <code>module</code> (one station per module section — the publication/overview tier). See <a href="../../reference/graph-subcommand/">Graph Subcommand Design</a></td>
+<td><code>metro</code> station zoom (metro only): <code>rule</code> (one station per rule, default), <code>process</code> (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), <code>module</code> (one station per module section — the publication/overview tier). Passing it with any other format is an error. See <a href="../../reference/graph-subcommand/">Graph Subcommand Design</a></td>
 </tr>
 <tr>
 <td><code>--verbose</code></td>
@@ -4213,27 +4213,31 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot
 </span></code></pre></div>
 <h3 id="render-to-png-with-graphviz">Render to PNG with Graphviz<a class="headerlink" href="#render-to-png-with-graphviz" title="Permanent link">#</a></h3>
-<p>The graph command prints log output (e.g. resource warnings) to stdout before the DOT body, so piping stdout into <code>dot</code> does not work reliably. Write the DOT to a file first, then render it:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span>-o<span class="w"> </span>graph.dot<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>dot<span class="w"> </span>-Tpng<span class="w"> </span>-o<span class="w"> </span>dag.png<span class="w"> </span>graph.dot
+<p>Log output (the banner, resource warnings) goes to stderr; the workflow DAG
+is the only content on stdout, so piping into Graphviz works:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span><span class="p">|</span><span class="w"> </span>dot<span class="w"> </span>-Tpng<span class="w"> </span>-o<span class="w"> </span>dag.png
+</span></code></pre></div>
+<p>For complex graphs, write the DOT to a file first and render from it:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span>-o<span class="w"> </span>graph.dot<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>dot<span class="w"> </span>-Tpng<span class="w"> </span>-o<span class="w"> </span>dag.png<span class="w"> </span>graph.dot
 </span></code></pre></div>
 <h3 id="save-dot-to-file">Save DOT to file<a class="headerlink" href="#save-dot-to-file" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span>-o<span class="w"> </span>graph.dot
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot<span class="w"> </span>-o<span class="w"> </span>graph.dot
 </span></code></pre></div>
 <h3 id="render-clustered-view">Render clustered view<a class="headerlink" href="#render-clustered-view" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot-clustered<span class="w"> </span>-o<span class="w"> </span>clustered.dot
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>dot-clustered<span class="w"> </span>-o<span class="w"> </span>clustered.dot
 </span></code></pre></div>
 <h3 id="export-a-mermaid-diagram">Export a Mermaid diagram<a class="headerlink" href="#export-a-mermaid-diagram" title="Permanent link">#</a></h3>
 <p><code>mermaid</code> emits standard Mermaid <code>graph LR</code> — no <code>%%metro</code> directives — so it renders directly on GitHub, in VS Code, and in any Mermaid renderer:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>mermaid<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>mermaid<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
 </span></code></pre></div>
 <h3 id="export-an-nf-metro-metro-map">Export an nf-metro metro map<a class="headerlink" href="#export-an-nf-metro-metro-map" title="Permanent link">#</a></h3>
 <p><code>metro</code> emits an <a href="https://github.com/seqeralabs/nf-metro">nf-metro</a> definition — Mermaid <code>graph LR</code> extended with <code>%%metro</code> line/section directives — that renders as a transit-map-style SVG. Rules are grouped into colored "lines" by their analysis stage (resolved per rule by explicit <code>tags</code>, module-name prefix, or shell/script keywords — see <a href="#metro-map-nf-metro">Stage assignment</a> below):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Render locally (requires nf-metro) or paste the .mmd content into the</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># online playground at https://seqeralabs.github.io/nf-metro/latest/playground/</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>pip<span class="w"> </span>install<span class="w"> </span>nf-metro
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>nf-metro<span class="w"> </span>render<span class="w"> </span>pipeline.mmd<span class="w"> </span>-o<span class="w"> </span>pipeline.svg
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>-o<span class="w"> </span>pipeline.mmd
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="c1"># Render locally (requires nf-metro) or paste the .mmd content into the</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># online playground at https://seqeralabs.github.io/nf-metro/latest/playground/</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>pip<span class="w"> </span>install<span class="w"> </span>nf-metro
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>nf-metro<span class="w"> </span>render<span class="w"> </span>pipeline.mmd<span class="w"> </span>-o<span class="w"> </span>pipeline.svg
 </span></code></pre></div>
 <p><code>--granularity</code> zooms the metro map in three rungs (see <a href="../../reference/graph-subcommand/">Graph Subcommand Design</a> for the persona rationale):</p>
 <ul>
@@ -4241,92 +4245,96 @@
 <li><code>process</code> — chain-connected rules driven by the same tool collapse into tool-named stations (<code>samtools sort</code> → <code>samtools index</code> → one "SAMtools" stop).</li>
 <li><code>module</code> — one station per module section; the compact publication/overview tier that lands dense ports at the published-map scale.</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Publication-tier overview (compact module map)</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>--granularity<span class="w"> </span>module<span class="w"> </span>-o<span class="w"> </span>overview.mmd
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Tool-level map for reviewing a port against its upstream</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>--granularity<span class="w"> </span>process<span class="w"> </span>-o<span class="w"> </span>tools.mmd
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Publication-tier overview (compact module map)</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>--granularity<span class="w"> </span>module<span class="w"> </span>-o<span class="w"> </span>overview.mmd
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Tool-level map for reviewing a port against its upstream</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-f<span class="w"> </span>metro<span class="w"> </span>--granularity<span class="w"> </span>process<span class="w"> </span>-o<span class="w"> </span>tools.mmd
 </span></code></pre></div>
+<p><code>--granularity</code> is metro-only: it is rejected with any other <code>-f</code> value
+(before the workflow is parsed), so a zoom setting can never be silently
+ignored. Omit <code>-f</code> and use only <code>--granularity</code> and the latter fails with the
+same error — pass <code>-f metro</code> explicitly.</p>
 <h3 id="view-the-expanded-runtime-dag">View the expanded runtime DAG<a class="headerlink" href="#view-the-expanded-runtime-dag" title="Permanent link">#</a></h3>
 <p>By default, <code>graph</code> shows the template DAG — one node per <code>[[rules]]</code> block, with every declared dataflow edge included (<code>input</code> paths and <code>expand_inputs</code> patterns alike). Use <code>--expanded</code> to show the actual runtime DAG after wildcard, sample, and scatter expansion: each generated task becomes its own node (rule names get a <code>_&lt;group&gt;_&lt;sample&gt;</code> or <code>_&lt;pair_id&gt;</code> suffix). Catalog pages render the template DAG — it is the stable overview; the expanded view is the full runtime truth.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--expanded
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--expanded
 </span></code></pre></div>
 <p>For example, a workflow with a <code>cohort</code> sample group of three samples shows the template DAG as 12 rules, while the expanded view shows 22 rules — one per (rule, sample) task:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>┌────────────────────────────────────────────────┐
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>│  Workflow DAG: 22 rules, 28 dependencies       │
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>│  Depth: 12, Width: 3, Critical path: 12 steps  │
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>└────────────────────────────────────────────────┘
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>Level 0 (parallel: 3 rules)
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>┌─── fastp_qc_cohort_NA12878
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>│─── fastp_qc_cohort_NA12879
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>└─── fastp_qc_cohort_NA12880
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>     │
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>     ▼
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>Level 1 (parallel: 3 rules)
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>┌─── bwa_mem2_align_cohort_NA12878 [depends: fastp_qc_cohort_NA12878]
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>│─── bwa_mem2_align_cohort_NA12879 [depends: fastp_qc_cohort_NA12879]
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>└─── bwa_mem2_align_cohort_NA12880 [depends: fastp_qc_cohort_NA12880]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>┌────────────────────────────────────────────────┐
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>│  Workflow DAG: 22 rules, 28 dependencies       │
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>│  Depth: 12, Width: 3, Critical path: 12 steps  │
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>└────────────────────────────────────────────────┘
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>Level 0 (parallel: 3 rules)
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>┌─── fastp_qc_cohort_NA12878
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>│─── fastp_qc_cohort_NA12879
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>└─── fastp_qc_cohort_NA12880
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>     │
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>     ▼
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>Level 1 (parallel: 3 rules)
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>┌─── bwa_mem2_align_cohort_NA12878 [depends: fastp_qc_cohort_NA12878]
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>│─── bwa_mem2_align_cohort_NA12879 [depends: fastp_qc_cohort_NA12879]
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>└─── bwa_mem2_align_cohort_NA12880 [depends: fastp_qc_cohort_NA12880]
 </span></code></pre></div>
 <hr />
 <h2 id="output-formats">Output Formats<a class="headerlink" href="#output-formats" title="Permanent link">#</a></h2>
 <h3 id="ascii-default">ASCII (default)<a class="headerlink" href="#ascii-default" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>┌──────────────────────────────────────────────┐
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>│  Workflow DAG: 3 rules, 2 dependencies       │
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>│  Depth: 3, Width: 1, Critical path: 3 steps  │
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>└──────────────────────────────────────────────┘
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>Level 0 (sequential)
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>     generate_data
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>     │
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>     ▼
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>Level 1 (sequential)
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>     transform [depends: generate_data]
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>     │
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>     ▼
-</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>Level 2 (sequential)
-</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>     summarize [depends: transform]
-</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>
-</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>Critical path: generate_data → transform → summarize
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>┌──────────────────────────────────────────────┐
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>│  Workflow DAG: 3 rules, 2 dependencies       │
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>│  Depth: 3, Width: 1, Critical path: 3 steps  │
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>└──────────────────────────────────────────────┘
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>Level 0 (sequential)
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>     generate_data
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>     │
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>     ▼
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>Level 1 (sequential)
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>     transform [depends: generate_data]
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>     │
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>     ▼
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>Level 2 (sequential)
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>     summarize [depends: transform]
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>Critical path: generate_data → transform → summarize
 </span></code></pre></div>
 <h3 id="dot">DOT<a class="headerlink" href="#dot" title="Permanent link">#</a></h3>
-<div class="language-dot highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">digraph</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"generate_data"</span><span class="p">]</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">]</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"summarize"</span><span class="p">]</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="p">}</span>
+<div class="language-dot highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">digraph</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"generate_data"</span><span class="p">]</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"transform"</span><span class="p">]</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"summarize"</span><span class="p">]</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="m">1</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">]</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The <code>dot-clustered</code> format adds level-based clusters, <code>rankdir = TB</code> (top-to-bottom), and node/edge styling:</p>
-<div class="language-dot highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">digraph</span><span class="w"> </span><span class="nt">workflow</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="na">rankdir</span><span class="p">=</span><span class="s">TB</span><span class="p">;</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="k">node</span><span class="w"> </span><span class="p">[</span><span class="na">shape</span><span class="p">=</span><span class="s">box</span><span class="p">,</span><span class="w"> </span><span class="na">style</span><span class="p">=</span><span class="s2">"rounded,filled"</span><span class="p">,</span><span class="w"> </span><span class="na">fillcolor</span><span class="p">=</span><span class="s2">"#e8f0fe"</span><span class="p">,</span><span class="w"> </span><span class="na">fontname</span><span class="p">=</span><span class="s2">"Helvetica"</span><span class="p">];</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="k">edge</span><span class="w"> </span><span class="p">[</span><span class="na">color</span><span class="p">=</span><span class="s2">"#666666"</span><span class="p">];</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 0"</span><span class="p">;</span>
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
-</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
-</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">    </span><span class="nt">"generate_data"</span><span class="p">;</span>
-</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>
-</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_1</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 1"</span><span class="p">;</span>
-</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
-</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
-</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a><span class="w">    </span><span class="nt">"transform"</span><span class="p">;</span>
-</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>
-</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_2</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 2"</span><span class="p">;</span>
-</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
-</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
-</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a><span class="w">    </span><span class="nt">"summarize"</span><span class="p">;</span>
-</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-13-26"><a id="__codelineno-13-26" name="__codelineno-13-26" href="#__codelineno-13-26"></a>
-</span><span id="__span-13-27"><a id="__codelineno-13-27" name="__codelineno-13-27" href="#__codelineno-13-27"></a><span class="w">  </span><span class="nt">"generate_data"</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nt">"transform"</span><span class="p">;</span>
-</span><span id="__span-13-28"><a id="__codelineno-13-28" name="__codelineno-13-28" href="#__codelineno-13-28"></a><span class="w">  </span><span class="nt">"transform"</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nt">"summarize"</span><span class="p">;</span>
-</span><span id="__span-13-29"><a id="__codelineno-13-29" name="__codelineno-13-29" href="#__codelineno-13-29"></a><span class="p">}</span>
+<div class="language-dot highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">digraph</span><span class="w"> </span><span class="nt">workflow</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="na">rankdir</span><span class="p">=</span><span class="s">TB</span><span class="p">;</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="k">node</span><span class="w"> </span><span class="p">[</span><span class="na">shape</span><span class="p">=</span><span class="s">box</span><span class="p">,</span><span class="w"> </span><span class="na">style</span><span class="p">=</span><span class="s2">"rounded,filled"</span><span class="p">,</span><span class="w"> </span><span class="na">fillcolor</span><span class="p">=</span><span class="s2">"#e8f0fe"</span><span class="p">,</span><span class="w"> </span><span class="na">fontname</span><span class="p">=</span><span class="s2">"Helvetica"</span><span class="p">];</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="k">edge</span><span class="w"> </span><span class="p">[</span><span class="na">color</span><span class="p">=</span><span class="s2">"#666666"</span><span class="p">];</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 0"</span><span class="p">;</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">    </span><span class="nt">"generate_data"</span><span class="p">;</span>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_1</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 1"</span><span class="p">;</span>
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
+</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">    </span><span class="nt">"transform"</span><span class="p">;</span>
+</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a>
+</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="w">  </span><span class="k">subgraph</span><span class="w"> </span><span class="nt">cluster_2</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="w">    </span><span class="na">label</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"Level 2"</span><span class="p">;</span>
+</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="w">    </span><span class="na">style</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">dashed</span><span class="p">;</span>
+</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="w">    </span><span class="na">color</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"#cccccc"</span><span class="p">;</span>
+</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="w">    </span><span class="nt">"summarize"</span><span class="p">;</span>
+</span><span id="__span-14-25"><a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-14-26"><a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a>
+</span><span id="__span-14-27"><a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a><span class="w">  </span><span class="nt">"generate_data"</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nt">"transform"</span><span class="p">;</span>
+</span><span id="__span-14-28"><a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a><span class="w">  </span><span class="nt">"transform"</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="nt">"summarize"</span><span class="p">;</span>
+</span><span id="__span-14-29"><a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="mermaid">Mermaid<a class="headerlink" href="#mermaid" title="Permanent link">#</a></h3>
 <p>The <code>mermaid</code> format emits standard Mermaid <code>graph LR</code> — a node per rule, an
@@ -4347,14 +4355,14 @@ transit-map-style SVG. You can render it locally with <code>nf-metro render</cod
 or paste the <code>.mmd</code> content into the
 <a href="https://seqeralabs.github.io/nf-metro/latest/playground/">nf-metro online playground</a>
 to preview it without installing anything:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>%%metro line: generic | Analysis | #79706E
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>graph LR
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    n0["generate_data"]
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    n1["transform"]
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    n2["summarize"]
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    n0 --&gt;|generic| n1
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    n1 --&gt;|generic| n2
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>%%metro line: generic | Analysis | #79706E
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>graph LR
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    n0["generate_data"]
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    n1["transform"]
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>    n2["summarize"]
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    n0 --&gt;|generic| n1
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>    n1 --&gt;|generic| n2
 </span></code></pre></div>
 <p>Each rule is assigned a <em>stage</em> that becomes a colored "metro line",
 resolved by three matching tiers in priority order plus a fallback:</p>

@@ -2927,6 +2927,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#known-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3760,6 +3771,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#known-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3932,6 +3954,12 @@ each persona actually uses:</p>
 </tr>
 </tbody>
 </table>
+<p><strong>Constraint:</strong> <code>--granularity</code> applies to <code>metro</code> only. With any other
+format the CLI rejects it before the workflow is parsed — a zoom setting is
+never silently ignored (the default is <code>rule</code>, so plain <code>-f metro</code> and
+<code>-f metro --granularity rule</code> are identical). The rejected-combination error
+names the option and the value, and tells the user to pass <code>-f metro</code> or drop
+the option.</p>
 <h2 id="engine-design-invariants">Engine design invariants<a class="headerlink" href="#engine-design-invariants" title="Permanent link">#</a></h2>
 <p>The exporter is generic by construction — it knows nothing about any
 particular workflow:</p>
@@ -3980,6 +4008,15 @@ curve-invariant fallback for process-tier maps whose density exceeds what
 nf-metro's router currently tables) live with the automation script, not
 in the engine: they are rendering policy, and the engine must stay a
 faithful, generic DAG exporter.</p>
+<h2 id="known-boundary">Known boundary<a class="headerlink" href="#known-boundary" title="Permanent link">#</a></h2>
+<p>The engine promises structurally valid, deterministic mmd — the ladder,
+the cycle-safety, and the topological ordering are engine-side invariants.
+Rendering success is nf-metro's concern, and its router has limits: for very
+dense <code>rule</code>- or <code>process</code>-tier maps (live: community enrichment,
+varlociraptor) nf-metro 1.1.0 aborts with a <code>CurveInvariantError</code> instead of
+producing a broken picture — a package upgrade or the project's render-fallback
+setup (above) is the fix. The <code>module</code> tier is the publication guarantee:
+it renders for the whole corpus.</p>
 
 
 
