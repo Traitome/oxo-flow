@@ -2938,6 +2938,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#reading-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3782,6 +3793,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#reading-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4017,6 +4039,30 @@ varlociraptor) nf-metro 1.1.0 aborts with a <code>CurveInvariantError</code> ins
 producing a broken picture — a package upgrade or the project's render-fallback
 setup (above) is the fix. The <code>module</code> tier is the publication guarantee:
 it renders for the whole corpus.</p>
+<h2 id="reading-semantics">Reading semantics<a class="headerlink" href="#reading-semantics" title="Permanent link">#</a></h2>
+<p>Every export draws the <em>template</em> DAG: one node per rule (or per collapsed
+station at coarser granularity), one edge per data dependency. Three shapes
+that can look like broken rendering are structural reality — worth knowing
+before editing the exporter:</p>
+<ol>
+<li><strong>Off-track stations.</strong> A rule with no dataflow edge (an external input
+   consumed as a path, a terminal export) appears outside the main flow —
+   nf-metro renders the <code>%%metro off_track</code> list in its own band. The
+   engine emits the directive only when a subset of stations is isolated;
+   a fully isolated workflow intentionally stays on one line.</li>
+<li><strong>Independent chains.</strong> A DAG can be weakly disconnected: a quantifier
+   reading the same raw reads the alignment chain reads (live: tcasia's
+   <code>salmon_quant</code>) draws as a separate group ending in the shared report.
+   Correct connectivity, not a missing edge.</li>
+<li><strong>Merged-cyclic stations.</strong> Mutually-referencing modules contract into
+   one merged section (the SCC pass) with a <code>" + "</code>-joined title; the
+   site's overview pass keeps those as separate per-stage stations, so a
+   cyclic multi-module pipeline reads as one station per analysis stage
+   instead of one repeated merged name (live: sarek).</li>
+</ol>
+<p>The runtime view — one node per (rule × sample/pair) task — is
+<code>oxo-flow graph --expanded</code>; exported figures stay template-level for the
+stable overview.</p>
 
 
 
