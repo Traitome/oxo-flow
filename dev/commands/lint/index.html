@@ -3974,7 +3974,19 @@ either a matching <code>when</code> gate on the consumer or splitting it into
 <code>when</code>-gated variants (the <code>multiqc</code>/<code>multiqc_pseudo</code> idiom). Consumers
 that declare their tolerance for a missing producer are not flagged:
 <code>optional = true</code> / <code>"any"</code> rules, <code>input_groups</code> disk-discovery
-fallbacks, and consumers that already carry any <code>when</code> gate.</p>
+fallbacks, and consumers that already carry any <code>when</code> gate.
+W032 flags a <code>[config]</code> key whose <em>name</em> looks like a secret
+(<code>token</code>, <code>secret</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
+<code>access_key</code>, <code>private_key</code>, <code>ssh_key</code>) but is not declared
+<code>sensitive</code>: its value then lands in plaintext in command records,
+stderr tails, and the checkpoint — credential leakage on shared
+clusters and in CI artifacts. The repair is the declaration itself:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[config]</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">api_token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"sk-..."</span><span class="p">,</span><span class="w"> </span><span class="n">sensitive</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
+<p>Declared-sensitive keys are env-routed and masked on disk, so W032
+never flags them — see
+<a href="../../reference/workflow-format/#config-configuration-variables"><code>[config]</code> — Configuration Variables</a>.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

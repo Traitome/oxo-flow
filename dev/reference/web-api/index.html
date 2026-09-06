@@ -5469,7 +5469,10 @@ Generates Dockerfile or Singularity definition.</p>
 <code>toml_content</code> is the workflow source (required — the run is created from
 it, not from a saved pipeline); <code>max_jobs</code>, <code>dry_run</code>, <code>keep_going</code>,
 <code>pipeline_id</code>, <code>cluster_id</code>, <code>samples</code>, and <code>targets</code> are top-level fields
-(not nested under a <code>config</code> object). Returns
+(not nested under a <code>config</code> object). This flat shape is the typed
+<code>CreateRunRequest</code> schema — the OpenAPI spec declares it as the endpoint's
+<code>requestBody</code>, and the handler parses exactly that type, so the spec, the
+server, and the TypeScript client stay in lockstep. Returns
 <code>{ run_id, status: "queued", estimated_resources, execution_plan }</code>.</p>
 <p>Before spawning the executor the run stages the acting user's uploaded
 files (<code>POST /api/files</code> → <code>workspace/users/&lt;user&gt;/inputs/</code>) into the run's

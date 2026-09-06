@@ -3992,6 +3992,11 @@ replay them deterministically and revoke them when the rule is invalidated
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
 <li>Checkpoint files are written automatically during <code>oxo-flow run</code> execution</li>
+<li><code>--timing</code> reads the per-rule benchmarks recorded in the checkpoint by
+  CLI runs (wall time, peak RSS) — no separate database is involved; web-
+  initiated runs keep their own records in the web service's database, and
+  their checkpoint timings are equally readable via <code>status</code> from the run's
+  workdir</li>
 <li>Use <code>status</code> to inspect progress of long-running pipelines, especially on clusters</li>
 <li>The checkpoint file is not updated after the pipeline completes — it reflects the state at the last write</li>
 <li>Exits with code <code>0</code> regardless of the pipeline's success or failure</li>
