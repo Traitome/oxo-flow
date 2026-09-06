@@ -134,3 +134,29 @@ varlociraptor) nf-metro 1.1.0 aborts with a `CurveInvariantError` instead of
 producing a broken picture — a package upgrade or the project's render-fallback
 setup (above) is the fix. The `module` tier is the publication guarantee:
 it renders for the whole corpus.
+
+## Reading semantics
+
+Every export draws the *template* DAG: one node per rule (or per collapsed
+station at coarser granularity), one edge per data dependency. Three shapes
+that can look like broken rendering are structural reality — worth knowing
+before editing the exporter:
+
+1. **Off-track stations.** A rule with no dataflow edge (an external input
+   consumed as a path, a terminal export) appears outside the main flow —
+   nf-metro renders the `%%metro off_track` list in its own band. The
+   engine emits the directive only when a subset of stations is isolated;
+   a fully isolated workflow intentionally stays on one line.
+2. **Independent chains.** A DAG can be weakly disconnected: a quantifier
+   reading the same raw reads the alignment chain reads (live: tcasia's
+   `salmon_quant`) draws as a separate group ending in the shared report.
+   Correct connectivity, not a missing edge.
+3. **Merged-cyclic stations.** Mutually-referencing modules contract into
+   one merged section (the SCC pass) with a `" + "`-joined title; the
+   site's overview pass keeps those as separate per-stage stations, so a
+   cyclic multi-module pipeline reads as one station per analysis stage
+   instead of one repeated merged name (live: sarek).
+
+The runtime view — one node per (rule × sample/pair) task — is
+`oxo-flow graph --expanded`; exported figures stay template-level for the
+stable overview.
