@@ -21,6 +21,10 @@ pub enum MetroArg {
     /// collapse into tool-named stations (the nf-core idiom:
     /// `samtools sort`/`samtools index` → one "SAMtools" stop).
     Process,
+    /// One station per module section: the publication/overview tier —
+    /// a compact module-level transit map (each section becomes a
+    /// station, colored by its dominant stage line).
+    Module,
 }
 
 impl From<MetroArg> for MetroGranularity {
@@ -28,6 +32,7 @@ impl From<MetroArg> for MetroGranularity {
         match arg {
             MetroArg::Rule => MetroGranularity::Rule,
             MetroArg::Process => MetroGranularity::Process,
+            MetroArg::Module => MetroGranularity::Module,
         }
     }
 }

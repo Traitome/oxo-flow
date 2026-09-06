@@ -718,6 +718,14 @@ pub enum MetroGranularity {
     #[default]
     Rule,
     Process,
+    /// One station per section (the workflow's module namespaces, SCCs
+    /// contracted): the publication/overview tier. A compact module-level
+    /// transit map whose stations are the sections themselves, ordered by
+    /// the section DAG and colored by each section's dominant stage line.
+    /// Dense ported DAGs (live: community mag, 642 stations at rule
+    /// granularity) land in the ~10-20-station scale of published nf-core
+    /// maps without hand curation.
+    Module,
 }
 
 impl WorkflowDag {
@@ -841,7 +849,11 @@ impl WorkflowDag {
         // representative is its earliest rule (file order), keeping the
         // output deterministic.
         let station_of: HashMap<NodeIndex, NodeIndex> = match granularity {
-            MetroGranularity::Rule => nodes.iter().map(|&node| (node, node)).collect(),
+            // The module tier groups by section afterward, so no station
+            // collapsing happens here.
+            MetroGranularity::Rule | MetroGranularity::Module => {
+                nodes.iter().map(|&node| (node, node)).collect()
+            }
             MetroGranularity::Process => {
                 let mut parent: HashMap<NodeIndex, NodeIndex> =
                     nodes.iter().map(|&node| (node, node)).collect();
@@ -1053,7 +1065,11 @@ impl WorkflowDag {
         let mut label_counts: HashMap<(String, String), usize> = HashMap::new();
         for &rep in &station_nodes {
             let base = match granularity {
-                MetroGranularity::Rule => metro_station_label(&self.graph[rep].name).to_string(),
+                // Unused at module granularity (the early-returned module
+                // tier labels sections, not stations).
+                MetroGranularity::Rule | MetroGranularity::Module => {
+                    metro_station_label(&self.graph[rep].name).to_string()
+                }
                 MetroGranularity::Process => rules
                     .get(self.graph[rep].rule_index)
                     .and_then(crate::stage::detect_tool)
@@ -1160,11 +1176,8 @@ impl WorkflowDag {
                     .copied()
                     .filter(|n| &node_section[n] == section)
                     .collect();
-                let rank: HashMap<NodeIndex, usize> = members
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &n)| (n, i))
-                    .collect();
+                let rank: HashMap<NodeIndex, usize> =
+                    members.iter().enumerate().map(|(i, &n)| (n, i)).collect();
                 let mut ready: BTreeSet<(usize, NodeIndex)> = members
                     .iter()
                     .filter(|n| !intra_in_degree.contains_key(n))
@@ -1192,6 +1205,90 @@ impl WorkflowDag {
                 (section.clone(), ordered)
             })
             .collect();
+
+        if granularity == MetroGranularity::Module {
+            // Publication/overview tier: one station per contracted section,
+            // flat graph (the section IS the station — no nesting), edges
+            // are the deduplicated inter-section dataflow edges, and each
+            // station rides its section's dominant stage line (most member
+            // stations, ties by file order). Dense ported DAGs land in the
+            // ~10-20-station scale of published nf-core maps without any
+            // hand curation.
+            let rank: HashMap<&str, usize> = sections
+                .iter()
+                .enumerate()
+                .map(|(i, (section, _))| (section.as_str(), i))
+                .collect();
+            let mut dominant: HashMap<String, String> = HashMap::new();
+            for (section, _) in &sections {
+                let mut counts: HashMap<&str, usize> = HashMap::new();
+                for node in station_nodes.iter().filter(|n| &node_section[n] == section) {
+                    *counts.entry(node_stage[node].as_str()).or_insert(0) += 1;
+                }
+                let best = station_nodes
+                    .iter()
+                    .filter(|n| &node_section[n] == section)
+                    .map(|n| node_stage[n].as_str())
+                    .max_by_key(|s| counts[s])
+                    .unwrap_or("generic");
+                dominant.insert(section.clone(), best.to_string());
+            }
+            let mut seen: HashSet<(usize, usize)> = HashSet::new();
+            let mut module_edges: Vec<(usize, usize)> = Vec::new();
+            for &(src, dst) in &station_edges {
+                let (a, b) = (
+                    rank[node_section[&src].as_str()],
+                    rank[node_section[&dst].as_str()],
+                );
+                if a != b && seen.insert((a, b)) {
+                    module_edges.push((a, b));
+                }
+            }
+            let mut degree: HashMap<usize, usize> = HashMap::new();
+            for &(a, b) in &module_edges {
+                *degree.entry(a).or_default() += 1;
+                *degree.entry(b).or_default() += 1;
+            }
+            let isolated: Vec<String> = (0..sections.len())
+                .filter(|i| !degree.contains_key(i))
+                .map(|i| format!("n{i}"))
+                .collect();
+            let mut lines: Vec<String> = Vec::new();
+            for (section, _) in &sections {
+                let stage = &dominant[section];
+                if !lines.iter().any(|s| s == stage) {
+                    lines.push(stage.clone());
+                }
+            }
+            let mut out = String::new();
+            for stage in &lines {
+                out.push_str(&format!(
+                    "%%metro line: {} | {} | {}\n",
+                    sanitize_metro_id(stage),
+                    sanitize_mermaid_text(&crate::stage::stage_display(stage)),
+                    crate::stage::stage_color(stage),
+                ));
+            }
+            if !isolated.is_empty() && isolated.len() < sections.len() {
+                out.push_str(&format!("%%metro off_track: {}\n", isolated.join(", ")));
+            }
+            out.push('\n');
+            out.push_str("graph LR\n");
+            for (i, (_, display)) in sections.iter().enumerate() {
+                out.push_str(&format!(
+                    "    n{i}[\"{}\"]\n",
+                    sanitize_mermaid_label(display)
+                ));
+            }
+            for &(a, b) in &module_edges {
+                out.push_str(&format!(
+                    "    n{a} -->|{}| n{b}\n",
+                    sanitize_metro_id(&dominant[&sections[a].0])
+                ));
+            }
+            return Ok(out);
+        }
+
         let mut stages: Vec<String> = Vec::new();
         for node in &station_nodes {
             let stage = &node_stage[node];
@@ -3233,6 +3330,56 @@ mod tests {
         assert!(
             producer < consumer,
             "producer must sit left of its consumer within the section:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_module_granularity_emits_one_station_per_section() {
+        // Publication tier: stations are the sections themselves (flat
+        // graph, no subgraphs), edges are deduplicated section dataflow,
+        // each station colored by its section's dominant stage.
+        let mut rules = vec![
+            make_rule("qc_raw", vec!["raw.fq"], vec!["qc_raw/"]),
+            make_rule("align_reads", vec!["raw.fq"], vec!["aln.bam"]),
+            make_rule("qc_bam", vec!["aln.bam"], vec!["qc_bam/"]),
+            make_rule("report_all", vec!["qc_raw/", "qc_bam/"], vec!["report/"]),
+        ];
+        rules[0].shell = Some("fastqc raw.fq".into());
+        rules[1].shell = Some("bwa mem ref.fa raw.fq > aln.bam".into());
+        rules[2].shell = Some("fastqc aln.bam".into());
+        rules[3].shell = Some("multiqc .".into());
+        let mut modules: HashMap<String, Vec<String>> = HashMap::new();
+        modules.insert("fastq_qc".to_string(), vec!["qc_raw".to_string()]);
+        modules.insert("alignment".to_string(), vec!["align_reads".to_string()]);
+        modules.insert("bam_qc".to_string(), vec!["qc_bam".to_string()]);
+        modules.insert("report".to_string(), vec!["report_all".to_string()]);
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag
+            .to_metro(&rules, Some(&modules), MetroGranularity::Module)
+            .unwrap();
+        assert!(
+            !mmd.contains("subgraph"),
+            "module tier is flat — sections ARE the stations:\n{mmd}"
+        );
+        assert!(mmd.contains("n0[\"Read QC\"]"), "fastq_qc station:\n{mmd}");
+        assert!(
+            mmd.contains("n1[\"Alignment\"]"),
+            "alignment station:\n{mmd}"
+        );
+        assert!(mmd.contains("n2[\"BAM QC\"]"), "bam_qc station:\n{mmd}");
+        assert!(mmd.contains("n3[\"Reporting\"]"), "report station:\n{mmd}");
+        assert!(
+            mmd.contains("n1 -->|align| n2"),
+            "alignment -> bam_qc edge:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("n2 -->|qc| n3"),
+            "bam_qc -> report edge:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("n0 -->|qc| n3"),
+            "fastq_qc -> report edge:\n{mmd}"
         );
     }
 }

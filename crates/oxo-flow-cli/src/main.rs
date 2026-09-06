@@ -435,7 +435,7 @@ pub enum Commands {
             long,
             value_enum,
             default_value_t = crate::commands::output::MetroArg::Rule,
-            help = "Station granularity for the metro format: 'rule' keeps one station per rule; 'process' collapses chain-connected same-tool rules into tool-named stations (nf-core idiom)"
+            help = "Station granularity for the metro format: 'rule' keeps one station per rule; 'process' collapses chain-connected same-tool rules into tool-named stations (nf-core idiom); 'module' emits one station per module section (publication/overview tier)"
         )]
         granularity: crate::commands::output::MetroArg,
     },
