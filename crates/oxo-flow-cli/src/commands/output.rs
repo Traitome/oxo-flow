@@ -3,19 +3,46 @@
 use crate::commands::{print_banner, resolve_workflow};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
-use oxo_flow_core::dag::WorkflowDag;
+use oxo_flow_core::dag::{MetroGranularity, WorkflowDag};
 use oxo_flow_core::executor::CheckpointState;
 use oxo_flow_core::report::{Report, ReportContent, ReportSection, TemplateEngine};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Station granularity for the `metro` graph format.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MetroArg {
+    /// Every rule is one station (default).
+    Rule,
+    /// Rules chain-connected within a section and driven by the same tool
+    /// collapse into tool-named stations (the nf-core idiom:
+    /// `samtools sort`/`samtools index` → one "SAMtools" stop).
+    Process,
+    /// One station per module section: the publication/overview tier —
+    /// a compact module-level transit map (each section becomes a
+    /// station, colored by its dominant stage line).
+    Module,
+}
+
+impl From<MetroArg> for MetroGranularity {
+    fn from(arg: MetroArg) -> Self {
+        match arg {
+            MetroArg::Rule => MetroGranularity::Rule,
+            MetroArg::Process => MetroGranularity::Process,
+            MetroArg::Module => MetroGranularity::Module,
+        }
+    }
+}
 
 pub fn handle_graph(
     workflow: PathBuf,
     format: String,
     output: Option<PathBuf>,
     expanded: bool,
+    granularity: MetroArg,
 ) -> Result<()> {
     print_banner();
     let workflow = resolve_workflow(Some(workflow))?;
@@ -39,7 +66,13 @@ pub fn handle_graph(
         "dot-clustered" => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
         "tree" => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
         "mermaid" => Ok(dag.to_mermaid()),
-        "metro" => dag.to_metro(&config.rules).map_err(|e| anyhow::anyhow!(e)),
+        "metro" => dag
+            .to_metro(
+                &config.rules,
+                Some(&config.module_rules),
+                granularity.into(),
+            )
+            .map_err(|e| anyhow::anyhow!(e)),
         _ => Err(anyhow::anyhow!(
             "unsupported graph format '{}'. Supported formats: ascii, dot, dot-clustered, tree, mermaid, metro",
             format

@@ -194,6 +194,7 @@ nav:
       - Workflow Versioning: reference/versioning.md
       - Wildcards: reference/wildcards.md
       - DAG Engine: reference/dag-engine.md
+      - Graph Subcommand Design: reference/graph-subcommand.md
       - DAG Edit API: reference/dag-edit-api.md
       - Environment System: reference/environment-system.md
       - China Network Mirrors: reference/china-mirrors.md
