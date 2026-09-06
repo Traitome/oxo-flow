@@ -1222,16 +1222,22 @@ impl WorkflowDag {
             let mut dominant: HashMap<String, String> = HashMap::new();
             for (section, _) in &sections {
                 let mut counts: HashMap<&str, usize> = HashMap::new();
+                // File order — station_nodes is rule-index ordered — so a
+                // count tie picks the FIRST stage (matching the tie
+                // convention elsewhere in the exporter; std's max_by_key
+                // would pick the last).
+                let mut best: Option<(usize, &str)> = None;
                 for node in station_nodes.iter().filter(|n| &node_section[n] == section) {
-                    *counts.entry(node_stage[node].as_str()).or_insert(0) += 1;
+                    let stage = node_stage[node].as_str();
+                    let count = counts.entry(stage).or_insert(0);
+                    *count += 1;
+                    let count = *count;
+                    if best.is_none_or(|(bc, _)| count > bc) {
+                        best = Some((count, stage));
+                    }
                 }
-                let best = station_nodes
-                    .iter()
-                    .filter(|n| &node_section[n] == section)
-                    .map(|n| node_stage[n].as_str())
-                    .max_by_key(|s| counts[s])
-                    .unwrap_or("generic");
-                dominant.insert(section.clone(), best.to_string());
+                let best_stage = best.map(|(_, stage)| stage).unwrap_or("generic");
+                dominant.insert(section.clone(), best_stage.to_string());
             }
             let mut seen: HashSet<(usize, usize)> = HashSet::new();
             let mut module_edges: Vec<(usize, usize)> = Vec::new();
@@ -1260,15 +1266,11 @@ impl WorkflowDag {
                     lines.push(stage.clone());
                 }
             }
+            let mut used_colors: HashSet<&'static str> = HashSet::new();
+            let mut taken_line_ids: HashSet<String> = HashSet::new();
             let mut out = String::new();
-            for stage in &lines {
-                out.push_str(&format!(
-                    "%%metro line: {} | {} | {}\n",
-                    sanitize_metro_id(stage),
-                    sanitize_mermaid_text(&crate::stage::stage_display(stage)),
-                    crate::stage::stage_color(stage),
-                ));
-            }
+            let line_ids =
+                emit_metro_line_defs(&mut out, &lines, &mut used_colors, &mut taken_line_ids);
             if !isolated.is_empty() && isolated.len() < sections.len() {
                 out.push_str(&format!("%%metro off_track: {}\n", isolated.join(", ")));
             }
@@ -1281,9 +1283,10 @@ impl WorkflowDag {
                 ));
             }
             for &(a, b) in &module_edges {
+                let stage = &dominant[&sections[a].0];
                 out.push_str(&format!(
                     "    n{a} -->|{}| n{b}\n",
-                    sanitize_metro_id(&dominant[&sections[a].0])
+                    line_ids[stage.as_str()]
                 ));
             }
             return Ok(out);
@@ -1297,17 +1300,13 @@ impl WorkflowDag {
             }
         }
 
+        // Line definitions (colors + ids shared with the module tier via
+        // emit_metro_line_defs).
+        let mut used_colors: HashSet<&'static str> = HashSet::new();
+        let mut taken_line_ids: HashSet<String> = HashSet::new();
         let mut out = String::new();
-
-        // Line definitions.
-        for stage in &stages {
-            out.push_str(&format!(
-                "%%metro line: {} | {} | {}\n",
-                sanitize_metro_id(stage),
-                sanitize_mermaid_text(&crate::stage::stage_display(stage)),
-                crate::stage::stage_color(stage),
-            ));
-        }
+        let line_ids =
+            emit_metro_line_defs(&mut out, &stages, &mut used_colors, &mut taken_line_ids);
         // Stations with no dataflow edges (terminal exports, side outputs)
         // are auxiliary to the main flow — nf-metro's off-track stops
         // render them without routing pressure, keeping the trunk wide
@@ -1336,12 +1335,13 @@ impl WorkflowDag {
         // inside their section, inter-section edges after every `end`
         // (nf-metro rule).
         let mut inter_section_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+        let mut taken_section_ids: HashSet<String> = HashSet::new();
 
         for (section, display) in &sections {
             if multi_section {
                 out.push_str(&format!(
                     "    subgraph {} [{}]\n",
-                    sanitize_metro_id(section),
+                    unique_metro_id(&sanitize_metro_id(section), &mut taken_section_ids),
                     sanitize_mermaid_text(display)
                 ));
             }
@@ -1363,7 +1363,7 @@ impl WorkflowDag {
                     out.push_str(&format!(
                         "{inner_indent}n{} -->|{}| n{}\n",
                         src.index(),
-                        sanitize_metro_id(&node_stage[&src]),
+                        line_ids[node_stage[&src].as_str()],
                         dst.index()
                     ));
                 } else {
@@ -1382,7 +1382,7 @@ impl WorkflowDag {
             out.push_str(&format!(
                 "    n{} -->|{}| n{}\n",
                 src.index(),
-                sanitize_metro_id(&node_stage[&src]),
+                line_ids[node_stage[&src].as_str()],
                 dst.index()
             ));
         }
@@ -1571,6 +1571,51 @@ fn looks_like_directory(path: &str) -> bool {
 
 /// Sanitize a stage name into a safe nf-metro/Mermaid identifier (line ID or
 /// section ID): non-alphanumeric characters become underscores.
+/// Make a metro id unique within one export.
+///
+/// [`sanitize_metro_id`] is not injective — `de-analysis` and
+/// `de_analysis` both map to `de_analysis` — and nf-metro keeps the first
+/// declaration of an id, silently dropping the rest. Suffix collisions
+/// `_2`, `_3`, … so no line or section is lost (custom stage tags make
+/// punctuation-pair collisions reachable).
+fn unique_metro_id(base: &str, taken: &mut HashSet<String>) -> String {
+    let mut id = base.to_string();
+    let mut k = 2;
+    while !taken.insert(id.clone()) {
+        id = format!("{base}_{k}");
+        k += 1;
+    }
+    id
+}
+
+/// Emit one `%%metro line:` definition per stage, in order.
+///
+/// Shared by both metro tiers (their colour and id assignment must never
+/// diverge): colours go through [`crate::stage::metro_line_color`] so
+/// custom lanes never share a colour on one map; ids deduplicate as
+/// [`unique_metro_id`]. The returned `stage → id` map lets edge labels
+/// reuse exactly the declared ids.
+fn emit_metro_line_defs<'a>(
+    out: &mut String,
+    stages: &'a [String],
+    used_colors: &mut HashSet<&'static str>,
+    taken_ids: &mut HashSet<String>,
+) -> HashMap<&'a str, String> {
+    let mut line_ids: HashMap<&str, String> = HashMap::new();
+    for stage in stages {
+        let color = crate::stage::metro_line_color(stage, used_colors);
+        let id = unique_metro_id(&sanitize_metro_id(stage), taken_ids);
+        line_ids.insert(stage, id.clone());
+        out.push_str(&format!(
+            "%%metro line: {} | {} | {}\n",
+            id,
+            sanitize_mermaid_text(&crate::stage::stage_display(stage)),
+            color,
+        ));
+    }
+    line_ids
+}
+
 fn sanitize_metro_id(s: &str) -> String {
     let mut out: String = s
         .chars()
@@ -3142,6 +3187,31 @@ mod tests {
         assert!(
             mmd.contains("n1[\"rule(bracket)\"]"),
             "escaped bracket not found in:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_line_ids_survive_sanitize_collisions() {
+        // `de-analysis` and `de_analysis` both sanitize to `de_analysis`;
+        // nf-metro keeps the first declaration of an id, so the second
+        // line must be deduplicated (`_2`) or it silently disappears.
+        let mut a = make_rule("a", vec![], vec!["mid.txt"]);
+        a.tags = vec!["de-analysis".to_string()];
+        let mut b = make_rule("b", vec!["mid.txt"], vec!["out.txt"]);
+        b.tags = vec!["de_analysis".to_string()];
+        let rules = vec![a, b];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        assert!(
+            mmd.contains("%%metro line: de_analysis | de-analysis |")
+                && mmd.contains("%%metro line: de_analysis_2 | de_analysis |"),
+            "both colliding lines must be declared:\n{mmd}"
+        );
+        assert_eq!(
+            mmd.matches("%%metro line:").count(),
+            2,
+            "exactly the two lines:\n{mmd}"
         );
     }
 

@@ -27,7 +27,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree), `mermaid` (Mermaid `graph LR`), `metro` (nf-metro metro map). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
-| `--granularity <LEVEL>` | | `metro` station zoom: `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), `module` (one station per module section — the publication/overview tier). See [Graph Subcommand Design](../reference/graph-subcommand.md) |
+| `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |
@@ -51,7 +51,14 @@ oxo-flow graph pipeline.oxoflow -f dot
 
 ### Render to PNG with Graphviz
 
-The graph command prints log output (e.g. resource warnings) to stdout before the DOT body, so piping stdout into `dot` does not work reliably. Write the DOT to a file first, then render it:
+Log output (the banner, resource warnings) goes to stderr; the workflow DAG
+is the only content on stdout, so piping into Graphviz works:
+
+```bash
+oxo-flow graph pipeline.oxoflow -f dot | dot -Tpng -o dag.png
+```
+
+For complex graphs, write the DOT to a file first and render from it:
 
 ```bash
 oxo-flow graph -f dot -o graph.dot pipeline.oxoflow
@@ -102,6 +109,11 @@ oxo-flow graph pipeline.oxoflow -f metro --granularity module -o overview.mmd
 # Tool-level map for reviewing a port against its upstream
 oxo-flow graph pipeline.oxoflow -f metro --granularity process -o tools.mmd
 ```
+
+`--granularity` is metro-only: it is rejected with any other `-f` value
+(before the workflow is parsed), so a zoom setting can never be silently
+ignored. Omit `-f` and use only `--granularity` and the latter fails with the
+same error — pass `-f metro` explicitly.
 
 ### View the expanded runtime DAG
 

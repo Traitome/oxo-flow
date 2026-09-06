@@ -66,6 +66,13 @@ each persona actually uses:
 | `mermaid` | plain Mermaid `graph LR` for docs | — | documentation |
 | `metro` | nf-metro transit map (SVG/HTML) | `rule` / `process` / `module` | learner, reviewer, publication, site |
 
+**Constraint:** `--granularity` applies to `metro` only. With any other
+format the CLI rejects it before the workflow is parsed — a zoom setting is
+never silently ignored (the default is `rule`, so plain `-f metro` and
+`-f metro --granularity rule` are identical). The rejected-combination error
+names the option and the value, and tells the user to pass `-f metro` or drop
+the option.
+
 ## Engine design invariants
 
 The exporter is generic by construction — it knows nothing about any
@@ -116,3 +123,14 @@ curve-invariant fallback for process-tier maps whose density exceeds what
 nf-metro's router currently tables) live with the automation script, not
 in the engine: they are rendering policy, and the engine must stay a
 faithful, generic DAG exporter.
+
+## Known boundary
+
+The engine promises structurally valid, deterministic mmd — the ladder,
+the cycle-safety, and the topological ordering are engine-side invariants.
+Rendering success is nf-metro's concern, and its router has limits: for very
+dense `rule`- or `process`-tier maps (live: community enrichment,
+varlociraptor) nf-metro 1.1.0 aborts with a `CurveInvariantError` instead of
+producing a broken picture — a package upgrade or the project's render-fallback
+setup (above) is the fix. The `module` tier is the publication guarantee:
+it renders for the whole corpus.

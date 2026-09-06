@@ -12,10 +12,31 @@ use oxo_flow_core::report::{Report, ReportContent, ReportSection, TemplateEngine
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+/// Output format for the `graph` subcommand.
+///
+/// `metro` additionally takes `--granularity`; every other format renders
+/// the template DAG as-is (use `--expanded` for the runtime DAG).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum GraphFormat {
+    /// Terminal ASCII DAG with level grouping and metrics box.
+    Ascii,
+    /// Graphviz digraph (machine-consumable).
+    Dot,
+    /// Graphviz digraph grouped into level clusters.
+    DotClustered,
+    /// Indented dependency tree.
+    Tree,
+    /// Standard Mermaid `graph LR` (GitHub/VS Code/MkDocs).
+    Mermaid,
+    /// nf-metro transit map (`%%metro` line/section directives).
+    Metro,
+}
+
 /// Station granularity for the `metro` graph format.
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum MetroArg {
     /// Every rule is one station (default).
+    #[default]
     Rule,
     /// Rules chain-connected within a section and driven by the same tool
     /// collapse into tool-named stations (the nf-core idiom:
@@ -39,11 +60,24 @@ impl From<MetroArg> for MetroGranularity {
 
 pub fn handle_graph(
     workflow: PathBuf,
-    format: String,
+    format: GraphFormat,
     output: Option<PathBuf>,
     expanded: bool,
-    granularity: MetroArg,
+    granularity: Option<MetroArg>,
 ) -> Result<()> {
+    // `--granularity` is a metro-only zoom. A non-metro format silently
+    // ignoring it would look like the zoom applied, so fail fast before
+    // the workflow is even parsed. The value's spelling comes from clap
+    // itself (single source of truth for the allowed values).
+    if let Some(level) = granularity
+        && format != GraphFormat::Metro
+    {
+        let level = clap::ValueEnum::to_possible_value(&level).expect("ValueEnum value");
+        anyhow::bail!(
+            "--granularity '{}' only applies to the metro format; pass -f metro or drop the option",
+            level.get_name()
+        );
+    }
     print_banner();
     let workflow = resolve_workflow(Some(workflow))?;
     let mut config = WorkflowConfig::from_file(&workflow)
@@ -59,24 +93,25 @@ pub fn handle_graph(
     }
 
     let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    if dag.node_count() == 0 {
+        // An empty export (bare "graph LR") is indistinguishable from a
+        // successful render downstream — fail loudly instead.
+        anyhow::bail!("workflow '{}' has no rules to graph", workflow.display());
+    }
 
-    let result = match format.as_str() {
-        "ascii" => dag.to_ascii().map_err(|e| anyhow::anyhow!(e)),
-        "dot" => Ok(dag.to_dot()),
-        "dot-clustered" => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
-        "tree" => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
-        "mermaid" => Ok(dag.to_mermaid()),
-        "metro" => dag
+    let result = match format {
+        GraphFormat::Ascii => dag.to_ascii().map_err(|e| anyhow::anyhow!(e)),
+        GraphFormat::Dot => Ok(dag.to_dot()),
+        GraphFormat::DotClustered => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
+        GraphFormat::Tree => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
+        GraphFormat::Mermaid => Ok(dag.to_mermaid()),
+        GraphFormat::Metro => dag
             .to_metro(
                 &config.rules,
                 Some(&config.module_rules),
-                granularity.into(),
+                granularity.unwrap_or_default().into(),
             )
             .map_err(|e| anyhow::anyhow!(e)),
-        _ => Err(anyhow::anyhow!(
-            "unsupported graph format '{}'. Supported formats: ascii, dot, dot-clustered, tree, mermaid, metro",
-            format
-        )),
     }?;
 
     if let Some(path) = output {
