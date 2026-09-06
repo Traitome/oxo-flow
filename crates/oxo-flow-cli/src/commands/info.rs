@@ -8,7 +8,7 @@
 use crate::commands::config_comments::extract_config_descriptions;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use oxo_flow_core::config::WorkflowConfig;
+use oxo_flow_core::config::{IncludeDirective, WorkflowConfig};
 use oxo_flow_core::config_impact::is_engine_injected_key;
 use oxo_flow_core::rule::{EnvironmentSpec, Rule};
 use oxo_flow_core::scheduler::parse_memory_mb;
@@ -25,9 +25,18 @@ pub fn info_command(workflow: PathBuf, format: Option<String>) -> Result<()> {
     // surfaces the `[config]` section comments as parameter descriptions.
     let text = std::fs::read_to_string(&workflow)
         .with_context(|| format!("failed to read workflow {}", workflow.display()))?;
-    let descriptions = extract_config_descriptions(&text);
     let cfg = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse workflow {}", workflow.display()))?;
+    let mut descriptions = extract_config_descriptions(&text);
+    // Included files merge their own `[config]` keys into the workflow —
+    // their comments describe those keys too, and nested includes merge
+    // just the same (parse.rs resolves them recursively), so walk the
+    // local include tree. The main file's text wins (`or_insert` follows
+    // parse.rs's merge order: earlier inserts keep priority); git-pinned
+    // (issue #112) and URL includes are skipped (best-effort prose, never
+    // a correctness matter).
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    collect_include_descriptions(&workflow, &cfg.includes, &mut visited, &mut descriptions);
 
     let meta = derive_meta(&workflow, &cfg, &descriptions);
 
@@ -41,6 +50,42 @@ pub fn info_command(workflow: PathBuf, format: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Recursively merge `[config]` comment descriptions from local include
+/// files (URL and git-pinned includes are skipped). Unreadable files are
+/// silently skipped — descriptions are prose, never a correctness matter.
+fn collect_include_descriptions(
+    workflow: &Path,
+    includes: &[IncludeDirective],
+    visited: &mut std::collections::HashSet<PathBuf>,
+    descriptions: &mut BTreeMap<String, String>,
+) {
+    for inc in includes {
+        if inc.repo.is_some() || inc.path.starts_with("http://") || inc.path.starts_with("https://")
+        {
+            continue;
+        }
+        let inc_path = workflow
+            .parent()
+            .map(|dir| dir.join(&inc.path))
+            .unwrap_or_else(|| PathBuf::from(&inc.path));
+        if !visited.insert(inc_path.clone()) {
+            continue;
+        }
+        let Ok(inc_text) = std::fs::read_to_string(&inc_path) else {
+            continue;
+        };
+        for (key, description) in extract_config_descriptions(&inc_text) {
+            descriptions.entry(key).or_insert(description);
+        }
+        // Nested includes: parse the included file to find its own
+        // `[[include]]` directives (their paths resolve against the
+        // included file's directory).
+        if let Ok(inc_cfg) = WorkflowConfig::from_file(&inc_path) {
+            collect_include_descriptions(&inc_path, &inc_cfg.includes, visited, descriptions);
+        }
+    }
 }
 
 /// Derive the machine-checkable catalog metadata from a parsed workflow.

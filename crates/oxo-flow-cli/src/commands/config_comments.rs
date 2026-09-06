@@ -9,8 +9,20 @@
 //! - a contiguous block of `#` lines immediately above a key line (no blank
 //!   line in between) is that key's description;
 //! - a trailing `#` comment on the key line itself is the fallback;
+//! - a BLOCK description also describes the group it heads: bare keys that
+//!   follow on consecutive lines inherit it (workflows write one comment
+//!   block above a group of related params, e.g. "Binning options" above a
+//!   dozen keys — live: mag/ampliseq). Trailing comments never propagate
+//!   (they are key-specific), and a blank line or new section ends the
+//!   group;
 //! - comments inside multi-line values or outside `[config]` never associate;
 //! - comments above `[config.<name>]` subtable headers describe the table key.
+//!
+//! Known limitation: bracket tracking covers `[...]`/`{...}` but not
+//! triple-quoted `"""..."""` values — a blank line or `#`-prefixed line
+//! INSIDE a `[config]` multi-line string can sever a group or seed the next
+//! key's description. Rare in practice (multi-line `[config]` strings are
+//! uncommon); descriptions are prose, never a correctness matter.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +35,11 @@ pub fn extract_config_descriptions(text: &str) -> BTreeMap<String, String> {
     let mut section: Option<String> = None;
     let mut pending: Vec<String> = Vec::new();
     let mut value_depth = 0usize;
+    // Group propagation state: the most recent BLOCK description and
+    // whether the previous significant line was a key (a group continues
+    // over consecutive key lines only).
+    let mut last_block_desc: Option<String> = None;
+    let mut last_line_was_key = false;
 
     for line in text.lines() {
         let line = line.trim();
@@ -49,6 +66,8 @@ pub fn extract_config_descriptions(text: &str) -> BTreeMap<String, String> {
                 pending.clear();
             }
             value_depth = 0;
+            last_block_desc = None;
+            last_line_was_key = false;
             continue;
         }
         if section.as_deref() != Some("config") {
@@ -60,12 +79,15 @@ pub fn extract_config_descriptions(text: &str) -> BTreeMap<String, String> {
             if !comment.is_empty() && !is_decorator(&comment) {
                 pending.push(comment);
             }
+            last_line_was_key = false;
             continue;
         }
 
         if line.is_empty() {
             // A blank line severs the comment block from any following key.
             pending.clear();
+            last_block_desc = None;
+            last_line_was_key = false;
             continue;
         }
 
@@ -76,10 +98,19 @@ pub fn extract_config_descriptions(text: &str) -> BTreeMap<String, String> {
         if pending.is_empty() {
             if let Some(trailing) = trailing_comment(value) {
                 descriptions.insert(key, trailing);
+                last_block_desc = None;
+            } else if last_line_was_key && let Some(desc) = last_block_desc.clone() {
+                // Bare key directly under a block-described key: part of the
+                // same group, inherits the group's description.
+                descriptions.insert(key, desc);
+            } else {
+                last_block_desc = None;
             }
         } else {
             attach(&mut descriptions, &mut pending, &key);
+            last_block_desc = descriptions.get(&key).cloned();
         }
+        last_line_was_key = true;
     }
     descriptions
 }
@@ -298,6 +329,51 @@ mod tests {
         // The comment reads as a section note, not a key description.
         let text = "[config]\n# Section-level note.\n\nrmats_cstat = 0.0001\n";
         assert_eq!(extract_config_descriptions(text), BTreeMap::new());
+    }
+
+    #[test]
+    fn group_block_propagates_to_consecutive_bare_keys() {
+        // One block above a group of related params describes them all
+        // (live: mag "Binning options" above a dozen keys).
+        let text = "[config]\n# Clipping (upstream params with the same defaults)\nclip_tool = \"fastp\"\nreads_minlength = 15\nfastp_qualified_quality = 15\n\n# Next group.\nnext = 1\n";
+        let desc = "Clipping (upstream params with the same defaults)";
+        assert_eq!(
+            extract_config_descriptions(text),
+            BTreeMap::from([
+                ("clip_tool".to_string(), desc.to_string()),
+                ("reads_minlength".to_string(), desc.to_string()),
+                ("fastp_qualified_quality".to_string(), desc.to_string()),
+                ("next".to_string(), "Next group.".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_comment_does_not_propagate_to_next_key() {
+        // Trailing comments are key-specific — a bare key after them
+        // inherits nothing (live: save_align_intermeds' trailing note
+        // must not leak onto out_dir).
+        let text =
+            "[config]\nsave_align_intermeds = true   # --create-bam flag\nout_dir = \"results\"\n";
+        assert_eq!(
+            extract_config_descriptions(text),
+            BTreeMap::from([(
+                "save_align_intermeds".to_string(),
+                "--create-bam flag".to_string()
+            )])
+        );
+    }
+
+    #[test]
+    fn blank_line_ends_group_propagation() {
+        let text = "[config]\n# Group note.\na = 1\nb = 2\n\nc = 3\n";
+        assert_eq!(
+            extract_config_descriptions(text),
+            BTreeMap::from([
+                ("a".to_string(), "Group note.".to_string()),
+                ("b".to_string(), "Group note.".to_string()),
+            ])
+        );
     }
 
     #[test]
