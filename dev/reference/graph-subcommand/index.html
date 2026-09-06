@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://traitome.github.io/oxo-flow/dev/how-to/use-environments/">
+        <link rel="canonical" href="https://traitome.github.io/oxo-flow/dev/reference/graph-subcommand/">
       
       
-        <link rel="prev" href="../web-editor/">
+        <link rel="prev" href="../dag-engine/">
       
       
-        <link rel="next" href="../run-on-cluster/">
+        <link rel="next" href="../dag-edit-api/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Use Environments - oxo-flow</title>
+        <title>Graph Subcommand Design - oxo-flow</title>
       
     
     
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#use-environments" class="md-skip">
+        <a href="#the-graph-subcommand-personas-granularity-ladder-and-export-design" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Use Environments
+              Graph Subcommand Design
             
           </span>
         </div>
@@ -1139,10 +1139,8 @@
       
   
   
-    
   
   
-  
     
     
       
@@ -1178,11 +1176,11 @@
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
           <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
@@ -1203,7 +1201,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1221,7 +1219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../create-workflow/" class="md-nav__link">
+      <a href="../../how-to/create-workflow/" class="md-nav__link">
         
   
   
@@ -1249,7 +1247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../web-editor/" class="md-nav__link">
+      <a href="../../how-to/web-editor/" class="md-nav__link">
         
   
   
@@ -1274,37 +1272,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Use Environments
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../how-to/use-environments/" class="md-nav__link">
         
   
   
@@ -1320,320 +1291,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#conda-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Conda Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Conda Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-an-environment-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create an environment file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-it-in-a-rule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference it in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docker-containers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Containers
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Docker Containers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#use-a-biocontainers-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a BioContainers image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#use-a-custom-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a custom image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#volume-mounting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Volume mounting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pull-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pull policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#singularity-apptainer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Singularity / Apptainer
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Singularity / Apptainer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pull-from-docker-hub" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pull from Docker Hub
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#use-a-local-sif-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a local SIF file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#hpc-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HPC considerations
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#pixi-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pixi Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Pixi Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-a-pixitoml" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create a pixi.toml
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-in-a-rule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#python-virtual-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Python Virtual Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Python Virtual Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-a-requirements-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create a requirements file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-in-a-rule_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mixing-backends-in-one-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mixing Backends in One Workflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#checking-availability" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Checking Availability
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Troubleshooting
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1646,7 +1303,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../run-on-cluster/" class="md-nav__link">
+      <a href="../../how-to/run-on-cluster/" class="md-nav__link">
         
   
   
@@ -1674,7 +1331,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../resource-tuning/" class="md-nav__link">
+      <a href="../../how-to/resource-tuning/" class="md-nav__link">
         
   
   
@@ -1702,7 +1359,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../generate-reports/" class="md-nav__link">
+      <a href="../../how-to/generate-reports/" class="md-nav__link">
         
   
   
@@ -1730,7 +1387,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../experiment-control-pairing/" class="md-nav__link">
+      <a href="../../how-to/experiment-control-pairing/" class="md-nav__link">
         
   
   
@@ -1758,7 +1415,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../cohort-sample-groups/" class="md-nav__link">
+      <a href="../../how-to/cohort-sample-groups/" class="md-nav__link">
         
   
   
@@ -1786,7 +1443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../concurrent-runs/" class="md-nav__link">
+      <a href="../../how-to/concurrent-runs/" class="md-nav__link">
         
   
   
@@ -1814,7 +1471,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../conditional-rules/" class="md-nav__link">
+      <a href="../../how-to/conditional-rules/" class="md-nav__link">
         
   
   
@@ -1842,7 +1499,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../china-mirrors/" class="md-nav__link">
+      <a href="../../how-to/china-mirrors/" class="md-nav__link">
         
   
   
@@ -1870,7 +1527,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../editor-setup/" class="md-nav__link">
+      <a href="../../how-to/editor-setup/" class="md-nav__link">
         
   
   
@@ -1898,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../how-to/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1926,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../desktop-app/" class="md-nav__link">
+      <a href="../../how-to/desktop-app/" class="md-nav__link">
         
   
   
@@ -2914,8 +2571,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -2971,11 +2630,11 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
         
           
           <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
@@ -2996,7 +2655,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
@@ -3014,7 +2673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   
@@ -3042,7 +2701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/workflow-format/" class="md-nav__link">
+      <a href="../workflow-format/" class="md-nav__link">
         
   
   
@@ -3070,7 +2729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/versioning/" class="md-nav__link">
+      <a href="../versioning/" class="md-nav__link">
         
   
   
@@ -3098,7 +2757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/wildcards/" class="md-nav__link">
+      <a href="../wildcards/" class="md-nav__link">
         
   
   
@@ -3126,7 +2785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/dag-engine/" class="md-nav__link">
+      <a href="../dag-engine/" class="md-nav__link">
         
   
   
@@ -3151,10 +2810,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../reference/graph-subcommand/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Graph Subcommand Design
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -3170,6 +2856,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#personas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Personas
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-granularity-ladder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The granularity ladder
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-format-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The format matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#engine-design-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engine design invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evaluation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -3182,7 +2943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/dag-edit-api/" class="md-nav__link">
+      <a href="../dag-edit-api/" class="md-nav__link">
         
   
   
@@ -3210,7 +2971,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/environment-system/" class="md-nav__link">
+      <a href="../environment-system/" class="md-nav__link">
         
   
   
@@ -3238,7 +2999,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/china-mirrors/" class="md-nav__link">
+      <a href="../china-mirrors/" class="md-nav__link">
         
   
   
@@ -3266,7 +3027,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/execution-backends/" class="md-nav__link">
+      <a href="../execution-backends/" class="md-nav__link">
         
   
   
@@ -3294,7 +3055,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/reporting-system/" class="md-nav__link">
+      <a href="../reporting-system/" class="md-nav__link">
         
   
   
@@ -3322,7 +3083,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/webhook/" class="md-nav__link">
+      <a href="../webhook/" class="md-nav__link">
         
   
   
@@ -3350,7 +3111,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/web-api/" class="md-nav__link">
+      <a href="../web-api/" class="md-nav__link">
         
   
   
@@ -3378,7 +3139,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/web-system-architecture/" class="md-nav__link">
+      <a href="../web-system-architecture/" class="md-nav__link">
         
   
   
@@ -3406,7 +3167,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ai-translation/" class="md-nav__link">
+      <a href="../ai-translation/" class="md-nav__link">
         
   
   
@@ -3434,7 +3195,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ai-cli/" class="md-nav__link">
+      <a href="../ai-cli/" class="md-nav__link">
         
   
   
@@ -3462,7 +3223,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ai-eval/" class="md-nav__link">
+      <a href="../ai-eval/" class="md-nav__link">
         
   
   
@@ -3490,7 +3251,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/custom-skills/" class="md-nav__link">
+      <a href="../custom-skills/" class="md-nav__link">
         
   
   
@@ -3518,7 +3279,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/diagnostics-engine/" class="md-nav__link">
+      <a href="../diagnostics-engine/" class="md-nav__link">
         
   
   
@@ -3546,7 +3307,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/cloud-storage/" class="md-nav__link">
+      <a href="../cloud-storage/" class="md-nav__link">
         
   
   
@@ -3574,7 +3335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/plugin-system/" class="md-nav__link">
+      <a href="../plugin-system/" class="md-nav__link">
         
   
   
@@ -3602,7 +3363,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/glossary/" class="md-nav__link">
+      <a href="../glossary/" class="md-nav__link">
         
   
   
@@ -3630,7 +3391,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/security/" class="md-nav__link">
+      <a href="../security/" class="md-nav__link">
         
   
   
@@ -3658,7 +3419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/license/" class="md-nav__link">
+      <a href="../license/" class="md-nav__link">
         
   
   
@@ -3746,7 +3507,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deploy-modes/" class="md-nav__link">
+      <a href="../../how-to/deploy-modes/" class="md-nav__link">
         
   
   
@@ -3774,7 +3535,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../collaboration/" class="md-nav__link">
+      <a href="../../how-to/collaboration/" class="md-nav__link">
         
   
   
@@ -3945,260 +3706,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#conda-environments" class="md-nav__link">
+  <a href="#personas" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Conda Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Conda Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-an-environment-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create an environment file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-it-in-a-rule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference it in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docker-containers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Containers
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Docker Containers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#use-a-biocontainers-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a BioContainers image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#use-a-custom-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a custom image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#volume-mounting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Volume mounting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pull-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pull policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#singularity-apptainer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Singularity / Apptainer
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Singularity / Apptainer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pull-from-docker-hub" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pull from Docker Hub
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#use-a-local-sif-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Use a local SIF file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#hpc-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HPC considerations
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#pixi-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pixi Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Pixi Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-a-pixitoml" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create a pixi.toml
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-in-a-rule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#python-virtual-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Python Virtual Environments
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Python Virtual Environments">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-a-requirements-file" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create a requirements file
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reference-in-a-rule_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reference in a rule
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mixing-backends-in-one-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mixing Backends in One Workflow
+        Personas
       
     </span>
   </a>
@@ -4206,10 +3717,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checking-availability" class="md-nav__link">
+  <a href="#the-granularity-ladder" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking Availability
+        The granularity ladder
       
     </span>
   </a>
@@ -4217,10 +3728,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+  <a href="#the-format-matrix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        The format matrix
       
     </span>
   </a>
@@ -4228,10 +3739,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#engine-design-invariants" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See Also
+        Engine design invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evaluation
       
     </span>
   </a>
@@ -4255,7 +3777,7 @@
 
 
   
-    <a href="https://github.com/Traitome/oxo-flow/edit/main/docs/guide/src/how-to/use-environments.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/Traitome/oxo-flow/edit/main/docs/guide/src/reference/graph-subcommand.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75z"/></svg>
     </a>
@@ -4263,196 +3785,201 @@
   
 
 
-<h1 id="use-environments">Use Environments<a class="headerlink" href="#use-environments" title="Permanent link">#</a></h1>
-<p>This guide provides practical recipes for the environment backends supported
-by oxo-flow. The engine ships eight backends: <code>conda</code>, <code>mamba</code>, <code>pixi</code>,
-<code>docker</code>, <code>singularity</code>, <code>venv</code>, and <code>modules</code> (plus the implicit <code>system</code>
-fallback when a rule declares no environment). Recipes below cover the most
-commonly used ones; <code>mamba</code> uses the same YAML syntax as <code>conda</code>, and
-<code>modules</code> takes a list of HPC module names.</p>
-<hr />
-<h2 id="conda-environments">Conda Environments<a class="headerlink" href="#conda-environments" title="Permanent link">#</a></h2>
-<h3 id="create-an-environment-file">Create an environment file<a class="headerlink" href="#create-an-environment-file" title="Permanent link">#</a></h3>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># envs/alignment.yaml</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">alignment</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">channels</span><span class="p">:</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bioconda</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">conda-forge</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">dependencies</span><span class="p">:</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bwa=0.7.17</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">samtools=1.19</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">picard=3.1.1</span>
-</span></code></pre></div>
-<h3 id="reference-it-in-a-rule">Reference it in a rule<a class="headerlink" href="#reference-it-in-a-rule" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/alignment.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"</span>
-</span></code></pre></div>
-<h3 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">#</a></h3>
-<ol>
-<li>oxo-flow checks if the environment already exists (keyed by the YAML specification)</li>
-<li>If not, it creates it from the YAML file</li>
-<li>The shell command runs inside the environment via <code>conda run -n &lt;env-name&gt; bash -c '&lt;command&gt;'</code>, where <code>&lt;env-name&gt;</code> is the <code>name:</code> from your YAML plus a short content-hash suffix for file specs (<code>&lt;name&gt;-&lt;hash8&gt;</code>, see workflow-format) — so two different YAMLs that happen to share a name never collide</li>
-<li>The environment is created once and reused by every rule that references the same YAML</li>
-</ol>
-<div class="admonition tip">
-<p class="admonition-title">Reuse environments</p>
-<p>Multiple rules can share the same conda YAML file. oxo-flow creates the environment once and reuses it — identical YAML content reuses the same env even across workflows.</p>
-</div>
-<hr />
-<h2 id="docker-containers">Docker Containers<a class="headerlink" href="#docker-containers" title="Permanent link">#</a></h2>
-<h3 id="use-a-biocontainers-image">Use a BioContainers image<a class="headerlink" href="#use-a-biocontainers-image" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"quay.io/biocontainers/bwa:0.7.19--h577a1d6_1"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa reads.fastq.gz | samtools sort -o aligned.bam"</span>
-</span></code></pre></div>
-<h3 id="use-a-custom-image">Use a custom image<a class="headerlink" href="#use-a-custom-image" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"myregistry.io/my-tools:1.0.0"</span><span class="w"> </span><span class="p">}</span>
-</span></code></pre></div>
-<h3 id="volume-mounting">Volume mounting<a class="headerlink" href="#volume-mounting" title="Permanent link">#</a></h3>
-<p>oxo-flow automatically mounts the working directory into the container. Input and output paths are resolved relative to the mount point.</p>
-<h3 id="pull-policy">Pull policy<a class="headerlink" href="#pull-policy" title="Permanent link">#</a></h3>
-<p>Images are pulled on first use. If you need offline operation, pre-pull images:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>quay.io/biocontainers/bwa:0.7.19--h577a1d6_1
-</span></code></pre></div>
-<p>Bare image names get one automatic retry against quay.io after a Docker
-Hub miss — Biocontainers publishes on quay.io, not Docker Hub:</p>
-<ul>
-<li><code>biocontainers/bwa:0.7.17</code> → retried as <code>quay.io/biocontainers/bwa:0.7.17</code></li>
-<li><code>bwa:0.7.17</code> (single name) → retried as <code>quay.io/biocontainers/bwa:0.7.17</code></li>
-</ul>
-<p>Explicit registries (<code>quay.io/…</code>, <code>docker.io/…</code>, <code>localhost:5000/…</code>) are
-pulled verbatim and never shadowed by the retry.</p>
-<hr />
-<h2 id="singularity-apptainer">Singularity / Apptainer<a class="headerlink" href="#singularity-apptainer" title="Permanent link">#</a></h2>
-<h3 id="pull-from-docker-hub">Pull from Docker Hub<a class="headerlink" href="#pull-from-docker-hub" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"docker://quay.io/biocontainers/bwa:0.7.19--h577a1d6_1"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem ref.fa reads.fastq.gz &gt; aligned.sam"</span>
-</span></code></pre></div>
-<h3 id="use-a-local-sif-file">Use a local SIF file<a class="headerlink" href="#use-a-local-sif-file" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"/shared/containers/bwa-0.7.17.sif"</span><span class="w"> </span><span class="p">}</span>
-</span></code></pre></div>
-<h3 id="hpc-considerations">HPC considerations<a class="headerlink" href="#hpc-considerations" title="Permanent link">#</a></h3>
-<p>Singularity is the preferred container runtime for HPC clusters because it:</p>
-<ul>
-<li>Does not require root privileges</li>
-<li>Integrates with cluster schedulers (SLURM, PBS)</li>
-<li>Supports shared filesystem mounts automatically</li>
-</ul>
-<hr />
-<h2 id="pixi-environments">Pixi Environments<a class="headerlink" href="#pixi-environments" title="Permanent link">#</a></h2>
-<h3 id="create-a-pixitoml">Create a pixi.toml<a class="headerlink" href="#create-a-pixitoml" title="Permanent link">#</a></h3>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># pixi.toml — at the workflow root (the directory you run oxo-flow from)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">[project]</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc-tools"</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">channels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bioconda"</span><span class="p">,</span><span class="w"> </span><span class="s2">"conda-forge"</span><span class="p">]</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">platforms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"linux-64"</span><span class="p">]</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">[dependencies]</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">fastqc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"0.12.1"</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">fastp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"0.23.4"</span>
-</span></code></pre></div>
-<h3 id="reference-in-a-rule">Reference in a rule<a class="headerlink" href="#reference-in-a-rule" title="Permanent link">#</a></h3>
-<p>The <code>pixi</code> value is the path to the <strong>manifest file</strong> (<code>pixi.toml</code>),
-relative to the workflow root:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"pixi.toml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc input.fastq.gz -o qc/"</span>
-</span></code></pre></div>
-<p>oxo-flow runs <code>pixi install --manifest-path pixi.toml</code> once, then wraps the
-command as <code>pixi run --manifest-path pixi.toml &lt;command&gt;</code>.</p>
-<hr />
-<h2 id="python-virtual-environments">Python Virtual Environments<a class="headerlink" href="#python-virtual-environments" title="Permanent link">#</a></h2>
-<h3 id="create-a-requirements-file">Create a requirements file<a class="headerlink" href="#create-a-requirements-file" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a># envs/requirements.txt
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>pandas&gt;=2.0
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>matplotlib&gt;=3.8
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>seaborn&gt;=0.13
-</span></code></pre></div>
-<h3 id="reference-in-a-rule_1">Reference in a rule<a class="headerlink" href="#reference-in-a-rule_1" title="Permanent link">#</a></h3>
-<p>The <code>venv</code> value is the <strong>directory</strong> where the virtual environment is
-created; the requirements file goes in the separate <code>venv_requirements</code>
-field (defaults to <code>requirements.txt</code> in the working directory):</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"plot_results"</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">venv</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"venv/"</span><span class="p">,</span><span class="w"> </span><span class="n">venv_requirements</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/requirements.txt"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python scripts/plot.py --input results.csv --output plot.png"</span>
-</span></code></pre></div>
-<h3 id="how-it-works_1">How it works<a class="headerlink" href="#how-it-works_1" title="Permanent link">#</a></h3>
-<ol>
-<li>oxo-flow creates the venv at the given directory with <code>python3 -m venv</code> (or reuses it if it already exists)</li>
-<li>Packages from the requirements file are installed with pip</li>
-<li>The shell command runs with the venv activated (<code>source &lt;dir&gt;/bin/activate &amp;&amp; &lt;command&gt;</code>)</li>
-</ol>
-<hr />
-<h2 id="mixing-backends-in-one-workflow">Mixing Backends in One Workflow<a class="headerlink" href="#mixing-backends-in-one-workflow" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/bwa:0.7.17"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># ...</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"call_variants"</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/gatk.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># ...</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="k">[[rules]]</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"annotate"</span>
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"docker://ensemblorg/ensembl-vep:112.0"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="c1"># ...</span>
-</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
-</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="k">[[rules]]</span>
-</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"report"</span>
-</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">venv</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"venv/"</span><span class="p">,</span><span class="w"> </span><span class="n">venv_requirements</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/requirements.txt"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="c1"># ...</span>
-</span></code></pre></div>
-<hr />
-<h2 id="checking-availability">Checking Availability<a class="headerlink" href="#checking-availability" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># List all backends available on this system</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Check all environments in a specific workflow</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
-</span></code></pre></div>
-<hr />
-<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">#</a></h2>
+<h1 id="the-graph-subcommand-personas-granularity-ladder-and-export-design">The <code>graph</code> Subcommand: Personas, Granularity Ladder, and Export Design<a class="headerlink" href="#the-graph-subcommand-personas-granularity-ladder-and-export-design" title="Permanent link">#</a></h1>
+<p>This page documents the design behind <code>oxo-flow graph</code> — the scenario-driven
+rationale (who reads a workflow diagram, and why), the granularity ladder
+that serves those scenarios, the format matrix, and the engine-side design
+invariants that keep every export generic.</p>
+<h2 id="personas">Personas<a class="headerlink" href="#personas" title="Permanent link">#</a></h2>
+<p>Seven reader roles drive the design. Each reads a workflow DAG for a
+different purpose, at a different level of detail:</p>
 <table>
 <thead>
 <tr>
-<th>Problem</th>
-<th>Solution</th>
+<th>Persona</th>
+<th>Scenario</th>
+<th>Needs</th>
+<th>Served by</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>conda: command not found</code></td>
-<td>Install Miniconda/Miniforge and ensure <code>conda</code> is on your <code>$PATH</code></td>
+<td><strong>Learner</strong> — first contact with a new workflow</td>
+<td>learning</td>
+<td>"What does this pipeline <em>do</em>?" — ~10-25 stops, plain-language section names, stage colors showing the read→align→quantify→report flow</td>
+<td><code>-f metro --granularity module</code>, gallery pages</td>
 </tr>
 <tr>
-<td>Docker permission denied</td>
-<td>Add your user to the <code>docker</code> group or use Singularity</td>
+<td><strong>Reviewer</strong> — checking a port against its upstream</td>
+<td>preview</td>
+<td>Tool names per step (is <code>samtools index</code> present?), correspondence with the upstream nf-core/snakemake process list</td>
+<td><code>-f metro --granularity process</code>, fidelity tables</td>
 </tr>
 <tr>
-<td>Singularity pull fails</td>
-<td>Check network access; pre-pull images with <code>singularity pull</code></td>
+<td><strong>Operator</strong> — running, rerunning, debugging a run</td>
+<td>computation</td>
+<td>Rule-level detail: which rules map to which checkpoint entries, files, and resource settings</td>
+<td><code>-f metro --granularity rule</code>, <code>-f ascii</code>, <code>-f tree</code>, <code>--expanded</code></td>
 </tr>
 <tr>
-<td>Pip install fails in venv</td>
-<td>Ensure <code>python3</code> and <code>pip</code> are available on the system</td>
+<td><strong>Publication author</strong> — preparing a figure for a paper</td>
+<td>publication</td>
+<td>A compact, print-friendly, color-blind-safe transit map at figure scale (~2:1 landscape, ≤ ~1800 px wide)</td>
+<td><code>-f metro --granularity module</code>, <code>nf-metro render</code> recipes</td>
+</tr>
+<tr>
+<td><strong>Site maintainer</strong> — regenerating diagrams for every community pipeline</td>
+<td>documentation</td>
+<td>Deterministic output, a repeatable automation script, pinned engine and renderer versions</td>
+<td><code>graph</code> + the site regeneration pipeline (issue #16)</td>
+</tr>
+<tr>
+<td><strong>Engine developer</strong> — extending the exporter</td>
+<td>development</td>
+<td>A generic design: one mechanism serves every workflow; no per-pipeline special cases</td>
+<td>granularity ladder, shared stage/tool knowledge tables</td>
+</tr>
+<tr>
+<td><strong>Auditor</strong> — graph analysis with external tools</td>
+<td>audit</td>
+<td>Machine-readable DAGs for graphviz pipelines and custom analysis</td>
+<td><code>-f dot</code>, <code>-f dot-clustered</code>, <code>--expanded</code></td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
+<h2 id="the-granularity-ladder">The granularity ladder<a class="headerlink" href="#the-granularity-ladder" title="Permanent link">#</a></h2>
+<p>One DAG, three levels of abstraction — the same ladder the published
+nf-core transit maps climb implicitly (their stations are process-level,
+grouped into stage sections):</p>
 <ul>
-<li><a href="../../tutorials/environment-management/">Environment Management tutorial</a> — getting started with environments</li>
-<li><a href="../../reference/environment-system/">Environment System reference</a> — architecture details</li>
+<li>
+<p><strong><code>rule</code></strong> (default) — every rule is one station. Mechanical truth:
+  useful to map rules ↔ checkpoints ↔ files while operating a run, and as
+  the base truth the coarser tiers collapse. Dense ported workflows (live:
+  community mag, 600+ rules) produce very large maps here.</p>
+</li>
+<li>
+<p><strong><code>process</code></strong> — rules that are chain-connected within a section and
+  driven by the same tool collapse into one tool-named station (the
+  nf-core idiom: <code>samtools sort</code> → <code>samtools index</code> → one "SAMtools"
+  stop). The collapse is cycle-safe: a union applies only while the
+  destination stays unreachable from the source once the direct station
+  edge is removed, so cross-connected same-tool pairs keep separate
+  numbered stops (<code>GATK (2)</code> onward) and the station graph stays acyclic.</p>
+</li>
+<li>
+<p><strong><code>module</code></strong> — one station per module section: the publication/overview
+  tier. Stations are the workflow's own module namespaces (SCC-contracted
+  where they reference each other cyclically), ordered by the section DAG
+  and colored by each section's dominant stage line. This lands dense
+  ports in the published-map scale without any hand curation (live:
+  community mag, 642 stations at rule granularity → 10 at module
+  granularity, rendered at 760×362 px vs the upstream map's 413×260).</p>
+</li>
 </ul>
+<p>Every tier comes out of the same <code>to_metro</code> pipeline (stage inference →
+section assignment → collapse → SCC contraction → topological ordering),
+so the tiers never disagree about structure — only about zoom.</p>
+<h2 id="the-format-matrix">The format matrix<a class="headerlink" href="#the-format-matrix" title="Permanent link">#</a></h2>
+<p><code>-f</code> selects the output format; the granularity ladder selects the zoom.
+Not every combination is meaningful — the matrix below shows the pairs
+each persona actually uses:</p>
+<table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Purpose</th>
+<th>Typical <code>--granularity</code></th>
+<th>Consumers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ascii</code></td>
+<td>one-glance terminal DAG</td>
+<td>—</td>
+<td>operator</td>
+</tr>
+<tr>
+<td><code>tree</code></td>
+<td>indented dependency tree</td>
+<td>—</td>
+<td>operator</td>
+</tr>
+<tr>
+<td><code>dot</code></td>
+<td>graphviz input</td>
+<td><code>--expanded</code> for the runtime DAG</td>
+<td>auditor, CI</td>
+</tr>
+<tr>
+<td><code>dot-clustered</code></td>
+<td>graphviz input grouped by workflow modules</td>
+<td>—</td>
+<td>auditor</td>
+</tr>
+<tr>
+<td><code>mermaid</code></td>
+<td>plain Mermaid <code>graph LR</code> for docs</td>
+<td>—</td>
+<td>documentation</td>
+</tr>
+<tr>
+<td><code>metro</code></td>
+<td>nf-metro transit map (SVG/HTML)</td>
+<td><code>rule</code> / <code>process</code> / <code>module</code></td>
+<td>learner, reviewer, publication, site</td>
+</tr>
+</tbody>
+</table>
+<h2 id="engine-design-invariants">Engine design invariants<a class="headerlink" href="#engine-design-invariants" title="Permanent link">#</a></h2>
+<p>The exporter is generic by construction — it knows nothing about any
+particular workflow:</p>
+<ol>
+<li><strong>Shared knowledge only.</strong> Stage inference (shell keywords), tool
+   display names, curated module titles, and stage colors live in one
+   table (<code>stage.rs</code>) that every workflow consults. No rule name, module
+   name, or pipeline name is special-cased anywhere in <code>dag.rs</code>.</li>
+<li><strong>Deterministic output.</strong> Stations follow the rule file order inside a
+   topological ordering; every tie-break is documented. The same workflow
+   file always produces byte-identical exports — a precondition for CI
+   regeneration and diffs.</li>
+<li><strong>Topological ordering everywhere.</strong> Sections are Kahn-ordered over
+   the section graph; stations are Kahn-ordered over the intra-section
+   station subgraph (ties by file order). A left-to-right transit map
+   needs producers left of consumers; file order alone can violate
+   dataflow (ported workflows group rules by module), and nf-metro
+   rejects backward intra-section edges as routing defects.</li>
+<li><strong>Cycle-safe contraction.</strong> Module sections that reference each other
+   cyclically merge into one section (deterministic id, <code>" + "</code>-joined
+   display) via Kosaraju SCCs — the contracted section graph is always
+   acyclic without dropping any station or edge.</li>
+<li><strong>Router-friendly shapes.</strong> Edges are deduplicated per station pair;
+   isolated stations go off-track (<code>%%metro off_track</code>); labels are
+   sanitized for Mermaid and nf-metro alike.</li>
+</ol>
+<h2 id="evaluation">Evaluation<a class="headerlink" href="#evaluation" title="Permanent link">#</a></h2>
+<p>Every change to the exporter is evaluated against the full 24-pipeline
+community corpus, not against single examples:</p>
+<ol>
+<li><strong>Render matrix</strong> — all 24 workflows are exported at all three
+   granularities and rendered with nf-metro; every export must be a valid
+   mmd and every module-tier export must render (the publication tier
+   must never abort).</li>
+<li><strong>Structural metrics</strong> — canvas size, aspect ratio, station count, and
+   text-overlap count are compared against the upstream nf-core maps for
+   the seven pipelines that have one (atacseq, chipseq, mag, methylseq,
+   rnaseq, scrnaseq, viralrecon); the target is the same order of
+   magnitude at the module tier.</li>
+<li><strong>Visual QA</strong> — rendered maps are inspected per persona (the gallery
+   QA page compares ours side-by-side with the upstream reference where
+   one exists).</li>
+</ol>
+<p>The render recipes (line-spread modes, spacing directives, and the
+curve-invariant fallback for process-tier maps whose density exceeds what
+nf-metro's router currently tables) live with the automation script, not
+in the engine: they are rendering policy, and the engine must stay a
+faithful, generic DAG exporter.</p>
 
 
 
@@ -4490,7 +4017,7 @@ field (defaults to <code>requirements.txt</code> in the working directory):</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../web-editor/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Build on the Web Canvas">
+          <a href="../dag-engine/" class="md-footer__link md-footer__link--prev" aria-label="Previous: DAG Engine">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -4500,20 +4027,20 @@ field (defaults to <code>requirements.txt</code> in the working directory):</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Build on the Web Canvas
+                DAG Engine
               </div>
             </div>
           </a>
         
         
           
-          <a href="../run-on-cluster/" class="md-footer__link md-footer__link--next" aria-label="Next: Run on a Cluster">
+          <a href="../dag-edit-api/" class="md-footer__link md-footer__link--next" aria-label="Next: DAG Edit API">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Run on a Cluster
+                DAG Edit API
               </div>
             </div>
             <div class="md-footer__button md-icon">
