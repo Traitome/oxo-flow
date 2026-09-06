@@ -263,7 +263,10 @@ Content-Type: application/json
 `toml_content` is the workflow source (required — the run is created from
 it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
 `pipeline_id`, `cluster_id`, `samples`, and `targets` are top-level fields
-(not nested under a `config` object). Returns
+(not nested under a `config` object). This flat shape is the typed
+`CreateRunRequest` schema — the OpenAPI spec declares it as the endpoint's
+`requestBody`, and the handler parses exactly that type, so the spec, the
+server, and the TypeScript client stay in lockstep. Returns
 `{ run_id, status: "queued", estimated_resources, execution_plan }`.
 
 Before spawning the executor the run stages the acting user's uploaded

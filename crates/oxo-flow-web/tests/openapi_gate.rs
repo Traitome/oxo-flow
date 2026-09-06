@@ -189,3 +189,23 @@ fn every_router_route_is_in_the_generated_spec() {
         "expected >= 102 documented operations (one per route handler), got {operation_count}"
     );
 }
+
+/// Body-carrying POSTs must declare their request body (issue #324 F-4):
+/// a handler that parses a JSON payload but documents no request body
+/// forces API consumers to read source instead of the spec.
+#[test]
+fn post_runs_documents_its_request_body() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json())
+        .expect("generated spec must parse as JSON");
+
+    let post = &spec["paths"]["/api/runs"]["post"];
+    assert!(
+        post.get("requestBody").is_some(),
+        "POST /api/runs must declare a requestBody in the OpenAPI spec"
+    );
+    let schema = &post["requestBody"]["content"]["application/json"]["schema"];
+    assert!(
+        schema.get("$ref").is_some() || schema.get("properties").is_some(),
+        "POST /api/runs requestBody must reference a schema, got {schema}"
+    );
+}

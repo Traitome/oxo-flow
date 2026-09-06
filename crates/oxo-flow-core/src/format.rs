@@ -1586,6 +1586,38 @@ pub fn lint_format(
         }
     }
 
+    // W032 (issue #324 F-5): config keys whose NAMES suggest secrets but
+    // are not declared sensitive. Undeclared values land in plaintext in
+    // command records, stderr tails, and the checkpoint — credential
+    // leakage on shared clusters and in CI artifacts. The declared path
+    // (sensitive = true) routes the value through env injection and masks
+    // it everywhere, so this is a one-line declaration away.
+    {
+        static SECRET_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"(?i)(token|secret|passwd|password|credential|api[_-]?key|access[_-]?key|private[_-]?key|ssh[_-]?key)",
+            )
+            .expect("valid secret-key regex")
+        });
+        for key in config.config.keys() {
+            let declared_sensitive = config.config_meta.get(key).is_some_and(|def| def.sensitive);
+            if declared_sensitive || !SECRET_KEY_RE.is_match(key) {
+                continue;
+            }
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "config key '{key}' looks like a secret but is not declared sensitive — its value lands in plaintext in command records, logs, and the checkpoint"
+                ),
+                rule: None,
+                code: "W032".to_string(),
+                suggestion: Some(format!(
+                    "declare it as {key} = {{ default = \"...\", sensitive = true }} so the value is env-routed and masked on disk"
+                )),
+            });
+        }
+    }
+
     diagnostics
 }
 
@@ -4669,6 +4701,79 @@ mod tests {
             w031_count(&diagnostics),
             1,
             "a when-gated producer's output_pattern must warn unmatched consumers: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w032_flags_secret_like_config_keys_without_sensitive_declaration() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            description = "x"
+            author = "x"
+
+            [config]
+            api_token = "sk-supersecret"
+            api_key = "AKIA-SECRET"
+            password = "hunter2"
+            monkey = "harmless"
+            threads = 4
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let flagged: Vec<&str> = diagnostics
+            .iter()
+            .filter(|d| d.code == "W032")
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            flagged.iter().any(|m| m.contains("api_token")),
+            "api_token must be flagged: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|m| m.contains("api_key")),
+            "api_key must be flagged: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|m| m.contains("password")),
+            "password must be flagged: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|m| m.contains("monkey")),
+            "substring matches like 'monkey' must not be flagged: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|m| m.contains("threads")),
+            "non-secret keys must not be flagged: {flagged:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w032_silent_when_sensitive_declared() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+            description = "x"
+            author = "x"
+
+            [config]
+            api_token = { default = "sk-supersecret", sensitive = true }
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hi > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W032"),
+            "declared-sensitive keys are the hardened path, not a defect: {diagnostics:?}"
         );
     }
 

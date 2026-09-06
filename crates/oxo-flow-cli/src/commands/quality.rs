@@ -91,20 +91,45 @@ pub async fn validate_command(
             let workflow_dir = oxo_flow_core::parent_dir(&workflow);
             let mut missing_inputs = Vec::new();
             if !as_include {
+                // Sample placeholders need a declared sample domain to
+                // resolve at run time (issue #324 F-3): without any of
+                // sample_groups / pairs / sample_pattern the wildcard can
+                // never bind, and the run fails mid-flight with a literal
+                // brace token. validate must flag it here — the approve
+                // layer previously reported "valid": true for these.
+                let sample_domain_declared = !cfg.sample_groups.is_empty()
+                    || !cfg.pairs.is_empty()
+                    || cfg.workflow.sample_pattern.is_some();
+                const SAMPLE_PLACEHOLDERS: &[&str] = &[
+                    "{sample}",
+                    "{group}",
+                    "{pair_id}",
+                    "{experiment}",
+                    "{control}",
+                    "{tumor}",
+                    "{normal}",
+                    "{log}",
+                ];
                 for rule in &cfg.rules {
                     for input in &rule.input {
                         // Only check if it's not a wildcard path and doesn't exist
-                        if !input.contains('{')
-                            && !input.contains('}')
-                            && !workflow_dir.join(input).exists()
-                        {
-                            // Also check if it's an output of another rule
-                            let is_generated =
-                                cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
+                        if !input.contains('{') && !input.contains('}') {
+                            if !workflow_dir.join(input).exists() {
+                                // Also check if it's an output of another rule
+                                let is_generated =
+                                    cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
 
-                            if !is_generated {
-                                missing_inputs.push(input);
+                                if !is_generated {
+                                    missing_inputs.push(input.clone());
+                                }
                             }
+                        } else if !sample_domain_declared
+                            && SAMPLE_PLACEHOLDERS.iter().any(|ph| input.contains(ph))
+                        {
+                            // Wildcard input with no sample domain to bind it.
+                            missing_inputs.push(format!(
+                                "{input} (no sample groups/pairs/sample_pattern declared)"
+                            ));
                         }
                     }
                 }
