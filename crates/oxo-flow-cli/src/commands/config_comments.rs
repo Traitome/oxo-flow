@@ -312,7 +312,8 @@ mod tests {
             extract_config_descriptions(text),
             BTreeMap::from([(
                 "reference_dir".to_string(),
-                "reference_dir/ layout: genome.fa, genes.gtf\nstar/ index, bowtie2/ index.".to_string()
+                "reference_dir/ layout: genome.fa, genes.gtf\nstar/ index, bowtie2/ index."
+                    .to_string()
             )])
         );
     }

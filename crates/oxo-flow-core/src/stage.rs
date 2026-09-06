@@ -240,8 +240,8 @@ pub fn module_display(module: &str) -> String {
 /// `Somatic Callers + Germline + WGS Callers` instead of
 /// `10 Somatic Callers + 20 Germline + 91 Wgs Callers`.
 fn title_case(module: &str) -> String {
-    let stripped = module
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '_' || c == '-' || c == '.');
+    let stripped =
+        module.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_' || c == '-' || c == '.');
     let word_case = stripped
         .split(['_', ' ', '-'])
         .filter(|w| !w.is_empty())
