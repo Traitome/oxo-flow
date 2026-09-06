@@ -97,7 +97,7 @@ api_token = { default = "sk-...", sensitive = true }
 
 Declared-sensitive keys are env-routed and masked on disk, so W032
 never flags them — see
-[`[config]` — Configuration Variables](../reference/workflow-format.md#config--configuration-variables).
+[`[config]` — Configuration Variables](../reference/workflow-format.md#config-configuration-variables).
 
 ---
 
