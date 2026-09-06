@@ -2982,7 +2982,7 @@ fn render_shell_command_inner(
             tracing::warn!(
                 rule = %rule.name,
                 placeholder = ph,
-                "unresolved placeholder remained in the rendered command — the rule will execute with a literal brace token (report as an engine bug with the workflow)"
+                "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
             );
         }
     }

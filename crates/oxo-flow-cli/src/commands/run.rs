@@ -2608,6 +2608,32 @@ pub async fn run_command(
                                 let mut sno = skipped_no_output.lock().await;
                                 sno.insert(rule_name.clone());
                             }
+                            if record.skip_reason.as_deref() == Some("outputs up-to-date") {
+                                // Up-to-date outputs are valid completions
+                                // (issue #324 F-1): a rule interrupted
+                                // mid-run can leave outputs behind (its
+                                // shell kept running after a SIGKILL), and
+                                // resume verdicts it up-to-date. Recording
+                                // it prevents re-submission on every later
+                                // run and keeps the audit trail aligned
+                                // with the disk.
+                                let benchmark =
+                                    oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                                        rule: rule_name.clone(),
+                                        wall_time_secs: 0.0,
+                                        max_memory_mb: None,
+                                        memory_limit_mb: rule
+                                            .effective_memory()
+                                            .and_then(oxo_flow_core::scheduler::parse_memory_mb),
+                                        cpu_seconds: None,
+                                        retries: 0,
+                                    };
+                                let mut ck = checkpoint.lock().await;
+                                ck.mark_completed(&rule_name, benchmark);
+                                if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                                    tracing::warn!("Failed to save checkpoint: {e}");
+                                }
+                            }
                             // Surface the executor's skip reason (condition
                             // false, optional inputs missing, outputs
                             // up-to-date) — otherwise a submitted rule that
@@ -3543,6 +3569,12 @@ pub async fn run_command(
                 // verify would report them missing. If the migration
                 // cannot be persisted, keep the files and skip the
                 // deletion entirely.
+                //
+                // Checksums only exist under `--provenance`. With no
+                // recorded checksum there is nothing that can lie, so the
+                // deletion proceeds without a persistence round-trip
+                // (issue #324 F-2) — previously the empty migration made
+                // cleanup a silent no-op on every default run.
                 let mut migrated: Vec<String> = Vec::new();
                 for chunk in rule.input.iter() {
                     if let Some(sha) = checkpoint.checksums.remove(&chunk.to_string()) {
@@ -3550,10 +3582,9 @@ pub async fn run_command(
                         migrated.push(chunk.to_string());
                     }
                 }
-                if migrated.is_empty() {
-                    continue;
-                }
-                if let Err(e) = checkpoint.save_to_file(&checkpoint_path) {
+                if !migrated.is_empty()
+                    && let Err(e) = checkpoint.save_to_file(&checkpoint_path)
+                {
                     tracing::warn!(
                         error = %e,
                         "failed to persist chunk migration — keeping chunk files"

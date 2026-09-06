@@ -68,10 +68,28 @@ impl std::fmt::Display for NodeStatus {
     }
 }
 
+/// The wire contract of `POST /api/runs` (issue #324 F-4): a flat
+/// `toml_content` plus flat options — the exact shape the frontend client
+/// sends and the handler parses. Kept in one place so the OpenAPI spec,
+/// the handler, and the TypeScript client can never drift again.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateRunRequest {
-    pub pipeline_id: String,
-    pub config: Option<RunConfig>,
+    /// Workflow definition in `.oxoflow` TOML format. Required.
+    pub toml_content: String,
+    #[serde(default)]
+    pub max_jobs: Option<usize>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub keep_going: Option<bool>,
+    #[serde(default)]
+    pub cluster_id: Option<String>,
+    #[serde(default)]
+    pub pipeline_id: Option<String>,
+    #[serde(default)]
+    pub samples: Option<Vec<String>>,
+    #[serde(default)]
+    pub targets: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -284,21 +302,26 @@ mod tests {
 
     #[test]
     fn test_create_run_request_roundtrip() {
-        let req = CreateRunRequest {
-            pipeline_id: "p1".into(),
-            config: Some(RunConfig {
-                max_jobs: Some(4),
-                dry_run: Some(true),
-                keep_going: Some(false),
-                resource_budget: Some(ResourceBudget {
-                    max_memory: Some("8G".into()),
-                    max_threads: Some(4),
-                }),
-            }),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: CreateRunRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.pipeline_id, req.pipeline_id);
+        // The WIRE contract of POST /api/runs (issue #324 F-4): a flat
+        // toml_content plus flat options — the shape the frontend client
+        // and the handler actually speak. The type must parse exactly this
+        // payload; a divergent typed contract is a decorated lie.
+        let json = serde_json::json!({
+            "toml_content": "[workflow]\nname = \"x\"",
+            "max_jobs": 4,
+            "dry_run": true,
+            "keep_going": false,
+            "cluster_id": null,
+            "pipeline_id": "p1",
+            "samples": ["S1"],
+            "targets": [],
+        });
+        let back: CreateRunRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(back.toml_content, "[workflow]\nname = \"x\"");
+        assert_eq!(back.pipeline_id.as_deref(), Some("p1"));
+        assert_eq!(back.max_jobs, Some(4));
+        assert_eq!(back.dry_run, Some(true));
+        assert_eq!(back.samples.as_deref(), Some(&["S1".to_string()][..]));
     }
 
     #[test]

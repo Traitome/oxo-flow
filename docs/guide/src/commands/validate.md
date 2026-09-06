@@ -60,6 +60,21 @@ oxo-flow validate pipeline.oxoflow
 ✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: cycle detected: align → sort_bam → align
 ```
 
+### Wildcard input without a sample domain
+
+An input containing a sample placeholder (`{sample}`, `{group}`, `{pair_id}`, …)
+resolves only when the workflow declares a sample domain
+(`[[sample_groups]]`, `[[pairs]]`, or `sample_pattern`). Without one the
+run fails mid-flight with a literal brace token, so `validate` reports
+the path as missing instead of approving it:
+
+```
+⚠ Warning: The following input files do not exist:
+  - missing/{sample}.txt (no sample groups/pairs/sample_pattern declared)
+```
+
+`--json` includes the same entry in `missing_inputs`.
+
 ---
 
 ## Notes

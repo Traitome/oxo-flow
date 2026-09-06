@@ -325,3 +325,73 @@ async fn server_ai_config_reports_an_unreadable_credential_as_unconfigured() {
         "the message must say how to recover: {message}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-4 — POST /api/runs speaks ONE typed contract (issue #324)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_run_accepts_the_flat_wire_contract() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "max_jobs": 2,
+            "dry_run": true,
+            "keep_going": false,
+            "pipeline_id": null,
+            "samples": [],
+            "targets": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["run_id"].as_str().is_some_and(|s| !s.is_empty()),
+        "a created run returns its id: {body}"
+    );
+}
+
+#[tokio::test]
+async fn create_run_keeps_the_stable_missing_toml_error() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    let (status, body) = post(&app, "/api/runs", json!({ "max_jobs": 2, "dry_run": true })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "MISSING", "{body}");
+    assert_eq!(body["message"], "toml_content required", "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// F-6① — empty-body POSTs must not demand a JSON content type
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pause_and_resume_accept_empty_bodies() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // No Content-Type header, no body — the action verbs must still reach
+    // the handler (a missing run then answers 404, not a 415 media-type
+    // rejection aimed at a body the client never sent). Raw oneshot calls
+    // because a 415's plain-text body is not JSON (the `request` helper
+    // assumes JSON responses).
+    for action in ["pause", "resume", "cancel"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/runs/does-not-exist/{action}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "empty-body {action} must not be rejected as 415"
+        );
+    }
+}

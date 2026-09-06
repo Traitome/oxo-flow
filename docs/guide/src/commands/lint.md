@@ -83,6 +83,21 @@ either a matching `when` gate on the consumer or splitting it into
 that declare their tolerance for a missing producer are not flagged:
 `optional = true` / `"any"` rules, `input_groups` disk-discovery
 fallbacks, and consumers that already carry any `when` gate.
+W032 flags a `[config]` key whose *name* looks like a secret
+(`token`, `secret`, `password`, `credential`, `api_key`,
+`access_key`, `private_key`, `ssh_key`) but is not declared
+`sensitive`: its value then lands in plaintext in command records,
+stderr tails, and the checkpoint — credential leakage on shared
+clusters and in CI artifacts. The repair is the declaration itself:
+
+```toml
+[config]
+api_token = { default = "sk-...", sensitive = true }
+```
+
+Declared-sensitive keys are env-routed and masked on disk, so W032
+never flags them — see
+[`[config]` — Configuration Variables](../reference/workflow-format.md#config-configuration-variables).
 
 ---
 
