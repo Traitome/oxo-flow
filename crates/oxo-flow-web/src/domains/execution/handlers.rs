@@ -155,6 +155,7 @@ mod run_rate_limit {
     post,
     path = "/api/runs",
     tag = "runs",
+    request_body = CreateRunRequest,
     responses(
         (status = 200, description = "Success", body = CreateRunResponse),
         (status = 400, description = "Error", body = ApiError),
@@ -163,8 +164,26 @@ mod run_rate_limit {
 /// POST /api/runs
 pub async fn create_run(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<CreateRunResponse> {
+    // Parse through the typed contract (issue #324 F-4) so the type is the
+    // single source of truth — but keep the stable MISSING error for a
+    // missing `toml_content` instead of a bare serde message.
+    let req: CreateRunRequest = serde_json::from_value(body).map_err(|e| {
+        if e.to_string().contains("toml_content") {
+            err(
+                StatusCode::BAD_REQUEST,
+                "MISSING",
+                "toml_content required".into(),
+            )
+        } else {
+            err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_BODY",
+                format!("invalid create-run body: {e}"),
+            )
+        }
+    })?;
     // Issue #213: dedicated budget for expensive run creation — separate
     // from the global per-minute request limiter so health checks / reads
     // cannot crowd it out (and vice versa).
@@ -194,21 +213,12 @@ pub async fn create_run(
     }
 
     let user = current_user::resolve(authenticated.as_ref());
-    let toml = req
-        .get("toml_content")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "MISSING",
-                "toml_content required".into(),
-            )
-        })?;
-    let max_jobs = req.get("max_jobs").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+    let toml = req.toml_content.as_str();
+    let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
         max_jobs: Some(max_jobs),
-        dry_run: req.get("dry_run").and_then(|v| v.as_bool()),
-        keep_going: req.get("keep_going").and_then(|v| v.as_bool()),
+        dry_run: req.dry_run,
+        keep_going: req.keep_going,
         resource_budget: None,
     };
 
@@ -216,8 +226,8 @@ pub async fn create_run(
     // the run execute on that host (staged over tar-over-ssh, results
     // pulled back — domains/clusters/remote.rs).
     let cluster_id: Option<String> = req
-        .get("cluster_id")
-        .and_then(|v| v.as_str())
+        .cluster_id
+        .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from);
 
@@ -226,8 +236,8 @@ pub async fn create_run(
     // checkpoint (config snapshot, rule fingerprints, input manifests)
     // survives across re-runs and delivers precise invalidation.
     let pipeline_id: Option<String> = req
-        .get("pipeline_id")
-        .and_then(|v| v.as_str())
+        .pipeline_id
+        .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from);
     // Boundary validation: pipeline_id becomes a path component and must be a
@@ -408,9 +418,7 @@ pub async fn create_run(
                 user.id.clone(),
                 cluster_row,
                 run_dir,
-                req.get("max_jobs")
-                    .and_then(|v| v.as_u64())
-                    .map(|j| j as usize),
+                req.max_jobs,
             );
             return Ok(Json(resp));
         }
@@ -424,38 +432,11 @@ pub async fn create_run(
             crate::executor::RunFlags {
                 resume_failed: false,
                 rerun: false,
-                dry_run: req
-                    .get("dry_run")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                keep_going: req
-                    .get("keep_going")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                max_jobs: req
-                    .get("max_jobs")
-                    .and_then(|v| v.as_u64())
-                    .map(|j| j as usize),
-                samples: req
-                    .get("samples")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str())
-                            .map(String::from)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                targets: req
-                    .get("targets")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str())
-                            .map(String::from)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                dry_run: req.dry_run.unwrap_or(false),
+                keep_going: req.keep_going.unwrap_or(false),
+                max_jobs: req.max_jobs,
+                samples: req.samples.unwrap_or_default(),
+                targets: req.targets.unwrap_or_default(),
             },
         );
     }
@@ -1413,7 +1394,9 @@ pub async fn cancel_run(
 pub async fn pause_run(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    // The body carries no options today; `Option` exempts an empty body
+    // from the JSON content-type demand (issue #324 F-6).
+    _body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -1434,8 +1417,9 @@ pub async fn pause_run(
             format!("Run {id} is already {} — cannot pause", run.status),
         ));
     }
-    let reason = req
-        .get("reason")
+    let reason = _body
+        .as_ref()
+        .and_then(|Json(v)| v.get("reason"))
         .and_then(|v| v.as_str())
         .unwrap_or("user_request");
 
@@ -1492,7 +1476,9 @@ pub async fn pause_run(
 pub async fn resume_run(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    // `Option` exempts an empty body from the JSON content-type demand
+    // (issue #324 F-6); the only consumed key is the optional from_rule.
+    body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<serde_json::Value> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -1516,7 +1502,10 @@ pub async fn resume_run(
             ),
         ));
     }
-    let from_rule = req.get("from_rule").and_then(|v| v.as_str());
+    let from_rule = body
+        .as_ref()
+        .and_then(|Json(v)| v.get("from_rule"))
+        .and_then(|v| v.as_str());
 
     // Unfreeze the live process group.
     if let Some(pgid) = crate::process_control::pgid(&id)
