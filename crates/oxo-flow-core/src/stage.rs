@@ -14,6 +14,7 @@
 //! Rules that match nothing fall back to `"generic"`.
 
 use crate::rule::Rule;
+use std::collections::HashSet;
 
 /// Canonical stage names in the order the palette assigns colors.
 const PALETTE: &[(&str, &str, &str)] = &[
@@ -30,9 +31,14 @@ const PALETTE: &[(&str, &str, &str)] = &[
 ];
 
 /// Fallback colors for custom (non-canonical) stages, selected by stable hash.
+///
+/// Okabe-Ito (colour-blind safe) values plus two legacy light tones. The
+/// entries are mutually distinct so several custom-stage lines on one map
+/// stay separable (live: community enrichment has eight custom stage
+/// lines; the previous palette clustered them in the brown/pink family).
 const EXTRA_COLORS: &[&str] = &[
-    "#9C755F", "#BAB0AC", "#FF9DA7", "#D4A6C8", "#86BCB6", "#59A14F", "#EDC948", "#8CD17D",
-    "#B6992D", "#6E6E6E",
+    "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#8CD17D",
+    "#B6992D", "#999999",
 ];
 
 /// `(rule-name prefix, canonical stage)` pairs for ported workflows whose
@@ -256,6 +262,41 @@ pub fn stage_color(stage: &str) -> &'static str {
     EXTRA_COLORS[stable_hash(stage) % EXTRA_COLORS.len()]
 }
 
+/// Whether `stage` is a canonical palette stage (stable, table-driven
+/// colour) rather than a workflow-specific custom stage.
+pub fn is_canonical_stage(stage: &str) -> bool {
+    PALETTE.iter().any(|(s, _, _)| *s == stage)
+}
+
+/// Colour for a stage line within one metro export.
+///
+/// Canonical stages keep their fixed palette entry. Custom stages start at
+/// their stable-hash offset in the fallback palette and walk forward to the
+/// first colour not yet used on this map, so a stage keeps its base colour
+/// wherever possible while several custom lines on one map never share a
+/// colour (live: community enrichment puts eight custom lines on one map,
+/// where a bare hash modulo painted several of them the same colour).
+pub fn metro_line_color(stage: &str, used: &mut HashSet<&'static str>) -> &'static str {
+    if let Some((_, _, color)) = PALETTE.iter().find(|(s, _, _)| *s == stage) {
+        // Canonical lanes keep their fixed colour and do not occupy slots in
+        // the fallback walk — dense maps may share a hue with a canonical
+        // lane (a problem of degree, never of correctness).
+        return color;
+    }
+    let offset = stable_hash(stage) % EXTRA_COLORS.len();
+    for k in 0..EXTRA_COLORS.len() {
+        let color = EXTRA_COLORS[(offset + k) % EXTRA_COLORS.len()];
+        if !used.contains(color) {
+            used.insert(color);
+            return color;
+        }
+    }
+    // More custom lanes than fallback colours (live: community bgcflow at
+    // rule granularity). Falling back to the stage's base colour is better
+    // than aborting an otherwise-valid export.
+    EXTRA_COLORS[offset % EXTRA_COLORS.len()]
+}
+
 /// DJB2-style hash — deterministic across runs, so diagram colors are stable.
 fn stable_hash(s: &str) -> usize {
     let mut h: usize = 5381;
@@ -269,7 +310,7 @@ fn stable_hash(s: &str) -> usize {
 mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn rule(name: &str, shell: &str, tags: Vec<&str>) -> Rule {
         Rule {
@@ -377,5 +418,57 @@ mod tests {
     fn canonical_colors_are_stable() {
         assert_eq!(stage_color("qc"), "#4C78A8");
         assert_eq!(stage_color("custom_thing"), stage_color("custom_thing"));
+    }
+
+    #[test]
+    fn metro_line_colors_never_collide_on_one_map() {
+        // Eight custom stages on one export get eight distinct colours even
+        // when their hash offsets coincide (the live community enrichment
+        // case; a bare hash modulo painted several lines the same colour).
+        let mut used = HashSet::new();
+        let stages = [
+            "databases",
+            "great",
+            "pycistarget",
+            "gseapy",
+            "plots",
+            "aggregate",
+            "visualize",
+            "export",
+        ];
+        let colors: Vec<&str> = stages
+            .iter()
+            .map(|s| metro_line_color(s, &mut used))
+            .collect();
+        assert_eq!(colors.iter().collect::<HashSet<_>>().len(), colors.len());
+    }
+
+    #[test]
+    fn metro_line_canonical_stages_keep_their_color() {
+        let mut used = HashSet::new();
+        assert_eq!(metro_line_color("qc", &mut used), "#4C78A8");
+        assert_eq!(used.len(), 0, "canonical lanes take no fallback slot");
+    }
+
+    #[test]
+    fn custom_stage_colour_pin_stays_stable() {
+        // Pins the fallback walk's first assignment for one stage — a
+        // palette shuffle or offset change must fail here, not silently
+        // repaint regenerated maps.
+        let mut used = HashSet::new();
+        assert_eq!(metro_line_color("custom_tag", &mut used), "#8CD17D");
+    }
+
+    #[test]
+    fn metro_line_more_custom_lanes_than_palette_never_aborts() {
+        // A custom-stage-heavy map (live: community bgcflow, rule tier) must
+        // export even when the fallback palette is exhausted — the last lane
+        // repeats the stage's base colour instead of panicking.
+        let mut used = HashSet::new();
+        let mut colors = Vec::new();
+        for i in 0..24 {
+            colors.push(metro_line_color(&format!("custom_stage_{i}"), &mut used));
+        }
+        assert_eq!(colors.len(), 24);
     }
 }

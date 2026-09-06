@@ -15,7 +15,9 @@ use crate::commands::cluster::cluster_command;
 use crate::commands::completions::handle_completions;
 use crate::commands::info::info_command;
 use crate::commands::infra::{env_command, handle_license};
-use crate::commands::output::{handle_diff, handle_export, handle_graph, handle_report};
+use crate::commands::output::{
+    GraphFormat, MetroArg, handle_diff, handle_export, handle_graph, handle_report,
+};
 use crate::commands::project::{init_command, template_command};
 use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
@@ -420,10 +422,11 @@ pub enum Commands {
         #[arg(
             short = 'f',
             long,
-            default_value = "ascii",
+            value_enum,
+            default_value_t = GraphFormat::Ascii,
             help = "Output format: ascii, dot, dot-clustered, tree, mermaid, metro"
         )]
-        format: String,
+        format: GraphFormat,
         #[arg(short = 'o', long, help = "Output file path")]
         output: Option<PathBuf>,
         #[arg(
@@ -431,13 +434,13 @@ pub enum Commands {
             help = "Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG)"
         )]
         expanded: bool,
-        #[arg(
-            long,
-            value_enum,
-            default_value_t = crate::commands::output::MetroArg::Rule,
-            help = "Station granularity for the metro format: 'rule' keeps one station per rule; 'process' collapses chain-connected same-tool rules into tool-named stations (nf-core idiom); 'module' emits one station per module section (publication/overview tier)"
-        )]
-        granularity: crate::commands::output::MetroArg,
+        /// Station zoom for the metro format (default: rule): 'rule' keeps
+        /// one station per rule; 'process' collapses chain-connected
+        /// same-tool rules into tool-named stations (nf-core idiom);
+        /// 'module' emits one station per module section
+        /// (publication/overview tier).
+        #[arg(long, value_enum)]
+        granularity: Option<MetroArg>,
     },
     /// Show execution status and per-rule timings from a checkpoint file.
     Status {
