@@ -3065,8 +3065,8 @@ mod tests {
         let mmd = dag
             .to_metro(&rules, Some(&modules), MetroGranularity::Rule)
             .unwrap();
-        assert!(mmd.contains("subgraph s_01_preprocessing [01 Preprocessing]"));
-        assert!(mmd.contains("subgraph s_02_assembly [02 Assembly]"));
+        assert!(mmd.contains("subgraph s_01_preprocessing [Preprocessing]"));
+        assert!(mmd.contains("subgraph s_02_assembly [Assembly]"));
         assert!(!mmd.contains("subgraph qc [Read QC]"));
         // The inter-section edge is emitted with the source rule's stage line.
         assert!(mmd.contains("n0 -->|trim| n1"));
@@ -3097,7 +3097,7 @@ mod tests {
         // One merged section holds both modules (id joins the members,
         // display joins their titles); no standalone sections remain.
         assert!(
-            mmd.contains("subgraph qc_dada2 [Qc + Dada2]"),
+            mmd.contains("subgraph qc_dada2 [QC + Dada2]"),
             "merged section missing:\n{mmd}"
         );
         assert!(!mmd.contains("subgraph qc ["));
