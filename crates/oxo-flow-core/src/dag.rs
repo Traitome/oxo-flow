@@ -7,13 +7,13 @@
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::{FilePatterns, Rule};
-use petgraph::algo::toposort;
+use petgraph::algo::{kosaraju_scc, toposort};
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::NodeRef;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 /// A node in the workflow DAG, representing a single rule.
 #[derive(Debug, Clone)]
@@ -698,7 +698,29 @@ impl WorkflowDag {
         }
         out
     }
+}
 
+/// Station granularity for [`WorkflowDag::to_metro`] metro-map exports.
+///
+/// `Rule` (the default) gives every rule its own station. `Process` collapses
+/// chains of rules that share a section and are driven by the same known tool
+/// (via the shell/script keyword table in [`crate::stage`]) into one station
+/// named after the tool — the nf-core transit-map idiom where `samtools
+/// sort`, `samtools index`, … are a single "SAMtools" stop. Only
+/// chain-connected rules merge (union-find over intra-group edges):
+/// independent uses of the same tool (raw- vs trimmed-read FastQC) keep
+/// separate stops, numbered `FastQC (2)` onward when labels repeat within a
+/// section. The coarser granularity keeps dense ported workflows (live:
+/// community rnaseq, 135 rules) within the ~40-60-station scale of the
+/// published nf-core maps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MetroGranularity {
+    #[default]
+    Rule,
+    Process,
+}
+
+impl WorkflowDag {
     /// Export the DAG as an nf-metro "metro map" definition.
     ///
     /// Output is a Mermaid `graph LR` subset extended with `%%metro`
@@ -711,61 +733,410 @@ impl WorkflowDag {
     /// nf-metro render workflow.mmd -o workflow.svg
     /// ```
     ///
-    /// Each rule becomes a station (its `module::` prefix stripped — the
-    /// section already names the group); each dependency becomes an edge
-    /// carrying the *source* rule's stage line. Stages are inferred per rule
-    /// (see [`crate::stage`]) and become colored lines that flow through
-    /// multiple sections — the nf-core transit-map structure — while sections
-    /// follow the workflow's module namespaces in data-flow order.
+    /// Each station's label is the rule name with its `module::` prefix
+    /// stripped (the section already names the group); each dependency
+    /// becomes an edge carrying the *source* station's stage line. Stages
+    /// are inferred per rule (see [`crate::stage`]) and become colored
+    /// lines that flow through multiple sections — the nf-core
+    /// transit-map structure — while sections group the workflow's module
+    /// namespaces, emitted in topological order with mutually-referencing
+    /// modules contracted into one merged section.
     ///
-    pub fn to_metro(&self, rules: &[Rule]) -> Result<String> {
+    /// `granularity` controls station collapsing: see [`MetroGranularity`].
+    /// Grouped rules keep the first member's stage for the line color and
+    /// never cross sections, so section placement is identical for both
+    /// granularities.
+    ///
+    /// `modules` maps a module name to its member rule names (the
+    /// `[[include]]` file stem by default) and places prefixless rules
+    /// into their workflow module. Without it, prefixless rules fall
+    /// back to their stage, which can merge distinct modules into one
+    /// section and make the section graph cyclic (live: community mag,
+    /// stage fallback aligned↔analysis).
+    pub fn to_metro(
+        &self,
+        rules: &[Rule],
+        modules: Option<&HashMap<String, Vec<String>>>,
+        granularity: MetroGranularity,
+    ) -> Result<String> {
         let nodes = self.nodes_by_rule_index();
         let edges = self.sorted_edges();
+
+        // Rule name → owning module, for includes without an explicit
+        // `namespace = "..."` (their rules keep unprefixed names). The
+        // module lists hold PARSE-TIME names; wildcard expansion does not
+        // rewrite them, so an expanded instance `fastqc_S1` is resolved by
+        // exact match first, then by the longest member prefix (`module_rules`
+        // members are original names — see expand.rs instance naming).
+        // Known limitation: a MAIN-file rule whose name extends a module
+        // member (`fastp` member, `fastp_extra` host rule) takes the prefix
+        // path and lands in that module's section. Exact member matches
+        // always win and stage fallback never regresses from the old
+        // export, so the cost is a misplaced section only — no lost edges.
+        let module_members: Vec<(&str, &str)> = modules
+            .into_iter()
+            .flat_map(|map| map.iter())
+            .flat_map(|(module, members)| {
+                members
+                    .iter()
+                    .map(move |member| (member.as_str(), module.as_str()))
+            })
+            .collect();
+        let find_module = |name: &str| -> Option<&str> {
+            let mut best: Option<(&str, &str)> = None;
+            for &(member, module) in &module_members {
+                if name == member {
+                    return Some(module);
+                }
+                let is_instance_prefix = name
+                    .as_bytes()
+                    .get(member.len())
+                    .is_some_and(|b| *b == b'_')
+                    && name.starts_with(member);
+                if is_instance_prefix && best.is_none_or(|(bm, _)| member.len() > bm.len()) {
+                    best = Some((member, module));
+                }
+            }
+            best.map(|(_, module)| module)
+        };
 
         // Two orthogonal groupings, mirroring nf-core's transit maps:
         // - the LINE is the rule's stage (tags → module prefix → shell
         //   keywords → generic) — the colored track an edge flows along;
         // - the SECTION is the workflow's own module namespace
-        //   (`module::rule`), falling back to the stage for prefixless
-        //   rules. Sections follow the workflow file's data-flow order, so
-        //   the section graph is acyclic by construction — no cycle
-        //   demotion (which previously flooded "generic" on real
-        //   pipelines, live: community rnaseq).
+        //   (`module::rule`, or the owning `[[include]]` module for
+        //   prefixless rules), falling back to the stage only for rules
+        //   defined directly in the main file. Real workflows cycle
+        //   between modules (live: community ampliseq — dada2 quality
+        //   checks sit in the qc module while dada2 results feed qc
+        //   plots), so the export contracts cyclic module groups into one
+        //   merged section rather than assuming an acyclic section graph.
         let mut node_stage: HashMap<NodeIndex, String> = HashMap::new();
         let mut node_section: HashMap<NodeIndex, String> = HashMap::new();
+        let mut node_section_is_module: HashMap<NodeIndex, bool> = HashMap::new();
         for node in &nodes {
             let stage = rules
                 .get(self.graph[*node].rule_index)
                 .map(crate::stage::detect_stage)
                 .unwrap_or_else(|| "generic".to_string());
-            let section = self.graph[*node]
-                .name
-                .split_once("::")
-                .map(|(prefix, _)| prefix.to_string())
-                .unwrap_or_else(|| stage.clone());
+            let name = &self.graph[*node].name;
+            let (section, is_module) = match name.split_once("::") {
+                Some((prefix, _)) => (prefix.to_string(), true),
+                None => match find_module(name.as_str()) {
+                    Some(module) => (module.to_string(), true),
+                    None => (stage.clone(), false),
+                },
+            };
             node_stage.insert(*node, stage);
             node_section.insert(*node, section);
+            node_section_is_module.insert(*node, is_module);
         }
 
-        // Sections and stages in first-appearance order (deterministic).
-        // A section's display comes from the module it groups, or from the
-        // stage itself for prefixless rules (custom stages keep their
-        // sanitized raw name).
-        let mut sections: Vec<(String, String)> = Vec::new();
-        for node in &nodes {
+        // Station collapsing: `Rule` keeps every rule as its own station;
+        // `Process` merges chains of same-section rules driven by the same
+        // known tool (union-find over intra-section edges) into one station
+        // named after the tool — see [`MetroGranularity`]. Merging never
+        // crosses sections, so every group lives in one section and section
+        // placement is identical for both granularities; a group's
+        // representative is its earliest rule (file order), keeping the
+        // output deterministic.
+        let station_of: HashMap<NodeIndex, NodeIndex> = match granularity {
+            MetroGranularity::Rule => nodes.iter().map(|&node| (node, node)).collect(),
+            MetroGranularity::Process => {
+                let mut parent: HashMap<NodeIndex, NodeIndex> =
+                    nodes.iter().map(|&node| (node, node)).collect();
+                let tool_of = |node: NodeIndex| {
+                    rules
+                        .get(self.graph[node].rule_index)
+                        .and_then(crate::stage::detect_tool)
+                };
+                let find = |mut node: NodeIndex, parent: &HashMap<NodeIndex, NodeIndex>| {
+                    while parent[&node] != node {
+                        node = parent[&node];
+                    }
+                    node
+                };
+                // Cycle-safe union: an acyclic rule DAG can still fold into
+                // a cyclic station graph when cross-connected same-tool
+                // pairs merge (live: clindet's `recal_link` symlink rule
+                // carries data from a GATK rule into another GATK rule, so
+                // the two GATK stations on either side would close a ring;
+                // nf-metro hard-aborts on any cycle). A union is applied
+                // only while the destination station stays unreachable from
+                // the source station once the direct station edge is
+                // removed — skipped unions keep both stations separate,
+                // which the duplicate-label numbering below renders as
+                // `GATK (2)` onward.
+                for &(src, dst) in &edges {
+                    if node_section[&src] != node_section[&dst] {
+                        continue;
+                    }
+                    if let (Some(a), Some(b)) = (tool_of(src), tool_of(dst))
+                        && a == b
+                    {
+                        let (root_src, root_dst) = (find(src, &parent), find(dst, &parent));
+                        if root_src == root_dst {
+                            continue;
+                        }
+                        // Station-level adjacency under the current
+                        // partition, with the direct station edge removed.
+                        let mut adjacent: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
+                        for &(u, v) in &edges {
+                            let (ru, rv) = (find(u, &parent), find(v, &parent));
+                            if ru != rv && !(ru == root_src && rv == root_dst) {
+                                adjacent.entry(ru).or_default().push(rv);
+                            }
+                        }
+                        let mut visited: HashSet<NodeIndex> = HashSet::from([root_src]);
+                        let mut queue: VecDeque<NodeIndex> = VecDeque::from([root_src]);
+                        let mut reaches = false;
+                        while let Some(node) = queue.pop_front() {
+                            for &next in adjacent.get(&node).into_iter().flatten() {
+                                if next == root_dst {
+                                    reaches = true;
+                                    break;
+                                }
+                                if visited.insert(next) {
+                                    queue.push_back(next);
+                                }
+                            }
+                            if reaches {
+                                break;
+                            }
+                        }
+                        if !reaches {
+                            parent.insert(root_src, root_dst);
+                        }
+                    }
+                }
+                // Each group's representative is its earliest rule in file
+                // order (`nodes` is rule-index ordered).
+                let mut rep_of_root: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+                for &node in &nodes {
+                    let mut root = node;
+                    while parent[&root] != root {
+                        root = parent[&root];
+                    }
+                    rep_of_root.entry(root).or_insert(node);
+                }
+                nodes
+                    .iter()
+                    .map(|&node| {
+                        let mut root = node;
+                        while parent[&root] != root {
+                            root = parent[&root];
+                        }
+                        (node, rep_of_root[&root])
+                    })
+                    .collect()
+            }
+        };
+        // Stations in file order (a representative is its own station), and
+        // station-level edges: remapped through the collapse, with chain
+        // self-loops and parallel duplicates removed — nf-metro routes one
+        // edge per station pair.
+        let station_nodes: Vec<NodeIndex> = nodes
+            .iter()
+            .copied()
+            .filter(|&node| station_of[&node] == node)
+            .collect();
+        let mut seen_edges: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+        let station_edges: Vec<(NodeIndex, NodeIndex)> = edges
+            .iter()
+            .filter_map(|&(src, dst)| {
+                let (src, dst) = (station_of[&src], station_of[&dst]);
+                (src != dst && seen_edges.insert((src, dst))).then_some((src, dst))
+            })
+            .collect();
+
+        // Sections in first-appearance order with their display names —
+        // module sections use the module's curated title, stage sections
+        // the stage display.
+        let mut section_order: Vec<String> = Vec::new();
+        let mut section_display: Vec<String> = Vec::new();
+        for node in &station_nodes {
             let section = &node_section[node];
-            if sections.iter().any(|(s, _)| s == section) {
+            if section_order.iter().any(|s| s == section) {
                 continue;
             }
-            let display = self.graph[*node]
-                .name
-                .split_once("::")
-                .map(|(prefix, _)| crate::stage::module_display(prefix))
-                .unwrap_or_else(|| crate::stage::stage_display(&node_stage[node]));
-            sections.push((section.clone(), display));
+            let display = if node_section_is_module[node] {
+                crate::stage::module_display(section)
+            } else {
+                crate::stage::stage_display(&node_stage[node])
+            };
+            section_order.push(section.clone());
+            section_display.push(display);
         }
+        let section_rank: HashMap<&str, usize> = section_order
+            .iter()
+            .enumerate()
+            .map(|(i, section)| (section.as_str(), i))
+            .collect();
+        let mut section_graph = DiGraph::new();
+        let section_nodes: Vec<NodeIndex> = section_order
+            .iter()
+            .map(|_| section_graph.add_node(()))
+            .collect();
+        let mut seen_section_edges: HashSet<(usize, usize)> = HashSet::new();
+        for &(src, dst) in &station_edges {
+            let (a, b) = (
+                section_rank[node_section[&src].as_str()],
+                section_rank[node_section[&dst].as_str()],
+            );
+            if a != b && seen_section_edges.insert((a, b)) {
+                section_graph.add_edge(section_nodes[a], section_nodes[b], ());
+            }
+        }
+
+        // Cyclic section groups (live: community ampliseq — dada2 quality
+        // checks sit in the qc module while dada2 results feed qc plots)
+        // have no acyclic subgraph order for nf-metro to lay out. Contract
+        // each strongly connected group into one merged section — the id
+        // joins the member ids, the display joins their titles with " + " —
+        // and remap its stations before labels and sections are built.
+        let mut section_of_scc: HashMap<usize, usize> = HashMap::new();
+        let mut merged_ids: Vec<String> = Vec::new();
+        let mut merged_displays: Vec<String> = Vec::new();
+        let mut taken_ids: HashSet<String> = section_order
+            .iter()
+            .map(|section| sanitize_metro_id(section))
+            .collect();
+        for scc in kosaraju_scc(&section_graph) {
+            if scc.len() < 2 {
+                continue;
+            }
+            // SCC members ascending = first-appearance order (section
+            // graph nodes were added in that order).
+            let mut members: Vec<usize> = scc.iter().map(|n| n.index()).collect();
+            members.sort_unstable();
+            let base_id = sanitize_metro_id(
+                &members
+                    .iter()
+                    .map(|&i| section_order[i].as_str())
+                    .collect::<Vec<_>>()
+                    .join("_"),
+            );
+            let mut merged_id = base_id.clone();
+            let mut suffix = 2;
+            while taken_ids.contains(&merged_id) {
+                merged_id = format!("{base_id}_{suffix}");
+                suffix += 1;
+            }
+            taken_ids.insert(merged_id.clone());
+            let slot = merged_ids.len();
+            for &member in &members {
+                section_of_scc.insert(member, slot);
+            }
+            merged_ids.push(merged_id);
+            merged_displays.push(
+                members
+                    .iter()
+                    .map(|&i| section_display[i].clone())
+                    .collect::<Vec<_>>()
+                    .join(" + "),
+            );
+        }
+        for node in &station_nodes {
+            if let Some(&slot) = section_of_scc.get(&section_rank[node_section[node].as_str()]) {
+                let merged = merged_ids[slot].clone();
+                node_section.insert(*node, merged);
+            }
+        }
+        let merged_display_by_id: HashMap<String, String> =
+            merged_ids.into_iter().zip(merged_displays).collect();
+
+        // Station labels: process-level stations carry the curated tool name
+        // (nf-core idiom — `samtools index` renders as "SAMtools"); rule
+        // names remain for tools outside the keyword table. Repeated labels
+        // within a section are numbered ` (2)`, ` (3)`, … onward.
+        let mut station_label: HashMap<NodeIndex, String> = HashMap::new();
+        let mut label_counts: HashMap<(String, String), usize> = HashMap::new();
+        for &rep in &station_nodes {
+            let base = match granularity {
+                MetroGranularity::Rule => metro_station_label(&self.graph[rep].name).to_string(),
+                MetroGranularity::Process => rules
+                    .get(self.graph[rep].rule_index)
+                    .and_then(crate::stage::detect_tool)
+                    .map_or_else(
+                        || metro_station_label(&self.graph[rep].name).to_string(),
+                        str::to_string,
+                    ),
+            };
+            let count = label_counts
+                .entry((node_section[&rep].clone(), base.clone()))
+                .or_insert(0);
+            *count += 1;
+            let label = if *count == 1 {
+                base
+            } else {
+                format!("{base} ({count})")
+            };
+            station_label.insert(rep, label);
+        }
+
+        // Sections in dataflow order and stages in first-appearance order
+        // (both deterministic). A section's display comes from the module
+        // it groups, from its contracted SCC merge, or from the stage
+        // itself for prefixless rules (custom stages keep their sanitized
+        // raw name).
+        let mut sections_first: Vec<(String, String)> = Vec::new();
+        for node in &station_nodes {
+            let section = &node_section[node];
+            if sections_first.iter().any(|(s, _)| s == section) {
+                continue;
+            }
+            let display = match merged_display_by_id.get(section) {
+                Some(display) => display.clone(),
+                None if node_section_is_module[node] => crate::stage::module_display(section),
+                None => crate::stage::stage_display(&node_stage[node]),
+            };
+            sections_first.push((section.clone(), display));
+        }
+        let final_rank: HashMap<&str, usize> = sections_first
+            .iter()
+            .enumerate()
+            .map(|(i, (section, _))| (section.as_str(), i))
+            .collect();
+        // Topological order over the contracted section graph (Kahn's,
+        // ties by first appearance): upstream modules sit left of their
+        // consumers regardless of rule file order (live: community
+        // ampliseq's reporting section collects from every earlier module
+        // yet first appears right after trim).
+        let mut in_degree: HashMap<usize, usize> = HashMap::new();
+        let mut successors: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut seen_final_edges: HashSet<(usize, usize)> = HashSet::new();
+        for &(src, dst) in &station_edges {
+            let (a, b) = (
+                final_rank[node_section[&src].as_str()],
+                final_rank[node_section[&dst].as_str()],
+            );
+            if a != b && seen_final_edges.insert((a, b)) {
+                *in_degree.entry(b).or_insert(0) += 1;
+                successors.entry(a).or_default().push(b);
+            }
+        }
+        let mut ready: BTreeSet<usize> = (0..sections_first.len())
+            .filter(|rank| !in_degree.contains_key(rank))
+            .collect();
+        let mut ordered: Vec<usize> = Vec::with_capacity(sections_first.len());
+        while let Some(&rank) = ready.first() {
+            ready.remove(&rank);
+            ordered.push(rank);
+            for &succ in successors.get(&rank).into_iter().flatten() {
+                let count = in_degree.get_mut(&succ).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(succ);
+                }
+            }
+        }
+        debug_assert_eq!(ordered.len(), sections_first.len());
+        let sections: Vec<(String, String)> = ordered
+            .into_iter()
+            .map(|rank| sections_first[rank].clone())
+            .collect();
         let mut stages: Vec<String> = Vec::new();
-        for node in &nodes {
+        for node in &station_nodes {
             let stage = &node_stage[node];
             if !stages.iter().any(|s| s == stage) {
                 stages.push(stage.clone());
@@ -782,6 +1153,24 @@ impl WorkflowDag {
                 sanitize_mermaid_text(&crate::stage::stage_display(stage)),
                 crate::stage::stage_color(stage),
             ));
+        }
+        // Stations with no dataflow edges (terminal exports, side outputs)
+        // are auxiliary to the main flow — nf-metro's off-track stops
+        // render them without routing pressure, keeping the trunk wide
+        // instead of stacking tall (live: 7-station community mixscape
+        // went from portrait 0.62 to landscape 4.2 with 4 off-track).
+        let mut degree: HashMap<NodeIndex, usize> = HashMap::new();
+        for &(src, dst) in &station_edges {
+            *degree.entry(src).or_default() += 1;
+            *degree.entry(dst).or_default() += 1;
+        }
+        let isolated: Vec<String> = station_nodes
+            .iter()
+            .filter(|node| !degree.contains_key(node))
+            .map(|node| format!("n{}", node.index()))
+            .collect();
+        if !isolated.is_empty() && isolated.len() < station_nodes.len() {
+            out.push_str(&format!("%%metro off_track: {}\n", isolated.join(", ")));
         }
         out.push('\n');
         out.push_str("graph LR\n");
@@ -803,15 +1192,15 @@ impl WorkflowDag {
                 ));
             }
 
-            for node in nodes.iter().filter(|n| &node_section[n] == section) {
+            for node in station_nodes.iter().filter(|n| &node_section[n] == section) {
                 out.push_str(&format!(
                     "{inner_indent}n{}[\"{}\"]\n",
                     node.index(),
-                    sanitize_mermaid_label(metro_station_label(&self.graph[*node].name))
+                    sanitize_mermaid_label(&station_label[node])
                 ));
             }
 
-            for &(src, dst) in &edges {
+            for &(src, dst) in &station_edges {
                 if node_section[&src] != *section {
                     continue;
                 }
@@ -1039,8 +1428,12 @@ fn sanitize_metro_id(s: &str) -> String {
             }
         })
         .collect();
+    // Mermaid ids must not start with a digit (module file stems like
+    // "01_preprocessing" do).
     if out.is_empty() {
         out = "stage".to_string();
+    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out = format!("s_{out}");
     }
     out
 }
@@ -2386,12 +2779,46 @@ mod tests {
             make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
         ];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         assert!(mmd.contains("%%metro line: generic | Analysis | #79706E"));
         assert!(mmd.contains("graph LR"));
         assert!(mmd.contains("n0[\"a\"]"));
         assert!(mmd.contains("n0 -->|generic| n1"));
         assert!(!mmd.contains("subgraph"));
+        // No isolated nodes → no off-track directive.
+        assert!(!mmd.contains("off_track"));
+    }
+
+    #[test]
+    fn metro_export_isolated_rules_go_off_track() {
+        // Rules without dataflow edges (terminal exports) are auxiliary —
+        // nf-metro renders them off-track so the main trunk stays wide
+        // (live: 7-station mixscape went from portrait 0.62 to landscape
+        // 4.2 with 4 off-track stations). The directive is skipped when
+        // EVERY node is isolated (nothing to route).
+        let mut chain = make_rule("a", vec!["in.txt"], vec!["mid.txt"]);
+        chain.shell = Some("fastqc in.txt".to_string());
+        let sink = make_rule("b", vec!["mid.txt"], vec!["out.txt"]);
+        let export = make_rule("export_annot", vec![], vec![]);
+        let rules = vec![chain, sink, export];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        assert!(mmd.contains("%%metro off_track: n2"));
+    }
+
+    #[test]
+    fn metro_export_all_isolated_omits_off_track() {
+        // No edges at all (wildcard-only DAGs with no concrete matches):
+        // the directive would mark every station off-track with no trunk
+        // left to route — skipped entirely.
+        let a = make_rule("a", vec!["in.txt"], vec!["mid.txt"]);
+        let b = make_rule("b", vec![], vec![]);
+        let rules = vec![a, b];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        assert!(!mmd.contains("off_track"));
+        assert!(mmd.contains("n0[\"a\"]"));
+        assert!(mmd.contains("n1[\"b\"]"));
     }
 
     #[test]
@@ -2409,7 +2836,7 @@ mod tests {
         align.shell = Some("STAR --runThreadN 8".to_string());
         let rules = vec![trim, align];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         assert!(mmd.contains("subgraph fastq_qc [Read QC]"));
         assert!(mmd.contains("subgraph alignment [Alignment]"));
         // Station labels are the bare rule names (no `module::` prefix).
@@ -2420,6 +2847,79 @@ mod tests {
     }
 
     #[test]
+    fn metro_export_include_modules_place_prefixless_rules() {
+        // `[[include]]` without `namespace = "..."` keeps rule names
+        // prefixless; the module map must place them into their module
+        // section (not fall back to the stage — which can merge distinct
+        // modules and cycle the section graph, live: community mag).
+        // Digit-leading file stems are sanitized to valid mermaid ids.
+        let mut preprocess = make_rule("fastp", vec!["reads.fq"], vec!["trimmed.fq"]);
+        preprocess.shell = Some("fastp -i reads.fq".to_string());
+        let mut assemble = make_rule("spades_S1", vec!["trimmed.fq"], vec!["contigs.fa"]);
+        assemble.shell = Some("spades.py -o out".to_string());
+        let rules = vec![preprocess, assemble];
+        let modules: HashMap<String, Vec<String>> = HashMap::from([
+            ("01_preprocessing".to_string(), vec!["fastp".to_string()]),
+            ("02_assembly".to_string(), vec!["spades".to_string()]),
+        ]);
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag
+            .to_metro(&rules, Some(&modules), MetroGranularity::Rule)
+            .unwrap();
+        assert!(mmd.contains("subgraph s_01_preprocessing [01 Preprocessing]"));
+        assert!(mmd.contains("subgraph s_02_assembly [02 Assembly]"));
+        assert!(!mmd.contains("subgraph qc [Read QC]"));
+        // The inter-section edge is emitted with the source rule's stage line.
+        assert!(mmd.contains("n0 -->|trim| n1"));
+    }
+
+    #[test]
+    fn metro_export_cyclic_module_sections_contract_into_one() {
+        // Bidirectional module pair (live: community ampliseq — dada2
+        // trims reads that QC plots consume while dada2 quality reports
+        // sit in the qc module): the section condensation has a cycle,
+        // so both modules contract into one merged section instead of
+        // assuming an acyclic module order.
+        let mut fastqc = make_rule("qc::fastqc", vec!["reads.fq"], vec!["reads_fastqc.html"]);
+        fastqc.shell = Some("fastqc reads.fq".to_string());
+        let mut filtntrim = make_rule(
+            "dada2::filtntrim",
+            vec!["reads_fastqc.html"],
+            vec!["trimmed.fq"],
+        );
+        filtntrim.shell = Some("echo filterAndTrim".to_string());
+        let mut read_plot = make_rule("qc::read_plot", vec!["trimmed.fq"], vec!["qc_plot.pdf"]);
+        read_plot.shell = Some("echo plotQualityProfile".to_string());
+        let mut multiqc = make_rule("report::multiqc", vec!["qc_plot.pdf"], vec!["report.html"]);
+        multiqc.shell = Some("multiqc .".to_string());
+        let rules = vec![fastqc, filtntrim, read_plot, multiqc];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        // One merged section holds both modules (id joins the members,
+        // display joins their titles); no standalone sections remain.
+        assert!(
+            mmd.contains("subgraph qc_dada2 [Qc + Dada2]"),
+            "merged section missing:\n{mmd}"
+        );
+        assert!(!mmd.contains("subgraph qc ["));
+        assert!(!mmd.contains("subgraph dada2 ["));
+        // Both directions flow inside the merged section; the downstream
+        // reporting module keeps its own section after the merged one.
+        assert!(mmd.contains("n0 -->|qc| n1"));
+        assert!(mmd.contains("n1 -->|generic| n2"));
+        assert!(mmd.contains("subgraph report [Reporting]"));
+        let merged_end = mmd
+            .rfind("    end\n")
+            .expect("multi-section map has end blocks");
+        let merged_pos = mmd.find("subgraph qc_dada2").unwrap();
+        let report_pos = mmd.find("subgraph report").unwrap();
+        assert!(
+            merged_pos < report_pos && report_pos < merged_end,
+            "reporting section must follow the merged section:\n{mmd}"
+        );
+    }
+
+    #[test]
     fn metro_export_multi_stage_emits_sections() {
         let mut qc = make_rule("fastqc", vec!["reads.fq"], vec!["reads_fastqc.html"]);
         qc.shell = Some("fastqc reads.fq".to_string());
@@ -2427,7 +2927,7 @@ mod tests {
         align.shell = Some("bwa mem ref.fa reads.fq > mapped.sam".to_string());
         let rules = vec![qc, align];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         assert!(mmd.contains("%%metro line: qc | Read QC | #4C78A8"));
         assert!(mmd.contains("%%metro line: align | Alignment | #54A24B"));
         assert!(mmd.contains("subgraph qc [Read QC]"));
@@ -2444,7 +2944,7 @@ mod tests {
         trim.shell = Some("fastp -i reads.fastq.gz".to_string());
         let rules = vec![qc, trim];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         assert!(mmd.contains("n0 -->|qc| n1"));
         let last_end = mmd
             .rfind("    end\n")
@@ -2465,7 +2965,7 @@ mod tests {
         rule.tags = vec!["qc".to_string()];
         let rules = vec![rule];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         assert!(mmd.contains("%%metro line: qc | Read QC | #4C78A8"));
         assert!(!mmd.contains("%%metro line: align"));
     }
@@ -2501,7 +3001,7 @@ mod tests {
         b.tags = vec!["stage|pipe".to_string()];
         let rules = vec![a, b];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         // Line directive field separators must survive display names.
         assert!(
             mmd.contains("%%metro line: stage_bracket | stage bracket | "),
@@ -2538,7 +3038,7 @@ mod tests {
             make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
         ];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let mmd = dag.to_metro(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
         let lines: Vec<&str> = mmd.lines().collect();
         let station_line = lines
             .iter()
@@ -2552,6 +3052,106 @@ mod tests {
             station_line.len() - station_line.trim_start().len(),
             edge_line.len() - edge_line.trim_start().len(),
             "single-stage station and edge must share the same indentation:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_process_granularity_collapses_tool_chains() {
+        // `samtools sort` → `samtools index` → `samtools stats` is one tool
+        // chain; process granularity renders a single "SAMtools" stop.
+        let mut rules = vec![
+            make_rule("sort", vec!["reads.bam"], vec!["sorted.bam"]),
+            make_rule("index", vec!["sorted.bam"], vec!["sorted.bam.bai"]),
+            make_rule("stats", vec!["sorted.bam"], vec!["stats.txt"]),
+            make_rule("multiqc_report", vec!["stats.txt"], vec!["report.html"]),
+        ];
+        rules[0].shell = Some("samtools sort -o sorted.bam reads.bam".into());
+        rules[1].shell = Some("samtools index sorted.bam".into());
+        rules[2].shell = Some("samtools stats sorted.bam > stats.txt".into());
+        rules[3].shell = Some("multiqc .".into());
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag
+            .to_metro(&rules, None, MetroGranularity::Process)
+            .unwrap();
+        assert!(
+            mmd.contains("n0[\"SAMtools\"]"),
+            "chain collapses into one tool-named station:\n{mmd}"
+        );
+        assert!(
+            !mmd.contains("n1[") && !mmd.contains("n2["),
+            "merged rules no longer get their own stations:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("n0 -->|align| n3"),
+            "collapsed station stays wired to downstream rules:\n{mmd}"
+        );
+
+        // Rule granularity keeps the same workflow expanded.
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        assert!(
+            mmd.contains("n1["),
+            "rule granularity keeps every stop:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_process_granularity_keeps_independent_uses_separate() {
+        // Two FastQC rules not chain-connected (raw vs trimmed reads) stay
+        // separate stops, numbered onward within their section.
+        let mut rules = vec![
+            make_rule("fastqc_raw", vec!["raw.fq"], vec!["raw_fastqc/"]),
+            make_rule("trim", vec!["raw.fq"], vec!["trimmed.fq"]),
+            make_rule(
+                "fastqc_trimmed",
+                vec!["trimmed.fq"],
+                vec!["trimmed_fastqc/"],
+            ),
+        ];
+        rules[0].shell = Some("fastqc raw.fq".into());
+        rules[1].shell = Some("fastp -i raw.fq -o trimmed.fq".into());
+        rules[2].shell = Some("fastqc trimmed.fq".into());
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag
+            .to_metro(&rules, None, MetroGranularity::Process)
+            .unwrap();
+        assert!(mmd.contains("n0[\"FastQC\"]"), "raw-read stop kept:\n{mmd}");
+        assert!(
+            mmd.contains("n2[\"FastQC (2)\"]"),
+            "independent same-tool use gets its own numbered stop:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("n1[\"fastp\"]"),
+            "different-tool rule keeps its rule station:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_process_granularity_merge_never_crosses_sections() {
+        // A tool chain bridging two module sections must not merge across
+        // the boundary: each section keeps its own station.
+        let mut rules = vec![
+            make_rule("align_reads", vec!["reads.fq"], vec!["aln.bam"]),
+            make_rule("qc_align", vec!["aln.bam"], vec!["qc/"]),
+        ];
+        rules[0].shell = Some("bwa mem ref.fa reads.fq > aln.bam".into());
+        rules[1].shell = Some("fastqc aln.bam".into());
+        let mut modules: HashMap<String, Vec<String>> = HashMap::new();
+        modules.insert("alignment".to_string(), vec!["align_reads".to_string()]);
+        modules.insert("bam_qc".to_string(), vec!["qc_align".to_string()]);
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag
+            .to_metro(&rules, Some(&modules), MetroGranularity::Process)
+            .unwrap();
+        assert!(
+            mmd.contains("subgraph alignment [Alignment]") && mmd.contains("n0[\"BWA\"]"),
+            "first section keeps its tool station:\n{mmd}"
+        );
+        assert!(
+            mmd.contains("subgraph bam_qc [BAM QC]") && mmd.contains("n1[\"FastQC\"]"),
+            "second section keeps its own station (no cross-section merge):\n{mmd}"
         );
     }
 }

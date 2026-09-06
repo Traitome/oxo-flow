@@ -58,67 +58,71 @@ const PREFIX_STAGES: &[(&str, &str)] = &[
     ("multiqc", "report"),
 ];
 
-/// `(stage, keyword)` pairs for shell/script inference, matched against the
-/// lowercased command text. Order matters: more specific signals (a variant
-/// caller) win over generic ones (an aligner), mirroring `WorkflowDomain`.
-const KEYWORDS: &[(&str, &str)] = &[
+/// `(stage, keyword, tool display)` pairs for shell/script inference, matched
+/// against the lowercased command text. Order matters: more specific signals
+/// (a variant caller) win over generic ones (an aligner), mirroring
+/// `WorkflowDomain`. The tool display is the curated process name used when
+/// the metro export groups rules into process-level stations (granularity
+/// `process`): several rules driven by the same tool collapse into one
+/// station named after the tool, the nf-core transit-map idiom
+/// (`samtools sort`/`samtools index`/… → one "SAMtools" stop).
+const KEYWORDS: &[(&str, &str, &str)] = &[
     // Reporting / aggregation — must precede QC so MultiQC is not misread as QC.
-    ("report", "multiqc"),
+    ("report", "multiqc", "MultiQC"),
     // Variant calling (specific callers before the broad "gatk").
-    ("variant", "haplotypecaller"),
-    ("variant", "mutect2"),
-    ("variant", "freebayes"),
-    ("variant", "strelka"),
-    ("variant", "vardict"),
-    ("variant", "bcftools call"),
-    ("variant", "bcftools mpileup"),
-    ("variant", "gatk"),
+    ("variant", "haplotypecaller", "HaplotypeCaller"),
+    ("variant", "mutect2", "Mutect2"),
+    ("variant", "freebayes", "freeBayes"),
+    ("variant", "strelka", "Strelka"),
+    ("variant", "vardict", "VarDict"),
+    ("variant", "bcftools call", "BCFtools"),
+    ("variant", "bcftools mpileup", "BCFtools"),
+    ("variant", "gatk", "GATK"),
     // Alignment-adjacent BAM processing (MarkDuplicates is the hub rule
     // most downstream stages consume — staging it as align keeps the
     // stage flow acyclic, live: community rnaseq).
-    ("align", "picard"),
+    ("align", "picard", "Picard"),
     // Annotation.
-    ("annotate", "snpeff"),
-    ("annotate", "snpsift"),
-    ("annotate", "annovar"),
-    ("annotate", "vep"),
+    ("annotate", "snpeff", "SnpEff"),
+    ("annotate", "snpsift", "SnpSift"),
+    ("annotate", "annovar", "ANNOVAR"),
+    ("annotate", "vep", "VEP"),
     // Quantification.
-    ("quantify", "featurecounts"),
-    ("quantify", "htseq"),
-    ("quantify", "salmon quant"),
-    ("quantify", "kallisto"),
-    ("quantify", "rsem"),
-    ("quantify", "stringtie"),
+    ("quantify", "featurecounts", "featureCounts"),
+    ("quantify", "htseq", "HTSeq"),
+    ("quantify", "salmon quant", "Salmon"),
+    ("quantify", "kallisto", "Kallisto"),
+    ("quantify", "rsem", "RSEM"),
+    ("quantify", "stringtie", "StringTie"),
     // Alignment.
-    ("align", "bwa"),
-    ("align", "star "),
-    ("align", "samtools sort"),
-    ("align", "samtools index"),
-    ("align", "samtools stats"),
-    ("align", "samtools flagstat"),
-    ("align", "samtools idxstats"),
-    ("align", "hisat2"),
-    ("align", "minimap2"),
-    ("align", "bowtie"),
-    ("align", "tophat"),
+    ("align", "bwa", "BWA"),
+    ("align", "star ", "STAR"),
+    ("align", "samtools sort", "SAMtools"),
+    ("align", "samtools index", "SAMtools"),
+    ("align", "samtools stats", "SAMtools"),
+    ("align", "samtools flagstat", "SAMtools"),
+    ("align", "samtools idxstats", "SAMtools"),
+    ("align", "hisat2", "HISAT2"),
+    ("align", "minimap2", "minimap2"),
+    ("align", "bowtie", "Bowtie2"),
+    ("align", "tophat", "TopHat"),
     // Trimming.
-    ("trim", "trimmomatic"),
-    ("trim", "trim_galore"),
-    ("trim", "cutadapt"),
-    ("trim", "fastp"),
+    ("trim", "trimmomatic", "Trimmomatic"),
+    ("trim", "trim_galore", "Trim Galore!"),
+    ("trim", "cutadapt", "cutadapt"),
+    ("trim", "fastp", "fastp"),
     // QC.
-    ("qc", "fastqc"),
-    ("qc", "fastq_screen"),
-    ("qc", "qualimap"),
-    ("qc", "fq_lint"),
-    ("qc", "fq lint"),
-    ("qc", "fqlint"),
+    ("qc", "fastqc", "FastQC"),
+    ("qc", "fastq_screen", "FastQ Screen"),
+    ("qc", "qualimap", "Qualimap"),
+    ("qc", "fq_lint", "fq lint"),
+    ("qc", "fqlint", "fq lint"),
     // Merge / concatenation (substring " cat"/" merge"/" concat" to avoid
     // matching "scatter" or "concatenate" noise).
-    ("merge", "samtools merge"),
-    ("merge", "bcftools merge"),
-    ("merge", "bcftools concat"),
-    ("merge", "picard merge"),
+    ("merge", "samtools merge", "SAMtools"),
+    ("merge", "bcftools merge", "BCFtools"),
+    ("merge", "bcftools concat", "BCFtools"),
+    ("merge", "picard merge", "Picard"),
 ];
 
 /// Normalize a user-supplied tag into a canonical stage name.
@@ -165,6 +169,24 @@ pub fn detect_stage(rule: &Rule) -> String {
     }
 
     // 3. Command keyword inference.
+    if let Some((stage, _, _)) = match_keyword(rule) {
+        return stage.to_string();
+    }
+
+    // 4. Fallback.
+    "generic".to_string()
+}
+
+/// The curated tool name for a rule, when its shell/script matches a known
+/// tool keyword (`samtools index` → `Some("SAMtools")`). Rules without a
+/// match stay individual stations in process-granularity metro exports.
+/// Same matching order as [`detect_stage`] step 3.
+pub fn detect_tool(rule: &Rule) -> Option<&'static str> {
+    match_keyword(rule).map(|(_, _, tool)| tool)
+}
+
+/// First `(stage, keyword, tool)` match over the rule's shell/script text.
+fn match_keyword(rule: &Rule) -> Option<(&'static str, &'static str, &'static str)> {
     let mut text = String::new();
     if let Some(shell) = &rule.shell {
         text.push_str(shell);
@@ -174,14 +196,10 @@ pub fn detect_stage(rule: &Rule) -> String {
         text.push_str(script);
     }
     let text = text.to_lowercase();
-    for (stage, keyword) in KEYWORDS {
-        if text.contains(keyword) {
-            return (*stage).to_string();
-        }
-    }
-
-    // 4. Fallback.
-    "generic".to_string()
+    KEYWORDS
+        .iter()
+        .find(|(_, keyword, _)| text.contains(keyword))
+        .copied()
 }
 
 /// Friendly section title for a module namespace (metro-map sections).
@@ -194,7 +212,7 @@ pub fn module_display(module: &str) -> String {
         "quantification" => "Quantification",
         "prepare_genome" => "Reference preparation",
         "bigwig" => "Coverage tracks",
-        "multiqc" => "Reporting",
+        "multiqc" | "report" => "Reporting",
         "trim" => "Trimming",
         "annotation" | "annotate" => "Annotation",
         "variant" => "Variant calling",
@@ -306,6 +324,9 @@ mod tests {
     fn module_display_curated_and_fallback() {
         assert_eq!(module_display("fastq_qc"), "Read QC");
         assert_eq!(module_display("prepare_genome"), "Reference preparation");
+        // Live: community ampliseq has a bare `report` module; the metro
+        // section must use the stage display, not a bare "Report".
+        assert_eq!(module_display("report"), "Reporting");
         assert_eq!(module_display("novel_module"), "Novel Module");
     }
 
@@ -331,6 +352,25 @@ mod tests {
     fn no_signal_falls_back_to_generic() {
         let r = rule("mystery", "echo hello", vec![]);
         assert_eq!(detect_stage(&r), "generic");
+    }
+
+    #[test]
+    fn detect_tool_returns_curated_display_name() {
+        assert_eq!(
+            detect_tool(&rule("a", "samtools sort in.bam", vec![])),
+            Some("SAMtools")
+        );
+        assert_eq!(
+            detect_tool(&rule("b", "STAR --genomeDir g", vec![])),
+            Some("STAR")
+        );
+        assert_eq!(
+            detect_tool(&rule("c", "multiqc .", vec![])),
+            Some("MultiQC")
+        );
+        assert_eq!(detect_tool(&rule("d", "echo nothing", vec![])), None);
+        // Tags/prefixes set the stage but are not tool identities.
+        assert_eq!(detect_tool(&rule("e", "echo x", vec!["qc"])), None);
     }
 
     #[test]
