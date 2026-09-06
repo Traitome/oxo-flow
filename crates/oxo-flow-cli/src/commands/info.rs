@@ -860,8 +860,9 @@ mod tests {
             "../../examples/gallery/16_16s_qiime2_amplicon.oxoflow",
         );
 
-        // `classifier` carries a 4-line comment block (joined with spaces);
-        // uncommented keys omit the field entirely.
+        // `classifier` carries a 4-line comment block (newline-joined, so
+        // the author's line structure survives); uncommented keys omit the
+        // field entirely.
         let records = meta["config"].as_array().unwrap();
         let classifier = records
             .iter()
@@ -869,9 +870,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             classifier["description"],
-            "Optional: pre-trained classifier for the target 16S region \
-             (e.g. silva-138-99-515-806-nb-classifier.qza). Set via \
-             `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`; \
+            "Optional: pre-trained classifier for the target 16S region\n\
+             (e.g. silva-138-99-515-806-nb-classifier.qza). Set via\n\
+             `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`;\n\
              without it, skip the classify step or train a classifier first."
         );
         let trim_left_f = records
