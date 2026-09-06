@@ -27,6 +27,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree), `mermaid` (Mermaid `graph LR`), `metro` (nf-metro metro map). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
+| `--granularity <LEVEL>` | | `metro` station zoom: `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), `module` (one station per module section — the publication/overview tier). See [Graph Subcommand Design](../reference/graph-subcommand.md) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |
@@ -87,6 +88,19 @@ oxo-flow graph pipeline.oxoflow -f metro -o pipeline.mmd
 # online playground at https://seqeralabs.github.io/nf-metro/latest/playground/
 pip install nf-metro
 nf-metro render pipeline.mmd -o pipeline.svg
+```
+
+`--granularity` zooms the metro map in three rungs (see [Graph Subcommand Design](../reference/graph-subcommand.md) for the persona rationale):
+
+- `rule` (default) — every rule is one station; the mechanical truth for operating and debugging a run.
+- `process` — chain-connected rules driven by the same tool collapse into tool-named stations (`samtools sort` → `samtools index` → one "SAMtools" stop).
+- `module` — one station per module section; the compact publication/overview tier that lands dense ports at the published-map scale.
+
+```bash
+# Publication-tier overview (compact module map)
+oxo-flow graph pipeline.oxoflow -f metro --granularity module -o overview.mmd
+# Tool-level map for reviewing a port against its upstream
+oxo-flow graph pipeline.oxoflow -f metro --granularity process -o tools.mmd
 ```
 
 ### View the expanded runtime DAG
