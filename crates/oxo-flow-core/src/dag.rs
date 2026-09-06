@@ -1135,6 +1135,63 @@ impl WorkflowDag {
             .into_iter()
             .map(|rank| sections_first[rank].clone())
             .collect();
+        // Topological station order within each section (Kahn over
+        // intra-section station edges, ties by file order): a left-to-right
+        // transit map needs producers left of consumers INSIDE a section —
+        // file order can violate dataflow (ported workflows group rules by
+        // module, live: community eager's kraken_merge precedes
+        // kraken_parse), and nf-metro rejects backward intra-section edges
+        // as collinear/bundle-order routing defects. Stations are acyclic
+        // (the collapse above is cycle-safe), but a residual cycle appends
+        // its members in file order rather than dropping any.
+        let mut intra_succ: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
+        let mut intra_in_degree: HashMap<NodeIndex, usize> = HashMap::new();
+        for &(src, dst) in &station_edges {
+            if node_section[&src] == node_section[&dst] {
+                *intra_in_degree.entry(dst).or_insert(0) += 1;
+                intra_succ.entry(src).or_default().push(dst);
+            }
+        }
+        let section_station_order: HashMap<String, Vec<NodeIndex>> = sections
+            .iter()
+            .map(|(section, _)| {
+                let members: Vec<NodeIndex> = station_nodes
+                    .iter()
+                    .copied()
+                    .filter(|n| &node_section[n] == section)
+                    .collect();
+                let rank: HashMap<NodeIndex, usize> = members
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &n)| (n, i))
+                    .collect();
+                let mut ready: BTreeSet<(usize, NodeIndex)> = members
+                    .iter()
+                    .filter(|n| !intra_in_degree.contains_key(n))
+                    .map(|&n| (rank[&n], n))
+                    .collect();
+                let mut ordered: Vec<NodeIndex> = Vec::with_capacity(members.len());
+                while let Some(&(_, node)) = ready.first() {
+                    ready.remove(&(rank[&node], node));
+                    ordered.push(node);
+                    for &succ in intra_succ.get(&node).into_iter().flatten() {
+                        let count = intra_in_degree.get_mut(&succ).unwrap();
+                        *count -= 1;
+                        if *count == 0 {
+                            ready.insert((rank[&succ], succ));
+                        }
+                    }
+                }
+                if ordered.len() < members.len() {
+                    let leftover: Vec<NodeIndex> = members
+                        .into_iter()
+                        .filter(|n| !ordered.contains(n))
+                        .collect();
+                    ordered.extend(leftover);
+                }
+                (section.clone(), ordered)
+            })
+            .collect();
         let mut stages: Vec<String> = Vec::new();
         for node in &station_nodes {
             let stage = &node_stage[node];
@@ -1192,7 +1249,7 @@ impl WorkflowDag {
                 ));
             }
 
-            for node in station_nodes.iter().filter(|n| &node_section[n] == section) {
+            for node in &section_station_order[section] {
                 out.push_str(&format!(
                     "{inner_indent}n{}[\"{}\"]\n",
                     node.index(),
@@ -3152,6 +3209,30 @@ mod tests {
         assert!(
             mmd.contains("subgraph bam_qc [BAM QC]") && mmd.contains("n1[\"FastQC\"]"),
             "second section keeps its own station (no cross-section merge):\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_export_orders_stations_topologically_within_section() {
+        // A left-to-right transit map needs producers left of consumers
+        // INSIDE a section; file order can violate dataflow (ported
+        // workflows group rules by module — live: community eager's
+        // kraken_merge precedes kraken_parse in file order, which
+        // nf-metro rejects as collinear routing defects).
+        let mut rules = vec![
+            make_rule("qc_consumer", vec!["mid.txt"], vec!["out.txt"]),
+            make_rule("qc_producer", vec!["in.txt"], vec!["mid.txt"]),
+        ];
+        rules[0].shell = Some("fastqc mid.txt".into());
+        rules[1].shell = Some("fastqc in.txt".into());
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        let producer = mmd.find("n1[\"qc_producer\"]").expect("producer station");
+        let consumer = mmd.find("n0[\"qc_consumer\"]").expect("consumer station");
+        assert!(
+            producer < consumer,
+            "producer must sit left of its consumer within the section:\n{mmd}"
         );
     }
 }
