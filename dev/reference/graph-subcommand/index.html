@@ -4001,9 +4001,10 @@ particular workflow:</p>
    dataflow (ported workflows group rules by module), and nf-metro
    rejects backward intra-section edges as routing defects.</li>
 <li><strong>Cycle-safe contraction.</strong> Module sections that reference each other
-   cyclically merge into one section (deterministic id, <code>" + "</code>-joined
-   display) via Kosaraju SCCs — the contracted section graph is always
-   acyclic without dropping any station or edge.</li>
+   cyclically merge into one section (deterministic id, two-line display:
+   the dominant stage top, the member module names below, deduplicated
+   and title-normalized) via Kosaraju SCCs — the contracted section graph
+   is always acyclic without dropping any station or edge.</li>
 <li><strong>Router-friendly shapes.</strong> Edges are deduplicated per station pair;
    isolated stations go off-track (<code>%%metro off_track</code>); labels are
    sanitized for Mermaid and nf-metro alike.</li>
@@ -4055,10 +4056,12 @@ before editing the exporter:</p>
    <code>salmon_quant</code>) draws as a separate group ending in the shared report.
    Correct connectivity, not a missing edge.</li>
 <li><strong>Merged-cyclic stations.</strong> Mutually-referencing modules contract into
-   one merged section (the SCC pass) with a <code>" + "</code>-joined title; the
-   site's overview pass keeps those as separate per-stage stations, so a
-   cyclic multi-module pipeline reads as one station per analysis stage
-   instead of one repeated merged name (live: sarek).</li>
+   one merged section (the SCC pass) with a two-line station label — the
+   dominant stage on top, the member module names below (live: atacseq
+   "Alignment / Analysis · PE · Cons · …", eager "Read QC / Branches");
+   the site's overview pass keeps cyclic modules as separate per-stage
+   stations, so a cyclic multi-module pipeline reads as one station per
+   analysis stage instead of one repeated merged name (live: sarek).</li>
 </ol>
 <p>The runtime view — one node per (rule × sample/pair) task — is
 <code>oxo-flow graph --expanded</code>; exported figures stay template-level for the
