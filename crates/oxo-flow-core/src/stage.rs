@@ -273,6 +273,8 @@ fn title_case(module: &str) -> String {
             "rna" => "RNA",
             "dna" => "DNA",
             "sv" => "SV",
+            "its" => "ITS",
+            "pe" => "PE",
             _ => w.as_str(),
         })
         .collect::<Vec<_>>();
