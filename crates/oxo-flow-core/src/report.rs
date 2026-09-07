@@ -1956,11 +1956,18 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
 
         let mut rows: Vec<Vec<String>> = Vec::new();
         for name in &completed {
-            let wall = cp
-                .benchmarks
-                .get(*name)
-                .map(|b| format!("{:.1}s", b.wall_time_secs))
-                .unwrap_or_else(|| "-".into());
+            let wall = cp.benchmarks.get(*name).map_or_else(
+                || "-".into(),
+                // Synthetic up-to-date records (issue #324 F-1) carry a 0.0
+                // placeholder — "-" reads honest, a fabricated "0.0s" does not.
+                |b| {
+                    if b.recorded_as.is_some() {
+                        "-".into()
+                    } else {
+                        format!("{:.1}s", b.wall_time_secs)
+                    }
+                },
+            );
             rows.push(vec![(*name).clone(), "success".into(), wall, "-".into()]);
         }
         for name in &failed {
@@ -2000,7 +2007,13 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
             let b = &cp.benchmarks[name];
             bench_rows.push(vec![
                 name.clone(),
-                format!("{:.2}s", b.wall_time_secs),
+                // Synthetic up-to-date records (issue #324 F-1) show "-"
+                // instead of the 0.0 placeholder they carry.
+                if b.recorded_as.is_some() {
+                    "-".into()
+                } else {
+                    format!("{:.2}s", b.wall_time_secs)
+                },
                 b.max_memory_mb
                     .map(|m| format!("{}MB", m))
                     .unwrap_or_else(|| "-".into()),
@@ -3772,6 +3785,7 @@ mod tests {
                 memory_limit_mb: Some(2048),
                 cpu_seconds: Some(3.2),
                 retries: 1,
+                recorded_as: None,
             },
         );
         cp.rule_runs.insert(
@@ -4912,6 +4926,7 @@ mod dashboard_status_tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }

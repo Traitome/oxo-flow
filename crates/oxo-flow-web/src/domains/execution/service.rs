@@ -519,6 +519,7 @@ mod file_listing_tests {
                 memory_limit_mb: Some(1000),
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         benchmarks.insert(
@@ -530,6 +531,7 @@ mod file_listing_tests {
                 memory_limit_mb: Some(1000),
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         let resp = diagnose_run(&[], "", &benchmarks);
@@ -556,6 +558,7 @@ mod file_listing_tests {
                 memory_limit_mb: None,
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         let resp = diagnose_run(&[], "", &benchmarks);

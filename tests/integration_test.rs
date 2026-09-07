@@ -1172,6 +1172,7 @@ fn checkpoint_state_json_roundtrip() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: Some(38.0),
+            recorded_as: None,
         },
     );
     state.mark_failed("call_variants");
@@ -1209,6 +1210,7 @@ fn checkpoint_state_file_persistence() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: Some(4.2),
+            recorded_as: None,
         },
     );
     state.mark_completed(
@@ -1220,6 +1222,7 @@ fn checkpoint_state_file_persistence() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: Some(115.0),
+            recorded_as: None,
         },
     );
 
@@ -1251,6 +1254,7 @@ fn checkpoint_should_skip_logic() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: Some(0.9),
+            recorded_as: None,
         },
     );
     state.mark_failed("failed_rule");
@@ -1275,6 +1279,7 @@ fn checkpoint_prometheus_metrics() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: None,
+            recorded_as: None,
         },
     );
     state.mark_failed("step2");

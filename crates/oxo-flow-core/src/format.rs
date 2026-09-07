@@ -1592,10 +1592,23 @@ pub fn lint_format(
     // leakage on shared clusters and in CI artifacts. The declared path
     // (sensitive = true) routes the value through env injection and masks
     // it everywhere, so this is a one-line declaration away.
+    //
+    // The pattern is anchored rather than a bare substring so that keys
+    // like `tokenize` / `password_length_hint` don't false-positive
+    // (issue #335 finding 1) while `api_token`, `db_password`, `ssh_key`
+    // and even bare `token` / `secret` still match:
+    // - `\b`-alternation covers bare and word-adjacent forms (`token`,
+    //   `api_key`); `_` is a word character, so `tokenize` (no boundary
+    //   before "ize") and `password_length_hint` (no boundary after
+    //   "password") fall out naturally.
+    // - The `[_-]`-prefixed segment alternative covers underscore-adjacent
+    //   forms the \b pass misses (`db_password` — no \b before "password"
+    //   mid-identifier) while still requiring the word to end at a segment
+    //   boundary or key end, so `password_length_hint` stays unflagged.
     {
         static SECRET_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(
-                r"(?i)(token|secret|passwd|password|credential|api[_-]?key|access[_-]?key|private[_-]?key|ssh[_-]?key)",
+                r"(?i)\b(token|secret|passwd|password|credential|api[_-]?key|access[_-]?key|private[_-]?key|ssh[_-]?key|key)\b|[_-](?i:token|secret|passwd|password|credential|key)([_-]|$)",
             )
             .expect("valid secret-key regex")
         });
@@ -4716,7 +4729,13 @@ mod tests {
             api_token = "sk-supersecret"
             api_key = "AKIA-SECRET"
             password = "hunter2"
+            db_password = "hunter2"
+            ssh_key = "/home/u/.ssh/id_rsa"
+            token = "bare-allowed"
+            secret = "bare-allowed"
             monkey = "harmless"
+            tokenize = "not-a-secret"
+            password_length_hint = 32
             threads = 4
 
             [[rules]]
@@ -4731,26 +4750,26 @@ mod tests {
             .filter(|d| d.code == "W032")
             .map(|d| d.message.as_str())
             .collect();
-        assert!(
-            flagged.iter().any(|m| m.contains("api_token")),
-            "api_token must be flagged: {flagged:?}"
-        );
-        assert!(
-            flagged.iter().any(|m| m.contains("api_key")),
-            "api_key must be flagged: {flagged:?}"
-        );
-        assert!(
-            flagged.iter().any(|m| m.contains("password")),
-            "password must be flagged: {flagged:?}"
-        );
-        assert!(
-            !flagged.iter().any(|m| m.contains("monkey")),
-            "substring matches like 'monkey' must not be flagged: {flagged:?}"
-        );
-        assert!(
-            !flagged.iter().any(|m| m.contains("threads")),
-            "non-secret keys must not be flagged: {flagged:?}"
-        );
+        for key in [
+            "api_token",
+            "api_key",
+            "password",
+            "db_password",
+            "ssh_key",
+            "token",
+            "secret",
+        ] {
+            assert!(
+                flagged.iter().any(|m| m.contains(&format!("'{key}'"))),
+                "{key} must be flagged: {flagged:?}"
+            );
+        }
+        for key in ["monkey", "tokenize", "password_length_hint", "threads"] {
+            assert!(
+                !flagged.iter().any(|m| m.contains(key)),
+                "substring/segment false-positive '{key}' must not be flagged: {flagged:?}"
+            );
+        }
     }
 
     #[test]

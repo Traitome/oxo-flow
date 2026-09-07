@@ -73,7 +73,11 @@ the path as missing instead of approving it:
   - missing/{sample}.txt (no sample groups/pairs/sample_pattern declared)
 ```
 
-`--json` includes the same entry in `missing_inputs`.
+`--json` includes the same entry in `missing_inputs`. That field is a
+free-text diagnostic list, not a stable machine interface: entries mix
+plain paths (file simply absent on disk) with paths annotated with a
+trailing `(...)` reason, so consumers must not exact-match the strings
+or split on whitespace — match on the path prefix instead.
 
 ---
 

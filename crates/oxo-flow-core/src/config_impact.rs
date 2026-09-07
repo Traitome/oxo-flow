@@ -1261,6 +1261,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1319,6 +1320,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1367,6 +1369,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1412,6 +1415,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1520,6 +1524,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1572,6 +1577,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1612,6 +1618,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1657,6 +1664,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -1709,6 +1717,7 @@ mod tests {
                 memory_limit_mb: None,
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         let mut cp = checkpoint.clone();
@@ -1752,6 +1761,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -2030,6 +2040,7 @@ mod tests {
                 memory_limit_mb: None,
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         let report = detect_config_changes(
@@ -2145,6 +2156,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }
@@ -2252,6 +2264,7 @@ mod tests {
                     memory_limit_mb: None,
                     cpu_seconds: None,
                     retries: 0,
+                    recorded_as: None,
                 },
             );
         }

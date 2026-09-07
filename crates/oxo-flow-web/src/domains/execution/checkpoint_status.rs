@@ -37,10 +37,16 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             rule: rule.clone(),
             status: NodeStatus::Success,
             started_at: None,
-            duration_ms: checkpoint
-                .benchmarks
-                .get(rule)
-                .map(|b| (b.wall_time_secs * 1000.0).round() as u64),
+            // Synthetic up-to-date records (issue #324 F-1) carry a 0.0
+            // placeholder wall time — report no duration rather than a
+            // fake "0ms".
+            duration_ms: checkpoint.benchmarks.get(rule).and_then(|b| {
+                if b.recorded_as.is_some() {
+                    None
+                } else {
+                    Some((b.wall_time_secs * 1000.0).round() as u64)
+                }
+            }),
             exit_code: None,
             progress_pct: None,
         });
