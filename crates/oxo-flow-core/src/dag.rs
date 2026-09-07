@@ -1092,6 +1092,19 @@ impl WorkflowDag {
                     short_names.push(display.to_string());
                 }
             }
+            // A member that is a strict prefix of another (live:
+            // varlociraptor's "Mapping" next to "Mapping Bwa") carries no
+            // extra information — the longer name wins.
+            let mut kept: Vec<String> = Vec::new();
+            for name in &short_names {
+                let is_prefix = short_names
+                    .iter()
+                    .any(|other| other.len() > name.len() && other.starts_with(name.as_str()));
+                if !is_prefix {
+                    kept.push(name.clone());
+                }
+            }
+            short_names = kept;
             if short_names.len() > 3 {
                 short_names.truncate(3);
                 short_names.push("…".to_string());
