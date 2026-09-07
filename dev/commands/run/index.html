@@ -4780,20 +4780,32 @@
 </span></code></pre></div>
 <h3 id="run-a-workflow-from-a-repository-nextflow-style">Run a workflow from a repository (nextflow-style)<a class="headerlink" href="#run-a-workflow-from-a-repository-nextflow-style" title="Permanent link">#</a></h3>
 <p>A public git repository can be executed directly — no clone, no bundle:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Default branch</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Default branch — the gh: prefix is optional for github.com repositories</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>owner/pipeline
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># where @tag means a GitHub Release bundle)</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline@v0.17.2
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>owner/pipeline@v0.17.2
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Any git URL or local repository directory</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>https://example.com/team/pipeline.git
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># The explicit forms work the same way (gh: can always be kept)</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline@v0.17.2
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Any git URL or local repository directory</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>https://example.com/team/pipeline.git
 </span></code></pre></div>
-<p>The repository is checked out into <code>.oxo-flow/repos/&lt;name&gt;</code> under the
-current directory (reused on later runs — delete the directory to force a
-fresh clone), and the workflow file is auto-discovered (<code>main.oxoflow</code>
-first). Because the clone is a read-only cache, the working directory
+<p>A bare <code>owner/pipeline</code> argument is interpreted as a GitHub repository
+unless it names something real on the filesystem: a path that exists, one
+starting with <code>.</code>, or one ending in <code>.oxoflow</code> is always treated as a
+local workflow path. Only a single-slash <code>owner/name</code> — optionally with
+<code>@ref</code> and a trailing <code>.git</code> — maps to <code>https://github.com/owner/name.git</code>.
+(So a missing <code>data/pipeline.oxoflow</code> keeps its normal "workflow file not
+found" error instead of attempting a clone.)</p>
+<p>The repository is checked out into <code>.oxo-flow/repos/&lt;owner&gt;-&lt;name&gt;</code> under
+the current directory (reused on later runs — delete the directory to
+force a fresh clone; the owner prefix keeps same-named repos of different
+owners from sharing a checkout), and the workflow file is auto-discovered
+(<code>main.oxoflow</code> first). Because the clone is a read-only cache, the working directory
 defaults to the <strong>current directory</strong> for repository runs — outputs, the
 checkpoint, and the workdir lock all land next to your data, not inside the
 clone. All other run semantics apply unchanged: <code>--samples</code>, <code>--rerun</code>,
