@@ -1105,15 +1105,23 @@ impl WorkflowDag {
                 }
             }
             short_names = kept;
+            // The members line: up to 3 names + an explicit "+N" counter
+            // when more (a "…" reads as elision; "+N" keeps the count —
+            // the missing members are listed in the page/module layer).
             if short_names.len() > 3 {
+                let extra = short_names.len() - 3;
                 short_names.truncate(3);
-                short_names.push("…".to_string());
+                short_names.push(format!("+{extra}"));
             }
             if short_names.is_empty() {
                 short_names.push(dominant_display.to_string());
             }
+            // Single line — nf-metro 1.1.0 renders a literal `\n` inside
+            // station labels inconsistently (glued or shown verbatim,
+            // live: community ampliseq rules map showed "dada2\nRead QC…");
+            // the stage/title pair is joined with " · " instead.
             merged_displays.push(format!(
-                "{}\\n{}",
+                "{} · {}",
                 dominant_display,
                 short_names.join(" · ")
             ));
@@ -3192,7 +3200,7 @@ mod tests {
         // One merged section holds both modules (id joins the members,
         // display joins their titles); no standalone sections remain.
         assert!(
-            mmd.contains("subgraph qc_dada2 [Read QC\\nQC · Dada2]"),
+            mmd.contains("subgraph qc_dada2 [Read QC · QC · Dada2]"),
             "merged section missing:\n{mmd}"
         );
         assert!(!mmd.contains("subgraph qc ["));
@@ -3244,14 +3252,14 @@ mod tests {
         // dominant stage ("rename") is not repeated there.
         let label = mmd
             .lines()
-            .find(|l| l.contains("subgraph") && l.contains("\\n"))
+            .find(|l| l.contains("subgraph") && l.contains("·"))
             .unwrap_or_else(|| panic!("no merged subgraph:\n{mmd}"));
         assert!(
             label.contains("Rename · QC"),
             "unexpected merged label: {label}"
         );
         assert!(
-            !label.contains("\\nrename"),
+            !label.contains("rename \u{00b7} Rename") && !label.contains("\\nrename"),
             "raw stage tag leaked into merged label: {label}"
         );
     }
