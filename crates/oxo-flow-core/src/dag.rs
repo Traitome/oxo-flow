@@ -1447,12 +1447,25 @@ impl WorkflowDag {
             }
         }
 
-        // Inter-section edges.
+        // Inter-section edges. nf-metro paints a station with the line of
+        // its incident edges: a TERMINAL station (no outgoing edge) whose
+        // own section line differs from the source's would be painted on
+        // the source line while its own line stays empty (live: fetchngs
+        // reporting — legend promised a yellow Reporting line, the map
+        // drew only gray and the Reporting station gray). An edge that
+        // ends a line belongs to the DESTINATION station's line.
+        let station_sources: HashSet<NodeIndex> =
+            station_edges.iter().map(|&(src, _)| src).collect();
         for (src, dst) in inter_section_edges {
+            let line = if station_sources.contains(&dst) {
+                &line_ids[node_stage[&src].as_str()]
+            } else {
+                &line_ids[node_stage[&dst].as_str()]
+            };
             out.push_str(&format!(
                 "    n{} -->|{}| n{}\n",
                 src.index(),
-                line_ids[node_stage[&src].as_str()],
+                line,
                 dst.index()
             ));
         }
@@ -3120,8 +3133,11 @@ mod tests {
         // Station labels are the bare rule names (no `module::` prefix).
         assert!(mmd.contains("n0[\"trimgalore\"]"));
         assert!(mmd.contains("n1[\"star_align\"]"));
-        // The cross-section edge carries the SOURCE rule's stage line.
-        assert!(mmd.contains("n0 -->|qc| n1"));
+        // The cross-section edge carries the SOURCE rule's stage line;
+        // a TERMINAL destination instead receives its own (destination)
+        // line so the station is painted on its own stage (live: fetchngs
+        // reporting terminal previously rendered gray on the Analysis line).
+        assert!(mmd.contains("n0 -->|align| n1"));
     }
 
     #[test]
@@ -3148,7 +3164,7 @@ mod tests {
         assert!(mmd.contains("subgraph s_02_assembly [Assembly]"));
         assert!(!mmd.contains("subgraph qc [Read QC]"));
         // The inter-section edge is emitted with the source rule's stage line.
-        assert!(mmd.contains("n0 -->|trim| n1"));
+        eprintln!("MMDDUMP\n{}", mmd); assert!(mmd.contains("n0 -->|generic| n1"));
     }
 
     #[test]
@@ -3266,11 +3282,11 @@ mod tests {
         let rules = vec![qc, trim];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
         let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
-        assert!(mmd.contains("n0 -->|qc| n1"));
+        assert!(mmd.contains("n0 -->|trim| n1"));
         let last_end = mmd
             .rfind("    end\n")
             .expect("multi-stage map has sections");
-        let edge_pos = mmd.rfind("-->|qc|").expect("cross-stage edge exists");
+        let edge_pos = mmd.rfind("-->|trim|").expect("cross-stage edge exists");
         assert!(
             edge_pos > last_end,
             "cross-stage edge must follow all `end` blocks:\n{mmd}"
@@ -3429,8 +3445,8 @@ mod tests {
             "merged rules no longer get their own stations:\n{mmd}"
         );
         assert!(
-            mmd.contains("n0 -->|align| n3"),
-            "collapsed station stays wired to downstream rules:\n{mmd}"
+            mmd.contains("n0 -->|report| n3"),
+            "terminal destination rides its own (report) line likewise:\n{mmd}"
         );
 
         // Rule granularity keeps the same workflow expanded.
