@@ -83,21 +83,34 @@ oxo-flow run pipeline.oxoflow
 A public git repository can be executed directly — no clone, no bundle:
 
 ```bash
-# Default branch
-oxo-flow run gh:owner/pipeline
+# Default branch — the gh: prefix is optional for github.com repositories
+oxo-flow run owner/pipeline
 
 # Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,
 # where @tag means a GitHub Release bundle)
+oxo-flow run owner/pipeline@v0.17.2
+
+# The explicit forms work the same way (gh: can always be kept)
+oxo-flow run gh:owner/pipeline
 oxo-flow run gh:owner/pipeline@v0.17.2
 
 # Any git URL or local repository directory
 oxo-flow run https://example.com/team/pipeline.git
 ```
 
-The repository is checked out into `.oxo-flow/repos/<name>` under the
-current directory (reused on later runs — delete the directory to force a
-fresh clone), and the workflow file is auto-discovered (`main.oxoflow`
-first). Because the clone is a read-only cache, the working directory
+A bare `owner/pipeline` argument is interpreted as a GitHub repository
+unless it names something real on the filesystem: a path that exists, one
+starting with `.`, or one ending in `.oxoflow` is always treated as a
+local workflow path. Only a single-slash `owner/name` — optionally with
+`@ref` and a trailing `.git` — maps to `https://github.com/owner/name.git`.
+(So a missing `data/pipeline.oxoflow` keeps its normal "workflow file not
+found" error instead of attempting a clone.)
+
+The repository is checked out into `.oxo-flow/repos/<owner>-<name>` under
+the current directory (reused on later runs — delete the directory to
+force a fresh clone; the owner prefix keeps same-named repos of different
+owners from sharing a checkout), and the workflow file is auto-discovered
+(`main.oxoflow` first). Because the clone is a read-only cache, the working directory
 defaults to the **current directory** for repository runs — outputs, the
 checkpoint, and the workdir lock all land next to your data, not inside the
 clone. All other run semantics apply unchanged: `--samples`, `--rerun`,
