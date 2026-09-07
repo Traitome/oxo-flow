@@ -93,9 +93,10 @@ particular workflow:
    dataflow (ported workflows group rules by module), and nf-metro
    rejects backward intra-section edges as routing defects.
 4. **Cycle-safe contraction.** Module sections that reference each other
-   cyclically merge into one section (deterministic id, `" + "`-joined
-   display) via Kosaraju SCCs — the contracted section graph is always
-   acyclic without dropping any station or edge.
+   cyclically merge into one section (deterministic id, two-line display:
+   the dominant stage top, the member module names below, deduplicated
+   and title-normalized) via Kosaraju SCCs — the contracted section graph
+   is always acyclic without dropping any station or edge.
 5. **Router-friendly shapes.** Edges are deduplicated per station pair;
    isolated stations go off-track (`%%metro off_track`); labels are
    sanitized for Mermaid and nf-metro alike.
@@ -152,10 +153,12 @@ before editing the exporter:
    `salmon_quant`) draws as a separate group ending in the shared report.
    Correct connectivity, not a missing edge.
 3. **Merged-cyclic stations.** Mutually-referencing modules contract into
-   one merged section (the SCC pass) with a `" + "`-joined title; the
-   site's overview pass keeps those as separate per-stage stations, so a
-   cyclic multi-module pipeline reads as one station per analysis stage
-   instead of one repeated merged name (live: sarek).
+   one merged section (the SCC pass) with a two-line station label — the
+   dominant stage on top, the member module names below (live: atacseq
+   "Alignment / Analysis · PE · Cons · …", eager "Read QC / Branches");
+   the site's overview pass keeps cyclic modules as separate per-stage
+   stations, so a cyclic multi-module pipeline reads as one station per
+   analysis stage instead of one repeated merged name (live: sarek).
 
 The runtime view — one node per (rule × sample/pair) task — is
 `oxo-flow graph --expanded`; exported figures stay template-level for the
