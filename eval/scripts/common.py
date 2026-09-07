@@ -119,7 +119,10 @@ def load_gold(layer, include_unreviewed=False, gold_path=None):
         if not rows:
             raise SystemExit(f"no {layer} rows found in {path}")
         return rows
-    approved = [r for r in rows if r.get("review_status") == "approved"]
+    approved = [
+        r for r in rows
+        if r.get("review_status") in ("approved", "corrected")
+    ]
     skipped = len(rows) - len(approved)
     if skipped:
         print(

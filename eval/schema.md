@@ -6,7 +6,7 @@ answer. The gold answer is a **draft by construction** (`gold_draft_by =
 claude`): every row carries a `provenance_url` pointing at the primary
 source the answer was derived from, so a human reviewer can verify each row against the source without trusting the draft.
 
-Reviewers edit only the review columns; `eval/scripts/runner.py` scores only rows with `review_status = approved` unless run with `--include-unreviewed`. When no approved rows exist, the harness now exits with an explicit error instead of silently emitting an empty report.
+Reviewers edit only the review columns; `eval/scripts/runner.py` scores rows with `review_status = approved` **or** `corrected` (a corrected row has had its gold columns repaired during review, so it is judged against its fixed answer) unless run with `--include-unreviewed`. When no reviewable rows exist, the harness exits with an explicit error instead of silently emitting an empty report.
 
 ## Common columns (all three CSVs)
 
