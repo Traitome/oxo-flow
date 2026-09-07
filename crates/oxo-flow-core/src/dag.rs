@@ -3164,7 +3164,7 @@ mod tests {
         assert!(mmd.contains("subgraph s_02_assembly [Assembly]"));
         assert!(!mmd.contains("subgraph qc [Read QC]"));
         // The inter-section edge is emitted with the source rule's stage line.
-        eprintln!("MMDDUMP\n{}", mmd); assert!(mmd.contains("n0 -->|generic| n1"));
+        assert!(mmd.contains("n0 -->|generic| n1"));
     }
 
     #[test]
