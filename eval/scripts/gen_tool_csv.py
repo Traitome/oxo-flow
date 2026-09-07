@@ -28,7 +28,48 @@ OUT_PATH = os.path.join(REPO_ROOT, "eval", "gold", "tool.csv")
 BIOCONDA_RECIPE_URL = (
     "https://github.com/bioconda/bioconda-recipes/tree/master/recipes/{name}"
 )
-NFCORE_MODULE_URL = "https://github.com/nf-core/modules/tree/main/modules/nf-core/{name}"
+NFCORE_MODULE_URL = "https://github.com/nf-core/modules/tree/master/modules/nf-core/{name}"
+
+# nf-core/modules restructured into nested submodules (parent/<tool>_<sub>
+# flattened names now live under a parent directory). Map the flattened
+# name to its parent/child path; absent from this map = top-level module.
+NFCORE_MODULE_PATHS = {
+    "abricate_summary": "abricate/summary",
+    "autocycler_trim": "autocycler/trim",
+    "bedtools_sort": "bedtools/sort",
+    "catpack_bins": "catpack/bins",
+    "cobs_compactconstruct": "cobs/compactconstruct",
+    "deacon_indexunion": "deacon/indexunion",
+    "epang_place": "epang/place",
+    "folddisco_index": "folddisco/index",
+    "gatk4_postprocessgermlinecnvcalls": "gatk4/postprocessgermlinecnvcalls",
+    "goatools_findenrichment": "goatools/findenrichment",
+    "hmmer_hmmlogo": "hmmer/hmmlogo",
+    "kallistobustools_count": "kallistobustools/count",
+    "misopy_index": "misopy/index",
+    "numorph_3dunet": "numorph/3dunet",
+    "pbmm2_align": "pbmm2/align",
+    "plink_recode": "plink/recode",
+    "samplesheetparser_diff": "samplesheetparser/diff",
+    "seqcluster_collapse": "seqcluster/collapse",
+    "somalier_relate": "somalier/relate",
+    "upp_align": "upp/align",
+}
+
+# bioconda-recipes removed these recipe dirs but the package pages on
+# anaconda.org remain live — point provenance there instead.
+BIOCONDA_PACKAGE_URL = "https://anaconda.org/bioconda/{name}"
+BIOCONDA_RECIPE_MISSING = {"r-seurat", "esme_psmpi_5_12_1", "gclib", "ghc"}
+
+
+def bioconda_url(name):
+    if name in BIOCONDA_RECIPE_MISSING:
+        return BIOCONDA_PACKAGE_URL.format(name=name)
+    return BIOCONDA_RECIPE_URL.format(name=name)
+
+
+def nfcore_url(name):
+    return NFCORE_MODULE_URL.format(name=NFCORE_MODULE_PATHS.get(name, name))
 
 
 def load_jsonl(name):
@@ -196,7 +237,7 @@ def emit():
     for query, tool in curated_purpose_queries():
         if tool in bioconda_index:
             source, date = "bioconda", dates.get("bioconda_tools.jsonl", "")
-            url = BIOCONDA_RECIPE_URL.format(name=tool)
+            url = bioconda_url(tool)
         elif tool in commercial_index:
             row = commercial_index[tool]
             source, date = "commercial", row.get("checked_at", "")
@@ -215,7 +256,7 @@ def emit():
         if tool in bioconda_index:
             source, url, date = (
                 "bioconda",
-                BIOCONDA_RECIPE_URL.format(name=tool),
+                bioconda_url(tool),
                 dates.get("bioconda_tools.jsonl", ""),
             )
         else:
@@ -232,7 +273,7 @@ def emit():
         add(
             f"what is {name} and what is its latest bioconda version",
             "exact_name", name, row.get("v", ""), "bioconda", 0,
-            BIOCONDA_RECIPE_URL.format(name=name),
+            bioconda_url(name),
             dates.get("bioconda_tools.jsonl", ""), "easy",
         )
 
@@ -242,7 +283,7 @@ def emit():
         add(
             f"what is the latest version of {name} available in bioconda",
             "version_pin", name, row.get("v", ""), "bioconda", 0,
-            BIOCONDA_RECIPE_URL.format(name=name),
+            bioconda_url(name),
             dates.get("bioconda_tools.jsonl", ""), "medium",
         )
 
@@ -252,7 +293,7 @@ def emit():
         add(
             f"what does the nf-core module {name} do",
             "exact_name", name, "", "nfcore", 0,
-            NFCORE_MODULE_URL.format(name=name),
+            nfcore_url(name),
             dates.get("nfcore_modules.jsonl", ""), "medium",
         )
 
