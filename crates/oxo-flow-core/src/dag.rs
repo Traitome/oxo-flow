@@ -1040,13 +1040,49 @@ impl WorkflowDag {
                 section_of_scc.insert(member, slot);
             }
             merged_ids.push(merged_id);
-            merged_displays.push(
-                members
-                    .iter()
-                    .map(|&i| section_display[i].clone())
-                    .collect::<Vec<_>>()
-                    .join(" + "),
-            );
+            // Two-line merged display: the group's DOMINANT stage reads
+            // first (what the section DOES — "Analysis") and the member
+            // module short-names after ("Read · Dada2 · …"). A 34-char
+            // one-liner ("Read QC + dada2 + Analysis + its", live:
+            // ampliseq) obscured reading in every consumer; the literal
+            // `\n` survives label sanitizing and wraps in nf-metro.
+            let member_sections: Vec<&str> =
+                members.iter().map(|&i| section_order[i].as_str()).collect();
+            let mut stage_counts: HashMap<&str, usize> = HashMap::new();
+            let mut best_stage: Option<(usize, &str)> = None;
+            for node in station_nodes.iter() {
+                let sec = node_section[node].as_str();
+                if !member_sections.contains(&sec) {
+                    continue;
+                }
+                let stage = node_stage[node].as_str();
+                let count = stage_counts.entry(stage).or_insert(0);
+                *count += 1;
+                if best_stage.is_none_or(|(bc, _)| *count > bc) {
+                    best_stage = Some((*count, stage));
+                }
+            }
+            let dominant = best_stage.map(|(_, s)| s).unwrap_or("generic");
+            let mut short_names: Vec<String> = members
+                .iter()
+                .map(|&i| {
+                    section_display[i]
+                        .split(' ')
+                        .next()
+                        .unwrap_or(section_display[i].as_str())
+                })
+                .map(str::to_string)
+                .collect();
+            short_names.dedup();
+            if short_names.len() > 3 {
+                short_names.truncate(3);
+                short_names.push("…".to_string());
+            }
+            merged_displays.push(format!(
+                "{}\\n{}",
+                crate::stage::stage_display(dominant),
+                short_names.join(" · ")
+            ));
         }
         for node in &station_nodes {
             if let Some(&slot) = section_of_scc.get(&section_rank[node_section[node].as_str()]) {
@@ -1601,9 +1637,18 @@ fn emit_metro_line_defs<'a>(
     used_colors: &mut HashSet<&'static str>,
     taken_ids: &mut HashSet<String>,
 ) -> HashMap<&'a str, String> {
+    // Custom lanes avoid the canonical palette hues on this map: a custom
+    // "rename" line next to canonical "Reporting" yellow was near
+    // indistinguishable (live: community ampliseq).
+    let avoid: HashSet<&'static str> = stages
+        .iter()
+        .filter(|s| crate::stage::is_canonical_stage(s))
+        .map(|s| crate::stage::stage_color(s))
+        .chain(crate::stage::EXTRA_NEAR_CANONICAL.iter().copied())
+        .collect();
     let mut line_ids: HashMap<&str, String> = HashMap::new();
     for stage in stages {
-        let color = crate::stage::metro_line_color(stage, used_colors);
+        let color = crate::stage::metro_line_color(stage, used_colors, &avoid);
         let id = unique_metro_id(&sanitize_metro_id(stage), taken_ids);
         line_ids.insert(stage, id.clone());
         out.push_str(&format!(
@@ -3097,7 +3142,7 @@ mod tests {
         // One merged section holds both modules (id joins the members,
         // display joins their titles); no standalone sections remain.
         assert!(
-            mmd.contains("subgraph qc_dada2 [QC + Dada2]"),
+            mmd.contains("subgraph qc_dada2 [Read QC\\nQC · Dada2]"),
             "merged section missing:\n{mmd}"
         );
         assert!(!mmd.contains("subgraph qc ["));

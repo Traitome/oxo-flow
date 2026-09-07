@@ -30,6 +30,13 @@ const PALETTE: &[(&str, &str, &str)] = &[
     ("generic", "Analysis", "#79706E"),
 ];
 
+/// Extra-colour hues that sit in the same FAMILY as canonical palette
+/// entries (#E69F00/#F0E442/#B6992D are orange/yellow/mustard shades close
+/// to canonical #F58518/#F2CF5B). Custom lanes avoid both the canonical
+/// colours and these hues (live: community ampliseq — the custom "rename"
+/// lane looked like the canonical "Reporting" yellow).
+pub const EXTRA_NEAR_CANONICAL: &[&str] = &["#E69F00", "#F0E442", "#B6992D"];
+
 /// Fallback colors for custom (non-canonical) stages, selected by stable hash.
 ///
 /// Okabe-Ito (colour-blind safe) values plus two legacy light tones. The
@@ -309,14 +316,29 @@ pub fn is_canonical_stage(stage: &str) -> bool {
 /// wherever possible while several custom lines on one map never share a
 /// colour (live: community enrichment puts eight custom lines on one map,
 /// where a bare hash modulo painted several of them the same colour).
-pub fn metro_line_color(stage: &str, used: &mut HashSet<&'static str>) -> &'static str {
+pub fn metro_line_color(
+    stage: &str,
+    used: &mut HashSet<&'static str>,
+    avoid: &HashSet<&'static str>,
+) -> &'static str {
     if let Some((_, _, color)) = PALETTE.iter().find(|(s, _, _)| *s == stage) {
-        // Canonical lanes keep their fixed colour and do not occupy slots in
-        // the fallback walk — dense maps may share a hue with a canonical
-        // lane (a problem of degree, never of correctness).
+        // Canonical lanes keep their fixed colour; the fallback walk below
+        // avoids them so a custom lane never trips a canonical hue (live:
+        // ampliseq's custom "rename" yellow next to the Reporting yellow).
         return color;
     }
     let offset = stable_hash(stage) % EXTRA_COLORS.len();
+    for k in 0..EXTRA_COLORS.len() {
+        let color = EXTRA_COLORS[(offset + k) % EXTRA_COLORS.len()];
+        if !used.contains(color) && !avoid.contains(color) {
+            used.insert(color);
+            return color;
+        }
+    }
+    // Fallback colours exhausted (canonical hues plus dense custom lanes —
+    // live: community bgcflow at rule granularity). First retry ignoring
+    // the avoid set; only then accept the stage's base colour rather than
+    // aborting an otherwise-valid export.
     for k in 0..EXTRA_COLORS.len() {
         let color = EXTRA_COLORS[(offset + k) % EXTRA_COLORS.len()];
         if !used.contains(color) {
@@ -324,9 +346,6 @@ pub fn metro_line_color(stage: &str, used: &mut HashSet<&'static str>) -> &'stat
             return color;
         }
     }
-    // More custom lanes than fallback colours (live: community bgcflow at
-    // rule granularity). Falling back to the stage's base colour is better
-    // than aborting an otherwise-valid export.
     EXTRA_COLORS[offset % EXTRA_COLORS.len()]
 }
 
@@ -489,7 +508,7 @@ mod tests {
         ];
         let colors: Vec<&str> = stages
             .iter()
-            .map(|s| metro_line_color(s, &mut used))
+            .map(|s| metro_line_color(s, &mut used, &HashSet::new()))
             .collect();
         assert_eq!(colors.iter().collect::<HashSet<_>>().len(), colors.len());
     }
@@ -497,8 +516,22 @@ mod tests {
     #[test]
     fn metro_line_canonical_stages_keep_their_color() {
         let mut used = HashSet::new();
-        assert_eq!(metro_line_color("qc", &mut used), "#4C78A8");
+        assert_eq!(
+            metro_line_color("qc", &mut used, &HashSet::new()),
+            "#4C78A8"
+        );
         assert_eq!(used.len(), 0, "canonical lanes take no fallback slot");
+    }
+
+    #[test]
+    fn metro_line_custom_lanes_avoid_canonical_hues() {
+        // live: community ampliseq — a custom "rename" lane next to the
+        // canonical "Reporting" yellow was indistinguishable; the walk
+        // must skip hues the map's canonical lanes already use.
+        let avoid = HashSet::from(["#F2CF5B"]);
+        let mut used = HashSet::new();
+        let color = metro_line_color("rename", &mut used, &avoid);
+        assert_ne!(color, "#F2CF5B", "custom lane must avoid the canonical hue");
     }
 
     #[test]
@@ -507,7 +540,10 @@ mod tests {
         // palette shuffle or offset change must fail here, not silently
         // repaint regenerated maps.
         let mut used = HashSet::new();
-        assert_eq!(metro_line_color("custom_tag", &mut used), "#8CD17D");
+        assert_eq!(
+            metro_line_color("custom_tag", &mut used, &HashSet::new()),
+            "#8CD17D"
+        );
     }
 
     #[test]
@@ -518,7 +554,11 @@ mod tests {
         let mut used = HashSet::new();
         let mut colors = Vec::new();
         for i in 0..24 {
-            colors.push(metro_line_color(&format!("custom_stage_{i}"), &mut used));
+            colors.push(metro_line_color(
+                &format!("custom_stage_{i}"),
+                &mut used,
+                &HashSet::new(),
+            ));
         }
         assert_eq!(colors.len(), 24);
     }
