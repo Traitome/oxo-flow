@@ -80,6 +80,16 @@ fn repo_dir_name(spec: &str) -> String {
 /// reported; a partial clone directory left behind by a failed attempt is
 /// removed so callers can retry cleanly.
 pub(crate) async fn clone_repo(repo_url: &str, git_ref: Option<&str>, target: &Path) -> Result<()> {
+    // An invalid ref name (space, ':' etc.) can never be a branch — fail
+    // before touching the network instead of three mirror round-trips.
+    if let Some(branch) = git_ref
+        && is_invalid_git_ref(branch)
+    {
+        anyhow::bail!(
+            "invalid git ref {branch:?}: refs cannot be empty; contain spaces, ~, ^, :, ?, *, [, \\, \
+             '..', '@{{', or start/end with '/', '.', or end with '.'"
+        );
+    }
     let mut failures: Vec<String> = Vec::new();
     for (index, candidate) in oxo_flow_core::git::mirror_candidates(repo_url)
         .iter()
@@ -186,6 +196,26 @@ pub(crate) enum RunSource {
 ///
 /// NOTE: for `run`, `@ref` selects a git branch/tag — unlike `pull`, it
 /// never means a GitHub Release asset. Run executes source, not artifacts.
+/// Longest allowed GitHub owner (user/org) handle: letters, digits, `-`.
+const GH_OWNER_MAX_LEN: usize = 39;
+
+/// A git ref name `git check-ref-format` rejects: empty, whitespace or
+/// `~ ^ : ? * [ \` (and the `..` / `@{` / delimiter patterns). Detected at
+/// parse time so an invalid branch costs an immediate error instead of
+/// three clone attempts (official URL + China mirrors).
+fn is_invalid_git_ref(git_ref: &str) -> bool {
+    git_ref.is_empty()
+        || git_ref != git_ref.trim()
+        || git_ref.starts_with('/')
+        || git_ref.ends_with('/')
+        || git_ref.ends_with('.')
+        || git_ref.contains("..")
+        || git_ref.contains("@{")
+        || git_ref
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+}
+
 pub(crate) fn classify_run_source(text: &str) -> Option<RunSource> {
     if let Some(spec) = text.strip_prefix("gh:") {
         if spec.is_empty() {
@@ -196,8 +226,8 @@ pub(crate) fn classify_run_source(text: &str) -> Option<RunSource> {
             None => (spec, None),
         };
         return Some(RunSource::Repo {
-            url: format!("https://github.com/{repo}.git"),
-            git_ref,
+            url: github_clone_url(repo),
+            git_ref: git_ref.filter(|r| !r.is_empty()),
         });
     }
     if (text.starts_with("https://") || text.starts_with("http://")) && text.ends_with(".git") {
@@ -222,40 +252,61 @@ pub(crate) fn classify_run_source(text: &str) -> Option<RunSource> {
     // keeps its "workflow file not found" error instead of a failed clone).
     if !text.starts_with('.')
         && !text.ends_with(".oxoflow")
-        && !Path::new(text).exists()
-        && let Some((owner, repo)) = text.split_once('/')
-        && !repo.contains('/')
+        && let Some((owner, rest)) = text.split_once('/')
         && !owner.is_empty()
-        && owner.len() <= 39
+        && owner.len() <= GH_OWNER_MAX_LEN
         && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         && !owner.starts_with('-')
         && !owner.ends_with('-')
+        && let Some((repo, git_ref)) = split_repo_ref(rest).filter(|(r, _)| !r.is_empty())
+        && !repo.contains('/')
+        && repo != "."
+        && repo != ".."
+        && !Path::new(text).exists()
     {
-        let (repo, git_ref) = match repo.split_once('@') {
-            Some((repo, git_ref)) => (repo, Some(git_ref.to_string())),
-            None => (repo, None),
-        };
         let repo = repo.strip_suffix(".git").unwrap_or(repo);
-        if repo.is_empty()
-            || repo == "."
-            || repo == ".."
-            || !repo
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-        {
+        if repo.is_empty() || repo == "." || repo == ".." {
             return None;
         }
         return Some(RunSource::Repo {
-            url: format!("https://github.com/{owner}/{repo}.git"),
+            url: github_clone_url(&format!("{owner}/{repo}")),
             git_ref,
         });
     }
     None
 }
 
+/// Split `repo[@ref]` into its parts with run-mode rules: no `@` means no
+/// ref, an empty ref is a typo (`repo@`) and resolves to the default
+/// branch, and a trailing `.git` on the repo part is normalized once.
+fn split_repo_ref(spec: &str) -> Option<(&str, Option<String>)> {
+    let (repo, git_ref) = match spec.split_once('@') {
+        Some((repo, git_ref)) => (repo, Some(git_ref.to_string())),
+        None => (spec, None),
+    };
+    if repo.is_empty() {
+        return None;
+    }
+    Some((repo, git_ref.filter(|r| !r.is_empty())))
+}
+
+/// GitHub clone URL for a `owner/repo` spec (trailing `.git` normalized).
+fn github_clone_url(repo: &str) -> String {
+    format!("https://github.com/{}.git", repo.trim_end_matches(".git"))
+}
+
 /// Cache directory name for a repo checkout (git refs are sanitized).
+///
+/// The owner (the URL segment before the leaf) is included so unrelated
+/// repositories sharing a leaf name can never alias one cache dir: existing
+/// checkouts are reused without re-verification, and `gh:a/foo` + `gh:b/foo`
+/// colliding at `.oxo-flow/repos/foo` would silently run the wrong repo.
 pub(crate) fn repo_cache_name(repo_url: &str, git_ref: Option<&str>) -> String {
-    let base = repo_dir_name(repo_url);
+    let segments: Vec<&str> = repo_url.rsplit('/').filter(|s| !s.is_empty()).collect();
+    let base = match segments.as_slice() {
+        [leaf, owner, ..] => format!("{owner}-{}", leaf.trim_end_matches(".git")),
+        _ => repo_dir_name(repo_url),
+    };
     match git_ref {
         Some(r) if !r.is_empty() => format!("{base}-{}", r.replace(['/', '\\'], "-")),
         _ => base,
@@ -490,14 +541,14 @@ mod tests {
 
     #[test]
     fn repo_cache_name_sanitizes_ref() {
-        assert_eq!(repo_cache_name("https://github.com/o/r.git", None), "r");
+        assert_eq!(repo_cache_name("https://github.com/o/r.git", None), "o-r");
         assert_eq!(
             repo_cache_name("https://github.com/o/r.git", Some("v1.0.0")),
-            "r-v1.0.0"
+            "o-r-v1.0.0"
         );
         assert_eq!(
             repo_cache_name("https://github.com/o/r.git", Some("feature/x")),
-            "r-feature-x"
+            "o-r-feature-x"
         );
     }
 
@@ -564,6 +615,72 @@ mod tests {
     }
 
     #[test]
+    fn classify_refs_allow_slashes_and_gh_parity() {
+        // A git ref may itself contain '/' (branch names like feature/x) —
+        // the @ split must come before the single-slash guard.
+        match classify_run_source("owner/repo@feature/coverage").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/repo.git");
+                assert_eq!(git_ref.as_deref(), Some("feature/coverage"));
+            }
+        }
+        // The gh: form gets the same normalization as the bare form: a
+        // trailing .git is never doubled, an empty ref is a typo (not a
+        // branch) and resolves to the default branch.
+        match classify_run_source("gh:owner/repo.git").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/repo.git");
+                assert!(git_ref.is_none());
+            }
+        }
+        for text in ["gh:owner/repo@", "owner/repo@"] {
+            match classify_run_source(text).unwrap() {
+                RunSource::Repo { git_ref, .. } => {
+                    assert!(
+                        git_ref.is_none(),
+                        "empty ref in {text} must resolve to default"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repo_cache_name_includes_owner() {
+        // Distinct owners sharing a leaf name must not alias one cache dir:
+        // existing checkouts are reused without verification, so a/foo and
+        // b/foo colliding would silently run the wrong repository.
+        assert_eq!(
+            repo_cache_name("https://github.com/a/foo.git", None),
+            "a-foo"
+        );
+        assert_eq!(
+            repo_cache_name("https://github.com/a/foo.git", Some("v1.0.0")),
+            "a-foo-v1.0.0"
+        );
+        assert_eq!(
+            repo_cache_name("https://github.com/a/foo.git", Some("feature/x")),
+            "a-foo-feature-x"
+        );
+        assert_eq!(
+            repo_cache_name("https://example.com/team/p.git", None),
+            "team-p"
+        );
+    }
+
+    #[test]
+    fn invalid_git_refs_fail_before_network() {
+        assert!(is_invalid_git_ref("a:b"));
+        assert!(is_invalid_git_ref("has space"));
+        assert!(is_invalid_git_ref("trailing."));
+        assert!(is_invalid_git_ref("..double-dot"));
+        assert!(is_invalid_git_ref("@{brace"));
+        assert!(is_invalid_git_ref(""));
+        assert!(!is_invalid_git_ref("v1.0.0"));
+        assert!(!is_invalid_git_ref("feature/coverage"));
+    }
+
+    #[test]
     fn classify_bare_shorthand_keeps_local_paths_local() {
         // A .oxoflow path is a workflow path, never a repo — a missing file
         // keeps the normal "workflow file not found" error instead of
@@ -589,7 +706,10 @@ mod tests {
     async fn checkout_repo_workflow_clones_and_reuses_cache() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git_repo_with_workflow(dir.path(), "main.oxoflow");
-        let cache = dir.path().join(".oxo-flow/repos/demo");
+        let cache = dir
+            .path()
+            .join(".oxo-flow/repos")
+            .join(repo_cache_name(&repo.display().to_string(), None));
 
         let wf = checkout_repo_workflow(&repo.display().to_string(), None, &cache)
             .await

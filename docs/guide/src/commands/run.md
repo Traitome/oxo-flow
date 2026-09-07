@@ -106,10 +106,11 @@ local workflow path. Only a single-slash `owner/name` — optionally with
 (So a missing `data/pipeline.oxoflow` keeps its normal "workflow file not
 found" error instead of attempting a clone.)
 
-The repository is checked out into `.oxo-flow/repos/<name>` under the
-current directory (reused on later runs — delete the directory to force a
-fresh clone), and the workflow file is auto-discovered (`main.oxoflow`
-first). Because the clone is a read-only cache, the working directory
+The repository is checked out into `.oxo-flow/repos/<owner>-<name>` under
+the current directory (reused on later runs — delete the directory to
+force a fresh clone; the owner prefix keeps same-named repos of different
+owners from sharing a checkout), and the workflow file is auto-discovered
+(`main.oxoflow` first). Because the clone is a read-only cache, the working directory
 defaults to the **current directory** for repository runs — outputs, the
 checkpoint, and the workdir lock all land next to your data, not inside the
 clone. All other run semantics apply unchanged: `--samples`, `--rerun`,

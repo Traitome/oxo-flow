@@ -781,8 +781,9 @@ pub async fn run_command(
     let jobs = jobs.max(1);
 
     // ── Repository-URL workflows (nextflow-style `run <repo>`) ──────────
-    // `oxo-flow run gh:owner/repo[@ref]` (or a *.git URL / local repo dir)
-    // checks out into <cwd>/.oxo-flow/repos/<name> (reused on later runs).
+    // `oxo-flow run gh:owner/repo[@ref]` / `owner/repo[@ref]` (or a *.git
+    // URL / local repo dir) checks out into <cwd>/.oxo-flow/repos/<owner>-<name>
+    // (reused on later runs).
     // For run, @ref is a git branch/tag — never a Release asset (that is
     // pull's bundle namespace). Outputs/checkpoint default to the CURRENT
     // directory: data belongs outside the clone.

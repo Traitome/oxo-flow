@@ -5409,10 +5409,13 @@ shell = "echo hello > result.txt"
         work.join(".oxo-flow").join("checkpoint.json").exists(),
         "checkpoint lands in the workdir"
     );
-    assert!(
-        work.join(".oxo-flow/repos/wf-repo/main.oxoflow").exists(),
-        "clone cached under .oxo-flow/repos"
-    );
+    // Cache naming is an implementation detail (owner-prefixed so same-leaf
+    // repos of different owners cannot alias); assert the clone exists.
+    let cached = std::fs::read_dir(work.join(".oxo-flow/repos"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().join("main.oxoflow").exists());
+    assert!(cached, "clone cached under .oxo-flow/repos");
 
     // Second run: cache reused, rule skipped via checkpoint.
     let out = oxo_flow_cmd()
