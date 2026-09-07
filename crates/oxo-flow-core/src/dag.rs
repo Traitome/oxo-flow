@@ -1063,24 +1063,45 @@ impl WorkflowDag {
                 }
             }
             let dominant = best_stage.map(|(_, s)| s).unwrap_or("generic");
-            let mut short_names: Vec<String> = members
-                .iter()
-                .map(|&i| {
-                    section_display[i]
-                        .split(' ')
-                        .next()
-                        .unwrap_or(section_display[i].as_str())
-                })
-                .map(str::to_string)
-                .collect();
-            short_names.dedup();
+            let dominant_display = crate::stage::stage_display(dominant);
+            // Second line lists the member modules by their FULL display
+            // names (first words only read as cryptic fragments — live:
+            // "Read · Branches" / "Pe · …" at atacseq/ampliseq). Kept
+            // order-preserving-unique, and a member whose name equals the
+            // dominant stage label is dropped so "Read QC\nRead QC · X"
+            // never repeats itself (the stage line already names it).
+            let mut short_names: Vec<String> = Vec::new();
+            for i in &members {
+                let raw = section_order[*i].as_str();
+                // Stage-based sections fall back to the RAW stage tag
+                // ("its", "rename") when the stage is not canonical — the
+                // members line then reads "its" all-lowercase. Normalize
+                // such raw values through the module title-case rules
+                // (its → ITS, rename → Rename) when the section display
+                // was the raw fallback itself.
+                let display = if section_display[*i] == raw {
+                    crate::stage::module_display(raw)
+                } else {
+                    section_display[*i].clone()
+                };
+                let display = display.trim();
+                if display.is_empty() || display == dominant_display {
+                    continue;
+                }
+                if !short_names.iter().any(|n| n == display) {
+                    short_names.push(display.to_string());
+                }
+            }
             if short_names.len() > 3 {
                 short_names.truncate(3);
                 short_names.push("…".to_string());
             }
+            if short_names.is_empty() {
+                short_names.push(dominant_display.to_string());
+            }
             merged_displays.push(format!(
                 "{}\\n{}",
-                crate::stage::stage_display(dominant),
+                dominant_display,
                 short_names.join(" · ")
             ));
         }
@@ -3160,6 +3181,49 @@ mod tests {
         assert!(
             merged_pos < report_pos && report_pos < merged_end,
             "reporting section must follow the merged section:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn metro_merged_members_use_full_names_and_normalized_raw_stages() {
+        // Merged members used to shrink to first words ("Read · Branches")
+        // and raw custom-stage tags kept their lowercase fallback ("its").
+        // Full module titles + one normalization through the same
+        // title-case rules keep the second line readable (live: ampliseq
+        // "Read QC · Dada2 · Analysis · …", eager "Read QC\nBranches").
+        // Section-level cycle through FOUR distinct rules (no rule-level
+        // cycle — the real ampliseq shape: rename → qc and qc → rename via
+        // different rules), one side stage-based with a non-canonical tag.
+        let mut n1 = make_rule("mm_trim", vec!["reads.fq"], vec!["a.out"]);
+        n1.shell = Some("echo trim".to_string());
+        n1.tags = vec!["rename".to_string()]; // custom stage → raw display
+        let mut d = make_rule("qc::d", vec!["a.out"], vec!["d.out"]);
+        d.shell = Some("fastqc a.out".to_string());
+        let mut e = make_rule("qc::e", vec!["d.out"], vec!["e.out"]);
+        e.shell = Some("fastqc d.out".to_string());
+        let mut n2 = make_rule("mm_merge", vec!["e.out"], vec!["c.out"]);
+        n2.shell = Some("echo merge".to_string());
+        n2.tags = vec!["rename".to_string()];
+        let mut r = make_rule("report::r", vec!["c.out"], vec!["rep.html"]);
+        r.shell = Some("multiqc .".to_string());
+        let rules = vec![n1, d, e, n2, r];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        // The pair contracts (rename → qc → rename) into one section ahead
+        // of reporting; the second line lists full titles, the raw
+        // custom-stage "rename" is normalized to "Rename", and the
+        // dominant stage ("rename") is not repeated there.
+        let label = mmd
+            .lines()
+            .find(|l| l.contains("subgraph") && l.contains("\\n"))
+            .unwrap_or_else(|| panic!("no merged subgraph:\n{mmd}"));
+        assert!(
+            label.contains("Rename · QC"),
+            "unexpected merged label: {label}"
+        );
+        assert!(
+            !label.contains("\\nrename"),
+            "raw stage tag leaked into merged label: {label}"
         );
     }
 
