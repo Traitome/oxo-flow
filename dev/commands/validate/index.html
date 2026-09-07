@@ -4016,7 +4016,11 @@ the path as missing instead of approving it:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>⚠ Warning: The following input files do not exist:
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  - missing/{sample}.txt (no sample groups/pairs/sample_pattern declared)
 </span></code></pre></div>
-<p><code>--json</code> includes the same entry in <code>missing_inputs</code>.</p>
+<p><code>--json</code> includes the same entry in <code>missing_inputs</code>. That field is a
+free-text diagnostic list, not a stable machine interface: entries mix
+plain paths (file simply absent on disk) with paths annotated with a
+trailing <code>(...)</code> reason, so consumers must not exact-match the strings
+or split on whitespace — match on the path prefix instead.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
