@@ -53,6 +53,8 @@ def generate_hello(rule_count: int) -> str:
         lines.append(f'input = ["{_toml_escape(inp)}"]')
         lines.append(f'output = ["{_toml_escape(out)}"]')
         lines.append(f'shell = "echo {i} > {{output[0]}}"')
+        lines.append('')
+        lines.append('[rules.resources]')
         lines.append(f'threads = 1')
         lines.append('')
     return '\n'.join(lines)
@@ -74,6 +76,8 @@ def generate_parallel(sample_count: int) -> str:
         lines.append(f'input = ["input_{sample}.txt"]')
         lines.append(f'output = ["processed_{sample}.txt"]')
         lines.append(f'shell = "echo process {sample} > processed_{sample}.txt"')
+        lines.append('')
+        lines.append('[rules.resources]')
         lines.append(f'threads = 1')
         lines.append('')
     # 汇总规则
@@ -83,6 +87,8 @@ def generate_parallel(sample_count: int) -> str:
     lines.append(f'input = [{inputs}]')
     lines.append(f'output = ["merged_output.txt"]')
     lines.append(f'shell = "cat {{input[0]}} > merged_output.txt"')
+    lines.append('')
+    lines.append('[rules.resources]')
     lines.append(f'threads = 1')
     lines.append('')
     return '\n'.join(lines)
@@ -102,6 +108,8 @@ def generate_scatter_gather(sample_count: int) -> str:
     lines.append(f'input = ["input.txt"]')
     lines.append(f'output = [{", ".join(f'"chunk_{i}.txt"' for i in range(sample_count))}]')
     lines.append(f'shell = "echo split > {{output[0]}}"')
+    lines.append('')
+    lines.append('[rules.resources]')
     lines.append(f'threads = 1')
     lines.append('')
 
@@ -112,6 +120,8 @@ def generate_scatter_gather(sample_count: int) -> str:
         lines.append(f'input = ["chunk_{i}.txt"]')
         lines.append(f'output = ["processed_{i}.txt"]')
         lines.append(f'shell = "echo process {i} > processed_{i}.txt"')
+        lines.append('')
+        lines.append('[rules.resources]')
         lines.append(f'threads = 1')
         lines.append('')
 
@@ -122,6 +132,8 @@ def generate_scatter_gather(sample_count: int) -> str:
     lines.append(f'input = [{inputs}]')
     lines.append(f'output = ["final_output.txt"]')
     lines.append(f'shell = "cat {{input[0]}} > final_output.txt"')
+    lines.append('')
+    lines.append('[rules.resources]')
     lines.append(f'threads = 1')
     lines.append('')
     return '\n'.join(lines)
@@ -159,7 +171,12 @@ def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any],
                                 ("dry-run", ["dry-run", str(tmp)]),
                                 ("lint", ["lint", str(tmp)])]:
             full_cmd = [oxo_bin] + args
-            elapsed, rc, stdout, stderr = _run_command(full_cmd)
+            # 多次迭代取最小值（降低系统噪声），与 hyperfine 的 min 语义一致
+            elapsed, rc, stdout, stderr = float("inf"), 1, "", ""
+            for _ in range(iterations):
+                e, r, so, se = _run_command(full_cmd)
+                if e < elapsed:
+                    elapsed, rc, stdout, stderr = e, r, so, se
             status = "OK" if rc == 0 else "FAIL"
             print(f"    {cmd_name:10s}  {count:5d} rules  {_format_duration(elapsed):>10s}  [{status}]")
             output.setdefault("lifecycle", []).append({
@@ -167,6 +184,7 @@ def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any],
                 "rule_count": count,
                 "wall_time_sec": round(elapsed, 4),
                 "exit_code": rc,
+                "iterations": iterations,
             })
             if rc != 0 and stderr:
                 print(f"      stderr: {stderr[:200]}")
@@ -186,7 +204,11 @@ def benchmark_scaling(oxo_bin: str, sample_counts: list[int], output: dict[str, 
         for cmd_name, args in [("validate", ["validate", str(tmp)]),
                                 ("dry-run", ["dry-run", str(tmp)])]:
             full_cmd = [oxo_bin] + args
-            elapsed, rc, _, _ = _run_command(full_cmd)
+            elapsed, rc, _, _ = float("inf"), 1, "", ""
+            for _ in range(iterations):
+                e, r, _, _ = _run_command(full_cmd)
+                if e < elapsed:
+                    elapsed, rc = e, r
             status = "OK" if rc == 0 else "FAIL"
             print(f"    {cmd_name:10s}  {sc:5d} samples  {_format_duration(elapsed):>10s}  [{status}]")
             output.setdefault("scaling", []).append({
@@ -194,6 +216,7 @@ def benchmark_scaling(oxo_bin: str, sample_counts: list[int], output: dict[str, 
                 "sample_count": sc,
                 "wall_time_sec": round(elapsed, 4),
                 "exit_code": rc,
+                "iterations": iterations,
             })
 
         tmp.unlink()
@@ -228,7 +251,7 @@ def benchmark_reliability(oxo_bin: str, output: dict[str, Any], iterations: int 
     tmp.write_text(toml)
 
     checksums = []
-    for _ in range(3):
+    for _ in range(max(3, iterations)):
         elapsed, rc, stdout, _ = _run_command(
             [oxo_bin, "lint", str(tmp)])
         if rc == 0:
@@ -280,7 +303,12 @@ def main():
                         choices=["all", "lifecycle", "scaling",
                                  "reliability"],
                         help="要运行的基准类型")
+    parser.add_argument("--iterations", type=int, default=1,
+                        help="每条命令的重复运行次数（取最小值，降低噪声）")
     args = parser.parse_args()
+
+    if args.iterations < 1:
+        parser.error("--iterations 必须 >= 1")
 
     oxo_bin = Path(args.oxo_flow)
     if not oxo_bin.exists():
@@ -307,14 +335,17 @@ def main():
     # 生命周期基准: 不同管线规模
     if args.benchmark in ("all", "lifecycle"):
         benchmark_lifecycle(str(oxo_bin.resolve()),
-                            [10, 50, 100, 500, 1000], output["results"])
+                            [10, 50, 100, 500, 1000], output["results"],
+                            iterations=args.iterations)
     # 扩展性基准: 并行样本数
     if args.benchmark in ("all", "scaling"):
         benchmark_scaling(str(oxo_bin.resolve()),
-                          [10, 50, 100], output["results"])
+                          [10, 50, 100], output["results"],
+                          iterations=args.iterations)
     # 可靠性基准
     if args.benchmark in ("all", "reliability"):
-        benchmark_reliability(str(oxo_bin.resolve()), output["results"])
+        benchmark_reliability(str(oxo_bin.resolve()), output["results"],
+                              iterations=args.iterations)
 
     # 输出
     json_output = json.dumps(output, indent=2, ensure_ascii=False)
