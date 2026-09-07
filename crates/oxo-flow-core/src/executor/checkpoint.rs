@@ -154,6 +154,15 @@ pub struct BenchmarkRecord {
     /// Number of retry attempts before success (0 = first attempt succeeded).
     #[serde(default)]
     pub retries: u32,
+    /// Why this benchmark carries no real measurements. `Some("outputs
+    /// up-to-date")` marks the synthetic record written on resume when an
+    /// interrupted rule's outputs are verdicted up-to-date (issue #324 F-1):
+    /// the entry exists so later runs short-circuit it as completed, but its
+    /// `wall_time_secs` is a 0.0 placeholder, not a measurement — displays
+    /// use this marker to show `-`/exclude it instead of a fake `0.0s`.
+    /// `None` for every normally-executed rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_as: Option<String>,
 }
 
 /// Per-rule execution record persisted for reporting (issue #83 WS2):

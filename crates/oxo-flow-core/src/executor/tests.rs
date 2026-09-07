@@ -477,6 +477,7 @@ fn benchmark_record_creation() {
         memory_limit_mb: None,
         retries: 0,
         cpu_seconds: Some(38.0),
+        recorded_as: None,
     };
     assert_eq!(b.rule, "fastqc");
     assert!((b.wall_time_secs - 42.5).abs() < f64::EPSILON);
@@ -494,6 +495,7 @@ fn checkpoint_mark_completed() {
         memory_limit_mb: None,
         retries: 0,
         cpu_seconds: None,
+        recorded_as: None,
     };
     state.mark_completed("step1", bench);
     assert!(state.is_completed("step1"));
@@ -522,6 +524,7 @@ fn checkpoint_json_round_trip() {
             memory_limit_mb: None,
             retries: 0,
             cpu_seconds: Some(110.0),
+            recorded_as: None,
         },
     );
     state.mark_failed("variant_call");

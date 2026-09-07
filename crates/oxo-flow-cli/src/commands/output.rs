@@ -983,7 +983,14 @@ fn write_r_data(
         for name in names {
             let (wall, mem) = match cp.benchmarks.get(name) {
                 Some(b) => (
-                    b.wall_time_secs.to_string(),
+                    // Synthetic up-to-date records (issue #324 F-1) carry a
+                    // 0.0 placeholder, not a measurement — show "-" like
+                    // un-benchmarked failed rules instead of a fake 0.0.
+                    if b.recorded_as.is_some() {
+                        "-".to_string()
+                    } else {
+                        b.wall_time_secs.to_string()
+                    },
                     b.max_memory_mb
                         .map(|m| m.to_string())
                         .unwrap_or_else(|| "-".to_string()),

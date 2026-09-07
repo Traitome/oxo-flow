@@ -2513,6 +2513,7 @@ pub async fn run_command(
                                         .and_then(oxo_flow_core::scheduler::parse_memory_mb),
                                     cpu_seconds: record.cpu_seconds,
                                     retries: record.retries,
+                                    recorded_as: None,
                                 };
                             // Post-run manifest re-verification
                             // (issue #194 §2.10): an external writer
@@ -2627,6 +2628,7 @@ pub async fn run_command(
                                             .and_then(oxo_flow_core::scheduler::parse_memory_mb),
                                         cpu_seconds: None,
                                         retries: 0,
+                                        recorded_as: Some("outputs up-to-date".to_string()),
                                     };
                                 let mut ck = checkpoint.lock().await;
                                 ck.mark_completed(&rule_name, benchmark);
@@ -3948,6 +3950,10 @@ fn rule_resource_rows(
                 "rule": name,
                 "status": status,
                 "wall_time_secs": b.wall_time_secs,
+                // Synthetic up-to-date records (issue #324 F-1) carry a 0.0
+                // placeholder wall time — JSON consumers can distinguish
+                // them from real measurements via this marker.
+                "recorded_as": b.recorded_as,
                 "peak_rss_mb": b.max_memory_mb,
                 "cpu_seconds": b.cpu_seconds,
                 "retries": b.retries,
@@ -5199,10 +5205,15 @@ async fn process_output_pattern_discovery(
     Ok(new_names)
 }
 
+/// Wall-time timings for `status --timing`, slowest first, plus their sum.
+/// Synthetic records (issue #324 F-1 `recorded_as: Some(...)`) carry a 0.0
+/// placeholder rather than a measurement, so they are excluded from the
+/// list and the total — a fake "0.0s" row would pollute both.
 fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
     let mut timings: Vec<(&str, f64)> = state
         .benchmarks
         .iter()
+        .filter(|(_, b)| b.recorded_as.is_none())
         .map(|(rule, bench)| (rule.as_str(), bench.wall_time_secs))
         .collect();
     // Deterministic order: slowest first (HashSet iteration order is arbitrary)

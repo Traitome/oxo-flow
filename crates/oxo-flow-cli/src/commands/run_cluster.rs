@@ -231,6 +231,7 @@ async fn record_outcome(
                     .and_then(oxo_flow_core::scheduler::parse_memory_mb),
                 cpu_seconds: record.cpu_seconds,
                 retries: record.retries,
+                recorded_as: None,
             };
             ck.record_run(record);
             ck.mark_completed(&record.rule, benchmark);

@@ -85,9 +85,11 @@ that declare their tolerance for a missing producer are not flagged:
 fallbacks, and consumers that already carry any `when` gate.
 W032 flags a `[config]` key whose *name* looks like a secret
 (`token`, `secret`, `password`, `credential`, `api_key`,
-`access_key`, `private_key`, `ssh_key`) but is not declared
-`sensitive`: its value then lands in plaintext in command records,
-stderr tails, and the checkpoint — credential leakage on shared
+`access_key`, `private_key`, `ssh_key` — matched at word/segment
+boundaries, so names that merely contain these as a substring, like
+`tokenize` or `password_length_hint`, are not flagged) but is not
+declared `sensitive`: its value then lands in plaintext in command
+records, stderr tails, and the checkpoint — credential leakage on shared
 clusters and in CI artifacts. The repair is the declaration itself:
 
 ```toml

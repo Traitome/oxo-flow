@@ -169,8 +169,19 @@ pub async fn create_run(
     // Parse through the typed contract (issue #324 F-4) so the type is the
     // single source of truth — but keep the stable MISSING error for a
     // missing `toml_content` instead of a bare serde message.
+    //
+    // Classification uses the serde error's field path, not message text:
+    // `missing_field` errors carry the field name structurally, so a serde
+    // wording change across versions cannot silently degrade the stable
+    // MISSING code to INVALID_BODY (issue #335 finding 2).
     let req: CreateRunRequest = serde_json::from_value(body).map_err(|e| {
-        if e.to_string().contains("toml_content") {
+        // `missing field` is a Category::Data error whose Display embeds the
+        // field path (`missing field \`toml_content\``); requiring Data rules
+        // out Io/Eof/Syntax mismatches and the backtick-quoted path rules out
+        // a coincidental mention in an unrelated message.
+        let missing_toml = e.classify() == serde_json::error::Category::Data
+            && e.to_string().contains("missing field `toml_content`");
+        if missing_toml {
             err(
                 StatusCode::BAD_REQUEST,
                 "MISSING",

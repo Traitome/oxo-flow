@@ -124,6 +124,13 @@ fn f1_up_to_date_rule_is_recorded_as_completed_after_resume() {
         ck["benchmarks"].get("step2").is_some(),
         "up-to-date step2 must get a benchmark entry"
     );
+    // The benchmark must be MARKED as the synthetic up-to-date record, so
+    // displays can show "-" instead of a fake 0.0s wall time (issue #335).
+    assert!(
+        ck["benchmarks"]["step2"]["recorded_as"] == "outputs up-to-date",
+        "benchmark entry must carry the up-to-date marker: {:#}",
+        ck["benchmarks"]["step2"]
+    );
 }
 
 #[test]
