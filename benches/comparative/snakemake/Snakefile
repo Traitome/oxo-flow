@@ -2,27 +2,40 @@
 oxo-flow 对比基准 — Snakemake 等效管线
 
 与 benches/macro/suite.py 中 generate_hello(N) 生成的 oxo-flow
-管线等价: N 步顺序链。
+管线等价: N 步顺序链（step_0 -> step_1 -> ... -> step_{N-1}）。
 
 用法:
     snakemake --cores 1
+
+COUNT 可通过 config 覆盖:
+    snakemake --cores 1 --config count=100
+
+已知边界: Snakemake 9.x 的 DAG 构建是递归实现，链深超过约 484 步会触发
+RecursionError（Python 默认 recursionlimit=1000；实测 484 OK / 485 FAIL）。
+这不是本 Snakefile 的问题 —— 单文件通配符链天然有这样的深度上限。
+macro 基准覆盖到 1000 规模，如需在 Snakemake 侧复现，可在运行前
+抬高递归限制（snakemake 没有直接开关，需在 sitecustomize 或 profile 里
+设 sys.setrecursionlimit），或接受该引擎的深度边界并在结果中注记。
 """
 
-COUNT = 10
+COUNT = int(config.get("count", 10))
 
 rule all:
     input:
         f"step_{COUNT - 1}_output.txt"
 
 rule step_0:
-    output: "step_0_output.txt"
-    shell: "echo 0 > {output}"
+    output:
+        "step_0_output.txt"
+    shell:
+        "echo 0 > {output}"
 
 rule step_i:
     input:
-        f"step_{{wildcards.i - 1}}_output.txt"
+        lambda wc: f"step_{int(wc.i) - 1}_output.txt"
     output:
         "step_{i}_output.txt"
     wildcard_constraints:
-        i = "[1-9][0-9]*"
-    shell: "echo {wildcards.i} > {output}"
+        i = r"[0-9]+"
+    shell:
+        "echo {wildcards.i} > {output}"
