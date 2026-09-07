@@ -69,7 +69,11 @@ pub struct Cli {
 pub enum Commands {
     /// Execute a workflow.
     Run {
-        #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
+        #[arg(
+            value_name = "WORKFLOW",
+            help = "Path to the .oxoflow workflow file, or a repository to run \
+                    (gh:owner/repo[@ref], owner/repo[@ref], *.git URL, or file://dir)"
+        )]
         workflow: Option<PathBuf>,
         #[arg(
             short = 'j',

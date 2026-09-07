@@ -214,6 +214,42 @@ pub(crate) fn classify_run_source(text: &str) -> Option<RunSource> {
             git_ref: None,
         });
     }
+    // Bare GitHub shorthand: `owner/repo[@ref]` — the `gh:` prefix is
+    // optional, nextflow-style. Only single-slash owner/repo shapes that
+    // do not exist locally are interpreted as repositories; `.oxoflow`
+    // paths, paths starting with `.`, and anything the filesystem has are
+    // left to the normal local-path handling (a missing `.oxoflow` file
+    // keeps its "workflow file not found" error instead of a failed clone).
+    if !text.starts_with('.')
+        && !text.ends_with(".oxoflow")
+        && !Path::new(text).exists()
+        && let Some((owner, repo)) = text.split_once('/')
+        && !repo.contains('/')
+        && !owner.is_empty()
+        && owner.len() <= 39
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+    {
+        let (repo, git_ref) = match repo.split_once('@') {
+            Some((repo, git_ref)) => (repo, Some(git_ref.to_string())),
+            None => (repo, None),
+        };
+        let repo = repo.strip_suffix(".git").unwrap_or(repo);
+        if repo.is_empty()
+            || repo == "."
+            || repo == ".."
+            || !repo
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return None;
+        }
+        return Some(RunSource::Repo {
+            url: format!("https://github.com/{owner}/{repo}.git"),
+            git_ref,
+        });
+    }
     None
 }
 
@@ -489,6 +525,64 @@ mod tests {
         // A plain workflow path is not a repo.
         assert!(classify_run_source("workflows/wgs.oxoflow").is_none());
         assert!(classify_run_source("gh:").is_none());
+    }
+
+    #[test]
+    fn classify_bare_owner_repo_is_github_repo() {
+        // The `gh:` prefix may be dropped: `owner/repo` means github.com.
+        match classify_run_source("owner/repo").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/repo.git");
+                assert!(git_ref.is_none());
+            }
+        }
+        // @ref keeps run semantics (a git branch/tag, never a Release).
+        match classify_run_source("owner/repo@v1.0.0").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/repo.git");
+                assert_eq!(git_ref.as_deref(), Some("v1.0.0"));
+            }
+        }
+    }
+
+    #[test]
+    fn classify_bare_shorthand_normalizes_repo_segment() {
+        // Dots are legal in GitHub repo names.
+        match classify_run_source("owner/my.repo").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/my.repo.git");
+                assert!(git_ref.is_none());
+            }
+        }
+        // A trailing .git is not doubled into the clone URL.
+        match classify_run_source("owner/repo.git").unwrap() {
+            RunSource::Repo { url, git_ref } => {
+                assert_eq!(url, "https://github.com/owner/repo.git");
+                assert!(git_ref.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn classify_bare_shorthand_keeps_local_paths_local() {
+        // A .oxoflow path is a workflow path, never a repo — a missing file
+        // keeps the normal "workflow file not found" error instead of
+        // silently attempting a clone.
+        assert!(classify_run_source("data/pipeline.oxoflow").is_none());
+        // Multi-segment or empty-repo shapes are not owner/repo.
+        assert!(classify_run_source("a/b/c").is_none());
+        assert!(classify_run_source("owner/").is_none());
+        // An existing local path wins over the shorthand interpretation.
+        let sub = format!(
+            "tmp-classify-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        std::fs::create_dir_all(Path::new(&sub).join("repo")).unwrap();
+        assert!(classify_run_source(&format!("{sub}/repo")).is_none());
+        let _ = std::fs::remove_dir_all(&sub);
     }
 
     #[tokio::test]
