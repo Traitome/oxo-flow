@@ -293,6 +293,7 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
                 memory_limit_mb: None,
                 cpu_seconds: None,
                 retries: 0,
+                recorded_as: None,
             },
         );
         if let Some(rule) = config.get_rule(&r.rule)
