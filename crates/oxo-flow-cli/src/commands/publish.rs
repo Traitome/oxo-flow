@@ -449,12 +449,26 @@ fn add_env_file(
     if let Some(env_file) = env.get(field).and_then(|v| v.as_str()) {
         let abs_path = workflow_dir.join(env_file);
         if abs_path.exists() {
-            let filename = abs_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if !referenced_files.iter().any(|(name, _)| name == &filename) {
-                referenced_files.push((filename, abs_path));
+            // Keep the DECLARED relative path as the bundle member: the
+            // bundled workflow still says `conda = "envs/qc.yaml"`, so
+            // flattening the file to the archive root produced a bundle
+            // that could not run (audit finding).
+            let member = env_file.trim_start_matches("./").replace('\\', "/");
+            if member.starts_with('/')
+                || member
+                    .split('/')
+                    .any(|component| component.is_empty() || component == "..")
+            {
+                eprintln!(
+                    "  {} env file path '{}' is not a clean relative path — skipping (field: {})",
+                    "⚠".yellow(),
+                    env_file,
+                    field
+                );
+                return;
+            }
+            if !referenced_files.iter().any(|(name, _)| name == &member) {
+                referenced_files.push((member, abs_path));
             }
         } else {
             eprintln!(

@@ -166,28 +166,50 @@ pub const OXOX_FAILED_RETENTION_DAYS: u64 = 7;
 /// Called once at run start; best-effort with a count — cleanup must never
 /// block a run.
 pub fn cleanup_stale_failed_asides(workdir: &Path, max_age_days: u64) -> usize {
-    use std::collections::VecDeque;
+    use std::collections::{HashSet, VecDeque};
     let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
     let now = std::time::SystemTime::now();
     let mut removed = 0usize;
+    // Cycle guard: a symlinked dir used to be followed (`path.is_dir()`
+    // resolves links), so `loop -> .` walked forever and a link out of the
+    // workdir let retention delete `.oxo-failed` files in unrelated trees.
+    // `checkpoint::walk_dir` never traverses symlinks; this walk must not
+    // either. The visited set additionally bounds bind-mounted/hardlinked
+    // aliases of the same directory.
+    let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut queue: VecDeque<PathBuf> = VecDeque::from([workdir.to_path_buf()]);
     while let Some(dir) = queue.pop_front() {
+        let Ok(real) = std::fs::canonicalize(&dir) else {
+            continue;
+        };
+        if !visited.insert(real) {
+            continue;
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            // `DirEntry::file_type` is the entry's own type (no symlink
+            // following) — the whole point of the guard.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 // Never descend into the engine's own state dir — asides
                 // live next to workflow outputs, not inside .oxo-flow.
                 if path.file_name().and_then(|n| n.to_str()) == Some(".oxo-flow") {
                     continue;
                 }
                 queue.push_back(path);
-            } else if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".oxo-failed"))
+            } else if file_type.is_file()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with(".oxo-failed"))
                 && std::fs::metadata(&path)
                     .and_then(|m| m.modified())
                     .ok()
@@ -367,5 +389,29 @@ mod tests {
         assert!(!dir.path().join("results/a.txt.oxo-failed").exists());
         assert!(dir.path().join("results/b.txt").exists());
         assert!(dir.path().join(".oxo-flow/secret.oxo-failed").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_stale_failed_asides_never_follows_symlinked_dirs() {
+        // A symlinked directory must not be traversed: `loop -> .` makes the
+        // walk unbounded (it hung before the guard), and a link out of the
+        // workdir let retention delete `.oxo-failed` evidence in unrelated
+        // trees.
+        let workdir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("keep.oxo-failed"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), workdir.path().join("link-out")).unwrap();
+        std::os::unix::fs::symlink(workdir.path(), workdir.path().join("loop")).unwrap();
+        std::fs::write(workdir.path().join("local.oxo-failed"), "x").unwrap();
+
+        let removed = cleanup_stale_failed_asides(workdir.path(), 0);
+
+        assert_eq!(removed, 1, "only the real local aside is aged out");
+        assert!(!workdir.path().join("local.oxo-failed").exists());
+        assert!(
+            outside.path().join("keep.oxo-failed").exists(),
+            "a symlink out of the workdir must not expose external files"
+        );
     }
 }

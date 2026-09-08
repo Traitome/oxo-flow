@@ -70,8 +70,26 @@ oxo-flow validate my-pipeline.oxoflow
 ```
 
 ```
-✓ my-pipeline.oxoflow — 2 rules, 1 dependencies
+✓ my-pipeline.oxoflow — 2 rules, 1 dependency
 ```
+
+!!! warning "Warnings are the signal — the exit code is not"
+
+    `validate` exits `0` even when it warns. A missing input file, a
+    `sample_pattern` that matches no files, or a `{sample}` wildcard with no
+    sample source declared (no `sample_pattern`, `[[sample_groups]]`, or
+    `[[pairs]]`) — all are warnings under the `✓` line, not errors:
+
+    ```
+    ✓ my-pipeline.oxoflow — 2 rules, 1 dependency
+
+      ⚠ Warning: The following input files do not exist:
+        - raw/sample1_R1.fastq.gz
+    ```
+
+    The `✓ ... — N rules, M dependencies` line only says the workflow
+    *parsed*. Read the warnings, and let `run` be the gate: it exits non-zero
+    when a rule's input is absent or its wildcards cannot be bound.
 
 ---
 

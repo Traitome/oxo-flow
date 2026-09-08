@@ -647,6 +647,22 @@ fn effective_bind_host_with(mode: &str, host: &str, dev_mode: bool) -> anyhow::R
     Ok(host.to_string())
 }
 
+/// Capability matrix advertised at startup when `DATABASE_URL` selects
+/// PostgreSQL.
+///
+/// It must describe what this build actually serves: the HTTP layer is not
+/// yet PostgreSQL-aware — every domain handler (auth sessions included)
+/// reads the SQLite pool, so a PG deployment answers 503 `DB_ERROR` on
+/// DB-backed routes instead of silently handing out session tokens that are
+/// never persisted (logins then 401 forever).
+pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:\n  \
+     available: /api/health · /api/license · /api/openapi.json · SPA assets\n  \
+     unavailable 503 DB_ERROR (SQLite-only handlers): auth sessions — login tokens are \
+     NOT persisted, later requests 401 — plus pipelines, templates, shares, clusters, \
+     audit, AI, chat\n  \
+     gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
+     (run execution is SQLite-only)";
+
 pub async fn start_server_with_mode(
     mode: &str,
     host: &str,
@@ -659,9 +675,9 @@ pub async fn start_server_with_mode(
     crate::db::recover_orphaned_runs().await?;
     crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
 
-    // Cluster definitions from the platform config file are imported here
-    // (the shared entry for BOTH the `oxo-flow serve` subcommand and the
-    // standalone web binary) — idempotent, existing DB rows win.
+    // Cluster definitions from the platform config file are imported by both
+    // serving entry points (this one and the standalone web binary), each
+    // calling the same idempotent import — existing DB rows win.
     if let Some(cfg) = crate::config::load() {
         crate::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
     }
@@ -695,16 +711,43 @@ pub async fn start_server_with_mode(
     let addr = format!("{host}:{port}");
     tracing::info!("Starting oxo-flow web server in {mode} mode on {addr}");
 
-    // The daily run quota is a rolling window that must reset — without
-    // this runs_today only ever grows and users hit 429 until a restart.
-    spawn_daily_quota_reset();
+    // Background maintenance every serving entry point needs (idempotent).
+    start_background_tasks();
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // The connect-info service feeds the rate limiter's peer-address key;
+    // without it the limiter can only fall back to one shared bucket.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
+}
+
+/// Start the background maintenance tasks every serving entry point needs.
+///
+/// Idempotent — a second call is a no-op — so both `oxo-flow serve` (this
+/// library) and the standalone `oxo-flow-web` binary can call it without
+/// double-spawning. The daily quota reset is the load-bearing one: without
+/// it `runs_today` only ever grows and every `POST /api/runs` answers 429
+/// until the process restarts.
+pub fn start_background_tasks() {
+    if BACKGROUND_TASKS_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    spawn_daily_quota_reset();
+}
+
+static BACKGROUND_TASKS_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether [`start_background_tasks`] has run in this process (test seam).
+#[cfg(test)]
+fn background_tasks_started() -> bool {
+    BACKGROUND_TASKS_STARTED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Reset the daily run quota once per UTC day (at minute 1, so DST and
@@ -762,6 +805,44 @@ pub async fn shutdown_signal() {
 #[cfg(test)]
 mod effective_bind_host_tests {
     use super::*;
+
+    /// The PG capability log is the operator-facing contract; it must not
+    /// advertise SQLite-only surfaces (auth sessions) as available.
+    #[test]
+    fn pg_capability_matrix_is_truthful_about_auth() {
+        let line = |prefix: &str| {
+            PG_CAPABILITY_MATRIX
+                .lines()
+                .find(|l| l.trim_start().starts_with(prefix))
+                .unwrap_or_else(|| panic!("matrix lacks a '{prefix}' line: {PG_CAPABILITY_MATRIX}"))
+        };
+
+        let available = line("available:");
+        assert!(
+            !available.contains("auth"),
+            "auth sessions are SQLite-only and must not be advertised as available: {available}"
+        );
+        let unavailable = line("unavailable");
+        assert!(
+            unavailable.contains("auth sessions"),
+            "the SQLite-only auth limitation must be spelled out: {unavailable}"
+        );
+        assert!(
+            PG_CAPABILITY_MATRIX.contains("RUNS_REQUIRE_SQLITE"),
+            "the runs gate must stay in the matrix"
+        );
+    }
+
+    /// Both serving entry points call `start_background_tasks`; a second
+    /// call must not double-spawn the quota-reset loop.
+    #[tokio::test]
+    async fn background_tasks_start_exactly_once() {
+        assert!(!background_tasks_started());
+        start_background_tasks();
+        assert!(background_tasks_started());
+        start_background_tasks();
+        assert!(background_tasks_started());
+    }
 
     #[test]
     fn personal_mode_forces_loopback_for_non_loopback_hosts() {

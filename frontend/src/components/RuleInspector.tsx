@@ -155,19 +155,23 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
   );
 
   const handleSave = () => {
+    // A cleared field must travel as explicit `null` (the backend removes the
+    // key for null patches): omitting it — or sending "" — left the old value
+    // in place, so clearing a field silently did nothing.
+    const cleared = (value: string) => (value.trim() === '' ? null : value);
     const patch: Record<string, unknown> = {
-      description: form.description,
-      shell: form.shell,
-      script: form.script,
+      description: cleared(form.description),
+      shell: cleared(form.shell),
+      script: cleared(form.script),
       input: form.input.filter((v) => v.trim() !== ''),
       output: form.output.filter((v) => v.trim() !== ''),
-      when: form.when,
+      when: cleared(form.when),
       retries: form.retries === '' ? null : Number(form.retries),
       tags: form.tags.split(',').map((t) => t.trim()).filter((t) => t !== ''),
       optional: form.optional,
       required: form.required,
-      log: form.log,
-      benchmark: form.benchmark,
+      log: cleared(form.log),
+      benchmark: cleared(form.benchmark),
     };
     if (form.environment !== 'system') {
       patch.environment = { [form.environment]: form.environmentSpec };
@@ -181,14 +185,14 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
     if (form.gpu !== '') resources.gpu = Number(form.gpu);
     if (form.disk !== '') resources.disk = form.disk;
     if (form.timeLimit !== '') resources.time_limit = form.timeLimit;
-    if (Object.keys(resources).length > 0) patch.resources = resources;
-    if (form.envvars.length > 0) {
-      const envvars: Record<string, string> = {};
-      for (const { key, value } of form.envvars) {
-        if (key.trim() !== '') envvars[key.trim()] = value;
-      }
-      patch.envvars = envvars;
+    // `resources` is replaced wholesale, so an emptied form must null the
+    // table — omitting it kept every old resource value.
+    patch.resources = Object.keys(resources).length > 0 ? resources : null;
+    const envvars: Record<string, string> = {};
+    for (const { key, value } of form.envvars) {
+      if (key.trim() !== '') envvars[key.trim()] = value;
     }
+    patch.envvars = Object.keys(envvars).length > 0 ? envvars : null;
     onSave(patch);
   };
 

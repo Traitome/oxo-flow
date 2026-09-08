@@ -415,32 +415,53 @@ jobs:
         run: |
           export PATH="$PWD/target/debug:$PATH"
 
-          # Issue #249 flaky governance: first attempt runs the full suite.
+          # Issue #249 flaky governance: first attempt runs the full suite with
+          # --no-fail-fast so every test binary reports its failures (without
+          # it the first failing binary aborts the rest and hides later ones).
           # On failure, the FAILED test list is extracted from that run's
           # output and ONLY those tests re-run once — a load-timing flake
           # (signal-grace races, first-run resource contention) passes and
           # the job stays green; a genuine regression fails again and the
           # job goes red. The retry is capped at exactly one re-run so
           # persistent breakage is never masked.
-          if OUT=$(cargo test --workspace 2>&1); then
+          #
+          # The retry uses libtest's --exact, which only addresses bare
+          # `test <name> ... FAILED` lines. Doctest failures carry a
+          # description and line number in the name ("test src/wildcard.rs -
+          # expand_pattern (line 662) ... FAILED"); passing such a line to
+          # --exact matches zero tests and exits 0, which would turn a real
+          # doctest regression green. Any FAILED line that is not a bare
+          # unit/integration test therefore fails the job instead of retrying.
+          if OUT=$(cargo test --workspace --no-fail-fast 2>&1); then
             echo "$OUT"
             exit 0
           fi
           echo "$OUT"
 
           echo "::warning::test suite failed — re-running FAILED tests once (flake gate, issue #249)"
-          FAILED=$(echo "$OUT" | grep -E "^test .* FAILED" | sed -E 's/^test ([^ ]+) \.\.\. FAILED$/\1/' | sort -u || true)
-          if [ -z "$FAILED" ]; then
+          # `^test .* FAILED` also matches the per-binary summary line
+          # (`test result: FAILED. N passed; ...`), which is not a test name —
+          # without the second filter every failure would look unparseable and
+          # the flake retry would never run.
+          FAILED_LINES=$(echo "$OUT" | grep -E "^test .* FAILED" | grep -vE "^test result:" || true)
+          if [ -z "$FAILED_LINES" ]; then
             echo "could not extract failed test names (compile error or format change) — failing the job"
             exit 1
           fi
+          UNPARSED=$(printf '%s\n' "$FAILED_LINES" | grep -vE '^test [^ ]+ \.\.\. FAILED$' || true)
+          if [ -n "$UNPARSED" ]; then
+            echo "::error::FAILED lines below are not bare test names (doctests carry a description and line number) — --exact cannot retry them, failing instead of masking:"
+            printf '%s\n' "$UNPARSED"
+            exit 1
+          fi
+          FAILED=$(printf '%s\n' "$FAILED_LINES" | sed -E 's/^test ([^ ]+) \.\.\. FAILED$/\1/' | sort -u)
           echo "Re-running: $FAILED"
           # One argument per test via a real array: an unquoted $FAILED
           # word-splits on spaces too, and a fully-quoted one arrives as a
           # single --exact filter containing newlines and matches nothing
           # (issue #297 item 8).
           mapfile -t FAILED_LIST <<< "$FAILED"
-          if cargo test --workspace -- --exact "${FAILED_LIST[@]}"; then
+          if cargo test --workspace --no-fail-fast -- --exact "${FAILED_LIST[@]}"; then
             echo "::warning::FAILED tests passed on re-run — classified as load-timing flakes (issue #249)"
             exit 0
           fi

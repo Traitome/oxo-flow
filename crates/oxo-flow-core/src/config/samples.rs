@@ -50,7 +50,12 @@ impl WorkflowConfig {
             }
         }
 
-        // Workflow order: group order, then within-group order, deduplicated.
+        // Workflow order: group order, then within-group order, then each
+        // pair's experiment/control in pair order — deduplicated. Pair
+        // names are part of the selectable domain: a pairs-only workflow
+        // declares no group samples, and `first:N`/explicit names must
+        // still be able to select its pairs (a `--samples first:2` there
+        // used to drop every pair and report "matched no samples").
         let ordered: Vec<String> = {
             let mut out = Vec::new();
             for group in &self.sample_groups {
@@ -60,19 +65,32 @@ impl WorkflowConfig {
                     }
                 }
             }
+            for pair in &self.pairs {
+                for name in std::iter::once(&pair.experiment).chain(pair.control.iter()) {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
             out
         };
 
-        let allowed: std::collections::HashSet<String> = if let Some(n) = take_first {
-            ordered
-                .iter()
-                .take(n)
-                .cloned()
-                .chain(explicit.iter().cloned())
-                .collect()
+        let mut allowed: std::collections::HashSet<String> = if let Some(n) = take_first {
+            ordered.iter().take(n).cloned().collect()
         } else {
-            explicit.iter().cloned().collect()
+            std::collections::HashSet::new()
         };
+        for name in &explicit {
+            allowed.insert(name.clone());
+            // A pair ID is a selectable identifier too: naming the pair
+            // selects both of its samples, so `--samples P1` keeps P1.
+            for pair in self.pairs.iter().filter(|p| p.pair_id == *name) {
+                allowed.insert(pair.experiment.clone());
+                if let Some(ref control) = pair.control {
+                    allowed.insert(control.clone());
+                }
+            }
+        }
         let kept: Vec<String> = ordered
             .iter()
             .filter(|s| allowed.contains(*s))
@@ -80,13 +98,15 @@ impl WorkflowConfig {
             .collect();
         // Pair experiment/control names are valid sample identifiers too —
         // they must not be reported as unknown (issue #63 feeds resolved
-        // `ready` names through this path).
+        // `ready` names through this path). Pair IDs select their pair and
+        // are known for the same reason.
         let unknown: Vec<String> = explicit
             .iter()
             .filter(|name| {
                 !ordered.iter().any(|s| s == name.as_str())
                     && !self.pairs.iter().any(|p| {
-                        p.experiment == name.as_str()
+                        p.pair_id == name.as_str()
+                            || p.experiment == name.as_str()
                             || p.control.as_deref().is_some_and(|c| c == name.as_str())
                     })
             })
@@ -124,6 +144,76 @@ impl WorkflowConfig {
         }
 
         Ok((kept, unknown))
+    }
+
+    /// Sample ids declared by more than one owner — a second
+    /// `[[sample_groups]]` entry, or a `[[pairs]]` experiment/control that
+    /// already belongs to a group. Returns `(sample, first_owner,
+    /// second_owner)` in workflow order; owners are `group '<name>'` /
+    /// `pair '<id>'`.
+    ///
+    /// A repeated id is only safe when every rule path distinguishes the
+    /// owners (e.g. a `{group}` component in the output). Otherwise the two
+    /// instances share an output path: the second is skipped as
+    /// "outputs up-to-date" while the checkpoint records both as
+    /// completed, so one sample's data can be consumed as the other's.
+    /// Repeats WITHIN one owner (a sample listed twice in the same group)
+    /// are not duplicates — they deduplicate to a single instance.
+    ///
+    /// The engine's [`AUTO_DISCOVERED_GROUP_NAME`](crate::config::AUTO_DISCOVERED_GROUP_NAME)
+    /// group is exempt against `[[pairs]]`: feeding discovered samples into
+    /// pairs is the documented pairing workflow, not a competing
+    /// declaration. It still counts against a user-declared group (two
+    /// groups fanning out the same `{sample}` is the real double-owner
+    /// case).
+    #[must_use]
+    pub fn duplicate_sample_owners(&self) -> Vec<(String, String, String)> {
+        fn record(
+            owner_of: &mut HashMap<String, String>,
+            duplicates: &mut Vec<(String, String, String)>,
+            sample: &str,
+            owner: String,
+        ) {
+            match owner_of.get(sample) {
+                Some(first) if *first != owner => {
+                    duplicates.push((sample.to_string(), first.clone(), owner));
+                }
+                Some(_) => {}
+                None => {
+                    owner_of.insert(sample.to_string(), owner);
+                }
+            }
+        }
+
+        let mut owner_of: HashMap<String, String> = HashMap::new();
+        let mut duplicates = Vec::new();
+        for group in &self.sample_groups {
+            for sample in &group.samples {
+                record(
+                    &mut owner_of,
+                    &mut duplicates,
+                    sample,
+                    format!("group '{}'", group.name),
+                );
+            }
+        }
+        let auto_owner = format!("group '{}'", crate::config::AUTO_DISCOVERED_GROUP_NAME);
+        for pair in &self.pairs {
+            let owner = format!("pair '{}'", pair.pair_id);
+            for member in std::iter::once(&pair.experiment).chain(pair.control.iter()) {
+                // Auto-discovery feeding pairs is the documented pairing
+                // workflow (`sample_pattern` + `[[pairs]]`), not a competing
+                // owner — only user-declared groups are compared here.
+                if owner_of
+                    .get(member)
+                    .is_some_and(|first| *first == auto_owner)
+                {
+                    continue;
+                }
+                record(&mut owner_of, &mut duplicates, member, owner.clone());
+            }
+        }
+        duplicates
     }
 
     /// Replace the workflow's sample groups outright and keep the injected

@@ -631,7 +631,13 @@ impl ClusterProfile {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigDef {
     /// Default value when not provided via CLI or profile.
+    ///
+    /// Scalars are accepted and stringified (`default = false` → `"false"`).
+    /// Non-scalars are a hard error: silently keeping the raw table as the
+    /// runtime value rendered TOML text into commands and made
+    /// `when = "config.key"` gates truthy (audit finding C4).
     #[serde(default)]
+    #[serde(deserialize_with = "deserialize_config_default")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
 
@@ -667,6 +673,35 @@ pub struct ConfigDef {
     /// Path must exist on disk (requires `type = "path"`).
     #[serde(default)]
     pub must_exist: bool,
+}
+
+/// Deserialize a declarative `[config]` default from any TOML scalar.
+///
+/// The field is a string everywhere downstream (`{config.key}` interpolation,
+/// `when` evaluation, `--key` validation), so booleans/integers/floats are
+/// stringified rather than rejected. Arrays and tables have no scalar
+/// representation and are refused — the previous silent fallback kept the raw
+/// inline table as the runtime value, which injected TOML text into commands
+/// and made gates truthy.
+fn deserialize_config_default<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<toml::Value>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Ok(Some(s)),
+        Some(toml::Value::Integer(i)) => Ok(Some(i.to_string())),
+        Some(toml::Value::Float(f)) => Ok(Some(f.to_string())),
+        Some(toml::Value::Boolean(b)) => Ok(Some(b.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "config default must be a string, integer, float, or boolean (got {}); \
+             declare arrays/tables as a plain [config] value instead",
+            other.type_str()
+        ))),
+    }
 }
 
 /// A declared reference artifact — a pre-built index or data file.
@@ -1286,6 +1321,12 @@ pub(crate) fn expand_command_text_fields(
     expanded.on_failure = source.on_failure.as_deref().map(&expand);
 }
 
+/// Name of the engine-created sample group holding `sample_pattern`
+/// discovery results. Not a user-declared owner: pairing workflows
+/// legitimately reference the discovered samples from `[[pairs]]`
+/// (see [`WorkflowConfig::duplicate_sample_owners`]).
+pub const AUTO_DISCOVERED_GROUP_NAME: &str = "auto-discovered";
+
 /// A named collection of samples with optional metadata wildcards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SampleGroup {
@@ -1811,8 +1852,10 @@ pub struct WorkflowConfig {
     /// address columns as `{meta.<column>}`, resolved per instance from
     /// the instance's sample-like binding (`{sample}`, or `{pair_id}` /
     /// experiment / control in pair workflows). A missing row or column
-    /// renders as an empty string. Never set by user TOML — the table only
-    /// comes from `metadata_file`.
+    /// renders as an empty string. Populated from `metadata_file` at plan
+    /// time; a top-level `[metadata]` table in the workflow is also honored,
+    /// and rows loaded from `metadata_file` overwrite inline rows with the
+    /// same sample id.
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, HashMap<String, String>>,
@@ -1848,6 +1891,13 @@ pub struct WorkflowConfig {
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.
     #[serde(skip)]
     pub expansion_templates: HashMap<String, String>,
+    /// Instance name → canonical binding key for `output_pattern` consumer
+    /// instances. Two distinct producer-domain combos can sanitize to the
+    /// SAME instance name (`A-1` and `A_1` both render `A_1`); only a
+    /// matching key makes a name collision idempotent (re-expansion), any
+    /// other is a hard duplicate. Never serialized.
+    #[serde(skip)]
+    pub expansion_instance_combos: HashMap<String, String>,
     /// Resolved include contracts (issue #112 module slice): one entry per
     /// `[[include]]` that declares an interface. Never serialized.
     #[serde(skip)]

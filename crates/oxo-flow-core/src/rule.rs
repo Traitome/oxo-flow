@@ -851,10 +851,20 @@ impl FilePatterns {
     }
 
     /// Returns a list of all patterns as strings.
+    ///
+    /// Map-form patterns are ordered by key: `HashMap` iteration order is
+    /// per-process random, so every order-sensitive consumer (`{output}` /
+    /// `{input}` rendering, cache identities, display joins) would otherwise
+    /// differ between runs. This matches [`Self::get_index`], which already
+    /// indexes the sorted keys.
     pub fn to_vec(&self) -> Vec<String> {
         match self {
             Self::List(v) => v.clone(),
-            Self::Map(m) => m.values().cloned().collect(),
+            Self::Map(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                keys.into_iter().map(|k| m[k].clone()).collect()
+            }
             Self::Dir { path, .. } => vec![path.clone()],
         }
     }
@@ -1398,7 +1408,12 @@ impl Rule {
                 suggestion: None,
             });
         }
-        if let Some(ref mem) = self.memory {
+        // Validate the effective value (`resources.memory` wins over the
+        // deprecated `memory` shorthand). Checking only the shorthand let an
+        // unparsable `[rules.resources] memory = "16GB"` through: the pool
+        // reserved 0 MB and the value was interpolated into `--memory` and
+        // scheduler directives unchecked (audit finding).
+        if let Some(mem) = self.effective_memory() {
             let mem_trimmed = mem.trim();
             if !mem_trimmed.is_empty() {
                 // Must end with a valid unit suffix and have a numeric prefix
@@ -2297,6 +2312,20 @@ mod tests {
     }
 
     #[test]
+    fn validate_resources_memory_shorthand_is_checked_too() {
+        // The deprecated `memory` shorthand was the only field validated;
+        // `[rules.resources] memory` slipped through and reserved 0 MB.
+        let mut rule = Rule {
+            name: "test".to_string(),
+            ..Default::default()
+        };
+        rule.resources.memory = Some("16GB".to_string());
+        assert!(rule.validate().is_err(), "16GB must be rejected");
+        rule.resources.memory = Some("16G".to_string());
+        assert!(rule.validate().is_ok(), "16G must be accepted");
+    }
+
+    #[test]
     fn validate_invalid_memory_no_unit() {
         let rule = Rule {
             name: "test".to_string(),
@@ -2689,5 +2718,28 @@ mod tests {
         // Empty segments dropped
         let spec: EnvironmentSpec = toml::from_str(r#"modules = "gcc/11.2,""#).unwrap();
         assert_eq!(spec.modules, vec!["gcc/11.2"]);
+    }
+
+    #[test]
+    fn map_patterns_are_ordered_by_key() {
+        // HashMap iteration order is per-process random; every order-sensitive
+        // consumer ({output}/{input} rendering, cache identities) must see the
+        // same order regardless of insertion order.
+        let mut a = HashMap::new();
+        a.insert("bam".to_string(), "out.bam".to_string());
+        a.insert("bai".to_string(), "out.bam.bai".to_string());
+        let mut b = HashMap::new();
+        b.insert("bai".to_string(), "out.bam.bai".to_string());
+        b.insert("bam".to_string(), "out.bam".to_string());
+        let pa = FilePatterns::Map(a);
+        let pb = FilePatterns::Map(b);
+        assert_eq!(pa.to_vec(), pb.to_vec());
+        assert_eq!(
+            pa.to_vec(),
+            vec!["out.bam.bai".to_string(), "out.bam".to_string()]
+        );
+        assert_eq!(pa.join(" "), "out.bam.bai out.bam");
+        // get_index already indexed sorted keys — the two must agree.
+        assert_eq!(pa.get_index(0), Some(&"out.bam.bai".to_string()));
     }
 }

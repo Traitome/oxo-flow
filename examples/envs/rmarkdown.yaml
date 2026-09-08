@@ -1,7 +1,9 @@
-# R + rmarkdown for notebook-style reports (gallery 09).
+# R + rmarkdown for notebook-style reports (gallery 09). Seurat is required
+# because templates/sc_report.Rmd loads it to plot the rendered object.
 name: rmarkdown
 channels:
   - conda-forge
 dependencies:
   - r-base=4.3
   - r-rmarkdown=2.25
+  - r-seurat=5.1.0

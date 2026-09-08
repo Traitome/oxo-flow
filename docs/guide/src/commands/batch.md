@@ -32,7 +32,6 @@ oxo-flow batch [OPTIONS] <TEMPLATE> [ITEMS...]
 | `--dry-run` | `-n` | — | Preview without executing |
 | `--workdir` | `-d` | . | Working directory |
 | `--environment` | `-e` | — | Environment spec |
-| `--checksum` | — | — | Compute output checksums |
 | `--generate-workflow` | — | — | Generate .oxoflow file |
 | `--output` | `-o` | batch.oxoflow | Output workflow file |
 

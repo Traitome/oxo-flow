@@ -83,8 +83,16 @@ impl AiConfig {
         if other.enabled {
             self.enabled = true;
         }
-        // Provider only changes if explicitly different from default
-        self.provider = other.provider;
+        // Provider only changes if explicitly different from default. The
+        // field is not optional, so an absent key parses to the default —
+        // taking `other.provider` unconditionally let a workflow
+        // `[ai] enabled = true` (no provider key) reset a global
+        // `provider = "claude"` back to DeepSeek. The cost is that an
+        // explicit `provider = "deepseek"` cannot override a non-default
+        // lower tier; DeepSeek is the default anyway.
+        if other.provider != ProviderKind::default() {
+            self.provider = other.provider;
+        }
         if other.model.is_some() {
             self.model = other.model.clone();
         }
@@ -164,6 +172,9 @@ impl AiConfig {
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
+        let temperature = ai_table
+            .get("temperature")
+            .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)));
 
         let skills = ai_table
             .get("skills")
@@ -183,7 +194,7 @@ impl AiConfig {
             api_url: None,
             max_retries,
             auto_fix,
-            temperature: None,
+            temperature,
             skills,
         })
     }
@@ -345,6 +356,44 @@ mod tests {
     }
 
     #[test]
+    fn merge_does_not_reset_provider_to_default() {
+        // Regression: `merge` copied `other.provider` unconditionally, so a
+        // workflow `[ai] enabled = true` (no provider key — parsed as the
+        // DeepSeek default) reset a global `provider = "claude"`.
+        let global = AiConfig {
+            enabled: true,
+            provider: ProviderKind::Claude,
+            ..AiConfig::default()
+        };
+        let workflow = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nenabled = true\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            workflow.provider,
+            ProviderKind::DeepSeek,
+            "an absent provider key parses as the default"
+        );
+
+        let mut resolved = AiConfig::default();
+        resolved.merge(&global);
+        resolved.merge(&workflow);
+        assert_eq!(
+            resolved.provider,
+            ProviderKind::Claude,
+            "a workflow without a provider key must not reset the global provider"
+        );
+
+        // An explicit non-default provider still overrides.
+        let explicit = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nprovider = \"openai\"\n").unwrap(),
+        )
+        .unwrap();
+        resolved.merge(&explicit);
+        assert_eq!(resolved.provider, ProviderKind::OpenAi);
+    }
+
+    #[test]
     fn auto_fix_mode_parse() {
         assert_eq!("ask".parse::<AutoFixMode>().unwrap(), AutoFixMode::Ask);
         assert_eq!(
@@ -363,6 +412,7 @@ enabled = true
 model = "deepseek-v4-flash"
 max_retries = 5
 auto_fix = "always"
+temperature = 0.2
 "#;
         let table: toml::Table = toml::from_str(toml_str).unwrap();
         let config = AiConfig::from_workflow_toml(&table).unwrap();
@@ -370,6 +420,7 @@ auto_fix = "always"
         assert_eq!(config.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(config.max_retries, 5);
         assert_eq!(config.auto_fix, AutoFixMode::Always);
+        assert_eq!(config.temperature, Some(0.2));
     }
 
     #[test]

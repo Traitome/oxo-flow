@@ -1118,7 +1118,21 @@ pub async fn retry_run(
         ));
     }
 
-    let from_rule = req.get("from_rule").and_then(|v| v.as_str());
+    // `from_rule` is documented in the API reference, but the engine has no
+    // "re-execute from rule X downstream" mode: the retry spawns the CLI with
+    // --resume-failed --rerun, which re-runs the checkpoint's failed set. A
+    // plan computed from an arbitrary origin would be a promise the spawned
+    // run cannot keep, so the field is rejected instead of silently ignored.
+    if req.get("from_rule").is_some_and(|v| !v.is_null()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "UNSUPPORTED_FIELD",
+            "from_rule is not supported: a retry re-executes the rules that failed in the \
+             previous run (plus their downstream dependents). To re-run a specific rule, \
+             remove its outputs or use `oxo-flow run --rerun`."
+                .into(),
+        ));
+    }
     let skip_succeeded = req
         .get("skip_succeeded")
         .and_then(|v| v.as_bool())
@@ -1140,7 +1154,7 @@ pub async fn retry_run(
             )
         })?;
 
-    let plan = service::compute_retry_plan(&node_items, &dag, from_rule, skip_succeeded)
+    let plan = service::compute_retry_plan(&node_items, &dag, skip_succeeded)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))?;
 
     // The retry is a REAL run (issue #82 P0-3 — previously the plan was
@@ -1435,9 +1449,21 @@ pub async fn pause_run(
         .unwrap_or("user_request");
 
     // Freeze the live process group (the CLI and every rule subprocess).
-    if let Some(pgid) = crate::process_control::pgid(&id)
-        && let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP)
-    {
+    // The status flip below is conditional on this succeeding: a queued run
+    // has no process group yet, and marking it 'paused' would strand the row
+    // (nothing to SIGCONT, and its quota reservation would never be
+    // released) — a conflict is the honest answer.
+    let Some(pgid) = crate::process_control::pgid(&id) else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "NO_PROCESS_GROUP",
+            format!(
+                "Run {id} has no live process group to pause (queued or already detached) — \
+                 cancel it instead"
+            ),
+        ));
+    };
+    if let Err(e) = crate::process_control::signal_group(pgid, crate::process_control::SIGSTOP) {
         return Err(err(
             StatusCode::CONFLICT,
             "PAUSE_ERROR",
@@ -1513,10 +1539,23 @@ pub async fn resume_run(
             ),
         ));
     }
-    let from_rule = body
+    // Resuming a paused process unfreezes it in place — there is no plan to
+    // recompute, so a `from_rule` origin cannot be honoured (the engine has
+    // no re-run-from-rule mode either; see retry_run). Reject it instead of
+    // echoing back a field that changes nothing.
+    if body
         .as_ref()
         .and_then(|Json(v)| v.get("from_rule"))
-        .and_then(|v| v.as_str());
+        .is_some_and(|v| !v.is_null())
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "UNSUPPORTED_FIELD",
+            "from_rule is not supported on resume: a paused run continues in place. To \
+             re-execute from a specific rule, cancel the run and retry it."
+                .into(),
+        ));
+    }
 
     // Unfreeze the live process group.
     if let Some(pgid) = crate::process_control::pgid(&id)
@@ -1545,14 +1584,13 @@ pub async fn resume_run(
 
     crate::broadcast_event_for(
         "run_resumed",
-        &serde_json::json!({"run_id": id, "from_rule": from_rule}),
+        &serde_json::json!({"run_id": id}),
         Some(&run.user_id),
     );
 
     Ok(Json(serde_json::json!({
         "run_id": id,
         "status": "running",
-        "from_rule": from_rule,
     })))
 }
 
@@ -1897,13 +1935,13 @@ pub async fn clean_run(
 
     let bin = crate::executor::find_oxo_flow_binary();
     let workflow = std::path::Path::new(&workdir).join("workflow.oxoflow");
-    let output = tokio::process::Command::new(bin)
-        .arg("clean")
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("clean")
         .arg(&workflow)
         .arg("--workdir")
         .arg(&workdir)
-        .arg("--force")
-        .output()
+        .arg("--force");
+    let output = run_bounded(cmd, CLEAN_TIMEOUT, CLEAN_OUTPUT_CAP_BYTES)
         .await
         .map_err(|e| {
             err(
@@ -1912,14 +1950,95 @@ pub async fn clean_run(
                 format!("Failed to run clean: {e}"),
             )
         })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     Ok(Json(serde_json::json!({
         "run_id": id,
-        "exit_code": output.status.code(),
-        "stdout": stdout.lines().last().unwrap_or(""),
-        "stderr": stderr.lines().last().unwrap_or(""),
+        "exit_code": output.status,
+        "stdout": output.stdout.lines().last().unwrap_or(""),
+        "stderr": output.stderr.lines().last().unwrap_or(""),
     })))
+}
+
+/// Hard limit on the `clean` subprocess. It walks and deletes a run workdir;
+/// a stuck CLI (network filesystem, huge tree) must not hold the request —
+/// and its connection — open forever.
+const CLEAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Per-stream capture cap. The response only surfaces the last line, but the
+/// pipes were previously unbounded (a chatty CLI could buffer gigabytes).
+const CLEAN_OUTPUT_CAP_BYTES: u64 = 64 * 1024;
+
+/// A finished subprocess with its captured (capped) output.
+#[derive(Debug)]
+struct BoundedOutput {
+    status: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Read at most `cap` bytes into `sink`, then discard the remainder so a
+/// child writing past the cap can never block on a full pipe.
+async fn capture_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    cap: u64,
+    sink: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    {
+        let mut limited = reader.take(cap);
+        limited.read_to_end(sink).await?;
+    }
+    tokio::io::copy(reader, &mut tokio::io::sink()).await?;
+    Ok(())
+}
+
+/// Run `cmd` with a hard timeout and a per-stream byte cap.
+///
+/// Output past the cap is drained and discarded (memory stays bounded), so
+/// the child still exits normally and its status is real; on timeout the
+/// child is killed (`kill_on_drop`) and the call reports it.
+async fn run_bounded(
+    mut cmd: tokio::process::Command,
+    timeout: std::time::Duration,
+    cap: u64,
+) -> Result<BoundedOutput, String> {
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| format!("failed to start: {e}"))?;
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout pipe".to_string())?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| "no stderr pipe".to_string())?;
+
+    let run = async move {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (out_res, err_res, status) = tokio::join!(
+            capture_capped(&mut stdout_pipe, cap, &mut out),
+            capture_capped(&mut stderr_pipe, cap, &mut err),
+            child.wait(),
+        );
+        out_res.map_err(|e| format!("stdout read failed: {e}"))?;
+        err_res.map_err(|e| format!("stderr read failed: {e}"))?;
+        let status = status.map_err(|e| format!("wait failed: {e}"))?;
+        Ok::<_, String>(BoundedOutput {
+            status: status.code(),
+            stdout: String::from_utf8_lossy(&out).into_owned(),
+            stderr: String::from_utf8_lossy(&err).into_owned(),
+        })
+    };
+
+    match tokio::time::timeout(timeout, run).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "timed out after {}s (process killed)",
+            timeout.as_secs()
+        )),
+    }
 }
 
 #[utoipa::path(
@@ -2032,4 +2151,44 @@ pub async fn resume_checkpoint(
         "resumed_from": id,
         "max_jobs": jobs,
     })))
+}
+
+#[cfg(test)]
+mod bounded_subprocess_tests {
+    use super::*;
+
+    fn sh(script: &str) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(script);
+        cmd
+    }
+
+    /// Output past the cap must not deadlock the wait: the pipes are closed
+    /// once the cap is hit, so the writer gets EPIPE and the status arrives.
+    #[tokio::test]
+    async fn output_is_capped_without_hanging() {
+        let out = run_bounded(
+            sh("head -c 200000 /dev/zero | tr '\\0' 'x'"),
+            std::time::Duration::from_secs(30),
+            1024,
+        )
+        .await
+        .expect("bounded run succeeds");
+        assert_eq!(out.status, Some(0));
+        assert_eq!(
+            out.stdout.len(),
+            1024,
+            "stdout capture must stop at the cap"
+        );
+    }
+
+    /// A hung subprocess is killed and reported instead of holding the
+    /// request open forever.
+    #[tokio::test]
+    async fn hung_subprocess_is_killed_and_reported() {
+        let err = run_bounded(sh("sleep 30"), std::time::Duration::from_millis(200), 1024)
+            .await
+            .expect_err("timeout must be an error");
+        assert!(err.contains("timed out"), "unexpected error: {err}");
+    }
 }

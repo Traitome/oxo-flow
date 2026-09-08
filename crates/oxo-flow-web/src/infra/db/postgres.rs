@@ -159,6 +159,7 @@ impl StorageBackend for PostgresBackend {
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 action TEXT NOT NULL,
                 target TEXT NOT NULL,
+                result TEXT NOT NULL DEFAULT 'success',
                 metadata TEXT,
                 timestamp TEXT NOT NULL
             );
@@ -191,7 +192,8 @@ impl StorageBackend for PostgresBackend {
                 session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                timestamp TEXT NOT NULL
+                meta TEXT,
+                created_at TEXT NOT NULL
             );
             "#,
         )
@@ -716,8 +718,11 @@ impl StorageBackend for PostgresBackend {
     async fn log_action(&self, user_id: &str, action: &str, target: &str) -> Result<(), String> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
+        // Same seven columns as the SQLite impl so an audit read written
+        // against either backend finds the same shape (result is the
+        // StorageBackend contract's implicit success marker).
         sqlx::query(
-            "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO audit_logs (id, user_id, action, target, result, metadata, timestamp) VALUES ($1, $2, $3, $4, 'success', $5, $6)",
         )
         .bind(&id)
         .bind(user_id)

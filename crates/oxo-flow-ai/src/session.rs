@@ -153,8 +153,14 @@ impl SessionMessage {
     pub fn from_message(msg: &crate::types::Message) -> Self {
         use sha2::Digest;
         let role = format!("{:?}", msg.role).to_lowercase();
+        // Char-boundary safe: a byte slice at 500 panics for CJK/emoji content
+        // (audit finding). `truncate_utf8_from_start` is the crate's existing
+        // helper for exactly this.
         let preview = if msg.content.len() > 500 {
-            format!("{}...", &msg.content[..500])
+            format!(
+                "{}...",
+                crate::types::truncate_utf8_from_start(&msg.content, 500)
+            )
         } else {
             msg.content.clone()
         };
@@ -247,13 +253,41 @@ pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
         message: e.to_string(),
     })?;
 
-    std::fs::write(&path, json).map_err(|e| AiError::SessionError {
-        path: path.clone(),
-        message: e.to_string(),
-    })?;
+    write_json_atomic(&path, &json)?;
 
     tracing::info!(session = %session.id, "AI session saved to {}", path.display());
     Ok(path)
+}
+
+/// Write `json` to `path` atomically: a temp sibling plus a rename.
+///
+/// A crash (or a full disk) mid-write used to leave a truncated JSON file
+/// that `ai status` then failed to parse. `rename` is atomic within a
+/// filesystem, so readers always see either the previous complete version
+/// or the new one — never a partial write. The temp file is created in the
+/// destination directory so the rename cannot cross filesystems.
+fn write_json_atomic(path: &Path, json: &str) -> Result<(), AiError> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session.json".to_string());
+    let tmp = dir.join(format!(
+        ".{stem}.tmp.{}.{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    std::fs::write(&tmp, json).map_err(|e| AiError::SessionError {
+        path: tmp.clone(),
+        message: e.to_string(),
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        AiError::SessionError {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        }
+    })
 }
 
 /// Archive a workflow file before modification.
@@ -295,6 +329,33 @@ pub fn archive_before_modify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_json_atomic_publishes_and_leaves_no_temp_file() {
+        // A truncated session file made `ai status` fail to parse; the
+        // write must go through a temp sibling + rename, leaving only the
+        // complete file behind.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s1.json");
+
+        write_json_atomic(&path, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":1}");
+
+        // Overwrite: the old complete version is replaced atomically.
+        write_json_atomic(&path, "{\"b\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"b\":2}");
+
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files must be renamed away: {leftovers:?}"
+        );
+    }
 
     #[test]
     fn session_has_unique_id() {
@@ -348,5 +409,22 @@ mod tests {
         let dir = archive_dir();
         assert!(dir.to_string_lossy().contains("oxo-flow"));
         assert!(dir.to_string_lossy().contains("ai_archive"));
+    }
+
+    #[test]
+    fn session_message_preview_is_char_boundary_safe() {
+        // A 500-byte slice of CJK content lands mid-character; the old
+        // `&msg.content[..500]` panicked while persisting the session.
+        let content = "汉".repeat(400); // 1200 bytes, every char 3 bytes
+        assert!(content.len() > 500);
+        let msg = crate::types::Message::assistant(&content);
+        let preview = SessionMessage::from_message(&msg);
+        assert!(preview.content_preview.ends_with("..."));
+        assert!(preview.content_preview.len() <= 503);
+        assert!(
+            preview
+                .content_preview
+                .is_char_boundary(preview.content_preview.len() - 3)
+        );
     }
 }

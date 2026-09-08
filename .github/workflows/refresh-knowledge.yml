@@ -3,8 +3,11 @@
 # Operational notes: 1st+16th of each month 03:00 UTC (cron is UTC) or manual
 # dispatch. scripts/refresh-knowledge/*.py are stdlib-only python3, idempotent
 # (rewrite data only on change); a failing script is tolerated (other sources
-# still refresh), reported via ::error, and named in the PR body. No changes ->
-# green run with a notice; changes -> the stable refresh-knowledge/auto branch
+# still refresh), reported via ::error, and named in the PR body — but a run
+# where EVERY script fails is a hard failure (nothing was refreshed, and it
+# would otherwise be indistinguishable from a healthy "no changes" run).
+# No changes -> green run with a notice; changes -> the stable
+# refresh-knowledge/auto branch
 # (re-runs force-push it in place — no dated orphan branches), commit of data +
 # meta files only, then a PR with label `automated` + per-source count summary
 # from knowledge_meta.json; if the org policy refuses Actions-created PRs, the
@@ -23,6 +26,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # `gh label create` and the issue fallback below (taken when org policy
+  # refuses Actions-created PRs) need issue scope. Unlisted scopes are
+  # `none`, so without this the documented fallback would 403 and the run
+  # would go red instead of staying green.
+  issues: write
 
 concurrency:
   group: knowledge-refresh
@@ -40,11 +48,14 @@ jobs:
         run: |
           set -uo pipefail
           FAILED=""
+          SCRIPT_COUNT=0
+          FAILED_COUNT=0
           if [ ! -d scripts/refresh-knowledge ] || [ -z "$(ls -A scripts/refresh-knowledge)" ]; then
             echo "::error::scripts/refresh-knowledge/ is missing or empty - nothing to refresh"; exit 1
           fi
           for script in scripts/refresh-knowledge/*.py; do
             [ -f "$script" ] || continue
+            SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
             echo "::group::Running ${script}"
             script_name="$(basename "$script")"
             timeout_seconds=600
@@ -63,10 +74,20 @@ jobs:
               rc=$?
               echo "::error::Refresh script failed: ${script} (exit ${rc}, timeout ${timeout_seconds}s)"
               FAILED="${FAILED:+${FAILED} }${script}"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
             fi
             echo "::endgroup::"
           done
           echo "FAILED_SCRIPTS=${FAILED}" >> "$GITHUB_ENV"
+          # Total-failure guard: a partial failure is tolerated (the other
+          # sources still refresh), but when EVERY script failed the run
+          # refreshed nothing. Without this, it would reach "no changes" below
+          # and go green with a notice — indistinguishable from a healthy
+          # no-op run. Fail loudly instead.
+          if [ "${SCRIPT_COUNT}" -gt 0 ] && [ "${FAILED_COUNT}" -eq "${SCRIPT_COUNT}" ]; then
+            echo "::error::All ${SCRIPT_COUNT} refresh script(s) failed - the knowledge data was not refreshed"
+            exit 1
+          fi
 
       - name: Check for data changes
         id: changes

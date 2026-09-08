@@ -6,6 +6,26 @@ use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction};
 
+/// Resolve a rule's relative manifest paths against the workflow's
+/// directory — the engine's contract for `pixi = "envs/pixi.toml"`. Absolute
+/// paths are left untouched; specs without a pixi declaration are returned
+/// as-is.
+fn resolve_relative_manifests(
+    spec: &oxo_flow_core::rule::EnvironmentSpec,
+    workflow_dir: &std::path::Path,
+) -> oxo_flow_core::rule::EnvironmentSpec {
+    let Some(pixi) = spec.pixi.as_deref() else {
+        return spec.clone();
+    };
+    let path = std::path::Path::new(pixi);
+    if path.is_absolute() {
+        return spec.clone();
+    }
+    let mut resolved = spec.clone();
+    resolved.pixi = Some(workflow_dir.join(path).to_string_lossy().into_owned());
+    resolved
+}
+
 pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
@@ -50,9 +70,18 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     let config = WorkflowConfig::from_file(&wf_path)
                         .with_context(|| format!("failed to parse {}", wf_path.display()))?;
 
+                    // A rule's `pixi = "envs/pixi.toml"` is resolved relative
+                    // to the WORKFLOW (that is what the engine's error message
+                    // promises), never to wherever the command happens to run.
+                    let workflow_dir = wf_path
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or_else(|| std::path::Path::new("."));
+
                     let mut all_ok = true;
                     for rule in &config.rules {
-                        match resolver.validate_spec(&rule.environment) {
+                        let spec = resolve_relative_manifests(&rule.environment, workflow_dir);
+                        match resolver.validate_spec(&spec) {
                             Ok(()) => {
                                 eprintln!(
                                     "  {} {} ({})",
@@ -96,7 +125,8 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
         } => {
             // AI mode: SPEC is a natural-language description, not a file path.
             if ai {
-                return create_env_from_ai(&spec, name, &backend).await;
+                return create_env_from_ai(&spec, name, backend.as_deref().unwrap_or("conda"))
+                    .await;
             }
             let name_str = name.clone().unwrap_or_else(|| {
                 spec.file_stem()
@@ -105,9 +135,13 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     .to_string()
             });
 
-            // Determine environment type from file extension or content
+            // Determine the backend from the spec's extension, then let an
+            // explicit --backend win. The flag used to be shadowed by this
+            // match, so `env create --backend pixi` always ran conda (audit
+            // finding); a mismatch with the spec format warns rather than
+            // silently overriding the user's choice.
             let ext = spec.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let backend = match ext {
+            let ext_backend = match ext {
                 "yaml" | "yml" => "conda",
                 "toml" => "pixi",
                 "lock" => "conda",
@@ -123,6 +157,19 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     anyhow::bail!("Unsupported environment spec format");
                 }
             };
+            let backend = match backend {
+                Some(requested) => {
+                    if !requested.eq_ignore_ascii_case(ext_backend) {
+                        eprintln!(
+                            "{} --backend {requested} overrides the spec format \
+                             ('.{ext}' is a {ext_backend} spec)",
+                            "Warning:".yellow()
+                        );
+                    }
+                    requested
+                }
+                None => ext_backend.to_string(),
+            };
 
             eprintln!(
                 "{} Creating {} environment '{}' from '{}'...",
@@ -132,7 +179,7 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                 spec.display()
             );
 
-            match backend {
+            match backend.as_str() {
                 "conda" => {
                     // Use conda/mamba to create environment
                     // Prefer mamba for speed, fall back to conda

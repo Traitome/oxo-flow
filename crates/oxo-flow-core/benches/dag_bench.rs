@@ -186,7 +186,7 @@ fn dag_analysis_1000(c: &mut Criterion) {
     });
     group.bench_function("critical_path", |b| b.iter(|| dag.critical_path().unwrap()));
     group.bench_function("metrics", |b| b.iter(|| dag.metrics().unwrap()));
-    group.bench_function("to_ascii", |b| b.iter(|| dag.to_ascii().unwrap()));
+    group.bench_function("to_ascii", |b| b.iter(|| dag.to_ascii(false).unwrap()));
     group.finish();
 }
 

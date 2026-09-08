@@ -1,13 +1,18 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import { api } from '../api/client';
 import { useI18n } from '../context/I18n';
 
 export default function Login() {
+  const location = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  // A redirect here can carry the reason (e.g. a share import that needs a
+  // session) — show it instead of landing on a blank form.
+  const [error, setError] = useState<string | null>(
+    (location.state as { notice?: string } | null)?.notice ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { t } = useI18n();

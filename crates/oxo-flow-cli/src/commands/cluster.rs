@@ -6,7 +6,7 @@ use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::ClusterAction;
@@ -305,8 +305,15 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 .expand_wildcards()
                 .context("failed to expand wildcard rules")?;
 
-            let dag =
-                WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+            // Same config-aware DAG construction `run` uses (audit finding:
+            // the plain constructor left `{config.x}` unexpanded, so edges
+            // between a producer's declared output and a consumer's concrete
+            // input were lost and the generated scripts had no dependencies).
+            let dag = WorkflowDag::from_rules_with_config(
+                &config.rules,
+                &crate::commands::run::config_placeholder_values(&config.config),
+            )
+            .context("failed to build workflow DAG")?;
 
             // --module partial runs (issue #112 elasticity) — the same
             // resolution `run` and `dry-run` use: each module name resolves
@@ -421,6 +428,16 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             // Create environment resolver for command wrapping
             let env_resolver = oxo_flow_core::environment::EnvironmentResolver::new();
 
+            // The scripts run in the workflow's own directory: that is where
+            // their `logs/` directory is created below, and a relative `cd`
+            // would otherwise make the job run in whatever directory the
+            // submitter happened to use (audit finding).
+            let cluster_workdir = workflow
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+
             // Build config variable map for placeholder expansion
             let mut wildcard_values: HashMap<String, String> = HashMap::new();
             for (key, value) in &config.config {
@@ -461,7 +478,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                         &shell_cmd,
                         &rule.environment,
                         Some(&rule.resources),
-                        Path::new("."),
+                        &cluster_workdir,
                     )
                     .map_err(|e| anyhow::anyhow!("environment wrapping failed: {}", e))?;
                 let scheduled = oxo_flow_core::backend::ScheduledRule {
@@ -471,7 +488,7 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     // itself.
                     template: rule_name.clone(),
                     shell_cmd: wrapped_cmd,
-                    workdir: std::path::PathBuf::from("."),
+                    workdir: cluster_workdir.clone(),
                     dependencies: dag.dependencies(rule_name).unwrap_or_default(),
                     wildcard_values: wildcard_values.clone(),
                 };

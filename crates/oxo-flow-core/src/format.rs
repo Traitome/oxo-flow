@@ -208,8 +208,14 @@ fn lint_regex_extract_calls(when: &str, rule: &Rule, diagnostics: &mut Vec<Diagn
 
 pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let config_ref_re = regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex");
-    let when_ref_re = regex::Regex::new(r"config\.(\w+)").expect("valid regex");
+    // Compiled once per process, not once per rule: this function runs for
+    // every rule in every validate/lint pass.
+    static CONFIG_REF_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\{config\.(\w+)\}").expect("valid regex"));
+    static WHEN_REF_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"config\.(\w+)").expect("valid regex"));
+    let config_ref_re = &*CONFIG_REF_RE;
+    let when_ref_re = &*WHEN_REF_RE;
 
     let check = |field: &str, text: &str, diagnostics: &mut Vec<Diagnostic>| {
         for cap in config_ref_re.captures_iter(text) {
@@ -264,11 +270,13 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
         lint_regex_extract_calls(when, rule, &mut diagnostics);
         // `len(config.<key>)` (issue #252): a length comparison against a
         // non-numeric literal is a silent always-false — flag it.
-        let len_ref_re = regex::Regex::new(
-            r#"len\(\s*config\.(\w+)\s*\)\s*(==|!=|>=|<=|>|<)\s*(?:'([^']*)'|"([^"]*)"|([^&|)]+))"#,
-        )
-        .expect("valid regex");
-        for cap in len_ref_re.captures_iter(when) {
+        static LEN_REF_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new(
+                r#"len\(\s*config\.(\w+)\s*\)\s*(==|!=|>=|<=|>|<)\s*(?:'([^']*)'|"([^"]*)"|([^&|)]+))"#,
+            )
+            .expect("valid regex")
+        });
+        for cap in LEN_REF_RE.captures_iter(when) {
             let rhs = cap
                 .get(3)
                 .or_else(|| cap.get(4))
@@ -1470,8 +1478,8 @@ pub fn lint_format(
         }
     }
 
-    // W031: consumer expands the full wildcard output of a when-gated
-    // producer without a when gate of its own (issue #319). When the
+    // W031: consumer reads the output of a when-gated producer without a
+    // when gate of its own (issue #319). When the
     // producer's gate is off, the producer writes nothing, and the
     // consumer's inputs cannot be resolved at plan time (dry-run `input ✗`)
     // or the workflow fails outright. Live incidents from the 24-repo
@@ -1484,9 +1492,11 @@ pub fn lint_format(
     // gated producer's `output` entry (or its `output_pattern`) after
     // canonicalizing every `{...}` placeholder to `{}` — the same raw
     // template equality the DAG builder's first inference step uses, so
-    // every flagged pair is a real template-level dataflow edge. Both
-    // sides must bear at least one wildcard: fully literal paths are the
-    // W020 concrete-existence territory, not unconditional expansion.
+    // every flagged pair is a real template-level dataflow edge. Literal
+    // paths are included: a literal input of a when-gated producer is the
+    // same hazard as a wildcard one (gate off ⇒ the file never appears ⇒
+    // the consumer cannot resolve its input), just without the expansion
+    // step in between.
     //
     // Deliberate exclusions (issue #319):
     // - consumer with any meaningful when gate — the when-gated variant
@@ -1500,16 +1510,13 @@ pub fn lint_format(
     // depends_on-only relationships never reach this check: they match no
     // input template against an output template.
     {
-        /// Canonical form of a wildcard-bearing template: every `{...}`
-        /// placeholder replaced with `{}`. Returns `None` for literal
-        /// paths (no expansion to get wrong).
-        fn canonical_template(pattern: &str) -> Option<String> {
+        /// Canonical form of a dataflow template: every `{...}`
+        /// placeholder replaced with `{}` so differently-named wildcards
+        /// still unify. Literal paths canonicalize to themselves.
+        fn canonical_template(pattern: &str) -> String {
             static PLACEHOLDER_RE: LazyLock<Regex> =
                 LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
-            if !pattern.contains('{') {
-                return None;
-            }
-            Some(PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned())
+            PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned()
         }
 
         /// A `when` gate that can actually disable the rule. `None`,
@@ -1528,14 +1535,18 @@ pub fn lint_format(
                 continue;
             }
             for output in producer.output.iter() {
-                if let Some(template) = canonical_template(output) {
-                    gated_producer_templates.push((&producer.name, template, output.as_str()));
-                }
+                gated_producer_templates.push((
+                    &producer.name,
+                    canonical_template(output),
+                    output.as_str(),
+                ));
             }
-            if let Some(ref pattern) = producer.output_pattern
-                && let Some(template) = canonical_template(pattern)
-            {
-                gated_producer_templates.push((&producer.name, template, pattern.as_str()));
+            if let Some(ref pattern) = producer.output_pattern {
+                gated_producer_templates.push((
+                    &producer.name,
+                    canonical_template(pattern),
+                    pattern.as_str(),
+                ));
             }
         }
 
@@ -1557,9 +1568,7 @@ pub fn lint_format(
                     .map(|expand| expand.pattern.as_str()),
             );
             for consumer_input in consumer_templates {
-                let Some(consumer_template) = canonical_template(consumer_input) else {
-                    continue;
-                };
+                let consumer_template = canonical_template(consumer_input);
                 for (producer_name, producer_template, producer_output) in &gated_producer_templates
                 {
                     if *producer_name == consumer.name
@@ -1692,11 +1701,11 @@ pub fn workflow_stats(config: &WorkflowConfig) -> WorkflowStats {
         match WorkflowDag::from_rules(&config.rules) {
             Ok(dag) => {
                 let groups = dag.parallel_groups().unwrap_or_default();
-                (
-                    dag.edge_count(),
-                    groups.len(),
-                    groups.len().saturating_sub(1),
-                )
+                // Depth = level count, the same definition `DagMetrics`
+                // uses for "Depth"/"Critical path: N steps" — a
+                // single-node DAG is one level deep, not zero. The two
+                // disagreed by one before (dag.rs used `groups.len()`).
+                (dag.edge_count(), groups.len(), groups.len())
             }
             Err(_) => (0, 0, 0),
         };
@@ -1916,30 +1925,72 @@ pub fn is_known_bio_format(path: &str) -> bool {
 /// Returns a list of warnings for any potential secrets found.
 #[must_use]
 pub fn scan_for_secrets(text: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    let secret_patterns = [
-        ("AKIA", "Possible AWS Access Key"),
-        ("sk-", "Possible Stripe/OpenAI secret key"),
-        ("ghp_", "Possible GitHub personal access token"),
-        ("glpat-", "Possible GitLab personal access token"),
+    // Key-shaped patterns are anchored and require a credential body: the
+    // bare `sk-` substring test flagged `task-list` / `disk-usage` as
+    // Stripe keys on every lint (issue #324 finding 3), and a token
+    // pattern with no body is not evidence of a secret. The word patterns
+    // stay substring tests — they name a credential by itself.
+    static TOKEN_PATTERNS: LazyLock<Vec<(Regex, &'static str, &'static str)>> =
+        LazyLock::new(|| {
+            [
+                (r"\bakia[0-9a-z]{12,}", "AKIA", "Possible AWS Access Key"),
+                (
+                    r"\bsk-[a-z0-9_-]{8,}",
+                    "sk-",
+                    "Possible Stripe/OpenAI secret key",
+                ),
+                (
+                    r"\bghp_[a-z0-9]{8,}",
+                    "ghp_",
+                    "Possible GitHub personal access token",
+                ),
+                (
+                    r"\bglpat-[a-z0-9_-]{8,}",
+                    "glpat-",
+                    "Possible GitLab personal access token",
+                ),
+            ]
+            .into_iter()
+            .map(|(pattern, display, description)| {
+                (
+                    Regex::new(pattern).expect("valid secret pattern"),
+                    display,
+                    description,
+                )
+            })
+            .collect()
+        });
+    static WORD_PATTERNS: [(&str, &str); 5] = [
         ("password", "Possible password in configuration"),
         ("secret", "Possible secret in configuration"),
         ("api_key", "Possible API key in configuration"),
         ("access_token", "Possible access token in configuration"),
         ("private_key", "Possible private key in configuration"),
     ];
-    for (pattern, description) in &secret_patterns {
-        if text.to_lowercase().contains(&pattern.to_lowercase()) {
-            diagnostics.push(Diagnostic {
-                code: "S008".to_string(),
-                severity: Severity::Warning,
-                message: format!("{}: found pattern matching '{}'", description, pattern),
-                rule: None,
-                suggestion: Some(
-                    "Remove secrets from workflow files and use environment variables instead"
-                        .to_string(),
-                ),
-            });
+
+    // One lowercase pass for the whole scan (it ran per pattern before).
+    let lower = text.to_lowercase();
+    let mut diagnostics = Vec::new();
+    let mut push = |pattern: &str, description: &str| {
+        diagnostics.push(Diagnostic {
+            code: "S008".to_string(),
+            severity: Severity::Warning,
+            message: format!("{}: found pattern matching '{}'", description, pattern),
+            rule: None,
+            suggestion: Some(
+                "Remove secrets from workflow files and use environment variables instead"
+                    .to_string(),
+            ),
+        });
+    };
+    for (re, display, description) in TOKEN_PATTERNS.iter() {
+        if re.is_match(&lower) {
+            push(display, description);
+        }
+    }
+    for (pattern, description) in WORD_PATTERNS {
+        if lower.contains(pattern) {
+            push(pattern, description);
         }
     }
     diagnostics
@@ -2014,13 +2065,19 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
     let b_names: std::collections::HashSet<&str> =
         b.rules.iter().map(|r| r.name.as_str()).collect();
 
-    for name in a_names.difference(&b_names) {
+    // HashSet iteration order is process-random: collect and sort so two
+    // diff runs on the same pair of workflows print identical output.
+    let mut removed: Vec<&str> = a_names.difference(&b_names).copied().collect();
+    removed.sort_unstable();
+    for name in removed {
         diffs.push(WorkflowDiff {
             category: "rules".to_string(),
             description: format!("rule removed: \"{}\"", name),
         });
     }
-    for name in b_names.difference(&a_names) {
+    let mut added: Vec<&str> = b_names.difference(&a_names).copied().collect();
+    added.sort_unstable();
+    for name in added {
         diffs.push(WorkflowDiff {
             category: "rules".to_string(),
             description: format!("rule added: \"{}\"", name),
@@ -4620,8 +4677,8 @@ mod tests {
         );
     }
 
-    // W031 (issue #319): a consumer that expands the full wildcard output of
-    // a when-gated producer, without a when gate of its own, leaves the
+    // W031 (issue #319): a consumer that reads the output of a when-gated
+    // producer, without a when gate of its own, leaves the
     // consumer's inputs unresolvable at plan time whenever the gate is off
     // (live: rnaseq multiqc vs pseudo-aligner producers, clindet tumor-only
     // vs paired-only metrics, eager hostremoval vs mapper-gated outputs).
@@ -4967,9 +5024,11 @@ mod tests {
     }
 
     #[test]
-    fn lint_w031_silent_for_literal_paths() {
-        // Literal producer outputs consumed by literal inputs are the W020
-        // territory (concrete existence check), not wildcard expansion.
+    fn lint_w031_flags_literal_paths() {
+        // A literal input of a when-gated producer is the same hazard as a
+        // wildcard one: gate off ⇒ the file never appears ⇒ the consumer
+        // cannot resolve its input (`cat: qc.txt: No such file or
+        // directory`). Reported once per producer/consumer pair.
         let toml = r#"
             [workflow]
             name = "test"
@@ -4982,7 +5041,7 @@ mod tests {
 
             [[rules]]
             name = "publish"
-            input = ["report.html"]
+            input = ["report.html", "report.html"]
             output = ["published.txt"]
             shell = "publish"
         "#;
@@ -4990,9 +5049,12 @@ mod tests {
         let diagnostics = lint_format(&config, None);
         assert_eq!(
             w031_count(&diagnostics),
-            0,
-            "fully literal paths involve no wildcard expansion: {diagnostics:?}"
+            1,
+            "a literal input of a when-gated producer must warn exactly once: {diagnostics:?}"
         );
+        let hit = diagnostics.iter().find(|d| d.code == "W031").unwrap();
+        assert_eq!(hit.rule.as_deref(), Some("publish"));
+        assert!(hit.message.contains("report_step") && hit.message.contains("report.html"));
     }
 
     #[test]
@@ -5074,6 +5136,139 @@ mod tests {
         assert!(
             suggestion.contains("multiqc") && suggestion.contains("when"),
             "the suggestion must name the consumer and the when-gate repair: {suggestion}"
+        );
+    }
+
+    // ── Audit remediation: depth definition, secret patterns, ordering ─────
+
+    #[test]
+    fn workflow_stats_depth_agrees_with_dag_metrics() {
+        // Both report LEVEL count now; format used `groups.len() - 1`, so a
+        // single-node DAG read "Depth: 0" against dag.rs's "Depth: 1" /
+        // "Critical path: 1 steps".
+        let single = WorkflowConfig::parse(
+            "[workflow]\nname = \"t\"\n[[rules]]\nname = \"only\"\nshell = \"echo\"\n",
+        )
+        .unwrap();
+        assert_eq!(workflow_stats(&single).max_depth, 1);
+        assert_eq!(
+            workflow_stats(&single).max_depth,
+            WorkflowDag::from_rules(&single.rules)
+                .unwrap()
+                .metrics()
+                .unwrap()
+                .max_depth
+        );
+
+        let chain = WorkflowConfig::parse(
+            "[workflow]\nname = \"t\"\n\
+             [[rules]]\nname = \"a\"\noutput = [\"a.txt\"]\nshell = \"echo\"\n\
+             [[rules]]\nname = \"b\"\ninput = [\"a.txt\"]\noutput = [\"b.txt\"]\nshell = \"echo\"\n\
+             [[rules]]\nname = \"c\"\ninput = [\"b.txt\"]\noutput = [\"c.txt\"]\nshell = \"echo\"\n",
+        )
+        .unwrap();
+        let stats = workflow_stats(&chain);
+        assert_eq!(stats.max_depth, 3);
+        assert_eq!(
+            stats.max_depth,
+            WorkflowDag::from_rules(&chain.rules)
+                .unwrap()
+                .metrics()
+                .unwrap()
+                .max_depth
+        );
+    }
+
+    #[test]
+    fn secret_scanning_ignores_key_patterns_inside_words() {
+        // `sk-` as a substring of an ordinary word is not a Stripe key —
+        // every lint flagged `task-list` / `disk-usage` before.
+        let diags = scan_for_secrets("steps = task-list, disk-usage, sk-\n");
+        assert!(
+            !diags.iter().any(|d| d.message.contains("Stripe")),
+            "word-embedded `sk-` must not flag: {diags:?}"
+        );
+        // A real key shape still does.
+        assert!(
+            scan_for_secrets("api_key = sk-test123456789")
+                .iter()
+                .any(|d| d.message.contains("Stripe"))
+        );
+    }
+
+    #[test]
+    fn workflow_diff_rule_changes_are_sorted() {
+        // `HashSet::difference` iteration order is process-random; the diff
+        // must be byte-stable.
+        let a = WorkflowConfig::parse(
+            "[workflow]\nname = \"t\"\nversion = \"1\"\n\
+             [[rules]]\nname = \"zeta\"\nshell = \"echo\"\n\
+             [[rules]]\nname = \"alpha\"\nshell = \"echo\"\n\
+             [[rules]]\nname = \"mid\"\nshell = \"echo\"\n",
+        )
+        .unwrap();
+        let b = WorkflowConfig::parse(
+            "[workflow]\nname = \"t\"\nversion = \"1\"\n\
+             [[rules]]\nname = \"new_b\"\nshell = \"echo\"\n\
+             [[rules]]\nname = \"new_a\"\nshell = \"echo\"\n",
+        )
+        .unwrap();
+        let diffs = diff_workflows(&a, &b);
+        let removed: Vec<&str> = diffs
+            .iter()
+            .filter(|d| d.description.starts_with("rule removed"))
+            .map(|d| d.description.as_str())
+            .collect();
+        assert_eq!(
+            removed,
+            vec![
+                "rule removed: \"alpha\"",
+                "rule removed: \"mid\"",
+                "rule removed: \"zeta\""
+            ]
+        );
+        let added: Vec<&str> = diffs
+            .iter()
+            .filter(|d| d.description.starts_with("rule added"))
+            .map(|d| d.description.as_str())
+            .collect();
+        assert_eq!(
+            added,
+            vec!["rule added: \"new_a\"", "rule added: \"new_b\""]
+        );
+    }
+
+    #[test]
+    fn undefined_config_refs_hoisted_patterns_all_fire_in_one_pass() {
+        // The three patterns are process-wide `LazyLock` statics now; all
+        // three must still fire from a single rule.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            sets = ["a"]
+
+            [[rules]]
+            name = "r"
+            input = ["{config.missing_input}.txt"]
+            output = ["out.txt"]
+            shell = "echo hi"
+            when = "len(config.sets) > 'few'"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diags = undefined_config_refs(&config.rules[0], &config);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == "E005" && d.message.contains("missing_input")),
+            "braced config ref must flag: {diags:?}"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == "W029" && d.message.contains("sets")),
+            "len(config.x) pattern must flag: {diags:?}"
         );
     }
 }

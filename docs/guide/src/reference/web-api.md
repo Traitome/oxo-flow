@@ -376,8 +376,12 @@ Chart data built from real sources: `files` maps the run's file tree (`{name, si
 POST /api/runs/{id}/retry
 Content-Type: application/json
 
-{"from_rule": "fastqc", "skip_succeeded": true}
+{"skip_succeeded": true}
 ```
+`from_rule` is **not supported**: the engine has no "re-run from rule X
+downstream" mode (`--target` selects the *upstream* closure), so the field is
+rejected with `400 UNSUPPORTED_FIELD` instead of being silently ignored.
+
 The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with `--resume-failed
 --rerun` so the failed rules re-execute despite their existing outputs and
@@ -395,7 +399,7 @@ Cancels a running/pending run.
 POST /api/runs/{id}/pause
 POST /api/runs/{id}/resume
 ```
-Pauses a running run (`{"reason": "..."}` optional) and resumes it (`{"from_rule": "..."}` optional).
+Pauses a running run (`{"reason": "..."}` optional) and resumes it. A `from_rule` field is rejected with `400 UNSUPPORTED_FIELD` (see Smart Retry above).
 
 ### Logs
 ```

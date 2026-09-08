@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { api } from '../api/client';
 import type { KnowledgeTool } from '../api/types';
@@ -18,26 +18,33 @@ export default function ToolPalette({ onAddTool }: ToolPaletteProps) {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Monotonic request sequence (same pattern as the editor's editSeq):
+  // clearing the debounce timer does not cancel a request already in flight,
+  // so a slow older response could overwrite a newer query's results.
+  const searchSeq = useRef(0);
 
   // Grounded search over the embedded Bioconda database (6103 tools).
   // An empty query shows the hint instead of an arbitrary DB slice — the
   // results are gated at render time, so no state resets are needed here.
   const effectiveQuery = query.trim();
   useEffect(() => {
+    const seq = ++searchSeq.current;
     if (effectiveQuery === '') return;
     const timer = setTimeout(async () => {
       setLoading(true);
       setError(null);
       try {
         const res = await api.knowledgeTools(query, 20);
+        if (seq !== searchSeq.current) return; // superseded by a newer query
         setTools(res.tools);
         setTotal(res.total);
       } catch (e: unknown) {
+        if (seq !== searchSeq.current) return;
         setError(e instanceof Error ? e.message : t('toolPalette.error'));
         setTools([]);
         setTotal(null);
       } finally {
-        setLoading(false);
+        if (seq === searchSeq.current) setLoading(false);
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);

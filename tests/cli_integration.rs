@@ -409,14 +409,19 @@ fn cli_sample_flag_removed_reports_unknown() {
         "[workflow]\nname = \"w\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo hi > o.txt\"\n",
     )
     .unwrap();
-    oxo_flow_cmd()
+    // `sample` is NOT a run flag (the flag is --samples), so it must not be
+    // listed among the command flags the override parser rejects by name —
+    // that misreported a declared `sample` config key as a command flag. The
+    // removed spelling still gets a migration hint instead of a bare parse
+    // error.
+    let assert = oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap(), "--sample", "S1"])
         .current_dir(dir.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "'--sample' is a command flag, not a config override",
-        ));
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("--sample"), "{stderr}");
+    assert!(stderr.contains("--samples"), "{stderr}");
 }
 
 /// --rerun forces re-execution even when outputs are up to date, while a
@@ -1162,6 +1167,26 @@ shell = "cp out1.txt out2.txt"
 /// inputs/outputs, summary counters, sample groups and pairs — while the
 /// human stderr listing stays byte-identical with or without --json (the
 /// ecosystem contract: external CIs grep the stderr plan text).
+/// Remove the `tracing` timestamp prefix (`<dim>2026-01-02T03:04:05.123Z<reset>`)
+/// from every line, so two invocations' stderr can be compared for content
+/// rather than for when they ran.
+fn strip_log_timestamps(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| {
+            // Log lines begin with the dim ANSI code, the RFC 3339 instant,
+            // and the reset+space that ends the prefix.
+            match line.find("\u{1b}[0m ") {
+                Some(end) if line.starts_with("\u{1b}[") && line[..end].contains('T') => {
+                    line[end + 5..].to_string()
+                }
+                _ => line.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn cli_dry_run_json_plan_schema() {
     let dir = tempfile::tempdir().unwrap();
@@ -1229,9 +1254,11 @@ shell = "cp out1.txt out2.txt"
     assert!(plain_out.status.success());
 
     // Human stderr listing is byte-identical with or without --json; only
-    // stdout carries the machine payload.
+    // stdout carries the machine payload. Tracing timestamps are clock data,
+    // not listing content — two separate processes can never match on them.
     assert_eq!(
-        json_out.stderr, plain_out.stderr,
+        strip_log_timestamps(&json_out.stderr),
+        strip_log_timestamps(&plain_out.stderr),
         "--json must not change the human stderr output"
     );
     let stdout = String::from_utf8_lossy(&json_out.stdout);
@@ -2621,8 +2648,14 @@ fn cli_completions_functional() {
 
 #[test]
 fn web_binary_exists() {
-    // Verify the web binary was built successfully
-    let _cmd = oxo_flow_web_cmd();
+    // Verify the web binary was built AND answers its CLI contract — merely
+    // constructing a Command asserts nothing about the binary.
+    oxo_flow_web_cmd()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("oxo-flow-web"))
+        .stdout(predicate::str::contains("--mode"));
 }
 
 // ─── Gallery workflow CLI tests ─────────────────────────────────────────────
@@ -3217,6 +3250,7 @@ fn cli_config_stats_gallery_multiomics() {
 
 #[test]
 fn cli_diff_identical_workflows() {
+    // The diff is the command's result: stdout, exit 0 when identical.
     oxo_flow_cmd()
         .args([
             "diff",
@@ -3225,11 +3259,13 @@ fn cli_diff_identical_workflows() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("identical"));
+        .stdout(predicate::str::contains("identical"));
 }
 
 #[test]
 fn cli_diff_different_workflows() {
+    // A diff with differences exits non-zero like `diff(1)`, and the human
+    // diff belongs on stdout (audit finding: stderr + always exit 0).
     oxo_flow_cmd()
         .args([
             "diff",
@@ -3237,8 +3273,8 @@ fn cli_diff_different_workflows() {
             "examples/gallery/14_paired_experiment_control.oxoflow",
         ])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("difference"));
+        .failure()
+        .stdout(predicate::str::contains("difference"));
 }
 
 #[test]
@@ -3321,6 +3357,65 @@ fn cli_env_check_with_simple_workflow() {
         .args(["env", "check", "examples/gallery/01_hello_world.oxoflow"])
         .assert()
         .success();
+}
+
+/// A rule's `pixi = "envs/pixi.toml"` is relative to the WORKFLOW, so
+/// `env check` run from any CWD must find a manifest that sits next to the
+/// workflow (and still fail for a genuinely missing one).
+#[cfg(unix)]
+#[test]
+fn cli_env_check_resolves_pixi_manifest_against_the_workflow_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join("wf");
+    fs::create_dir_all(wf_dir.join("envs")).unwrap();
+    fs::write(wf_dir.join("envs/pixi.toml"), "[project]\nname = \"x\"\n").unwrap();
+    let wf = wf_dir.join("pixi.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pixi-check\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x\"\n\n[rules.environment]\npixi = \"envs/pixi.toml\"\n",
+    )
+    .unwrap();
+
+    // Stub `pixi` so the backend-availability gate passes on machines without
+    // pixi installed; the manifest check is what this test exercises.
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pixi = bin_dir.join("pixi");
+    fs::write(&pixi, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pixi, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // CWD is the PARENT of the workflow dir: "envs/pixi.toml" does not exist
+    // relative to the process, only relative to the workflow.
+    oxo_flow_cmd()
+        .args(["env", "check", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .success();
+
+    // A manifest that exists only in the process CWD must NOT satisfy the
+    // check: the resolution base is the workflow, not where the CLI runs.
+    fs::create_dir_all(dir.path().join("envs")).unwrap();
+    fs::rename(
+        wf_dir.join("envs/pixi.toml"),
+        dir.path().join("envs/pixi.toml"),
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["env", "check", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pixi manifest"));
 }
 
 // ─── Run subcommand ──────────────────────────────────────────────────────────
@@ -4122,6 +4217,47 @@ fn cli_verbose_flag_produces_debug_output() {
         .success();
 }
 
+/// `--quiet` promises "non-essential output only", so a run must drop its
+/// human narration (DAG list, progress, summary) — while the archived run log
+/// keeps it, because that file is an artifact, not console noise.
+#[test]
+fn cli_quiet_suppresses_run_narration_but_keeps_the_run_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("quiet.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"quiet\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output}\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--quiet"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "quiet run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("DAG:"),
+        "quiet mode must not print the DAG list:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Done:"),
+        "quiet mode must not print the run summary:\n{stderr}"
+    );
+
+    let log = fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log")).unwrap();
+    assert!(
+        log.contains("Running:") && log.contains("Done:"),
+        "the archived run log must keep the narration --quiet only silences the console:\n{log}"
+    );
+}
+
 #[test]
 fn cli_quiet_flag_suppresses_output() {
     let output = oxo_flow_cmd()
@@ -4158,7 +4294,8 @@ fn cli_lint_all_gallery_workflows() {
 
 #[test]
 fn cli_lint_strict_mode() {
-    // A minimal workflow with no description may trigger a lint warning
+    // A minimal workflow with no description/author triggers lint warnings
+    // (W001, W002, W003, ...) but no errors — exactly the strict-mode delta.
     let dir = tempfile::tempdir().unwrap();
     let workflow = dir.path().join("minimal.oxoflow");
     fs::write(
@@ -4175,13 +4312,39 @@ shell = "echo hello > out.txt"
     )
     .unwrap();
 
-    // strict mode: exits non-zero if any warnings
-    let output = oxo_flow_cmd()
-        .args(["lint", workflow.to_str().unwrap(), "--strict"])
+    // Non-strict: warnings alone do not fail the command.
+    let out = oxo_flow_cmd()
+        .args(["lint", workflow.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
-    // We just check it runs without panicking
-    let _ = output.status;
+    assert!(
+        out.status.success(),
+        "warnings must not fail a non-strict lint: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("lint --json stdout must be one JSON document");
+    assert!(
+        json["warning_count"].as_u64().unwrap() > 0,
+        "the minimal workflow must produce warnings: {json}"
+    );
+    assert_eq!(json["error_count"], 0, "no errors expected: {json}");
+    assert_eq!(json["passed"], true, "warnings alone must pass: {json}");
+
+    // Strict: the same warnings are now fatal.
+    let out = oxo_flow_cmd()
+        .args(["lint", workflow.to_str().unwrap(), "--strict", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "strict mode must exit non-zero when warnings are present"
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("strict lint must still emit JSON");
+    assert_eq!(json["strict"], true);
+    assert_eq!(json["passed"], false, "{json}");
+    assert!(json["warning_count"].as_u64().unwrap() > 0, "{json}");
 }
 
 // ─── Bug-fix regression tests ─────────────────────────────────────────────────
@@ -4368,6 +4531,53 @@ shell = "echo data > out_{config.sample}.txt"
     assert!(
         !dir.path().join("out_CLEAN_SAMPLE.txt").exists(),
         "file should have been deleted by clean"
+    );
+}
+
+#[test]
+fn clean_resolves_outputs_against_workflow_dir_not_cwd() {
+    // Audit finding C1: `clean` used to resolve declared outputs against the
+    // process CWD, so running it from another directory deleted an unrelated
+    // file with the same relative path and left the real output untouched.
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("proj");
+    fs::create_dir_all(proj.join("results")).unwrap();
+    let wf = proj.join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "clean-cwd"
+
+[[rules]]
+name = "r1"
+output = ["results/out.txt"]
+shell = "echo hi > results/out.txt"
+"#,
+    )
+    .unwrap();
+    let real = proj.join("results/out.txt");
+    fs::write(&real, "REAL OUTPUT").unwrap();
+
+    // Same relative path, different directory — the CWD of the invocation.
+    let elsewhere = dir.path().join("elsewhere");
+    fs::create_dir_all(elsewhere.join("results")).unwrap();
+    let decoy = elsewhere.join("results/out.txt");
+    fs::write(&decoy, "UNRELATED").unwrap();
+
+    oxo_flow_cmd()
+        .args(["clean", wf.to_str().unwrap(), "--force"])
+        .current_dir(&elsewhere)
+        .assert()
+        .success();
+
+    assert!(
+        !real.exists(),
+        "the workflow's own output must be the one deleted"
+    );
+    assert!(
+        decoy.exists(),
+        "an unrelated file in the process CWD must never be deleted"
     );
 }
 
@@ -7858,8 +8068,8 @@ fn cli_test_deep_happy_path_all_checks_pass() {
     );
 }
 
-/// `test --deep --json` emits a fourth standalone `deep-check` document with
-/// the D001 finding, even though the command exits 1.
+/// `test --deep --json` emits ONE document whose `reports["deep-check"]`
+/// carries the D001 finding, even though the command exits 1.
 #[test]
 fn cli_test_deep_json_emits_deep_check_doc() {
     let dir = tempfile::tempdir().unwrap();
@@ -7876,8 +8086,16 @@ fn cli_test_deep_json_emits_deep_check_doc() {
     let out = run_test_command(dir.path(), &wf, &["--deep", "--json"]);
     assert!(!out.status.success(), "D001 error must fail test --deep");
     let docs = parse_json_docs(&out.stdout);
-    assert_eq!(docs.len(), 4, "expected 4 JSON docs, got {}", docs.len());
-    let deep = &docs[3];
+    assert_eq!(
+        docs.len(),
+        1,
+        "test --json emits one document, got {}",
+        docs.len()
+    );
+    let doc = &docs[0];
+    assert_eq!(doc["command"], "test");
+    assert_eq!(doc["status"], "failed");
+    let deep = &doc["reports"]["deep-check"];
     assert_eq!(deep["command"], "deep-check");
     assert_eq!(deep["error_count"], 1);
     assert_eq!(deep["passed"], false);
@@ -7891,10 +8109,10 @@ fn cli_test_deep_json_emits_deep_check_doc() {
     );
 }
 
-/// Without `--deep`, `test --json` keeps its existing three documents — the
-/// fast path is unchanged.
+/// Without `--deep`, `test --json` reports the three fast steps in the same
+/// single document.
 #[test]
-fn cli_test_no_deep_keeps_three_docs() {
+fn cli_test_no_deep_reports_three_steps() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
     std::fs::write(dir.path().join("scripts/analyze.py"), b"x").unwrap();
@@ -7915,7 +8133,24 @@ fn cli_test_no_deep_keeps_three_docs() {
         String::from_utf8_lossy(&out.stderr)
     );
     let docs = parse_json_docs(&out.stdout);
-    assert_eq!(docs.len(), 3, "expected 3 JSON docs, got {}", docs.len());
+    assert_eq!(
+        docs.len(),
+        1,
+        "test --json emits one document, got {}",
+        docs.len()
+    );
+    assert_eq!(docs[0]["status"], "passed");
+    let steps: Vec<&str> = docs[0]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["step"].as_str().unwrap())
+        .collect();
+    assert_eq!(steps, vec!["validate", "lint", "dry-run"]);
+    assert!(
+        docs[0].get("reports").is_none(),
+        "no sub-reports without --deep"
+    );
 }
 
 /// `test --deep --workdir` judges existence from the custom workdir — the
@@ -9727,4 +9962,452 @@ shell = "exit 3"
         !out.status.success(),
         "the failing rule must still fail the run"
     );
+}
+
+#[test]
+fn validate_rejects_sample_pattern_with_extra_wildcards() {
+    // `{read}` used to be discovered as part of the sample name, so
+    // `{sample}_R{read}.fq.gz` produced two "S1" samples and an opaque
+    // "duplicate rule name" error. It must now fail with a clear message.
+    let dir = tempfile::tempdir().unwrap();
+    let raw = dir.path().join("raw");
+    fs::create_dir_all(&raw).unwrap();
+    fs::write(raw.join("S1_R1.fastq.gz"), "x").unwrap();
+    fs::write(raw.join("S1_R2.fastq.gz"), "x").unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        r#"
+[workflow]
+name = "sp"
+sample_pattern = "raw/{sample}_R{read}.fastq.gz"
+
+[[rules]]
+name = "qc"
+input = ["raw/{sample}_R{read}.fastq.gz"]
+output = ["out/{sample}.txt"]
+shell = "echo {sample} > out/{sample}.txt"
+"#,
+    )
+    .unwrap();
+
+    let assert = oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap()])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(
+        stderr.contains("only {sample}") || stdout.contains("only {sample}"),
+        "error must name the supported wildcard; stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Audit remediation (confirmed CLI defects)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_json_emits_a_failed_document_on_early_aborts() {
+    // `run --json` promises a document on every exit path, but a missing or
+    // unparsable workflow exited 1 with zero bytes on stdout.
+    let dir = tempfile::tempdir().unwrap();
+
+    let missing = dir.path().join("nope.oxoflow");
+    let assert = oxo_flow_cmd()
+        .args(["run", "--json", missing.to_str().unwrap()])
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let doc: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document ({e}): {stdout:?}"));
+    assert_eq!(doc["command"], "run");
+    assert_eq!(doc["status"], "failed");
+
+    let malformed = dir.path().join("bad.oxoflow");
+    fs::write(&malformed, "[workflow]\nname = \"x\"\n[[rules]\n").unwrap();
+    let assert = oxo_flow_cmd()
+        .args(["run", "--json", malformed.to_str().unwrap()])
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let doc: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document ({e}): {stdout:?}"));
+    assert_eq!(doc["status"], "failed");
+}
+
+#[test]
+fn run_invalid_timeout_is_a_hard_error() {
+    // A typo'd --timeout used to warn and disable the timeout entirely.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    let assert = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--timeout", "half-an-hour"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("invalid --timeout"), "{stderr}");
+    assert!(stderr.contains("half-an-hour"), "{stderr}");
+}
+
+#[test]
+fn run_unknown_override_key_warns_with_the_closest_key() {
+    // A typo'd override key used to be accepted in total silence.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        r#"
+[config]
+sample_name = { default = "S1", help = "sample" }
+
+[[rules]]
+name = "r"
+output = ["o.txt"]
+shell = "echo x > o.txt"
+"#,
+    );
+    let assert = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "samplename=world"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("samplename"), "{stderr}");
+    assert!(stderr.contains("did you mean 'sample_name'"), "{stderr}");
+}
+
+#[test]
+fn dry_run_space_form_override_never_swallows_a_command_flag() {
+    // `dry-run wf --mode --json` consumed `--json` as the value of the
+    // declared key `mode` and ran with no JSON output at all.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        r#"
+[config]
+mode = { default = "a", help = "analysis mode" }
+
+[[rules]]
+name = "r"
+output = ["o.txt"]
+shell = "echo x > o.txt"
+"#,
+    );
+    let assert = oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap(), "--mode", "--json"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("--mode"), "{stderr}");
+    assert!(stderr.contains("--json"), "{stderr}");
+}
+
+#[test]
+fn batch_jobs_zero_does_not_hang() {
+    // `-j 0` built a zero-permit semaphore and hung forever.
+    let dir = tempfile::tempdir().unwrap();
+    oxo_flow_cmd()
+        .args([
+            "batch",
+            "echo {item}",
+            "a",
+            "b",
+            "-j",
+            "0",
+            "-d",
+            dir.path().to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+}
+
+#[test]
+fn batch_rejects_the_removed_checksum_flag() {
+    // --checksum was documented but only logged; it is gone (audit finding).
+    oxo_flow_cmd()
+        .args(["batch", "echo {item}", "a", "--checksum"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--checksum"));
+}
+
+#[test]
+fn touch_unknown_rule_exits_non_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r1\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    let assert = oxo_flow_cmd()
+        .args(["touch", wf.to_str().unwrap(), "--rule", "typo"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("typo"), "{stderr}");
+    assert!(stderr.contains("not found"), "{stderr}");
+}
+
+#[test]
+fn env_create_backend_flag_is_honoured() {
+    // --backend was shadowed by the extension match, so it was ignored and
+    // the create always ran conda.
+    let dir = tempfile::tempdir().unwrap();
+    let spec = dir.path().join("env.yaml"); // never created: fail fast in pixi
+    let assert = oxo_flow_cmd()
+        .args(["env", "create", spec.to_str().unwrap(), "--backend", "pixi"])
+        .assert();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("Creating pixi environment"), "{stderr}");
+    assert!(stderr.contains("--backend pixi overrides"), "{stderr}");
+}
+
+#[test]
+fn run_background_rejects_json() {
+    // The foreground launcher runs no workflow, so there is no summary to
+    // emit: the combination used to exit 0 with zero bytes on stdout.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    let assert = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--background", "--json"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("--json"), "{stderr}");
+    assert!(stderr.contains("--background"), "{stderr}");
+}
+
+#[test]
+fn background_run_removes_its_pid_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"sleep 1 && echo x > o.txt\"\n",
+    );
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--background"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let pid_file = dir.path().join(".oxo-flow/background.pid");
+    assert!(pid_file.exists(), "the launcher must write the pid file");
+
+    // The detached child removes the pid file when it finishes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while pid_file.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(!pid_file.exists(), "the pid file must not outlive the run");
+    assert!(
+        dir.path().join("o.txt").exists(),
+        "the background run must have executed the workflow"
+    );
+}
+
+#[test]
+fn test_json_emits_exactly_one_document() {
+    // `test --json` used to print 3-4 concatenated JSON documents.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    let assert = oxo_flow_cmd()
+        .args(["test", wf.to_str().unwrap(), "--json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let doc: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document ({e}): {stdout:?}"));
+    assert_eq!(doc["command"], "test");
+    assert_eq!(doc["status"], "passed");
+    let steps = doc["steps"].as_array().expect("steps array");
+    assert!(steps.len() >= 3, "every step is reported: {steps:?}");
+}
+
+#[test]
+fn graph_output_dash_writes_to_stdout() {
+    // `graph -o -` used to create a file literally named `-`.
+    oxo_flow_cmd()
+        .args([
+            "graph",
+            "examples/gallery/13_simple_variant_calling.oxoflow",
+            "-f",
+            "dot",
+            "-o",
+            "-",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("digraph"));
+    assert!(
+        !std::path::Path::new("-").exists(),
+        "`-o -` must not create a file named `-`"
+    );
+}
+
+#[test]
+fn resume_reports_the_real_remaining_count() {
+    // The "remaining" column was `failed` (the arithmetic cancelled out).
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        r#"
+[[rules]]
+name = "a"
+output = ["a.txt"]
+shell = "echo a > a.txt"
+
+[[rules]]
+name = "b"
+output = ["b.txt"]
+shell = "echo b > b.txt"
+
+[[rules]]
+name = "c"
+output = ["c.txt"]
+shell = "echo c > c.txt"
+"#,
+    );
+    let checkpoint = dir.path().join("checkpoint.json");
+    fs::write(
+        &checkpoint,
+        format!(
+            r#"{{"completed_rules": ["a"], "failed_rules": ["b"], "benchmarks": {{}}, "workflow_path": "{}"}}"#,
+            wf.display()
+        ),
+    )
+    .unwrap();
+    let assert = oxo_flow_cmd()
+        .args(["resume", checkpoint.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("1 completed, 1 failed, 2 remaining"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn no_color_suppresses_tracing_ansi_escapes() {
+    // The tracing layer keyed its ANSI flag off the background-redirect
+    // variable only, so --no-color still painted escapes into stderr.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    let assert = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-v", "--no-color"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "ANSI escapes leaked into stderr under --no-color: {stderr:?}"
+    );
+}
+
+#[test]
+fn json_flag_fails_fast_on_unsupported_commands() {
+    // The global --json was silently ignored by most subcommands: they
+    // exited 0 with human text (or nothing) on stdout.
+    for args in [
+        vec!["diff", "a.oxoflow", "b.oxoflow", "--json"],
+        vec!["env", "list", "--json"],
+        vec!["touch", "wf.oxoflow", "--json"],
+        vec!["graph", "wf.oxoflow", "--json"],
+    ] {
+        let assert = oxo_flow_cmd().args(&args).assert().failure();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+        assert!(
+            stderr.contains("does not support --json"),
+            "args={args:?} stderr={stderr}"
+        );
+    }
+    // `report` points at its own format flag instead.
+    let assert = oxo_flow_cmd()
+        .args(["report", "wf.oxoflow", "--json"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(stderr.contains("-f json"), "{stderr}");
+}
+
+#[test]
+fn report_auto_discovery_uses_the_format_extension() {
+    // `report -f json` with an auto-discovered workflow wrote a JSON document
+    // into a file named `report-<stamp>.html`.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = write_workflow(
+        dir.path(),
+        "[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    );
+    oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    oxo_flow_cmd()
+        .args(["report", "-f", "json"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let reports = dir.path().join(".oxo-flow/reports");
+    let names: Vec<String> = fs::read_dir(&reports)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n.starts_with("report-") && n.ends_with(".json")),
+        "the report must carry the format's extension: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.ends_with(".html")),
+        "no .html filename for a json report: {names:?}"
+    );
+}
+
+#[test]
+fn graph_file_output_is_plain_text() {
+    // `to_ascii` hardcoded ANSI escapes, so `-o FILE` and pipes carried raw
+    // escape bytes. File output must stay plain even when stdout is a TTY.
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("g.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"g\"\n\n[[rules]]\nname = \"a\"\noutput = [\"o.txt\"]\nshell = \"echo x > o.txt\"\n",
+    )
+    .unwrap();
+    let out = dir.path().join("g.txt");
+    oxo_flow_cmd()
+        .args([
+            "graph",
+            "-f",
+            "ascii",
+            wf.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let text = fs::read_to_string(&out).unwrap();
+    assert!(
+        !text.contains('\u{1b}'),
+        "graph file output must not contain ANSI escapes: {text:?}"
+    );
+    assert!(text.contains("Workflow DAG"), "got: {text}");
 }

@@ -29,7 +29,8 @@ export default function Audit() {
   useEffect(() => {
     api
       .audit(days, page, perPage)
-      .then(setData)
+      // A later success must clear the banner from an earlier failed load.
+      .then((d) => { setData(d); setError(null); })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : t('audit.loadFailed')));
   }, [days, page, perPage, t]);
 

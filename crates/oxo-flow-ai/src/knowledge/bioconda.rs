@@ -1,13 +1,12 @@
 //! Embedded Bioconda CLI tool database.
 //!
-//! The full Bioconda channel metadata: 6,470 raw registry entries filtered
-//! down to 6,103 curated CLI tools at refresh time (counts recorded in
-//! knowledge_meta.json; keep this comment in sync when refreshing).
-//! oxo-call-extends project) is embedded into the binary at build time
-//! via `include_str!` and exposed as a searchable database. AI agents
-//! query it through the `lookup_tool` to find real tools, their purposes,
-//! and their current Bioconda versions — instead of relying on the
-//! model's (potentially outdated) training data alone.
+//! Curated Bioconda CLI tools (count recorded in knowledge_meta.json —
+//! [`tool_count`] derives it from the data at runtime, so callers never
+//! hardcode a number that can drift). The data file is embedded into the
+//! binary at build time via `include_str!` and exposed as a searchable
+//! database. AI agents query it through the `lookup_tool` to find real
+//! tools, their purposes, and their current Bioconda versions — instead of
+//! relying on the model's (potentially outdated) training data alone.
 
 use std::sync::LazyLock;
 

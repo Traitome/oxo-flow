@@ -29,10 +29,12 @@ RUN cargo build --release -p oxo-flow-web -p oxo-flow-cli
 # "GLIBC_2.39 not found" (issue #276 docker-build gate).
 FROM debian:trixie-slim
 WORKDIR /app
-# Image version for the OCI LABEL below. Default tracks the workspace
-# version; CI passes --build-arg VERSION=… on every image build so the
-# label cannot drift from Cargo.toml / the published tag.
-ARG VERSION=0.17.0
+# Image version for the OCI LABEL below. CI passes --build-arg VERSION=…
+# on every image build (read from [workspace.package] in Cargo.toml), so the
+# published label can never drift from the tag. This default is only the
+# local-dev fallback: bump it together with the workspace version when the
+# version is bumped (`make docker-version` fails on drift).
+ARG VERSION=0.17.2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

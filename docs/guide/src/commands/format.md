@@ -29,7 +29,9 @@ oxo-flow format [OPTIONS] <WORKFLOW>
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
-| `--json` | — | — | Output machine-readable JSON to stdout |
+
+
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `schema`, `license`, `ai`, and `provenance verify`.
 
 ---
 

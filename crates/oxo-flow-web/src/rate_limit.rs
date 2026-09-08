@@ -119,10 +119,58 @@ pub struct RateLimitResponse {
     pub retry_after_secs: u64,
 }
 
+/// Whether the deployment sits behind a reverse proxy we control.
+///
+/// Only then may `X-Forwarded-For` / `X-Real-IP` be believed — they are
+/// client-supplied headers, so an untrusted deployment that keys on them
+/// hands every caller an unlimited supply of fresh rate-limit buckets.
+fn trusted_proxy_enabled() -> bool {
+    std::env::var("OXO_FLOW_TRUSTED_PROXY")
+        .map(|v| !v.is_empty() && v != "0" && v != "false")
+        .unwrap_or(false)
+}
+
+/// Derive the rate-limit bucket key for a request.
+///
+/// With a trusted proxy configured the left-most `X-Forwarded-For` value (or
+/// `X-Real-IP`) is the client. Without one the key is the transport peer
+/// address from [`axum::extract::ConnectInfo`] — spoofable headers are
+/// ignored — falling back to a single shared bucket when the transport does
+/// not supply a peer address (in-process routers, tests).
+fn client_key(request: &Request, trusted_proxy: bool) -> String {
+    if trusted_proxy {
+        let forwarded = request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                request
+                    .headers()
+                    .get("x-real-ip")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            });
+        if let Some(client) = forwarded {
+            return client.to_string();
+        }
+    }
+
+    request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Axum middleware that enforces per-IP rate limiting.
 ///
-/// The IP is extracted from the `X-Forwarded-For` header (for reverse-proxy
-/// deployments), then `X-Real-IP`, then falls back to a fixed key.  The
+/// The client key is the transport peer address unless
+/// `OXO_FLOW_TRUSTED_PROXY` marks the deployment as sitting behind a reverse
+/// proxy, in which case the forwarded headers are honoured.  The
 /// [`RateLimiter`] instance must be available via request extensions.
 pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
     use axum::Json;
@@ -153,21 +201,7 @@ pub async fn rate_limit_middleware(request: Request<axum::body::Body>, next: Nex
             .into_response();
     };
 
-    // Derive client key: X-Forwarded-For > X-Real-IP > fallback.
-    let key = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            request
-                .headers()
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let key = client_key(&request, trusted_proxy_enabled());
 
     // Explicit test/dev escape hatch (Playwright webServer sets it): the
     // browser e2e suite legitimately exceeds the 100 req/min budget from
@@ -225,6 +259,33 @@ mod tests {
             "fully-expired keys must be evicted by the opportunistic purge"
         );
         assert!(limiter.entries.contains_key("fresh-key"));
+    }
+
+    /// The login limiter must not be bypassable by rotating a spoofed
+    /// `X-Forwarded-For` header when no trusted proxy is configured.
+    #[test]
+    fn forwarded_headers_are_ignored_without_a_trusted_proxy() {
+        let mut request = Request::builder()
+            .uri("/api/auth/login")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request.headers_mut().insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("10.0.0.7, 10.0.0.8"),
+        );
+
+        // No trusted proxy and no peer address: one shared bucket, so
+        // rotating the header cannot mint new buckets.
+        assert_eq!(client_key(&request, false), "unknown");
+
+        // With a peer address the key is the peer, header or not.
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "127.0.0.1:4242".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        assert_eq!(client_key(&request, false), "127.0.0.1");
+
+        // A configured trusted proxy may believe the left-most entry.
+        assert_eq!(client_key(&request, true), "10.0.0.7");
     }
 
     #[test]

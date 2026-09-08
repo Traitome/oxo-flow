@@ -18,14 +18,13 @@ oxo-flow provides the following guarantees for deterministic execution:
 
 oxo-flow computes checksums of inputs that affect execution:
 
-| Input | Checksum method |
-| ----- | --------------- |
-| `.oxoflow` workflow file | Hashed (SipHash) |
-| Input data files | SHA-256 (content-based) |
-| Software versions | Recorded in provenance log |
-| Runtime parameters | Hashed with workflow config |
+| Input | Recorded as |
+| ----- | ----------- |
+| `.oxoflow` workflow file | SHA-256 (streamed) |
+| Input data files | SHA-256 (content-based) for files up to 64 MiB; larger files are tracked by size + mtime |
+| Software versions | Not recorded at runtime — the workflow's static software declarations are exported by `oxo-flow report --versions-yml` for CI diffing |
+| Runtime parameters | Per-key config snapshot in the checkpoint (sensitive keys store a SHA-256 digest), compared on every run |
 
-Before execution begins, a checksum of the workflow configuration is computed.
 Re-running a workflow with the same config and outputs already present will
 skip already-completed rules via the checkpoint system.
 
@@ -84,12 +83,15 @@ mechanisms:
   supporting output integrity verification.
 - **Execution metadata** — Per-rule benchmark records capture wall time,
   and checkpoints track rule completion status and exit codes.
-- **System information** — Hostname and oxo-flow version are recorded in
-  execution provenance.
+- **System information** — The oxo-flow version and the workflow file's
+  checksum are recorded in the report's provenance section; the hostname is
+  not recorded.
 
-The `ExecutionProvenance` type captures `config_checksum`, `input_checksums`,
-`output_checksums`, `software_versions`, `hostname`, and timing information.
-Run workflows with `--provenance` to generate full provenance records.
+The checkpoint (`CheckpointState`) captures output checksums (`checksums`,
+written under `--provenance`), the per-key config snapshot, per-rule
+structural fingerprints, and per-rule input manifests, alongside benchmarks
+and rule completion status. Run workflows with `--provenance` to record
+output checksums for later `oxo-flow provenance verify`.
 
 Provenance records are stored as structured JSON alongside workflow outputs and
 can be used to:

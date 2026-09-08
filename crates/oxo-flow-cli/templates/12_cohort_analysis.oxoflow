@@ -1,6 +1,8 @@
 # 12 — Cohort Analysis with Sample Groups
-# Population-scale study with per-sample analysis and cohort-level QC
-# aggregation (fastp → BWA-MEM2 → MarkDuplicates → HaplotypeCaller → MultiQC).
+# Population-scale study with per-sample analysis, cohort-level joint
+# genotyping, and cohort-level QC aggregation
+# (fastp → BWA-MEM2 → MarkDuplicates → HaplotypeCaller → CombineGVCFs →
+#  GenotypeGVCFs → MultiQC).
 
 [workflow]
 name = "cohort-analysis"
@@ -43,7 +45,10 @@ input = [
     "trimmed/{sample}_R2.fq.gz",
 ]
 output = ["aligned/{sample}.sorted.bam"]
-shell = "bwa-mem2 mem -t {threads} {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}"
+shell = '''
+rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' '{sample}' '{sample}')
+bwa-mem2 mem -t {threads} -R "$rg" {config.reference_fasta} {input[0]} {input[1]} | samtools sort -@ 4 -o {output[0]}
+'''
 
 [rules.resources]
 threads = 8
@@ -74,6 +79,45 @@ input = ["dedup/{sample}.dedup.bam"]
 output = ["gvcf/{sample}.g.vcf.gz"]
 shell = "gatk HaplotypeCaller -I {input[0]} -R {config.reference_fasta} -O {output[0]} -ERC GVCF"
 description = "Per-sample GVCF generation for joint genotyping"
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "combine_gvcfs"
+# Gathers every per-sample GVCF produced by the {sample} rule above.
+# expand_inputs is required: the paths only exist after expansion, so the
+# pattern (not a literal input) creates the DAG edges.
+input = []
+expand_inputs = [
+    { pattern = "gvcf/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+]
+output = ["gvcf/cohort.g.vcf.gz"]
+description = "Combine per-sample GVCFs into one multi-sample GVCF"
+shell = """
+gatk CombineGVCFs \
+    -R {config.reference_fasta} \
+    $(for f in {input}; do echo "-V $f "; done) \
+    -O {output[0]}
+"""
+
+[rules.resources]
+threads = 4
+memory = "16G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+[[rules]]
+name = "genotype_gvcfs"
+input = ["gvcf/cohort.g.vcf.gz"]
+output = ["variants/cohort.genotyped.vcf.gz"]
+description = "Joint genotyping across the whole cohort"
+shell = "gatk GenotypeGVCFs -R {config.reference_fasta} -V {input[0]} -O {output[0]}"
 
 [rules.resources]
 threads = 4

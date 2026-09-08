@@ -4,6 +4,7 @@
 //! Additional tools can be registered by plugins or MCP servers.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 
 use super::{Tool, ToolDef};
 use crate::error::AiError;
@@ -237,6 +238,53 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
     Err("too many redirects (>5)".into())
 }
 
+/// Maximum bytes of a fetched response body handed back to the model. The
+/// 15 s request timeout bounds *time*, not size: a fast endpoint can stream
+/// hundreds of megabytes in that window, and nothing near that fits the
+/// model's context (or the tool-result budget) anyway.
+const MAX_FETCH_BYTES: usize = 256 * 1024;
+
+/// Accumulates a response body up to [`MAX_FETCH_BYTES`] and reports whether
+/// the source had more. Reading happens chunk-at-a-time so an oversized (or
+/// endless) response is abandoned once the cap is reached instead of being
+/// buffered whole.
+struct CappedBody {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl CappedBody {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    /// Append one chunk; returns `false` once the cap is reached, telling
+    /// the caller to stop reading.
+    fn push(&mut self, chunk: &[u8]) -> bool {
+        let room = MAX_FETCH_BYTES.saturating_sub(self.bytes.len());
+        if chunk.len() > room {
+            self.bytes.extend_from_slice(&chunk[..room]);
+            self.truncated = true;
+            return false;
+        }
+        self.bytes.extend_from_slice(chunk);
+        self.bytes.len() < MAX_FETCH_BYTES
+    }
+
+    /// The body as text, with a marker appended when it was cut short.
+    fn finish(self) -> String {
+        let text = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            format!("{text}\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]")
+        } else {
+            text
+        }
+    }
+}
+
 /// Fetch content from a URL.
 #[derive(Default)]
 pub struct FetchUrlTool {
@@ -296,12 +344,19 @@ impl Tool for FetchUrlTool {
                     message: format!("blocked: {reason}"),
                 })?;
 
-        let text = response.text().await.map_err(|e| AiError::ToolError {
-            tool: "fetch_url".into(),
-            message: format!("read response failed: {e}"),
-        })?;
+        let mut body = CappedBody::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("read response failed: {e}"),
+            })?;
+            if !body.push(&chunk) {
+                break;
+            }
+        }
 
-        Ok(text)
+        Ok(body.finish())
     }
 }
 
@@ -369,13 +424,21 @@ impl Tool for WriteFileTool {
 
         // Archive the previous contents so an agent's overwrite is always
         // recoverable — this is what the tool description promises.
+        //
+        // The stamp carries nanoseconds and the loop below breaks any
+        // residual tie: a second-granular name let two writes to the same
+        // path within one second overwrite the first backup, silently
+        // destroying the earlier version.
         let mut backed_up_to = None;
         if path.exists() {
-            let backup = std::path::PathBuf::from(format!(
-                "{}.bak.{}",
-                path.display(),
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ));
+            let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S%.9f").to_string();
+            let mut backup = std::path::PathBuf::from(format!("{}.bak.{stamp}", path.display()));
+            let mut collision = 0u32;
+            while backup.exists() {
+                collision += 1;
+                backup =
+                    std::path::PathBuf::from(format!("{}.bak.{stamp}.{collision}", path.display()));
+            }
             match std::fs::copy(path, &backup) {
                 Ok(_) => backed_up_to = Some(backup),
                 Err(e) => {
@@ -491,13 +554,55 @@ mod tests {
         assert_eq!(content, "hello world");
         std::fs::remove_file(&tmp).ok();
     }
+
+    #[tokio::test]
+    async fn write_file_tool_keeps_every_backup_within_one_second() {
+        // Two overwrites inside the same second must BOTH be recoverable —
+        // the old second-granular backup name overwrote the first backup.
+        let tool = WriteFileTool::new();
+        let dir = std::env::temp_dir().join("oxo-flow-ai-backup-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("main.oxoflow");
+
+        for content in ["version one", "version two", "version three"] {
+            tool.execute(&format!(
+                r#"{{"path": "{}", "content": "{content}"}}"#,
+                target.display()
+            ))
+            .await
+            .unwrap();
+        }
+
+        let mut backups: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".bak."))
+            .collect();
+        backups.sort();
+        assert_eq!(
+            backups.len(),
+            2,
+            "each overwrite of an existing file must leave its own backup: {backups:?}"
+        );
+        let contents: Vec<String> = backups
+            .iter()
+            .map(|n| std::fs::read_to_string(dir.join(n)).unwrap())
+            .collect();
+        assert!(contents.contains(&"version one".to_string()));
+        assert!(contents.contains(&"version two".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
-/// Look up tools in the embedded Bioconda CLI database (6103 tools).
+/// Look up tools in the embedded Bioconda CLI database.
 ///
 /// Query by exact name, name prefix/substring, or summary keyword.
 /// Returns real tool names, current Bioconda versions, descriptions,
-/// and supported platforms.
+/// and supported platforms. The advertised record count is derived from
+/// the embedded data (never hardcoded — it drifted twice already).
 #[derive(Default)]
 pub struct LookupTool;
 
@@ -512,10 +617,13 @@ impl Tool for LookupTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "lookup_tool".into(),
-            description: "Search the embedded Bioconda CLI database (6103 tools) for bioinformatics tools. \
-                          Query by tool name, name fragment, or purpose keyword (e.g. 'star', 'align', 'variant calling'). \
-                          Returns tool names, current Bioconda versions, descriptions, and platform support. \
-                          Use this to pick the right tool and pin its current version instead of guessing.".into(),
+            description: format!(
+                "Search the embedded Bioconda CLI database ({} tools) for bioinformatics tools. \
+                 Query by tool name, name fragment, or purpose keyword (e.g. 'star', 'align', 'variant calling'). \
+                 Returns tool names, current Bioconda versions, descriptions, and platform support. \
+                 Use this to pick the right tool and pin its current version instead of guessing.",
+                crate::knowledge::bioconda::tool_count()
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -630,9 +738,10 @@ impl Tool for LookupSkillTool {
     }
 }
 
-/// Query the embedded bioinformatics pipeline knowledge graph (79 skills,
-/// 470 literature-backed transitions). Understand what feeds into or out
-/// of a workflow step, or find the pipeline path between two steps.
+/// Query the embedded bioinformatics pipeline knowledge graph. Understand
+/// what feeds into or out of a workflow step, or find the pipeline path
+/// between two steps. The advertised counts are derived from the embedded
+/// data (never hardcoded — they drifted already).
 #[derive(Default)]
 pub struct LookupPipelineTool;
 
@@ -645,9 +754,15 @@ impl LookupPipelineTool {
 #[async_trait]
 impl Tool for LookupPipelineTool {
     fn def(&self) -> ToolDef {
+        let (skills, transitions) = crate::knowledge::pipeline_graph::graph_stats();
         ToolDef {
             name: "lookup_pipeline".into(),
-            description: "Query the embedded bioinformatics pipeline knowledge graph (79 workflow skills, 469 data-flow transitions with data types and literature evidence). Use 'transitions' to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation).".into(),
+            description: format!(
+                "Query the embedded bioinformatics pipeline knowledge graph ({skills} workflow skills, \
+                 {transitions} data-flow transitions with data types and literature evidence). Use 'transitions' \
+                 to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this \
+                 to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation)."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -843,6 +958,27 @@ mod fetch_url_ssrf_tests {
             vec!["metadata.internal".to_string(), "example.com".to_string()]
         );
         assert!(parse_allowlist("").is_empty());
+    }
+
+    #[test]
+    fn capped_body_stops_at_cap_and_marks_truncation() {
+        // The 15 s timeout bounds time, not size: without a byte cap a fast
+        // endpoint can hand the model hundreds of megabytes.
+        let mut body = CappedBody::new();
+        assert!(body.push(b"hello "));
+        assert!(body.push(b"world"));
+        let oversized = vec![b'x'; MAX_FETCH_BYTES + 1024];
+        assert!(!body.push(&oversized), "the cap must stop the read");
+        let text = body.finish();
+        let marker = format!("\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]");
+        assert_eq!(text.len(), MAX_FETCH_BYTES + marker.len());
+        assert!(text.starts_with("hello world"));
+        assert!(text.ends_with(&marker));
+
+        // A body under the cap is returned verbatim, with no marker.
+        let mut body = CappedBody::new();
+        assert!(body.push(b"all of it"));
+        assert_eq!(body.finish(), "all of it");
     }
 
     #[test]

@@ -98,6 +98,45 @@ pub fn background_workdir_for_resume(checkpoint: &Path, workdir: Option<&Path>) 
     )
 }
 
+/// Environment variable carrying the pid-file path from the foreground
+/// launcher to the detached child, so the child can remove it when the run
+/// finishes (a leftover `.oxo-flow/background.pid` names a process that is
+/// already gone, audit finding).
+pub const PID_FILE_ENV: &str = "OXO_FLOW_BACKGROUND_PID_FILE";
+
+/// Removes the background pid file when the detached child finishes.
+///
+/// Armed only through [`PID_FILE_ENV`] (set by [`launch_in_background`]), so
+/// a foreground run gets an inert guard. Only the process the file names may
+/// remove it: a second background launch may have overwritten the file with
+/// its own pid in the meantime.
+pub struct BackgroundPidFileGuard(Option<PathBuf>);
+
+impl BackgroundPidFileGuard {
+    pub fn from_env() -> Self {
+        Self::new(std::env::var_os(PID_FILE_ENV).map(PathBuf::from))
+    }
+
+    fn new(path: Option<PathBuf>) -> Self {
+        Self(path)
+    }
+}
+
+impl Drop for BackgroundPidFileGuard {
+    fn drop(&mut self) {
+        let Some(path) = &self.0 else {
+            return;
+        };
+        let pid = std::process::id().to_string();
+        if fs::read_to_string(path).ok().as_deref().map(str::trim) != Some(pid.as_str()) {
+            return;
+        }
+        if let Err(e) = fs::remove_file(path) {
+            tracing::warn!(error = %e, path = %path.display(), "failed to remove the background pid file");
+        }
+    }
+}
+
 /// Spawn the detached child: same binary, `args`, stdout+stderr redirected
 /// to the run log. Unix: the child gets its own process group, so it
 /// survives the terminal's SIGHUP (and Ctrl-C's SIGINT targets the
@@ -105,7 +144,10 @@ pub fn background_workdir_for_resume(checkpoint: &Path, workdir: Option<&Path>) 
 /// DETACHED_PROCESS. The log is opened in append mode — the child's
 /// `activate_run_log` truncates it and the tracing tee writes the header;
 /// the inherited descriptors capture anything the tee does not.
-fn spawn_detached(args: &[OsString], log_path: &Path) -> io::Result<Child> {
+///
+/// `pid_file` is handed to the child via [`PID_FILE_ENV`] so the child can
+/// remove it on exit.
+fn spawn_detached(args: &[OsString], log_path: &Path, pid_file: &Path) -> io::Result<Child> {
     // The child's `activate_run_log` creates parent directories for the log;
     // the parent must do the same before it can open the redirect target.
     if let Some(parent) = log_path.parent() {
@@ -123,6 +165,7 @@ fn spawn_detached(args: &[OsString], log_path: &Path) -> io::Result<Child> {
         // (issue #194 A3). The flag routes the child to the redirect-only
         // path in `run_command`.
         .env("OXO_FLOW_STDERR_ALREADY_REDIRECTED", "1")
+        .env(PID_FILE_ENV, pid_file)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     #[cfg(unix)]
@@ -143,12 +186,11 @@ fn spawn_detached(args: &[OsString], log_path: &Path) -> io::Result<Child> {
 /// Write the child's pid to `<workdir>/.oxo-flow/background.pid`. The
 /// `.oxo-flow` directory is created here so the pid file's placement never
 /// depends on the child acquiring the workdir lock first.
-fn write_pid_file(workdir: &Path, pid: u32) -> io::Result<PathBuf> {
-    let dir = workdir.join(".oxo-flow");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("background.pid");
-    fs::write(&path, format!("{pid}\n"))?;
-    Ok(path)
+fn write_pid_file(path: &Path, pid: u32) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, format!("{pid}\n"))
 }
 
 /// Spawn the detached child, record its pid, print the one-line summary on
@@ -165,14 +207,15 @@ pub fn launch_in_background(args: &[OsString], workdir: &Path, log_path: &Path) 
             workdir.join(".oxo-flow/lock").display()
         );
     }
-    let child = spawn_detached(args, log_path).with_context(|| {
+    let pid_file = workdir.join(".oxo-flow").join("background.pid");
+    let child = spawn_detached(args, log_path, &pid_file).with_context(|| {
         format!(
             "failed to spawn the background process (log: {})",
             log_path.display()
         )
     })?;
     let pid = child.id();
-    let pid_file = write_pid_file(workdir, pid)?;
+    write_pid_file(&pid_file, pid)?;
     let checkpoint = workdir.join(".oxo-flow/checkpoint.json");
     eprintln!(
         "started in background (pid {pid}) · log: {} · monitor: oxo-flow status {} · stop: kill {pid}",
@@ -245,6 +288,22 @@ mod tests {
             strip_background_flag(args),
             os(&["run", "wf.oxoflow", "TAG=--background", "NAME=x"])
         );
+    }
+
+    #[test]
+    fn pid_file_guard_removes_only_its_own_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = dir.path().join("background.pid");
+        fs::write(&mine, format!("{}\n", std::process::id())).unwrap();
+        drop(BackgroundPidFileGuard::new(Some(mine.clone())));
+        assert!(!mine.exists(), "the guard must remove the pid file it owns");
+
+        // A newer background launch may have replaced the pid file — the
+        // older child must leave it alone.
+        let other = dir.path().join("other.pid");
+        fs::write(&other, "999999999\n").unwrap();
+        drop(BackgroundPidFileGuard::new(Some(other.clone())));
+        assert!(other.exists(), "another process's pid file must survive");
     }
 
     #[test]

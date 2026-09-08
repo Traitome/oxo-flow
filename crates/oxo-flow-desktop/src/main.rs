@@ -461,6 +461,13 @@ fn open_external(uri: &str) -> std::io::Result<()> {
 /// Slightly racy by nature (another process could take the port between
 /// close and the server's bind), but the failure window is microseconds
 /// and the server surfaces a bind error loudly if it ever happens.
+///
+/// The race cannot be closed from here: `oxo_flow_web::start_server_with_mode`
+/// takes a `(host, port)` pair and binds the listener itself, so there is no
+/// way to hand it an already-bound socket without changing the web crate's
+/// API. The failure mode is safe regardless — the bind error propagates out
+/// of the server future, the watchdog records it, and `early_exit_result`
+/// turns it into a non-zero exit instead of a window pointing at nothing.
 fn pick_free_port() -> Result<u16> {
     std::net::TcpListener::bind((HOST, 0))
         .context("failed to allocate a local port")?

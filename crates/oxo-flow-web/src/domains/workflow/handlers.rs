@@ -1659,6 +1659,18 @@ pub async fn rollback_pipeline(
         )
     })?;
 
+    // The restored content must parse — the same contract as save/update. A
+    // stale rules_count kept from the current pipeline would mask an
+    // unrunnable revision, and the snapshot below must not be written for a
+    // rollback that is about to be rejected.
+    let rules_count = count_rules(&toml_content).map_err(|e| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "PARSE_ERROR",
+            format!("revision {revision_id} is not a valid workflow: {e}"),
+        )
+    })?;
+
     // Restore = snapshot current + write the old content back.
     record_revision(
         pool,
@@ -1668,9 +1680,6 @@ pub async fn rollback_pipeline(
         &pipeline.toml_content,
     )
     .await;
-    let rules_count = oxo_flow_core::WorkflowConfig::parse(&toml_content)
-        .map(|wf| wf.rules.len() as i64)
-        .unwrap_or(pipeline.rules_count);
     let now = now_iso();
     sqlx::query(
         "UPDATE pipelines SET toml_content = ?, rules_count = ?, updated_at = ? WHERE id = ?",

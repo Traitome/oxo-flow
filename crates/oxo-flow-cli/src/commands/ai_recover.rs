@@ -14,6 +14,40 @@ pub struct DiagnoseResult {
     pub safe_to_auto_apply: bool,
 }
 
+/// Parse the model's safety verdict from the mandated output line
+/// `- Safe to auto-apply: <yes/no>`.
+///
+/// The previous substring test (`contains("safe to auto-apply")`) matched
+/// every conforming reply — including `- Safe to auto-apply: no` — so the
+/// auto-apply gate in `run.rs` never blocked anything. Anything other than an
+/// explicit `yes`/`true` verdict (missing, unparseable, or an explicit
+/// `NOT safe to auto-apply` line) means: do not rewrite the user's workflow.
+fn parse_safe_to_auto_apply(response_text: &str) -> bool {
+    // An explicit refusal wins wherever it appears in the reply.
+    if response_text
+        .to_ascii_lowercase()
+        .contains("not safe to auto-apply")
+    {
+        return false;
+    }
+    for line in response_text.lines() {
+        // `to_ascii_lowercase` preserves byte length, so the index stays valid
+        // on the original line.
+        let lower = line.to_ascii_lowercase();
+        let Some(idx) = lower.find("safe to auto-apply") else {
+            continue;
+        };
+        let verdict = line[idx + "safe to auto-apply".len()..]
+            .trim_start_matches(|c: char| c == ':' || c == '*' || c == '`' || c.is_whitespace())
+            .trim_matches(|c: char| c == '*' || c == '_' || c == '`' || c.is_whitespace())
+            .to_ascii_lowercase();
+        if verdict.starts_with("yes") || verdict.starts_with("true") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Analyze a pipeline failure using AI.
 pub async fn diagnose_failure(
     workflow_path: &Path,
@@ -68,8 +102,7 @@ pub async fn diagnose_failure(
         .unwrap_or_else(|| "Unknown — see full analysis".into());
     let fix_action =
         extract_section(&response_text, "Fix").unwrap_or_else(|| "Manual review needed".into());
-    let safe = response_text.contains("safe to auto-apply")
-        || response_text.contains("Safe to auto-apply");
+    let safe = parse_safe_to_auto_apply(&response_text);
 
     // Extract modified TOML
     let modified_toml = extract_toml_block(&response_text);
@@ -240,4 +273,27 @@ fn extract_section(text: &str, marker: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_safe_to_auto_apply;
+
+    #[test]
+    fn safe_gate_requires_an_explicit_yes() {
+        assert!(parse_safe_to_auto_apply("- Safe to auto-apply: yes"));
+        assert!(parse_safe_to_auto_apply("- **Safe to auto-apply**: YES"));
+        assert!(parse_safe_to_auto_apply("Safe to auto-apply: true"));
+        // The regression: the old substring test matched this exact line.
+        assert!(!parse_safe_to_auto_apply("- Safe to auto-apply: no"));
+        assert!(!parse_safe_to_auto_apply("- Safe to auto-apply: <yes/no>"));
+        assert!(!parse_safe_to_auto_apply(
+            "- **NOT safe to auto-apply**: changing DAG edges"
+        ));
+        // Missing/unparseable verdicts must never authorize a rewrite.
+        assert!(!parse_safe_to_auto_apply(
+            "## Root Cause\nbwa ran out of memory"
+        ));
+        assert!(!parse_safe_to_auto_apply(""));
+    }
 }

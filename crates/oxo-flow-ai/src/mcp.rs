@@ -33,6 +33,9 @@ const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Total request timeout for MCP HTTP calls (a hung server fails the
 /// call instead of blocking the AI command).
 const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound on `tools/list` pages followed per server: a server that
+/// loops on `nextCursor` must not spin the engine forever.
+const MAX_TOOL_PAGES: usize = 50;
 
 // ── MCP Client trait ───────────────────────────────────────────────────────
 
@@ -100,7 +103,16 @@ impl McpToolBridge {
         Ok(tools
             .into_iter()
             .map(|tool_def| {
-                let name = format!("mcp_{}_{}", client.server_name(), tool_def.name);
+                // The registry/wire name is sanitized: OpenAI-compatible
+                // providers reject the whole request when any tool name
+                // breaks `^[a-zA-Z0-9_-]{1,64}$`, and MCP tool names come
+                // from the server. The ORIGINAL name still goes back to the
+                // server (`execute` uses `tool_def.name`).
+                let name = crate::tools::sanitize_tool_name(&format!(
+                    "mcp_{}_{}",
+                    client.server_name(),
+                    tool_def.name
+                ));
                 McpToolBridge {
                     client: Arc::clone(&client),
                     tool_def,
@@ -231,37 +243,83 @@ impl McpHttpClient {
         let text = response.text().await.map_err(|e| AiError::Transport {
             message: format!("MCP response read failed: {e}"),
         })?;
-        parse_rpc_response(&text).map_err(|e| AiError::Protocol { message: e })
+        parse_rpc_response(&text, id).map_err(|e| AiError::Protocol { message: e })
+    }
+}
+
+/// Whether a JSON-RPC response carries the id of the request we sent.
+///
+/// JSON-RPC ids may be numbers or strings; the engine sends numbers, and a
+/// server echoing `"3"` for `3` is still a match.
+fn rpc_id_matches(value: &serde_json::Value, expected: u64) -> bool {
+    match value.get("id") {
+        Some(serde_json::Value::Number(n)) => n.as_u64() == Some(expected),
+        Some(serde_json::Value::String(s)) => s == &expected.to_string(),
+        _ => false,
     }
 }
 
 /// Parse a JSON-RPC response body — plain JSON or SSE-framed
-/// (`data: {...}` lines).
-fn parse_rpc_response(text: &str) -> Result<serde_json::Value, String> {
+/// (`data: {...}` lines) — and require its `id` to match `expected_id`.
+///
+/// Without the id check a stale, replayed or proxied body was accepted as
+/// this call's answer (audit finding): the engine then acted on another
+/// request's result.
+fn parse_rpc_response(text: &str, expected_id: u64) -> Result<serde_json::Value, String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-        return extract_rpc_result(value);
+        return extract_rpc_result(value, expected_id);
     }
-    // SSE framing: take the last `data:` payload.
-    let mut last = None;
+    // SSE framing: prefer the event whose id matches (servers interleave
+    // notifications and progress events around the answer), fall back to
+    // the last event so an id-less error body still yields a diagnosis.
+    let mut last: Option<&str> = None;
+    let mut matched: Option<serde_json::Value> = None;
     for line in text.lines() {
-        if let Some(payload) = line.strip_prefix("data:") {
-            last = Some(payload.trim());
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        last = Some(payload);
+        if matched.is_none()
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
+            && rpc_id_matches(&value, expected_id)
+        {
+            matched = Some(value);
         }
     }
-    match last {
-        Some(payload) => {
-            let value: serde_json::Value =
-                serde_json::from_str(payload).map_err(|e| format!("invalid SSE payload: {e}"))?;
-            extract_rpc_result(value)
-        }
-        _ => Err(format!(
-            "unparseable MCP response: {}",
-            &text[..text.len().min(200)]
-        )),
+    match matched {
+        Some(value) => extract_rpc_result(value, expected_id),
+        None => match last {
+            Some(payload) => {
+                let value: serde_json::Value = serde_json::from_str(payload)
+                    .map_err(|e| format!("invalid SSE payload: {e}"))?;
+                extract_rpc_result(value, expected_id)
+            }
+            // Char-boundary safe prefix: a plain byte slice at 200 panics when
+            // the body is a multi-byte (e.g. localized) error page (audit finding).
+            _ => Err(format!(
+                "unparseable MCP response: {}",
+                crate::types::truncate_utf8_from_start(text, 200)
+            )),
+        },
     }
 }
 
-fn extract_rpc_result(value: serde_json::Value) -> Result<serde_json::Value, String> {
+fn extract_rpc_result(
+    value: serde_json::Value,
+    expected_id: u64,
+) -> Result<serde_json::Value, String> {
+    // Id first: a body belonging to another request must never be accepted
+    // as this one's result — nor reported as this one's error.
+    if !rpc_id_matches(&value, expected_id) {
+        return Err(format!(
+            "MCP response id mismatch: expected {expected_id}, got {}",
+            value
+                .get("id")
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "<missing>".to_string())
+        ));
+    }
     if let Some(err) = value.get("error") {
         return Err(format!("MCP error: {err}"));
     }
@@ -269,6 +327,42 @@ fn extract_rpc_result(value: serde_json::Value) -> Result<serde_json::Value, Str
         .get("result")
         .cloned()
         .ok_or_else(|| format!("MCP response missing 'result': {value}"))
+}
+
+/// Turn a `tools/call` result into the tool's text.
+///
+/// Result shape: `{ content: [{type:"text",text:"..."}], isError?: bool }`.
+/// `isError: true` means the tool RAN and failed: returning its message as
+/// `Ok` made the caller record `success: true` and let the agent treat a
+/// failed call as a result (audit finding).
+fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, AiError> {
+    let mut text = None;
+    if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+        let parts: Vec<String> = content
+            .iter()
+            .filter_map(|item| item.get("text").and_then(|t| t.as_str()).map(String::from))
+            .collect();
+        if !parts.is_empty() {
+            text = Some(parts.join("\n"));
+        }
+    }
+    if text.is_none()
+        && let Some(structured) = result.get("structuredContent").and_then(|t| t.as_str())
+    {
+        text = Some(structured.to_string());
+    }
+    let text = text.unwrap_or_else(|| result.to_string());
+    if result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(AiError::ToolError {
+            tool: name.to_string(),
+            message: text,
+        });
+    }
+    Ok(text)
 }
 
 #[async_trait]
@@ -301,16 +395,44 @@ impl McpClient for McpHttpClient {
         }
         let _ = note_req.send().await;
 
-        let result = self.rpc(2, "tools/list", serde_json::json!({})).await?;
-        let tools: Vec<McpToolDef> = serde_json::from_value(
-            result
-                .get("tools")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
-        )
-        .map_err(|e| AiError::Protocol {
-            message: format!("invalid tools/list payload: {e}"),
-        })?;
+        // tools/list is paginated: the first page carries `nextCursor` when
+        // more tools exist. Ignoring it silently exposed only the first page
+        // (audit finding) — follow the cursor, bounded so a looping server
+        // cannot spin forever.
+        let mut tools: Vec<McpToolDef> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for request_id in (2_u64..).take(MAX_TOOL_PAGES) {
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            let result = self.rpc(request_id, "tools/list", params).await?;
+            let page: Vec<McpToolDef> = serde_json::from_value(
+                result
+                    .get("tools")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            )
+            .map_err(|e| AiError::Protocol {
+                message: format!("invalid tools/list payload: {e}"),
+            })?;
+            tools.extend(page);
+            cursor = result
+                .get("nextCursor")
+                .and_then(|c| c.as_str())
+                .map(String::from);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        if cursor.is_some() {
+            tracing::warn!(
+                server = %self.server_name,
+                tools = tools.len(),
+                pages = MAX_TOOL_PAGES,
+                "tools/list pagination stopped at the page cap — later pages are not exposed"
+            );
+        }
         Ok(tools)
     }
 
@@ -326,21 +448,7 @@ impl McpClient for McpHttpClient {
                 serde_json::json!({ "name": name, "arguments": args }),
             )
             .await?;
-
-        // Result shape: { content: [{type:"text",text:"..."}], ... }
-        if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
-            let parts: Vec<String> = content
-                .iter()
-                .filter_map(|item| item.get("text").and_then(|t| t.as_str()).map(String::from))
-                .collect();
-            if !parts.is_empty() {
-                return Ok(parts.join("\n"));
-            }
-        }
-        if let Some(text) = result.get("structuredContent").and_then(|t| t.as_str()) {
-            return Ok(text.to_string());
-        }
-        Ok(result.to_string())
+        tool_result_text(name, &result)
     }
 
     fn server_name(&self) -> &str {
@@ -418,12 +526,108 @@ mod tests {
         }
     }
 
+    /// A client whose server reports a tool name that is illegal on the
+    /// wire (OpenAI-compatible providers require `^[a-zA-Z0-9_-]{1,64}$`).
+    #[derive(Clone)]
+    struct IllegalNameClient;
+
+    #[async_trait]
+    impl McpClient for IllegalNameClient {
+        async fn list_tools(&self) -> Result<Vec<McpToolDef>, AiError> {
+            Ok(vec![McpToolDef {
+                name: "read.file:v2 (fast)".into(),
+                description: "illegal wire name".into(),
+                input_schema: serde_json::json!({}),
+                annotations: None,
+            }])
+        }
+
+        async fn call_tool(&self, name: &str, _args: &str) -> Result<String, AiError> {
+            Ok(format!("called:{name}"))
+        }
+
+        fn server_name(&self) -> &str {
+            "dodgy-server"
+        }
+    }
+
     #[tokio::test]
     async fn mcp_client_lists_tools() {
         let client = TestMcpClient;
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
+    }
+
+    #[test]
+    fn tool_result_text_surfaces_is_error() {
+        // `isError: true` means the tool ran and failed; returning its text
+        // as Ok made the caller record success: true.
+        let failed = serde_json::json!({
+            "content": [{"type": "text", "text": "samtools: command not found"}],
+            "isError": true,
+        });
+        let err = tool_result_text("run_shell", &failed).unwrap_err();
+        assert!(
+            err.to_string().contains("samtools: command not found"),
+            "{err}"
+        );
+        assert!(matches!(err, AiError::ToolError { .. }), "{err:?}");
+
+        let ok = serde_json::json!({
+            "content": [{"type": "text", "text": "done"}],
+        });
+        assert_eq!(tool_result_text("run_shell", &ok).unwrap(), "done");
+    }
+
+    #[test]
+    fn parse_rpc_response_rejects_id_mismatch() {
+        // A stale/replayed body must never be accepted as this call's answer.
+        let stale = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": {"tools": []}
+        })
+        .to_string();
+        let err = parse_rpc_response(&stale, 2).unwrap_err();
+        assert!(err.contains("id mismatch"), "{err}");
+
+        // The matching id is accepted, numbers or strings.
+        let good = serde_json::json!({"jsonrpc": "2.0", "id": 2, "result": {"ok": true}});
+        assert!(parse_rpc_response(&good.to_string(), 2).is_ok());
+        let stringified = serde_json::json!({"jsonrpc": "2.0", "id": "2", "result": {"ok": true}});
+        assert!(parse_rpc_response(&stringified.to_string(), 2).is_ok());
+    }
+
+    #[test]
+    fn parse_rpc_response_picks_the_matching_sse_event() {
+        // SSE bodies interleave notifications with the answer; the matching
+        // id wins over "last event".
+        let text = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n\
+                    data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\n\n\
+                    data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n\n";
+        let result = parse_rpc_response(text, 7).unwrap();
+        assert_eq!(result, serde_json::json!({"tools": []}));
+    }
+
+    #[tokio::test]
+    async fn mcp_bridge_sanitizes_wire_illegal_tool_names() {
+        // One illegal name fails EVERY provider request, so the composed
+        // name is normalized for the wire — while the original name still
+        // goes back to the MCP server.
+        let bridges = McpToolBridge::discover(Arc::new(IllegalNameClient))
+            .await
+            .unwrap();
+        let name = bridges[0].name().to_string();
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "wire name must match ^[a-zA-Z0-9_-]{{1,64}}$: {name}"
+        );
+        assert!(name.len() <= 64, "{name}");
+        assert_eq!(
+            bridges[0].execute("{}").await.unwrap(),
+            "called:read.file:v2 (fast)",
+            "the server must still receive the original tool name"
+        );
     }
 
     #[tokio::test]
@@ -566,6 +770,93 @@ mod tests {
         let _ = server;
     }
 
+    /// Serve `respond` on a fresh local port: the closure receives each
+    /// parsed JSON-RPC request and returns the response body to write.
+    /// Returns the `mcp://` URL and a request counter.
+    fn json_rpc_fixture(
+        respond: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_server = calls.clone();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            loop {
+                let mut buf = [0u8; 65536];
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                        let json: serde_json::Value =
+                            serde_json::from_str(&body).unwrap_or_default();
+                        calls_for_server.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let response_body = respond(&json).to_string();
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        if stream.write_all(response.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        (format!("mcp://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_follows_tools_list_pagination() {
+        // Ignoring `nextCursor` silently exposed only the first page.
+        let (url, calls) = json_rpc_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "tools/list" => {
+                    let cursor = req["params"]["cursor"].as_str().unwrap_or("");
+                    if cursor.is_empty() {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"page1","description":"p1","inputSchema":{"type":"object"}}],
+                            "nextCursor":"page-2"}})
+                    } else {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"page2","description":"p2","inputSchema":{"type":"object"}}]}})
+                    }
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            }
+        });
+        let client = McpHttpClient::new(&url).unwrap();
+        let tools = client.list_tools().await.unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["page1", "page2"], "both pages must be exposed");
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) >= 4,
+            "initialize + notification + two tools/list pages"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_rejects_a_response_for_another_request() {
+        let (url, _calls) = json_rpc_fixture(|req| {
+            if req["method"].as_str() == Some("tools/list") {
+                // A stale/replayed body: this id belongs to another request.
+                serde_json::json!({"jsonrpc":"2.0","id":99,"result":{"tools":[]}})
+            } else {
+                serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}})
+            }
+        });
+        let client = McpHttpClient::new(&url).unwrap();
+        let err = client.list_tools().await.unwrap_err().to_string();
+        assert!(err.contains("id mismatch"), "{err}");
+    }
+
     #[test]
     fn mcp_tool_def_unannotated_has_no_readonly_hint() {
         let def: McpToolDef = serde_json::from_value(serde_json::json!({
@@ -580,5 +871,15 @@ mod tests {
         assert!(McpHttpClient::new("stdio://local").is_err());
         assert!(McpHttpClient::new("mcp://localhost:8080").is_ok());
         assert!(McpHttpClient::new("https://example.com/mcp").is_ok());
+    }
+
+    #[test]
+    fn unparseable_body_with_multibyte_chars_does_not_panic() {
+        // A proxy/HTML error page longer than 200 bytes with multi-byte
+        // content: the old `&text[..text.len().min(200)]` panicked.
+        let body = format!("<html><body>{}</body></html>", "错".repeat(100));
+        assert!(body.len() > 200);
+        let err = parse_rpc_response(&body, 1).unwrap_err();
+        assert!(err.starts_with("unparseable MCP response:"));
     }
 }

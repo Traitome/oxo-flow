@@ -262,6 +262,25 @@ const TOOL_SUFFIXES: &[(&str, &str)] = &[
     ("_mqc.json", "mqc"),
 ];
 
+/// Translate a byte offset in `s.to_lowercase()` back to a byte offset in
+/// `s`.
+///
+/// `str::to_lowercase` can change byte lengths — U+212A KELVIN SIGN is
+/// three bytes and lowercases to `k` (one byte), U+0130 is two and
+/// lowercases to three — so an index found in the lowercase copy cannot be
+/// used to slice the original. Returns the offset of the character that
+/// contains `lower_offset` (or `s.len()` when the offset is past the end).
+pub(crate) fn lowercase_offset_to_original(s: &str, lower_offset: usize) -> usize {
+    let mut lower_len = 0;
+    for (idx, ch) in s.char_indices() {
+        if lower_len >= lower_offset {
+            return idx;
+        }
+        lower_len += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
+    }
+    s.len()
+}
+
 /// Classify a filename into `(tool, sample)`; `None` when no known tool
 /// pattern matches. Sample attribution follows the issue #83 P1-5 rulings:
 /// strip the tool suffix together with its separator dot —
@@ -291,7 +310,11 @@ fn classify_filename(name: &str) -> Option<(&'static str, Option<String>)> {
             }) {
                 strip_len += 1;
             }
-            let stripped = &name[..name.len() - strip_len];
+            // The strip length comes from the LOWERCASE copy, whose byte
+            // geometry can differ from the original (`S1.Kraken.report`:
+            // U+212A is 3 bytes, lowercases to 1) — slicing the original
+            // with it panics on the char boundary. Map the cut back.
+            let stripped = &name[..lowercase_offset_to_original(name, lower.len() - strip_len)];
             let sample = if stripped.is_empty() {
                 None
             } else {
@@ -521,5 +544,21 @@ mod tests {
         let stats = MetricsScanner::new().scan_with_stats(dir.path());
         assert_eq!(stats.custom.len(), 1);
         assert_eq!(stats.custom[0].title, "rollup", "stem minus _mqc.json");
+    }
+
+    #[test]
+    fn classify_filename_handles_kelvin_sign_sample() {
+        // U+212A KELVIN SIGN is 3 bytes and lowercases to 1, so the strip
+        // length computed on the lowercase copy used to slice the original
+        // mid-character and panic.
+        assert_eq!(
+            classify_filename("S1.Kraken.report"),
+            Some(("kraken2", Some("S1".to_string())))
+        );
+        // The ASCII spelling still attributes the same sample.
+        assert_eq!(
+            classify_filename("S1.kraken.report"),
+            Some(("kraken2", Some("S1".to_string())))
+        );
     }
 }

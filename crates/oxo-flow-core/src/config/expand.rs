@@ -207,7 +207,6 @@ impl WorkflowConfig {
             expand_pattern, has_wildcards, validate_wildcard_constraints_compiled,
             wildcard_combinations_from_groups, wildcard_combinations_from_pairs,
         };
-        use regex::Regex;
 
         // Pair-level `when` gating (snakemake-style DAG morphing at pair
         // scope): pairs whose `when` evaluates false declare no rule
@@ -230,6 +229,10 @@ impl WorkflowConfig {
                 }
             }
         }
+        // `config_values` is loop-invariant across the pair gate above and
+        // every per-instance `when` filter below (it mirrors `self.config`,
+        // which never changes during expansion) — cloned once per workflow,
+        // not once per wildcard combination (#268 item 4).
         let config_values: HashMap<String, toml::Value> = self
             .config
             .iter()
@@ -253,21 +256,12 @@ impl WorkflowConfig {
         let pair_combos = wildcard_combinations_from_pairs(&active_pairs);
         let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
 
-        // `config_values` is loop-invariant across every per-instance `when`
-        // filter below (it mirrors `self.config`, which never changes during
-        // expansion) — hoisted here so a large `[config]` table is cloned
-        // once per workflow, not once per wildcard combination (#268 item 4).
-        let config_values: HashMap<String, toml::Value> = self
-            .config
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
         // Rebuild expansion provenance from scratch — this method may run on a
         // config that was expanded before.
         self.expansion_samples.clear();
         self.expansion_values.clear();
         self.expansion_pairs.clear();
+        self.expansion_instance_combos.clear();
 
         // Environment field-level validation (the CLI run path does not
         // call per-rule `validate`): `gpus` requires a container backend.
@@ -372,17 +366,7 @@ impl WorkflowConfig {
         }
 
         // Pre-compile constraints for performance
-        let mut compiled_constraints = HashMap::new();
-        for (name, pattern) in &self.wildcard_constraints {
-            let re = Regex::new(pattern).map_err(|e| OxoFlowError::Wildcard {
-                rule: String::new(),
-                message: format!(
-                    "invalid regex constraint '{}' for wildcard '{}': {}",
-                    pattern, name, e
-                ),
-            })?;
-            compiled_constraints.insert(name.clone(), re);
-        }
+        let compiled_constraints = self.compiled_wildcard_constraints()?;
 
         // Wildcards that trigger pair expansion.
         // Include backward-compatible aliases `{tumor}`/`{normal}`.
@@ -535,6 +519,12 @@ impl WorkflowConfig {
                 let mut meta_texts: Vec<&str> = all_text.clone();
                 if let Some(ref log) = rule.log {
                     meta_texts.push(log);
+                }
+                // `output_pattern` carries the same per-instance
+                // substitution (see `apply_instance_meta`) — a typo'd
+                // column must warn here too.
+                if let Some(ref op) = rule.output_pattern {
+                    meta_texts.push(op);
                 }
                 for text in [
                     &rule.script,
@@ -1284,10 +1274,27 @@ impl WorkflowConfig {
                     let map_rule_name = format!("{}_{}", rule.name, value);
                     // Replace only {split_var} in map shell, keep other placeholders for execution
                     let map_shell = transform.map.replace(&format!("{{{split_var}}}"), value);
+                    // The declared input is shared by every chunk, so a
+                    // `{split_var}` reference in it must bake per value too
+                    // — cloning it verbatim left the braces in the input
+                    // (and, through `{input}`, in the rendered command)
+                    // for the documented `n`-chunking form. Other
+                    // placeholders stay untouched, exactly like the shell.
+                    let subst = |p: &String| p.replace(&format!("{{{split_var}}}"), value);
+                    let map_input = match &rule.input {
+                        FilePatterns::List(v) => FilePatterns::List(v.iter().map(subst).collect()),
+                        FilePatterns::Map(m) => FilePatterns::Map(
+                            m.iter().map(|(k, v)| (k.clone(), subst(v))).collect(),
+                        ),
+                        FilePatterns::Dir { path, pattern } => FilePatterns::Dir {
+                            path: subst(path),
+                            pattern: pattern.clone(),
+                        },
+                    };
 
                     let mut map_rule = Rule {
                         name: map_rule_name,
-                        input: rule.input.clone(),
+                        input: map_input,
                         output: vec![chunk_output].into(),
                         shell: Some(map_shell),
                         // Inherit the parent's required semantics (issue
@@ -1316,6 +1323,32 @@ impl WorkflowConfig {
 
                 // Generate combine rule if specified
                 if let Some(ref combine) = transform.combine {
+                    // The combine stage is ONE rule writing ONE merged
+                    // output, so the split variable has no per-value
+                    // meaning there. Cloning the declared output verbatim
+                    // would carry a literal `{split_var}` token the
+                    // executor can never resolve — the run aborts late
+                    // with an unhelpful placeholder error. Fail at plan
+                    // time instead.
+                    if rule
+                        .output
+                        .iter()
+                        .any(|o| o.contains(&format!("{{{split_var}}}")))
+                    {
+                        return Err(OxoFlowError::Validation {
+                            message: format!(
+                                "transform rule '{}' declares a combine stage but its output \
+                                 still contains '{{{split_var}}}' (the split variable)",
+                                rule.name
+                            ),
+                            rule: Some(rule.name.clone()),
+                            suggestion: Some(format!(
+                                "the combine stage writes one merged output — drop \
+                                 '{{{split_var}}}' from output (e.g. a single path) or remove \
+                                 [rules.transform.combine]"
+                            )),
+                        });
+                    }
                     let combine_rule_name = format!("{}_combine", rule.name);
                     let combine_shell = if let Some(ref shell) = combine.shell {
                         let chunks_str = all_chunk_outputs.join(" ");
@@ -1473,6 +1506,26 @@ impl WorkflowConfig {
         Ok(())
     }
 
+    /// Compile every `[wildcard_constraints]` regex once. Shared by the
+    /// plan-time fan-out and the runtime output_pattern-consumer
+    /// projection, so the per-consumer loop never recompiles them
+    /// (#268 perf family).
+    fn compiled_wildcard_constraints(&self) -> Result<HashMap<String, regex::Regex>> {
+        self.wildcard_constraints
+            .iter()
+            .map(|(name, pattern)| {
+                regex::Regex::new(pattern)
+                    .map(|re| (name.clone(), re))
+                    .map_err(|e| OxoFlowError::Wildcard {
+                        rule: String::new(),
+                        message: format!(
+                            "invalid regex constraint '{pattern}' for wildcard '{name}': {e}"
+                        ),
+                    })
+            })
+            .collect()
+    }
+
     /// Materialize one rule's `expand_inputs` patterns into concrete
     /// `input` entries, in place. Variables resolve from the config lists
     /// the pattern declares, then from this instance's own
@@ -1576,8 +1629,8 @@ impl WorkflowConfig {
 
     /// Apply the per-instance `{meta.<column>}` substitution (issue #227
     /// item 2) to every text field of an expanded rule — inputs, outputs,
-    /// shell, log, `when`, script, and the hooks — the same field set that
-    /// already carries per-instance substitutions.
+    /// shell, log, `when`, script, the hooks, and `output_pattern` — the
+    /// same field set that already carries per-instance substitutions.
     ///
     /// The instance's sample-like binding (from `combo`) selects the
     /// metadata row; a missing row OR column renders empty, so
@@ -1598,6 +1651,10 @@ impl WorkflowConfig {
                 .is_some_and(|s| s.contains("{meta."))
             || expanded
                 .when
+                .as_deref()
+                .is_some_and(|s| s.contains("{meta."))
+            || expanded
+                .output_pattern
                 .as_deref()
                 .is_some_and(|s| s.contains("{meta."))
             || expanded
@@ -1645,6 +1702,10 @@ impl WorkflowConfig {
             .when
             .as_deref()
             .map(|w| Self::bake_meta_when(w, &self.metadata, combo));
+        // `output_pattern` must resolve `{meta.<column>}` BEFORE discovery
+        // scans the tree — a literal token matches no file and the producer
+        // silently contributes an empty domain.
+        expanded.output_pattern = expanded.output_pattern.as_deref().map(expand);
         expanded.script = expanded.script.as_deref().map(expand);
         expanded.pre_exec = expanded.pre_exec.as_deref().map(expand);
         expanded.on_success = expanded.on_success.as_deref().map(expand);
@@ -1795,7 +1856,12 @@ impl WorkflowConfig {
         // matches within a path segment — `raw/{sample}_*.fq` groups every
         // fq of a sample, the CAT_FASTQ shape. Star-free patterns compile
         // to exactly the strict matcher, so nothing else changes.
-        let has_glob_star = pattern.contains('*') && !pattern.contains("**");
+        //
+        // A `**` pattern must reach `pattern_to_regex_glob`'s hard error:
+        // routing it to the strict matcher instead would escape the stars
+        // into a literal `**` and report a misleading "matched no files"
+        // (the cross-segment glob is unsupported, not absent).
+        let has_glob_star = pattern.contains('*');
         let pattern_re = if has_glob_star {
             crate::wildcard::pattern_to_regex_glob(&pattern)?
         } else {
@@ -2391,6 +2457,15 @@ impl WorkflowConfig {
         let pending = std::mem::take(&mut self.pending_output_pattern);
         let mut new_names = Vec::new();
         let mut still_pending = Vec::new();
+        // Loop-invariant across every consumer below: the compiled
+        // constraint regexes and the config snapshot (mirrors
+        // `self.config`, which this method never mutates).
+        let compiled_constraints = self.compiled_wildcard_constraints()?;
+        let config_values: HashMap<String, toml::Value> = self
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         for (consumer, producer) in pending.into_iter().zip(producers) {
             let Some(producer) = producer else {
                 // Not attached to any producer (defensive): keep pending.
@@ -2452,20 +2527,6 @@ impl WorkflowConfig {
             let own_table_refs: Vec<&ValueGroup> = own_tables.iter().collect();
             // Plan-time parity: constraint-filter the projected combos
             // exactly as the values fan-out branches do.
-            let compiled_constraints = self
-                .wildcard_constraints
-                .iter()
-                .map(|(name, pattern)| {
-                    regex::Regex::new(pattern)
-                        .map(|re| (name.clone(), re))
-                        .map_err(|e| OxoFlowError::Wildcard {
-                            rule: String::new(),
-                            message: format!(
-                                "invalid regex constraint '{pattern}' for wildcard '{name}': {e}"
-                            ),
-                        })
-                })
-                .collect::<Result<HashMap<_, _>>>()?;
             let own_combos: Vec<crate::wildcard::WildcardValues> = self
                 .cartesian_value_combos(&own_table_refs)?
                 .into_iter()
@@ -2476,12 +2537,6 @@ impl WorkflowConfig {
                     )
                     .is_ok()
                 })
-                .collect();
-            // `config_values` is loop-invariant (mirrors `self.config`).
-            let config_values: HashMap<String, toml::Value> = self
-                .config
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             // Values-major nesting mirrors the plan-time fan-out branches.
             for own in &own_combos {
@@ -2540,9 +2595,12 @@ impl WorkflowConfig {
     /// The instance name for one (own-values × producer-domain) combo:
     /// consumer template, own-values suffix, then the producer-pattern
     /// wildcard values in pattern order. `Ok(None)` signals an idempotent
-    /// no-op — a re-expansion (checkpoint re-entry) re-producing a name
-    /// THIS consumer already instantiated; any other collision is a
-    /// genuine naming conflict.
+    /// no-op — a re-expansion (checkpoint re-entry) re-producing the SAME
+    /// combo this consumer already instantiated. A name collision with a
+    /// DIFFERENT combo is a genuine naming conflict: the sanitizer maps
+    /// distinct values onto one name (`A-1` and `A_1` both render `A_1`),
+    /// so treating it as idempotent would silently drop a whole domain
+    /// value while the run still reported success.
     fn consumer_instance_name(
         &self,
         consumer: &Rule,
@@ -2558,17 +2616,58 @@ impl WorkflowConfig {
                 combo.get(w).map(String::as_str).unwrap_or_default(),
             ));
         }
+        let key = Self::consumer_combo_key(consumer, combo, own_suffix, pattern_wildcards);
         if self.rules.iter().any(|r| r.name == name) {
             if self
-                .expansion_templates
+                .expansion_instance_combos
                 .get(&name)
-                .is_some_and(|t| t == &consumer.name)
+                .is_some_and(|k| k == &key)
             {
                 return Ok(None);
             }
-            return Err(OxoFlowError::DuplicateRule { name });
+            let previous = self
+                .expansion_instance_combos
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| "(unknown)".to_string());
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "output_pattern consumer '{}' instantiated '{name}' twice from different \
+                     wildcard values: this combo {key} collides with {previous} — sanitizing \
+                     non-alphanumerics to '_' maps distinct values onto one instance name",
+                    consumer.name,
+                ),
+                rule: Some(consumer.name.clone()),
+                suggestion: Some(
+                    "rename one of the producer's wildcard values so the sanitized instance \
+                     names differ (values differing only in punctuation, e.g. 'A-1' vs 'A_1', \
+                     are indistinguishable after sanitization)"
+                        .to_string(),
+                ),
+            });
         }
         Ok(Some(name))
+    }
+
+    /// The canonical binding key of one `output_pattern` consumer combo —
+    /// template + own-values suffix + the producer-pattern wildcard values
+    /// in pattern order. Two combos are the SAME instantiation iff their
+    /// keys match; the sanitized instance NAME is deliberately not part of
+    /// the key (that is the collision this guards).
+    fn consumer_combo_key(
+        consumer: &Rule,
+        combo: &crate::wildcard::WildcardValues,
+        own_suffix: &str,
+        pattern_wildcards: &[String],
+    ) -> String {
+        let values: Vec<&str> = pattern_wildcards
+            .iter()
+            .map(|w| combo.get(w).map(String::as_str).unwrap_or_default())
+            .collect();
+        // `{:?}` escapes quotes, backslashes and control characters, so the
+        // tuple rendering is injective — no value can forge a separator and
+        // alias a different combo (which would silently drop it again).
+        format!("{:?}", (consumer.name.as_str(), own_suffix, values))
     }
 
     /// Build, register, and file one deferred-consumer instance from a
@@ -2623,6 +2722,10 @@ impl WorkflowConfig {
         }
         self.expansion_templates
             .insert(name.clone(), consumer.name.clone());
+        self.expansion_instance_combos.insert(
+            name.clone(),
+            Self::consumer_combo_key(consumer, merged, own_suffix, pattern_wildcards),
+        );
         self.rules.push(instance);
         Ok(Some(name))
     }

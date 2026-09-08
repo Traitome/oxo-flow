@@ -95,6 +95,27 @@ fn is_package_specifier(env_spec: &str) -> bool {
     env_spec.contains("::") && !env_spec.ends_with(".yaml") && !env_spec.ends_with(".yml")
 }
 
+/// The conda env name the RUNTIME resolves for `spec`.
+///
+/// Must match [`crate::environment::conda_env_name_from_spec`] exactly:
+/// the runtime wraps rules as `conda run -n <name>` with a
+/// content-hash-suffixed name (`<yaml name|file stem>-<hash8>`), so an
+/// image that pre-builds a plain `{rule.name}` env never hits that name —
+/// every rule then re-creates its env at run time and needs network.
+/// Falls back to the rule name when the spec derives no valid name (the
+/// runtime rejects those specs too), keeping `export` best-effort.
+fn runtime_conda_env_name(rule_name: &str, spec: &str) -> String {
+    crate::environment::conda_env_name_from_spec("conda", spec).unwrap_or_else(|e| {
+        tracing::warn!(
+            rule = rule_name,
+            spec,
+            error = %e,
+            "cannot derive the runtime conda env name for the container image — using the rule name"
+        );
+        rule_name.to_string()
+    })
+}
+
 /// Write the environment-installation instructions shared by both single-stage
 /// and multi-stage Dockerfiles.
 fn write_env_setup(
@@ -127,9 +148,9 @@ fn write_env_setup(
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| conda_env.clone());
+                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     dockerfile.push_str(&format!(
-                        "RUN conda env create -f /workflow/envs/{env_filename} -n {}\n\n",
-                        rule.name
+                        "RUN conda env create -f /workflow/envs/{env_filename} -n {env_name}\n\n"
                     ));
                 }
             }
@@ -575,9 +596,9 @@ pub fn generate_singularity_def(
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| conda_env.clone());
+                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     def.push_str(&format!(
-                        "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {}\n",
-                        rule.name
+                        "    /opt/conda/bin/conda env create -f /workflow/envs/{env_filename} -n {env_name}\n"
                     ));
                 }
             }
@@ -753,6 +774,59 @@ mod tests {
         let dockerfile = generate_dockerfile(&workflow, &config).unwrap();
         assert!(dockerfile.contains("Miniforge"));
         assert!(dockerfile.contains("conda env create"));
+    }
+
+    #[test]
+    fn container_prebuilds_the_runtime_conda_env_name() {
+        // The runtime wraps rules as `conda run -n <yaml name|stem>-<hash8>`
+        // (environment.rs `conda_env_name_from_spec`); an image that
+        // pre-builds a plain `{rule.name}` env never hits that name, so the
+        // pre-built env is dead weight and every rule re-creates it at run
+        // time (network required).
+        let dir = tempfile::tempdir().unwrap();
+        let env_dir = dir.path().join("envs");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        let spec = env_dir.join("tools.yaml");
+        std::fs::write(&spec, "name: tools\ndependencies:\n  - bwa\n").unwrap();
+
+        let workflow = WorkflowConfig::parse(&format!(
+            r#"
+            [workflow]
+            name = "conda-test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            shell = "echo hello"
+
+            [rules.environment]
+            conda = "{}"
+        "#,
+            spec.display()
+        ))
+        .unwrap();
+
+        let expected =
+            crate::environment::conda_env_name_from_spec("conda", spec.to_str().unwrap()).unwrap();
+        assert!(expected.starts_with("tools-"), "derived name: {expected}");
+
+        let dockerfile = generate_dockerfile(&workflow, &default_non_rootless()).unwrap();
+        assert!(
+            dockerfile.contains(&format!(
+                "conda env create -f /workflow/envs/tools.yaml -n {expected}"
+            )),
+            "{dockerfile}"
+        );
+        assert!(!dockerfile.contains("-n step1"), "{dockerfile}");
+
+        let def = generate_singularity_def(&workflow, &default_non_rootless()).unwrap();
+        assert!(
+            def.contains(&format!(
+                "conda env create -f /workflow/envs/tools.yaml -n {expected}"
+            )),
+            "{def}"
+        );
     }
 
     #[test]

@@ -55,7 +55,48 @@ struct Server {
     log_path: PathBuf,
 }
 
+/// Spawn the web server, retrying on a fresh port when the child dies before
+/// binding. `free_port` releases its probe listener before the child binds,
+/// so a parallel test can steal the port (TOCTOU) and the child then exits
+/// on the bind error.
 fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
+    let mut last_log = String::new();
+    for attempt in 1..=5 {
+        let port = if attempt == 1 { port } else { free_port() };
+        let mut server = spawn_server_once(dir, port, extra_envs);
+        if wait_for_bind(&mut server, Duration::from_secs(15)) {
+            return server;
+        }
+        last_log = log_tail(&server);
+        // Drop kills a child that is somehow still alive.
+    }
+    panic!("web server could not bind a free port after 5 attempts\n{last_log}");
+}
+
+/// Wait until THIS child has bound its port, proved by its own
+/// "Listening on http://host:port" line — a different process squatting on
+/// the port cannot be mistaken for ours.
+fn wait_for_bind(server: &mut Server, timeout: Duration) -> bool {
+    let needle = format!(
+        "Listening on http://{}",
+        server.base.trim_start_matches("http://")
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        if std::fs::read_to_string(&server.log_path).is_ok_and(|log| log.contains(&needle)) {
+            return true;
+        }
+        if matches!(server.child.try_wait(), Ok(Some(_))) {
+            return false;
+        }
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn spawn_server_once(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
     let log_path = dir.join("web-server.log");
     let log_file = std::fs::File::create(&log_path).expect("create server log");
     let mut cmd = Command::new(workspace_bin("oxo-flow-web"));

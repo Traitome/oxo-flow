@@ -678,21 +678,44 @@ pub async fn update_server_ai_config(
     // Issue #205: encrypt third-party credentials at rest when a master
     // key is configured; plaintext passthrough keeps legacy behavior.
     let stored_api_key = crate::infra::crypto::seal(api_key);
+    // An absent/empty key means "keep the stored one" — the API never returns
+    // the key, so a settings save that omits it must not wipe it.
+    let keep_key = i64::from(api_key.is_empty());
 
-    // Upsert server config (user_id IS NULL)
-    sqlx::query(
-        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, 1, 1, 0, 3, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, updated_at=excluded.updated_at"
+    // Server config is the `user_id IS NULL` row. `ON CONFLICT(user_id)`
+    // never fires for a NULL user_id (SQLite treats NULLs as distinct), so
+    // the old upsert appended a row on every save; update-then-insert is
+    // explicit and idempotent.
+    let now = chrono::Utc::now().to_rfc3339();
+    let updated = sqlx::query(
+        "UPDATE ai_provider_config SET provider = ?, api_url = ?, model = ?, \
+         api_key = CASE WHEN ? = 1 THEN api_key ELSE ? END, updated_at = ? \
+         WHERE user_id IS NULL",
     )
-    .bind(uuid::Uuid::new_v4().to_string())
     .bind(provider)
     .bind(api_url)
     .bind(model)
+    .bind(keep_key)
     .bind(&stored_api_key)
-    .bind(chrono::Utc::now().to_rfc3339())
-    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(&now)
     .execute(pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    if updated.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, 1, 1, 0, 3, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(provider)
+        .bind(api_url)
+        .bind(model)
+        .bind(&stored_api_key)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    }
 
     // Apply to runtime
     let _ = crate::ai_provider::AiProviderRegistry::global().reconfigure(
@@ -763,6 +786,10 @@ pub async fn update_user_ai_config(
     // Issue #205: encrypt third-party credentials at rest when a master
     // key is configured; plaintext passthrough keeps legacy behavior.
     let stored_api_key = crate::infra::crypto::seal(api_key);
+    // An absent/empty key means "keep the stored one". Compared as a flag,
+    // not by the sealed value: with a master key configured `seal("")` is a
+    // non-empty ciphertext.
+    let keep_key = i64::from(api_key.is_empty());
     let search_enabled = req
         .get("search_enabled")
         .and_then(|v| v.as_bool())
@@ -781,9 +808,11 @@ pub async fn update_user_ai_config(
         .unwrap_or(3);
 
     // The row belongs to the acting user, never a hardcoded 'default'
-    // (issue #82 P0-4).
+    // (issue #82 P0-4). An absent/empty api_key keeps the stored one: the
+    // API never returns the key, so a settings save that omits it must not
+    // wipe it (the old `api_key=excluded.api_key` did).
     sqlx::query(
-        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=excluded.api_key, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
+        "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider, api_url=excluded.api_url, model=excluded.model, api_key=CASE WHEN ? = 1 THEN ai_provider_config.api_key ELSE excluded.api_key END, search_enabled=excluded.search_enabled, monitor_enabled=excluded.monitor_enabled, auto_retry_enabled=excluded.auto_retry_enabled, max_correction_rounds=excluded.max_correction_rounds, updated_at=excluded.updated_at"
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(&user.id)
@@ -797,6 +826,7 @@ pub async fn update_user_ai_config(
     .bind(max_correction_rounds)
     .bind(chrono::Utc::now().to_rfc3339())
     .bind(chrono::Utc::now().to_rfc3339())
+    .bind(keep_key)
     .execute(pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;

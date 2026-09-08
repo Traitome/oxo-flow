@@ -1,9 +1,10 @@
 //! Embedded bioinformatics pipeline knowledge graph.
 //!
-//! 79 workflow skills and 469 data-flow transitions (skill A → skill B,
-//! annotated with the data types that pass between them: BAM, VCF, FASTQ,
+//! Workflow skills and data-flow transitions (skill A → skill B, annotated
+//! with the data types that pass between them: BAM, VCF, FASTQ,
 //! COUNT_MATRIX, etc.) from the Pipette.bio SkillGraph — each edge backed
-//! by literature paper counts.
+//! by literature paper counts. [`graph_stats`] derives the node/edge
+//! counts from the embedded data at runtime; never hardcode them.
 //!
 //! The graph answers "what feeds into X?" and "how do I get from A to B?"
 //! for pipeline design. It is embedded at build time and queried on demand

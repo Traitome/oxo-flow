@@ -7,11 +7,12 @@ TOML support: syntax highlighting, bracket matching, folding, and formatting.
 
 ## VS Code
 
-### Workspace (zero setup, ships with the repo)
+### Workspace (per repository)
 
-The oxo-flow repository and every
-[oxo-flow-community](https://github.com/oxo-flow-community) workflow repository
-ships a committed `.vscode/settings.json`:
+The [oxo-flow-community](https://github.com/oxo-flow-community) workflow
+repositories ship a committed `.vscode/settings.json` with this content. In
+the oxo-flow repository itself `.vscode/` is git-ignored, so create the file
+in the folder you work in:
 
 ```json
 {
@@ -21,7 +22,7 @@ ships a committed `.vscode/settings.json`:
 }
 ```
 
-Open the repository folder in VS Code and `.oxoflow` files highlight as TOML
+Open the folder in VS Code and `.oxoflow` files highlight as TOML
 immediately — nothing to install.
 
 ### User-level (all folders, all projects)

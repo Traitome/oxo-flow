@@ -22,7 +22,7 @@ memory = "8G"
 
 # Define the sample cohort for {sample} wildcard expansion.
 # Each sample must have WGS, RNA-seq, and methylation inputs.
-# Edit this list (or pass --sample on the CLI) to match your data.
+# Edit this list (or pass --samples on the CLI) to match your data.
 [[sample_groups]]
 name = "cohort"
 samples = ["sampleA", "sampleB"]
@@ -105,6 +105,7 @@ mkdir -p expression
 featureCounts -T {threads} \
               -a {config.gene_annotation} \
               -o {output[0]} -p --countReadPairs \
+              -s 2 \
               {input[0]}
 """
 
@@ -128,7 +129,7 @@ bismark --genome {config.bismark_index} \
         --multicore {threads} \
         --basename {sample} \
         -o methyl_aligned/
-deduplicate_bismark --paired --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
+deduplicate_bismark --paired --bam methyl_aligned/{sample}_bismark_bt2_pe.bam \
         -o methyl_aligned/{sample}
 """
 

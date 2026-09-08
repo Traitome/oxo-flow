@@ -36,6 +36,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 ## Top-level Structure
 
 ```toml
+reference_dir = "..."   # Optional: base directory for auto-derived reference paths
 [workflow]          # Required: metadata
 [config]            # Optional: user variables (plain or declarative form)
 [defaults]          # Optional: rule defaults
@@ -45,6 +46,8 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [[rules]]           # Required: one or more rules
 [[pairs]]           # Optional: experiment-control pairs (WC-01)
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
+[[values]]          # Optional: named value lists for parameter wildcards
+[metadata]          # Optional: per-sample metadata columns ({meta.<column>})
 [resource_budget]   # Optional: resource limits
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
@@ -56,6 +59,10 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications (issue #227)
 ```
+
+`reference_dir` is a bare top-level key, so it must appear before the first
+`[table]` header; it is also accepted inside `[config]`. See
+[Auto-Derivation from `reference_dir`](#auto-derivation-from-reference_dir).
 
 ---
 
@@ -1867,17 +1874,37 @@ sample_pattern = "raw/{sample}_R1.fastq.gz"
 
 # # Single-end reads
 # sample_pattern = "raw/{sample}.fastq.gz"
+```
 
-# # With technical replicates
-# sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"
+`sample_pattern` binds **`{sample}` only** — `{config.*}` placeholders are
+expanded, but any other wildcard name (`{read}`, `{replicate}`, `{lane}`, …)
+is captured by the glob and never bound: every matching file collapses to the
+same `{sample}` value and expansion fails with `duplicate rule name`. Point
+the pattern at one file per sample (R1 for paired-end data) and list the mate
+in each rule's `input`:
+
+```toml
+sample_pattern = "raw/{sample}_R1.fastq.gz"
+
+[[rules]]
+name  = "align"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.bam"]
+shell = "bwa mem ref.fa {input[0]} {input[1]} > {output[0]}"
 ```
 
 Supported wildcards in `sample_pattern`:
+
 | Wildcard | Description | Example match |
 |---|---|---|
 | `{sample}` | Sample identifier | `SAMPLE_01` from `SAMPLE_01_R1.fastq.gz` |
-| `{replicate}` | Technical replicate number | `1`, `2`, `3` |
-| `{read}` | Read pair identifier | `1` or `2` (R1/R2) |
+
+For genuine per-read/per-replicate fan-out, declare the domain explicitly with
+[`[[sample_groups]]`](#sample_groups-multi-sample-cohorts-wc-02),
+[`[[pairs]]`](#pairs-experiment-control-pairing-wc-01), or `[[values]]`, and
+reference the extra paths in each rule;
+[`input_groups`](#input-groups-input_groups) binds additional wildcards
+discovered from files.
 
 ### Merging Multiple Sample Sources
 
@@ -1890,8 +1917,9 @@ sample_pattern = "raw/{sample}_R1.fastq.gz"
 # CSV/TSV file
 sample_groups_file = "metadata/samples.csv"
 
-# Ad-hoc via CLI
-oxo-flow run pipeline.oxoflow --sample EXTRA_01 --sample EXTRA_02
+# Ad-hoc via CLI — filters the declared set (unknown names fail);
+# declares samples only when the workflow ships none
+oxo-flow run pipeline.oxoflow --samples EXTRA_01,EXTRA_02
 ```
 
 All sources deduplicate — the same sample from multiple sources appears once.
@@ -2032,7 +2060,7 @@ Supported multi-omics pair patterns:
 | Unmatched tumor vs pooled | `experiment = "T1"` | None |
 | Tumor-only (CNV, somatic) | `experiment = "T1"` | None |
 | Paired-end case-control | `experiment = "CASE", control = "CTRL"` | Required |
-| Time-series (no control) | `experiment = "T0", experiment = "T6"` | None |
+| Time-series (no control) | two entries: `experiment = "T0"` and `experiment = "T6"` | None |
 
 ---
 
@@ -2245,10 +2273,30 @@ shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {outp
 | `by` | String | **Required**. Variable name for splitting (e.g., `"chr"`, `"sample"`) |
 | `values` | Array | Direct list of split values |
 | `values_from` | String | Reference to config variable (e.g., `"config.chromosomes"`) |
-| `n` | String | Number of chunks (generates indices 0, 1, ..., n-1) |
+| `n` | String | Number of map instances — the split values are the labels `"0"`, `"1"`, ..., `"n-1"`. It does **not** partition the input data |
 | `glob` | String | Glob pattern to find split values from files |
 
 Priority: `values` → `values_from` → `n` → `glob`
+
+!!! warning "Split values are labels, not data partitions"
+
+    The engine never reads, slices, or chunks the declared input. It repeats
+    the rule once per split value and substitutes that value wherever
+    `{split_var}` appears. With `n = "3"` and `input = ["in.txt"]`, the map
+    command runs three times with the **same** input:
+
+    ```text
+    process in.txt > .oxo-flow/chunks/chunk/0.txt
+    process in.txt > .oxo-flow/chunks/chunk/1.txt
+    process in.txt > .oxo-flow/chunks/chunk/2.txt
+    ```
+
+    Dividing the work is the map command's job: it must use the split value
+    to select its own slice (e.g. `-L {chr}` for per-chromosome calling), or
+    the rule's `input` must *be* the split value (`input = ["{chr}"]`), so
+    each instance reads its own file. The engine never slices a file, and a
+    split variable embedded in a longer path (`shard_{chr}.txt`) is left
+    literal. `n = "3"` alone does neither.
 
 ### Combine Configuration
 

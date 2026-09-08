@@ -532,8 +532,11 @@ fn extract_sample_from_path(path: &str, wildcard_names: &[String]) -> Option<Str
         // E.g., "qc/sample_01_fastqc.html" -> might contain "sample_01"
         // This is a heuristic; in production the wildcard values are known
         if let Some(pos) = path_lower.find(&format!("_{}_", wc)) {
-            // Look backwards from the position to find the value
-            let before = &path[..pos];
+            // Look backwards from the position to find the value. `pos`
+            // indexes the LOWERCASE copy, whose byte geometry can differ
+            // from `path` (U+212A KELVIN SIGN is 3 bytes, lowercases to
+            // 1) — slicing `path` with it panics on the char boundary.
+            let before = &path[..crate::report_metrics::lowercase_offset_to_original(path, pos)];
             if let Some(last_sep) = before.rfind(['/', '\\']) {
                 let candidate = before[last_sep + 1..].to_string();
                 if !candidate.is_empty() && candidate.len() < 100 {
@@ -653,6 +656,22 @@ mod tests {
     fn extract_sample_from_path_with_wildcard() {
         let result = extract_sample_from_path("qc/sample_01_fastqc.html", &["sample".to_string()]);
         assert_eq!(result, None); // heuristic, may not match
+    }
+
+    #[test]
+    fn extract_sample_from_path_handles_kelvin_sign() {
+        // U+212A KELVIN SIGN is 3 bytes and lowercases to 1: the match
+        // offset found in the lowercase copy used to slice mid-character
+        // and panic.
+        assert_eq!(
+            extract_sample_from_path("data/K_sample_01/file.html", &["sample".to_string()]),
+            Some("K".to_string())
+        );
+        // The ordinary case is unchanged.
+        assert_eq!(
+            extract_sample_from_path("data/run_sample_01/file.html", &["sample".to_string()]),
+            Some("run".to_string())
+        );
     }
 
     #[test]

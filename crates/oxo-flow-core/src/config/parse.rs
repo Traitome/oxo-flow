@@ -41,12 +41,22 @@ impl WorkflowConfig {
             let toml::Value::Table(t) = val else {
                 continue;
             };
-            if (t.contains_key("default")
+            if t.contains_key("default")
                 || t.contains_key("required")
                 || t.contains_key("help")
-                || t.contains_key("sensitive"))
-                && let Ok(def) = toml::Value::Table(t.clone()).try_into::<ConfigDef>()
+                || t.contains_key("sensitive")
             {
+                // A failed conversion used to be swallowed by `if let Ok(..)`:
+                // the raw inline table stayed in `self.config`, so
+                // `{config.key}` rendered TOML text into commands and
+                // `when = "config.key"` gates evaluated truthy. Declarative
+                // entries must be valid or the workflow must not load.
+                let def: ConfigDef =
+                    toml::Value::Table(t.clone())
+                        .try_into()
+                        .map_err(|e| OxoFlowError::Config {
+                            message: format!("invalid declarative [config] entry '{key}': {e}"),
+                        })?;
                 self.config_meta.insert(key.clone(), def);
                 let runtime_val = self.config_meta[key].default.clone().unwrap_or_default();
                 self.config
@@ -180,6 +190,32 @@ impl WorkflowConfig {
                 });
             }
 
+            // `{sample}` is the only wildcard discovery understands: anything
+            // else (`{read}`, `{replicate}`) becomes part of the sample value,
+            // so `{sample}_R{read}.fastq.gz` discovers `S1` twice and then
+            // fails with an opaque "duplicate rule name" (audit finding).
+            // Refuse it up front and name the supported paired-end route.
+            let extra_wildcards: Vec<&str> = expanded_pattern
+                .match_indices('{')
+                .filter_map(|(start, _)| {
+                    expanded_pattern[start + 1..]
+                        .split('}')
+                        .next()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty() && *name != "sample")
+                })
+                .collect();
+            if !extra_wildcards.is_empty() {
+                return Err(OxoFlowError::Config {
+                    message: format!(
+                        "sample_pattern '{}' uses unsupported wildcard(s) {{{}}} — only {{sample}} is \
+                         supported; use [[pairs]] for paired-end/replicate discovery",
+                        expanded_pattern,
+                        extra_wildcards.join("}, {")
+                    ),
+                });
+            }
+
             // Resolve the base directory and filename pattern.
             let sp = std::path::Path::new(&expanded_pattern);
             let (search_dir, file_pattern) = if sp.is_absolute() {
@@ -213,7 +249,7 @@ impl WorkflowConfig {
 
                 if !auto_samples.is_empty() {
                     let auto_group = SampleGroup {
-                        name: "auto-discovered".to_string(),
+                        name: crate::config::AUTO_DISCOVERED_GROUP_NAME.to_string(),
                         samples: auto_samples.clone(),
                         metadata: HashMap::new(),
                     };
@@ -230,6 +266,23 @@ impl WorkflowConfig {
                     );
                 }
             }
+        }
+
+        // ── Cross-owner duplicate sample ids (sample-group/pair merge) ────
+        // The same id in two groups (or in a group and a pair) fans out two
+        // instances that share every output path the rule does not
+        // disambiguate with `{group}`: the second is skipped as "outputs
+        // up-to-date" while the checkpoint records both as completed, so one
+        // sample's data can silently be consumed as the other's. Warn (never
+        // error): orthogonal grouping with `{group}` in the paths is
+        // legitimate.
+        for (sample, first_owner, second_owner) in config.duplicate_sample_owners() {
+            tracing::warn!(
+                "sample '{sample}' is declared by both {first_owner} and {second_owner} — \
+                 unless every rule path distinguishes them (e.g. a {{group}} component), the \
+                 two instances share an output path and one is skipped as up-to-date while \
+                 consuming the other's data"
+            );
         }
 
         // ── Consolidate all sample sources into samples_list ──────────────
@@ -778,6 +831,12 @@ impl WorkflowConfig {
                     if self.defaults.environment.is_none() {
                         self.defaults.environment = profile_defaults.environment;
                     }
+                    if self.defaults.shell_prelude.is_none() {
+                        self.defaults.shell_prelude = profile_defaults.shell_prelude;
+                    }
+                    if self.defaults.time_limit.is_none() {
+                        self.defaults.time_limit = profile_defaults.time_limit;
+                    }
                 }
                 ProfileMode::Override => {
                     if profile_defaults.threads.is_some() {
@@ -788,6 +847,12 @@ impl WorkflowConfig {
                     }
                     if profile_defaults.environment.is_some() {
                         self.defaults.environment = profile_defaults.environment;
+                    }
+                    if profile_defaults.shell_prelude.is_some() {
+                        self.defaults.shell_prelude = profile_defaults.shell_prelude;
+                    }
+                    if profile_defaults.time_limit.is_some() {
+                        self.defaults.time_limit = profile_defaults.time_limit;
                     }
                 }
             }

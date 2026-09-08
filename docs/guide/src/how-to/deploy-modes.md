@@ -128,7 +128,7 @@ oxo-flow serve --mode hpc --base-path /oxo-flow
 
 # App on your workstation, cluster execution via the CLI on the login node
 ssh login-node
-oxo-flow cluster submit workflow.oxoflow --scheduler slurm
+oxo-flow cluster submit workflow.oxoflow -b slurm
 ```
 
 ## Switching Modes

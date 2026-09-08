@@ -23,7 +23,8 @@ A single rule declaration that expands into a fan-out of map chunks and an
 optional combine step:
 
 1. **Split**: Partition work by a variable (`by`) with explicit `values`, a
-   config reference (`values_from`), a chunk count (`n`), or a `glob`
+   config reference (`values_from`), an instance count (`n`, which yields the
+   labels `"0"`…`"n-1"` — it does not slice the input data), or a `glob`
 2. **Map**: Run the `map` command once per split value, in parallel
 3. **Combine**: Merge chunk outputs with an explicit `shell` command or
    automatic aggregation (`aggregate = true`, `method = "concat" | "json_merge"`)
@@ -83,7 +84,7 @@ expansion for readability.
 
 - **Per-chromosome variant calling** — scatter GVCF calling by chromosome, merge with `GatherVcfs`
 - **Independent per-chunk QC** — flagstat/coverage metrics per chromosome, no merge needed
-- **Large file processing** — split big inputs into chunks, process in parallel, concatenate results
+- **Fan-out over a declared domain** — repeat a command once per value (chromosome, sample, shard file) and concatenate the results. The split values are labels: the engine does not slice the input for you, so the `map` command (or an input path containing `{split_var}`) must select each instance's slice
 
 ## What's Next?
 

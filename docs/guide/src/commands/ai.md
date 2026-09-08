@@ -44,17 +44,23 @@ hallucination — so scripts can rely on the JSON contract in every state.
 
 ## Embedded knowledge freshness
 
-`oxo-flow ai` reports how fresh the four embedded knowledge sources are
-(tool reference, Bioconda database, bioSkills library, pipeline graph) in a
-**Knowledge freshness** section: per-source record count, generation date,
-staleness in days, and whether the source is auto-updated (`auto`) or
-manually curated (`manual`):
+`oxo-flow ai` reports how fresh the eight embedded knowledge sources are
+(Bioconda, bio.tools, commercial tools, EDAM ontology, nf-core modules,
+pipeline graph, skillgraph docs, bioSkills library) in a **Knowledge
+freshness** section: per-source record count, generation date, staleness in
+days, and whether the source is auto-updated (`auto`) or manually curated
+(`manual`):
 
 ```text
 Knowledge freshness:
-  bioconda_tools (auto) 6132 records, generated 2026-08-22 (1 day ago)
-  skills_index (auto) 562 records, generated 2026-08-22 (1 day ago)
-  pipeline_graph (auto) 548 records, generated 2026-08-22 (1 day ago)
+  bioconda_tools (auto) 6487 records, generated 2026-09-01 (7 days)
+  biotools_overlay (auto) 1925 records, generated 2026-08-23 (15 days)
+  commercial_tools (auto) 25 records, generated 2026-09-01 (7 days)
+  edam_terms (auto) 839 records, generated 2026-09-01 (7 days)
+  nfcore_modules (auto) 2000 records, generated 2026-09-01 (7 days)
+  pipeline_graph (auto) 543 records, generated 2026-09-01 (7 days)
+  skillgraph_docs (auto) 77 records, generated 2026-09-01 (7 days)
+  skills_index (auto) 562 records, generated 2026-09-01 (7 days)
 ```
 
 - Auto-updated sources older than 60 days are flagged `STALE` — the same

@@ -208,6 +208,7 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
                     || token.contains('&')
                     || token.contains('|')
                     || SHELL_BUILTINS.contains(&token.as_str())
+                    || is_env_assignment(&token)
                 {
                     continue;
                 }
@@ -240,7 +241,12 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
 
         // 4. Reference data (D004, warning).
         // (a) Path-like config values referenced by this rule's commands.
-        for (key, value) in &vars {
+        // `vars` is a HashMap — sorted keys keep the findings (and the
+        // report) byte-stable across runs.
+        let mut var_keys: Vec<&String> = vars.keys().collect();
+        var_keys.sort_unstable();
+        for key in var_keys {
+            let value = &vars[key];
             let placeholder = format!("{{{key}}}");
             let referenced = rule
                 .shell
@@ -455,6 +461,25 @@ fn is_script_candidate(token: &str) -> bool {
     token.contains('/') || SCRIPT_EXTENSIONS.iter().any(|ext| token.ends_with(ext))
 }
 
+/// True for a shell variable-assignment token (`KEY=VALUE`), which names no
+/// executable. A shell that starts with an inline environment
+/// (`TMPDIR=/scratch bwa mem …`) otherwise had its assignment probed as the
+/// command, reporting a false D001 "script file not found" for the value's
+/// path-like text.
+fn is_env_assignment(token: &str) -> bool {
+    match token.split_once('=') {
+        Some((key, _)) => {
+            !key.is_empty()
+                && key
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        None => false,
+    }
+}
+
 /// First whitespace token of each non-empty line — the command that line
 /// executes.
 fn first_command_tokens(cmd: &str) -> Vec<String> {
@@ -662,6 +687,26 @@ mod tests {
         assert!(d001[0].path.ends_with("./scripts/run.sh"));
     }
 
+    #[test]
+    fn inline_env_assignment_first_token_is_not_probed() {
+        // `TMPDIR=/scratch bwa mem …` starts with an assignment, not a
+        // command — probing it as a script path reported a false D001.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = wf(
+            "[[rules]]\nname = \"align\"\noutput = [\"results/a.bam\"]\n\
+             description = \"align reads\"\n\
+             shell = \"TMPDIR=/scratch bwa mem -t 4 ref.fa reads.fq > results/a.bam\"\n",
+        );
+        let report = deep_for(&toml, dir.path());
+        assert!(
+            findings_of(&report, "D001").is_empty(),
+            "{:?}",
+            findings_of(&report, "D001")
+        );
+        // The assignment must not be probed as a PATH binary either.
+        assert!(findings_of(&report, "D003").is_empty());
+    }
+
     // ── D003: system-backend binaries in PATH ──────────────────────────────
 
     #[test]
@@ -805,6 +850,25 @@ mod tests {
         assert_eq!(d004[0].severity, Severity::Warning);
         assert_eq!(d004[0].path, "/data/refs/GRCh38/genome.fa");
         assert_eq!(report.references_checked, 1);
+    }
+
+    #[test]
+    fn d004_findings_follow_sorted_config_keys() {
+        // The per-rule var loop iterates a HashMap; sorted keys keep the
+        // report byte-stable.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = wf(
+            "[config]\nzeta_ref = \"/missing/zeta.fa\"\nalpha_ref = \"/missing/alpha.fa\"\n\n\
+             [[rules]]\nname = \"align\"\noutput = [\"results/a.sam\"]\n\
+             description = \"align reads\"\n\
+             shell = \"tool {config.zeta_ref} {config.alpha_ref} > results/a.sam\"\n",
+        );
+        let report = deep_for(&toml, dir.path());
+        let paths: Vec<&str> = findings_of(&report, "D004")
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["/missing/alpha.fa", "/missing/zeta.fa"]);
     }
 
     #[test]

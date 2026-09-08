@@ -160,13 +160,13 @@ export default function PipelineEditor() {
     }
   }, []);
 
-  // Debounced buildDag+validate only matters to the canvas/TOML view; in
-  // guided mode the heavy panels aren't mounted, so skip the round-trips.
+  // Debounced buildDag+validate runs in both view modes: guided mode gates
+  // its Run/Dry-Run buttons on `validation`, which nothing else populates
+  // (in canvas mode it also keeps the DAG panel in sync).
   useEffect(() => {
-    if (viewMode !== 'canvas') return;
     const timer = setTimeout(() => updateDag(toml), 300);
     return () => clearTimeout(timer);
-  }, [toml, updateDag, viewMode]);
+  }, [toml, updateDag]);
 
   const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
@@ -202,26 +202,39 @@ export default function PipelineEditor() {
   };
 
   // Every canvas/inspector/palette edit runs through the backend command API;
-  // the returned canonical TOML replaces the local state (single source of truth).
-  const runEdit = async (operation: string, payload: Record<string, unknown>) => {
+  // the returned canonical TOML replaces the local state (single source of
+  // truth). Returns that TOML, or null when the edit was superseded/failed,
+  // so callers can chain edits against the latest content.
+  const runEdit = async (operation: string, payload: Record<string, unknown>, baseToml = toml): Promise<string | null> => {
     const seq = ++editSeq.current;
     try {
-      const res = await api.dagCommand(pipelineId, toml, operation, payload);
-      if (seq !== editSeq.current) return; // superseded by a newer edit
+      const res = await api.dagCommand(pipelineId, baseToml, operation, payload);
+      if (seq !== editSeq.current) return null; // superseded by a newer edit
       setToml(res.toml_content);
       const errors = res.validation_errors ?? [];
       if (!res.success && errors.length > 0) {
         session.setRunResult({ message: `Validation: ${errors.join('; ')}`, type: 'error' });
       }
+      return res.toml_content;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Edit failed';
       session.setRunResult({ message: `Edit failed: ${msg}`, type: 'error' });
+      return null;
     }
   };
 
   const handleConnect = (from: string, to: string) => runEdit('connect', { from, to });
-  const handleRemove = (names: string[]) => {
-    for (const name of names) runEdit('remove_rule', { name });
+  // Each edit posts the whole TOML, so firing remove_rule per name in
+  // parallel raced: every request carried the same original content and only
+  // the last removal survived. Chain them, threading each response's TOML
+  // into the next request.
+  const handleRemove = async (names: string[]) => {
+    let current = toml;
+    for (const name of names) {
+      const next = await runEdit('remove_rule', { name }, current);
+      if (next === null) return; // superseded or failed — stop the chain
+      current = next;
+    }
   };
 
   const handleAddTool = (tool: KnowledgeTool) => {
@@ -331,10 +344,17 @@ export default function PipelineEditor() {
   const handleSave = async () => {
     // Issue #79 P1-09: Save reported success even for TOML with 23 errors
     // or cycles. Invalid content is refused with the error list instead.
-    if (validation && !validation.valid) {
+    // Validate the exact content being saved: the debounced result can be
+    // stale by up to 300ms (and was never populated at all in guided mode).
+    let current = validation;
+    try {
+      current = await api.validate(toml);
+      setValidation(current);
+    } catch { /* keep the last known validation */ }
+    if (current && !current.valid) {
       setShowErrors(true);
       session.setRunResult({
-        message: `Not saved: ${validation.errors.length} validation error(s) — see the panel below`,
+        message: `Not saved: ${current.errors.length} validation error(s) — see the panel below`,
         type: 'error',
       });
       return;

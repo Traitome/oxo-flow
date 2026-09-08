@@ -204,14 +204,14 @@ shell = "fastqc {input[0]} -o qc/"
 name   = "wgs_coverage"
 when   = 'config.sequencing_mode == "WGS"'
 input  = ["aligned/sample.bam"]
-output = ["qc/coverage.txt"]
+output = ["qc/sample.mosdepth.summary.txt"]
 shell  = "mosdepth qc/sample aligned/sample.bam"
 
 [[rules]]
 name   = "wes_coverage"
 when   = 'config.sequencing_mode == "WES" && config.target_bed != ""'
 input  = ["aligned/sample.bam"]
-output = ["qc/coverage.txt"]
+output = ["qc/sample.mosdepth.summary.txt"]
 shell  = "mosdepth --by {config.target_bed} qc/sample aligned/sample.bam"
 
 [[rules]]

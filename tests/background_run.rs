@@ -273,19 +273,28 @@ fn cli_resume_background_completes_remaining_rule() {
 
 // ─── pid file + run log (child tee) ────────────────────────────────────
 
-/// The pid file lives at `<workdir>/.oxo-flow/background.pid` and the run
-/// log — written by the CHILD's tracing tee, not the foreground — carries
-/// the version header naming the workflow.
+/// The pid file lives at `<workdir>/.oxo-flow/background.pid` while the
+/// detached child runs and is removed when it exits; the run log — written by
+/// the CHILD's tracing tee, not the foreground — carries the version header
+/// naming the workflow.
 #[test]
 fn cli_run_background_pid_file_and_log() {
     let dir = tempfile::tempdir().unwrap();
     let wf = trivial_workflow(dir.path(), "bgl");
 
-    oxo_flow_cmd()
+    let output = oxo_flow_cmd()
         .args(["run", wf.to_str().unwrap(), "--background"])
         .current_dir(dir.path())
-        .assert()
-        .success();
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    // The foreground names the detached child's pid (the file itself is
+    // short-lived, so asserting its existence here would be racy).
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("started in background (pid"),
+        "the background summary must name the child pid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     assert!(
         wait_until(Duration::from_secs(60), || checkpoint_completed(
@@ -295,16 +304,12 @@ fn cli_run_background_pid_file_and_log() {
         "workflow must complete in the background within 60s"
     );
 
-    // Pid file: exists with a numeric pid naming a now-gone process.
-    let pid_text = fs::read_to_string(dir.path().join(".oxo-flow/background.pid"))
-        .expect("background.pid must exist");
-    let pid: u32 = pid_text
-        .trim()
-        .parse()
-        .expect("background.pid must contain a numeric pid");
+    // Pid file: removed once the child exits (the guard owns the cleanup) —
+    // a stale file would make a later run read a dead/reused pid.
+    let pid_path = dir.path().join(".oxo-flow/background.pid");
     assert!(
-        !process_alive(pid),
-        "child pid {pid} must be gone after the background run completes"
+        wait_until(Duration::from_secs(10), || !pid_path.exists()),
+        "background.pid must be removed after the background run completes"
     );
 
     // Run log: the child's tracing tee wrote the version header.
@@ -326,11 +331,12 @@ fn cli_run_background_pid_file_and_log() {
 
 // ─── --background combined with --json ─────────────────────────────────
 
-/// `--background` + `--json`: the foreground prints its summary to stderr
-/// and exits 0 — stdout stays empty (the JSON run summary belongs to the
-/// actual run, which happens in the child; documented in run.md).
+/// `--background` + `--json` is rejected: the foreground only launches the
+/// detached child, so there is no run summary to emit — the combination used
+/// to exit 0 with empty stdout, which a JSON consumer reads as a malformed
+/// document (audit finding).
 #[test]
-fn cli_run_background_with_json_exits_zero_and_keeps_stdout_empty() {
+fn cli_run_background_rejects_json() {
     let dir = tempfile::tempdir().unwrap();
     let wf = trivial_workflow(dir.path(), "bgj");
 
@@ -341,25 +347,21 @@ fn cli_run_background_with_json_exits_zero_and_keeps_stdout_empty() {
         .unwrap();
 
     assert!(
-        output.status.success(),
-        "run --background --json must exit 0: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "--background --json must fail fast, not exit 0 with empty stdout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--background") && stderr.contains("--json"),
+        "the error must name both flags: {stderr}"
     );
     assert!(
         output.stdout.is_empty(),
-        "--background must not emit the run's JSON summary from the foreground"
+        "a rejected invocation must not emit a document"
     );
+    // Nothing was launched: no checkpoint appears.
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("started in background (pid"),
-        "the background summary must be on stderr"
-    );
-
-    // The workflow still completes in the background.
-    assert!(
-        wait_until(Duration::from_secs(60), || checkpoint_completed(
-            dir.path(),
-            "gen"
-        )),
-        "workflow must complete in the background within 60s"
+        !checkpoint_completed(dir.path(), "gen"),
+        "a rejected invocation must not start the run"
     );
 }

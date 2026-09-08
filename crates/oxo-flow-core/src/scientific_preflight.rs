@@ -62,6 +62,22 @@ fn has_strand_flag(shell: &str) -> bool {
     })
 }
 
+/// Whether a Mutect2 command declares a matched normal. GATK accepts both
+/// the double-dash and single-dash spellings (`--normal` / `-normal`,
+/// `--normal-sample` / `-normal-sample`); the single-dash form is common in
+/// ported workflows, and reading it as tumor-only produced a false
+/// `SCI-MUTECT2-TUMOR-ONLY` warning. Token-exact matching keeps
+/// `--normal-lod` (a tumor-only quality threshold) from counting as a
+/// matched normal.
+fn has_normal_flag(shell: &str) -> bool {
+    shell.split_whitespace().any(|token| {
+        matches!(
+            token.split('=').next().unwrap_or(token),
+            "-normal" | "--normal" | "-normal-sample" | "--normal-sample"
+        )
+    })
+}
+
 /// Analyze a workflow for well-established scientific-design issues.
 ///
 /// The sample count comes from the (possibly `--samples`-filtered)
@@ -123,10 +139,7 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
             });
         }
 
-        if shell_lower.contains("mutect2")
-            && !shell_lower.contains("--normal")
-            && !shell_lower.contains("--normal-sample")
-        {
+        if shell_lower.contains("mutect2") && !has_normal_flag(&shell_lower) {
             warnings.push(ScientificWarning {
                 code: "SCI-MUTECT2-TUMOR-ONLY".into(),
                 rule: rule.name.clone(),
@@ -227,6 +240,26 @@ mod tests {
             "gatk Mutect2 -R ref.fa -I tumor.bam -I normal.bam --normal-sample N1 -O out.vcf.gz",
         );
         assert!(analyze_scientific_constraints(&ok).is_empty());
+
+        // GATK also accepts the single-dash spellings (the form ported
+        // workflows use, live: examples/gallery 14/15 `-normal CTRL_01`).
+        for ok_shell in [
+            "gatk Mutect2 -R ref.fa -I tumor.bam -normal N1 -O out.vcf.gz",
+            "gatk Mutect2 -R ref.fa -I tumor.bam -normal-sample N1 -O out.vcf.gz",
+        ] {
+            assert!(
+                analyze_scientific_constraints(&config_with_rule(ok_shell)).is_empty(),
+                "a matched normal must suppress the tumor-only warning: {ok_shell}"
+            );
+        }
+
+        // `--normal-lod` is a tumor-only quality threshold, not a matched
+        // normal — it must keep warning.
+        let lod =
+            config_with_rule("gatk Mutect2 -R ref.fa -I tumor.bam --normal-lod 3.0 -O out.vcf.gz");
+        let warnings = analyze_scientific_constraints(&lod);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "SCI-MUTECT2-TUMOR-ONLY");
     }
 
     #[test]

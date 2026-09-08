@@ -21,15 +21,13 @@ use crate::commands::output::{
 use crate::commands::project::{init_command, template_command};
 use crate::commands::provenance::provenance_verify_command;
 use crate::commands::publish::publish_command;
-use crate::commands::quality::{
-    deep_check_command, format_command, lint_command, touch_command, validate_command,
-};
+use crate::commands::quality::{format_command, lint_command, touch_command, validate_command};
 use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// oxo-flow — A Rust-native bioinformatics pipeline engine.
 ///
@@ -41,8 +39,9 @@ use std::path::PathBuf;
     version,
     about = "A Rust-native bioinformatics pipeline engine",
     long_about = "oxo-flow is a high-performance, modular bioinformatics pipeline engine\n\
-                   built from first principles in Rust. It supports conda, pixi, docker,\n\
-                   singularity, and venv environments with DAG-based execution."
+                   built from first principles in Rust. It supports conda, mamba, pixi,\n\
+                   docker, singularity, venv, and environment-modules backends (plus the\n\
+                   system environment) with DAG-based execution."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -61,6 +60,9 @@ pub struct Cli {
     no_color: bool,
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
+    /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
+    /// provenance verify, license, and ai explain; every other command rejects
+    /// the flag instead of silently ignoring it.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -166,7 +168,8 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
-        /// Maximum AI retries (overrides `[ai]` config).
+        /// Maximum AI attempts for recovery when a call fails (default: 1;
+        /// only a FAILED call is retried).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         /// Filter to a subset of samples: `first:N` or explicit names
@@ -221,7 +224,8 @@ pub enum Commands {
         /// Enable AI error recovery on rule failure.
         #[arg(long)]
         ai_recover: bool,
-        /// Maximum AI retries (overrides `[ai]` config).
+        /// Maximum AI attempts for recovery when a call fails (default: 1;
+        /// only a FAILED call is retried).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         #[arg(
@@ -274,7 +278,8 @@ pub enum Commands {
         /// Enable AI-powered analysis of the workflow.
         #[arg(long)]
         ai: bool,
-        /// Maximum AI analysis rounds (overrides `[ai]` config).
+        /// Maximum AI attempts for the analysis when a call fails (default:
+        /// 1; only a FAILED call is retried).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
         /// Filter to a subset of samples: `first:N` or explicit names
@@ -742,8 +747,6 @@ pub enum Commands {
         workdir: Option<PathBuf>,
         #[arg(short = 'e', long, help = "Environment to run each item in")]
         environment: Option<String>,
-        #[arg(long, help = "Record output checksums for later verification")]
-        checksum: bool,
         #[arg(long, help = "Generate a .oxoflow workflow file from the template")]
         generate_workflow: bool,
         #[arg(short = 'o', long, help = "Output file path")]
@@ -876,10 +879,10 @@ pub enum EnvAction {
         ai: bool,
         #[arg(
             long = "backend",
-            default_value = "conda",
-            help = "Environment backend to generate: conda (YAML) or pixi (TOML)"
+            value_name = "BACKEND",
+            help = "Environment backend: conda (YAML) or pixi (TOML). Default: inferred from the spec's extension, or conda with --ai"
         )]
-        backend: String,
+        backend: Option<String>,
     },
 }
 
@@ -1003,6 +1006,67 @@ pub enum ProvenanceAction {
     },
 }
 
+/// Emit the single `--json` document for `test`.
+///
+/// The command runs several sub-commands; each used to print its own JSON
+/// document, so `test --json` produced 3-4 concatenated documents that no
+/// parser accepts (audit finding). The steps now run with their JSON output
+/// suppressed and this summary is the command's only document.
+fn emit_test_json(
+    json: bool,
+    workflow: &Path,
+    status: &str,
+    steps: &[serde_json::Value],
+    reports: &serde_json::Map<String, serde_json::Value>,
+) {
+    if !json {
+        return;
+    }
+    let mut output = serde_json::json!({
+        "command": "test",
+        "workflow": workflow.display().to_string(),
+        "status": status,
+        "steps": steps,
+    });
+    if !reports.is_empty() {
+        output["reports"] = serde_json::Value::Object(reports.clone());
+    }
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// One `steps[]` entry for the `test --json` document.
+fn test_step_json(name: &str, passed: bool) -> serde_json::Value {
+    serde_json::json!({
+        "step": name,
+        "status": if passed { "passed" } else { "failed" },
+    })
+}
+
+/// Commands whose `--json` document is implemented.
+///
+/// The global flag is accepted by every subcommand, but most have no JSON
+/// output — they used to ignore it and exit 0 with human text (or nothing)
+/// on stdout, which scripts read as a malformed document (audit finding).
+/// Unsupported commands now reject the flag instead; `report` additionally
+/// gets a pointer at its own `-f json`.
+fn json_supported(command: &Commands) -> bool {
+    match command {
+        Commands::Run { .. }
+        | Commands::DryRun { .. }
+        | Commands::Validate { .. }
+        | Commands::Lint { .. }
+        | Commands::Test { .. }
+        | Commands::Status { .. }
+        | Commands::Batch { .. }
+        | Commands::Info { .. }
+        | Commands::Schema
+        | Commands::License { .. }
+        | Commands::Ai { .. } => true,
+        Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
+        _ => false,
+    }
+}
+
 /// Migration hint for commands removed in v0.13 (issue #76).
 ///
 /// clap would otherwise answer `oxo-flow history` with a bare
@@ -1114,13 +1178,49 @@ async fn main() -> Result<()> {
     };
     let cli = Cli::from_arg_matches(&matches)?;
 
-    if cli.no_color
+    // One colour policy for every output surface: `--no-color`, NO_COLOR,
+    // and background runs (whose stderr is the run log, issue #194 A3).
+    // The tracing layer used to key off the redirect variable alone, so
+    // `--no-color`/NO_COLOR still painted ANSI escapes into redirected
+    // stderr (audit finding).
+    let color_disabled = cli.no_color
         || std::env::var_os("NO_COLOR").is_some()
-        // Background runs redirect stderr onto the run log (issue #194 A3):
-        // colors would land in the file as ANSI escapes.
-        || std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some()
-    {
+        || std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
+    if color_disabled {
         colored::control::set_override(false);
+    }
+
+    // ── `--json` support gate (audit finding) ───────────────────────────
+    // The global flag is accepted everywhere but only a subset of commands
+    // emit a JSON document; the rest silently ignored it. Fail fast with
+    // the command's name instead of exiting 0 with unusable stdout.
+    if cli.json && !json_supported(&cli.command) {
+        let name = matches.subcommand_name().unwrap_or("this command");
+        let hint = match &cli.command {
+            Commands::Report { .. } => " — `report` selects JSON with `-f json`",
+            _ => "",
+        };
+        anyhow::bail!(
+            "`oxo-flow {name}` does not support --json yet{hint}.\n  \
+             Drop --json to run it normally, or use a command whose JSON \
+             document is implemented (run, dry-run, validate, lint, test, \
+             status, batch, info, schema, license, ai, provenance verify)."
+        );
+    }
+    // A background run never executes the workflow in the foreground
+    // process, so there is no run summary to write: reject the combination
+    // rather than exit 0 with zero bytes on stdout (audit finding).
+    if cli.json
+        && let Commands::Run {
+            background: true, ..
+        } = &cli.command
+    {
+        anyhow::bail!(
+            "`run --background` cannot be combined with --json: the foreground \
+             invocation only launches the detached child, so no run summary \
+             exists to emit.\n  Drop --json, or run in the foreground to get \
+             the machine-readable summary."
+        );
     }
 
     let default_level = if cli.quiet {
@@ -1130,16 +1230,13 @@ async fn main() -> Result<()> {
     } else {
         "info"
     };
-    // Background runs redirect stderr onto the run log (issue #194 A3):
-    // the fmt layer must not paint ANSI escapes into the file.
-    let stderr_redirected = std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_target(false)
-        .with_ansi(!stderr_redirected)
+        .with_ansi(!color_disabled)
         // Logs go to stderr so machine-readable stdout (graph DOT output,
         // --json, pipes into dot/other tools) stays clean.
         .with_writer(crate::logging::TeeWriter)
@@ -1426,6 +1523,10 @@ async fn main() -> Result<()> {
             level,
             json,
         } => {
+            // The global --json and the action's own flag are equivalent:
+            // `ai explain` is the only action with a JSON document, and a
+            // user may place the global flag before the subcommand.
+            let json = json || cli.json;
             // --step/--level/--json/workflow only make sense with 'explain'.
             let explain_args = workflow.is_some() || step.is_some() || json;
             match action.as_deref() {
@@ -1584,7 +1685,6 @@ async fn main() -> Result<()> {
             dry_run,
             workdir,
             environment,
-            checksum,
             generate_workflow,
             output,
         } => {
@@ -1601,7 +1701,6 @@ async fn main() -> Result<()> {
                 dry_run,
                 workdir,
                 environment,
-                checksum,
                 generate_workflow,
                 output,
             )
@@ -1636,67 +1735,112 @@ async fn main() -> Result<()> {
                 "🧪".bold(),
                 workflow.display()
             );
+            // `test --json` owns stdout: every step runs with its own JSON
+            // output suppressed (their human output is on stderr) and this
+            // handler emits ONE document describing all steps — it used to
+            // print 3-4 concatenated documents (audit finding).
+            let mut steps: Vec<serde_json::Value> = Vec::new();
+            // Sub-documents of steps that have one (currently deep-check):
+            // the aggregate stays a single document, but no detail is lost.
+            let mut reports = serde_json::Map::new();
+            macro_rules! step {
+                ($name:literal, $call:expr) => {{
+                    let result = $call;
+                    steps.push(test_step_json($name, result.is_ok()));
+                    if let Err(e) = result {
+                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                        return Err(e);
+                    }
+                }};
+            }
             // 1. Validate
             eprintln!("{} Validation...", "1.".bold());
-            validate_command(workflow.clone(), false, cli.json, false).await?;
+            step!(
+                "validate",
+                validate_command(workflow.clone(), false, false, false).await
+            );
             // 2. Lint
             eprintln!("{} Lint...", "2.".bold());
-            lint_command(workflow.clone(), false, cli.json, false).await?;
+            step!(
+                "lint",
+                lint_command(workflow.clone(), false, false, false).await
+            );
             // 3. Dry-run
             eprintln!("{} Dry-run...", "3.".bold());
-            dry_run_command(
-                Some(workflow.clone()),
-                target.clone(),
-                Vec::new(), // module
-                cli.verbose,
-                cli.json,
-                false,
-                None,
-                samples_filter.clone(),
-                workdir.clone(),
-                profile.clone(),
-                false,
-                vec![],
-                false,
-                false,
-            )
-            .await?;
+            step!(
+                "dry-run",
+                dry_run_command(
+                    Some(workflow.clone()),
+                    target.clone(),
+                    Vec::new(), // module
+                    cli.verbose,
+                    false,
+                    false,
+                    None,
+                    samples_filter.clone(),
+                    workdir.clone(),
+                    profile.clone(),
+                    false,
+                    vec![],
+                    false,
+                    false,
+                )
+                .await
+            );
             // 4. Optional: deep health checks (issue #64)
             if deep {
                 eprintln!("{} Deep checks...", "4.".bold());
-                deep_check_command(&workflow, workdir.as_deref(), cli.json)?;
+                match crate::commands::quality::run_deep_check(&workflow, workdir.as_deref()) {
+                    Ok((report, document)) => {
+                        steps.push(test_step_json("deep-check", report.passed));
+                        reports.insert("deep-check".to_string(), document);
+                        if !report.passed {
+                            // Same verdict as `deep-check`: D-errors fail.
+                            emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        steps.push(test_step_json("deep-check", false));
+                        emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
+                        return Err(e);
+                    }
+                }
             }
             // 5. Optional: run with --run flag
             if run {
                 eprintln!("{} Execution...", if deep { "5." } else { "4." }.bold());
-                run_command(
-                    Some(workflow),
-                    jobs,
-                    keep_going,      // keep_going
-                    workdir.clone(), // workdir
-                    None,            // log_file (default path)
-                    target.clone(),  // target
-                    Vec::new(),      // module
-                    retry,           // retry
-                    timeout.clone(), // timeout
-                    false,           // resume_failed
-                    profile.clone(), // profile
-                    0,               // max_threads
-                    0,               // max_memory
-                    false,           // skip_env_setup
-                    false,           // skip_ref_build
-                    None,            // cache_dir
-                    false,           // provenance
-                    cli.json,
-                    vec![], // cli_args
-                    false,  // ai_recover
-                    None,   // ai_max_retries
-                    samples_filter.clone(),
-                    false, // rerun (test mode: normal up-to-date checks)
-                    false, // no_report_snapshot (test mode keeps the standard run behavior)
-                    None,  // max_submitted (cluster queue cap — test keeps the profile's)
-                )
-                .await?;
+                step!(
+                    "run",
+                    run_command(
+                        Some(workflow.clone()),
+                        jobs,
+                        keep_going,      // keep_going
+                        workdir.clone(), // workdir
+                        None,            // log_file (default path)
+                        target.clone(),  // target
+                        Vec::new(),      // module
+                        retry,           // retry
+                        timeout.clone(), // timeout
+                        false,           // resume_failed
+                        profile.clone(), // profile
+                        0,               // max_threads
+                        0,               // max_memory
+                        false,           // skip_env_setup
+                        false,           // skip_ref_build
+                        None,            // cache_dir
+                        false,           // provenance
+                        false,           // json (the single test document is emitted here)
+                        vec![],          // cli_args
+                        false,           // ai_recover
+                        None,            // ai_max_retries
+                        samples_filter.clone(),
+                        false, // rerun (test mode: normal up-to-date checks)
+                        false, // no_report_snapshot (test mode keeps the standard run behavior)
+                        None,  // max_submitted (cluster queue cap — test keeps the profile's)
+                    )
+                    .await
+                );
             }
             // Optional: verify output file existence
             if let Some(output_path) = output {
@@ -1706,15 +1850,25 @@ async fn main() -> Result<()> {
                         "✓".green().bold(),
                         output_path.display()
                     );
+                    steps.push(serde_json::json!({
+                        "step": "output",
+                        "status": "passed",
+                    }));
                 } else {
                     eprintln!(
                         "{} Output file not found: {}",
                         "✗".red().bold(),
                         output_path.display()
                     );
+                    steps.push(serde_json::json!({
+                        "step": "output",
+                        "status": "failed",
+                    }));
+                    emit_test_json(cli.json, &workflow, "failed", &steps, &reports);
                     std::process::exit(1);
                 }
             }
+            emit_test_json(cli.json, &workflow, "passed", &steps, &reports);
             eprintln!("\n{} All checks passed.", "✓".green().bold());
         }
         Commands::Publish {

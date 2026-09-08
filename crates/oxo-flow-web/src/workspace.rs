@@ -2,8 +2,16 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Base workspace directory for the Web UI.
-const BASE_WORKSPACE: &str = "workspace";
+/// Base workspace directory for the Web UI (uploaded inputs, run sandboxes).
+///
+/// `OXO_FLOW_WORKSPACE` overrides it — deployments that keep data on a
+/// separate volume, and integration tests that must not write into the source
+/// tree, both need a relocatable root.
+fn base_workspace() -> PathBuf {
+    std::env::var("OXO_FLOW_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("workspace"))
+}
 
 /// Validate that a path component does not contain traversal sequences.
 fn validate_path_component(name: &str, field: &str) -> Result<()> {
@@ -43,7 +51,7 @@ pub fn setup_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
     validate_path_component(username, "username")?;
     validate_path_component(run_id, "run_id")?;
 
-    let run_dir = Path::new(BASE_WORKSPACE)
+    let run_dir = base_workspace()
         .join("users")
         .join(username)
         .join("runs")
@@ -74,7 +82,7 @@ pub fn initialize_sandbox(username: &str, run_id: &str, toml_content: &str) -> R
 pub fn get_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
     validate_path_component(username, "username")?;
     validate_path_component(run_id, "run_id")?;
-    Ok(Path::new(BASE_WORKSPACE)
+    Ok(base_workspace()
         .join("users")
         .join(username)
         .join("runs")
@@ -85,10 +93,7 @@ pub fn get_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
 /// `workspace/users/{user}/inputs/` root served by `POST /api/files`.
 pub fn inputs_directory(username: &str) -> Result<PathBuf> {
     validate_path_component(username, "username")?;
-    Ok(Path::new(BASE_WORKSPACE)
-        .join("users")
-        .join(username)
-        .join("inputs"))
+    Ok(base_workspace().join("users").join(username).join("inputs"))
 }
 
 /// Mirror the acting user's uploaded inputs into a run's working directory
@@ -173,7 +178,7 @@ fn dest_is_current(dest: &Path, src_meta: &fs::Metadata) -> bool {
 pub fn get_pipeline_directory(username: &str, pipeline_id: &str) -> Result<PathBuf> {
     validate_path_component(username, "username")?;
     validate_path_component(pipeline_id, "pipeline_id")?;
-    Ok(Path::new(BASE_WORKSPACE)
+    Ok(base_workspace()
         .join("users")
         .join(username)
         .join("pipelines")

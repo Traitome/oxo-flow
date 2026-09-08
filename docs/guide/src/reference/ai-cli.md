@@ -365,7 +365,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | `oxo-flow debug WORKFLOW` | optional | ✅ | AI command explanation |
 | `oxo-flow run WORKFLOW` | optional | ✅ | AI error recovery on failure |
 | `oxo-flow run WORKFLOW --ai-recover` | force | — | Explicit recovery override |
-| `oxo-flow run WORKFLOW --ai-max-retries N` | optional | — | Max fix attempts |
+| `oxo-flow run WORKFLOW --ai-max-retries N` | optional | — | Max AI recovery attempts when a call fails (default 1) |
 | `oxo-flow resume CHECKPOINT --ai-recover` | required | — | Diagnose + fix on restart |
 
 ## AI Command Explanation (`debug --ai`)

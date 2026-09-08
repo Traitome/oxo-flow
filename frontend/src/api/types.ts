@@ -354,7 +354,8 @@ export interface PauseRequest {
 }
 
 export interface ResumeRequest {
-  from_rule?: string;
+  // `from_rule` is intentionally absent: the API rejects it with
+  // `400 UNSUPPORTED_FIELD` (no downstream re-run mode exists).
   memory_adjust?: string;
   thread_adjust?: number;
 }

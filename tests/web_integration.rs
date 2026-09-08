@@ -88,7 +88,50 @@ impl TestServer {
     }
 
     /// Spawn the web server with its output captured to a log file in `dir`.
+    ///
+    /// Retries on a fresh port when the child dies before binding: `free_port`
+    /// releases its probe listener before the child binds, so a parallel test
+    /// can steal the port (TOCTOU) and the child then exits on the bind error.
     fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Self {
+        let mut last_log = String::new();
+        for attempt in 1..=5 {
+            let port = if attempt == 1 { port } else { free_port() };
+            let mut server = Self::spawn_server_once(dir, port, extra_envs);
+            if server.wait_for_bind(Duration::from_secs(15)) {
+                return server;
+            }
+            last_log = server.log_tail();
+            // Drop kills a child that is somehow still alive.
+        }
+        panic!(
+            "web server could not bind a free port after 5 attempts\nlast server log tail:\n{last_log}"
+        );
+    }
+
+    /// Wait until THIS child has bound its port, proved by its own
+    /// "Listening on http://host:port" line — a different process squatting
+    /// on the port cannot be mistaken for ours.
+    fn wait_for_bind(&mut self, timeout: Duration) -> bool {
+        let needle = format!(
+            "Listening on http://{}",
+            self.base.trim_start_matches("http://")
+        );
+        let deadline = Instant::now() + timeout;
+        loop {
+            if std::fs::read_to_string(&self.log_path).is_ok_and(|log| log.contains(&needle)) {
+                return true;
+            }
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return false;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn spawn_server_once(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Self {
         let log_path = dir.join("web-server.log");
         let log_file = std::fs::File::create(&log_path).expect("create server log");
         let mut cmd = StdCommand::new(workspace_bin("oxo-flow-web"));
@@ -140,6 +183,36 @@ impl TestServer {
         }
         server
     }
+}
+
+/// The port probe (`free_port`) releases its listener before the child binds,
+/// so a parallel test can steal the port (TOCTOU). The spawn helper must
+/// notice the child's bind failure and retry on a fresh port instead of
+/// failing the suite.
+#[tokio::test]
+async fn spawn_retries_when_the_probed_port_is_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    // Occupy a port for the whole test.
+    let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken_port = squatter.local_addr().unwrap().port();
+
+    let server = TestServer::spawn_server(dir.path(), taken_port, &[]);
+
+    assert_ne!(
+        server.base,
+        format!("http://127.0.0.1:{taken_port}"),
+        "the helper must move to a fresh port when the probed one is taken"
+    );
+    let resp = reqwest::Client::new()
+        .get(format!("{}/api/health", server.base))
+        .send()
+        .await
+        .expect("the retried server must answer");
+    assert!(
+        resp.status().is_success(),
+        "retried server health: {}",
+        resp.status()
+    );
 }
 
 async fn wait_for_terminal(client: &reqwest::Client, base: &str, run_id: &str) -> String {

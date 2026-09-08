@@ -51,15 +51,20 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Sync messages to session context whenever they change
+  // Sync messages to session context whenever they change. The setter
+  // identities are stable (useCallback in PipelineSession), so depending on
+  // them — instead of the whole `session` object — keeps the effect from
+  // re-running on every unrelated state update (that re-ran the dispatch and
+  // looped: the reducer always returns a new state object).
+  const { setChatMessages, setChatContext } = session;
   useEffect(() => {
-    session.setChatMessages(context, messages);
-  }, [messages, context, session]);
+    setChatMessages(context, messages);
+  }, [messages, context, setChatMessages]);
 
   // Set chat context on mount
   useEffect(() => {
-    session.setChatContext(context);
-  }, [context, session]);
+    setChatContext(context);
+  }, [context, setChatContext]);
 
   // Detect whether the server has a working AI provider so we can surface a
   // friendly fallback instead of a raw env-var error.

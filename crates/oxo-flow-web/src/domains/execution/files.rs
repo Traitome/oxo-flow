@@ -39,7 +39,14 @@ type ApiErrorRes = (StatusCode, Json<ApiError>);
 /// Per-file upload cap. 8 GiB covers the largest realistic single upload
 /// (paired-end fastqs, archives); total-request abuse is bounded by the
 /// global rate limiter.
-const MAX_UPLOAD_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub const MAX_UPLOAD_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Whole-request body limit for `POST /api/files`.
+///
+/// Axum's `Multipart` extractor applies `DefaultBodyLimit` (2 MiB) unless the
+/// route overrides it, which silently truncated every larger upload while the
+/// handler still answered 200 (audit finding C2). This sits one MiB above the
+/// per-file cap so multipart boundary overhead cannot trip it first.
+pub const MAX_UPLOAD_BODY_BYTES: usize = MAX_UPLOAD_FILE_BYTES as usize + 1024 * 1024;
 /// Zip archive bounds: entry count and total size.
 const MAX_ZIP_ENTRIES: usize = 4096;
 const MAX_ZIP_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -194,6 +201,15 @@ fn etag(path: &FsPath, size: u64) -> String {
     format!("\"{mtime:x}-{size:x}\"")
 }
 
+/// Read at most `limit` bytes from `path` (streaming — the file is never
+/// fully materialized, so previews of huge files stay memory-bounded).
+async fn read_capped(path: &FsPath, limit: u64) -> std::io::Result<Vec<u8>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).await?;
+    Ok(bytes)
+}
+
 /// Serve one file: preview JSON, or bytes with Range/ETag/disposition.
 async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Response {
     let meta = match std::fs::metadata(path) {
@@ -214,7 +230,10 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
     // Preview: JSON for text, inline bytes for images, 415 for the rest.
     if preview {
         if is_previewable(mime) {
-            let bytes = match tokio::fs::read(path).await {
+            // Stream at most one byte past the cap: a multi-GB .vcf in a run
+            // workdir must never be pulled into memory just to show 100 KiB
+            // (the cap used to be applied only after a full read).
+            let bytes = match read_capped(path, PREVIEW_MAX_BYTES as u64 + 1).await {
                 Ok(b) => b,
                 Err(e) => {
                     return err(
@@ -237,7 +256,21 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
             .into_response();
         }
         if mime.starts_with("image/") {
-            let data = match tokio::fs::read(path).await {
+            // Inline images are bounded like text previews. A truncated image
+            // is a corrupt image, so an oversized one is refused up front
+            // (the size is already known from metadata — no read at all).
+            if size > PREVIEW_MAX_BYTES as u64 {
+                return err(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "PREVIEW_TOO_LARGE",
+                    format!(
+                        "Image is {size} bytes — too large to preview (limit \
+                         {PREVIEW_MAX_BYTES}); download it instead"
+                    ),
+                )
+                .into_response();
+            }
+            let data = match read_capped(path, PREVIEW_MAX_BYTES as u64 + 1).await {
                 Ok(d) => d,
                 Err(e) => {
                     return err(
@@ -647,19 +680,46 @@ pub async fn upload_files(
     let mut subdir = String::new();
     let mut saved: Vec<serde_json::Value> = Vec::new();
 
-    while let Ok(Some(mut field)) = multipart.next_field().await {
+    // Errors are explicit: the old `while let Ok(Some(..))` / `while let
+    // Ok(Some(chunk))` shape ended the loop silently on a body-limit or
+    // transport error and still answered 200 with a truncated file (audit
+    // finding C2). A read error now aborts the request and removes any
+    // partial file.
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                return err(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "UPLOAD_READ_ERROR",
+                    format!("Upload aborted while reading the request body: {e}"),
+                )
+                .into_response();
+            }
+        };
         let field_name = field.name().unwrap_or("").to_string();
         if field_name == "path" {
-            if let Ok(value) = field.text().await {
-                subdir = value.trim().trim_matches('/').to_string();
-                if subdir
-                    .split('/')
-                    .any(|c| c.is_empty() || c == ".." || c.contains('\\'))
-                {
+            match field.text().await {
+                Ok(value) => {
+                    subdir = value.trim().trim_matches('/').to_string();
+                    if subdir
+                        .split('/')
+                        .any(|c| c.is_empty() || c == ".." || c.contains('\\'))
+                    {
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "INVALID_PATH",
+                            "path must be a clean relative directory".into(),
+                        )
+                        .into_response();
+                    }
+                }
+                Err(e) => {
                     return err(
                         StatusCode::BAD_REQUEST,
-                        "INVALID_PATH",
-                        "path must be a clean relative directory".into(),
+                        "UPLOAD_READ_ERROR",
+                        format!("Failed to read the 'path' field: {e}"),
                     )
                     .into_response();
                 }
@@ -724,19 +784,29 @@ pub async fn upload_files(
             }
         };
         let mut over = false;
-        while let Ok(Some(chunk)) = field.chunk().await {
-            written += chunk.len() as u64;
-            if written > MAX_UPLOAD_FILE_BYTES {
-                over = true;
-                break;
-            }
-            if file.write_all(&chunk).await.is_err() {
-                return err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "IO_ERROR",
-                    "Failed to write upload".into(),
-                )
-                .into_response();
+        let mut read_error: Option<String> = None;
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    written += chunk.len() as u64;
+                    if written > MAX_UPLOAD_FILE_BYTES {
+                        over = true;
+                        break;
+                    }
+                    if file.write_all(&chunk).await.is_err() {
+                        return err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "IO_ERROR",
+                            "Failed to write upload".into(),
+                        )
+                        .into_response();
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    read_error = Some(e.to_string());
+                    break;
+                }
             }
         }
         let _ = file.flush().await;
@@ -747,6 +817,16 @@ pub async fn upload_files(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "FILE_TOO_LARGE",
                 format!("File exceeds the {MAX_UPLOAD_FILE_BYTES}-byte upload cap"),
+            )
+            .into_response();
+        }
+        if let Some(e) = read_error {
+            // Never report success for a partial file.
+            let _ = tokio::fs::remove_file(&dest).await;
+            return err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "UPLOAD_READ_ERROR",
+                format!("Upload aborted after {written} bytes: {e}"),
             )
             .into_response();
         }
@@ -816,6 +896,55 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A preview of a file far larger than the cap must return only the
+    /// capped prefix (the read itself is streamed — reading the whole file
+    /// into memory is what OOMed the server on multi-GB workdir files).
+    #[tokio::test]
+    async fn preview_caps_oversized_text_files() {
+        // Arrange — 4 MiB, 40x the 100 KiB preview cap.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.vcf");
+        std::fs::write(&path, "A".repeat(4 * 1024 * 1024)).unwrap();
+
+        // Act
+        let response = serve_file(FsPath::new(&path), true, None).await;
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["truncated"], true);
+        assert_eq!(json["size_bytes"], 4 * 1024 * 1024);
+        assert_eq!(
+            json["content"].as_str().unwrap().len(),
+            PREVIEW_MAX_BYTES,
+            "preview content must stop at the cap"
+        );
+    }
+
+    /// Oversized images are refused before any read; small ones still inline.
+    #[tokio::test]
+    async fn preview_refuses_oversized_images_but_serves_small_ones() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let big = dir.path().join("huge.png");
+        std::fs::write(&big, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        let response = serve_file(FsPath::new(&big), true, None).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "an oversized image must be refused, not buffered"
+        );
+
+        let small = dir.path().join("small.png");
+        std::fs::write(&small, b"\x89PNG\r\n\x1a\n").unwrap();
+        let response = serve_file(FsPath::new(&small), true, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+    }
 
     #[cfg(unix)]
     #[test]

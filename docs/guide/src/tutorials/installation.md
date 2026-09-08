@@ -220,7 +220,7 @@ oxo-flow validate my-test-pipeline.oxoflow
 Expected output:
 
 ```
-✓ my-test-pipeline.oxoflow — 1 rules, 0 dependencies
+✓ my-test-pipeline.oxoflow — 1 rule, 0 dependencies
 ```
 
 ---

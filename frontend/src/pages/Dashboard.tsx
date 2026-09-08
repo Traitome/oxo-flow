@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bot, FileCode2, PlayCircle, Sparkles } from 'lucide-react';
 import { api } from '../api/client';
-import type { HealthResponse, SystemInfo, RunItem, Template } from '../api/types';
+import type { HealthResponse, SystemInfo, RunItem, Template, RuntimeMetrics } from '../api/types';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
 import Glossary from '../components/Glossary';
@@ -22,7 +22,13 @@ export default function Dashboard() {
   const { t, lang } = useI18n();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [sys, setSys] = useState<SystemInfo | null>(null);
+  // Host memory comes from /api/metrics: health.resources.memory_used_pct is
+  // a hardcoded 0.0 server-side, so the tile used to read a fake 0%.
+  const [metrics, setMetrics] = useState<RuntimeMetrics | null>(null);
   const [runs, setRuns] = useState<RunItem[]>([]);
+  // Server-side count of matching runs: `runs` is one capped page, so
+  // runs.length is not a total (audit #16).
+  const [runTotal, setRunTotal] = useState<number | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(
@@ -32,7 +38,8 @@ export default function Dashboard() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
     api.system().then(setSys).catch(() => {});
-    api.listRuns().then((r) => setRuns(r.items)).catch(() => {});
+    api.metrics().then(setMetrics).catch(() => {});
+    api.listRuns().then((r) => { setRuns(r.items); setRunTotal(r.total); }).catch(() => {});
     api.listTemplates().then(setTemplates).catch(() => {});
     api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
   }, []);
@@ -153,11 +160,14 @@ export default function Dashboard() {
       {/* Compact system strip — data kept, prominence reduced */}
       <div className="stat-grid" style={{ marginTop: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
         <StatCard value={health?.version || '-'} label={t('dashboard.version')} />
-        <StatCard value={runs.length} label={t('dashboard.totalRuns')} />
+        <StatCard value={runTotal ?? runs.length} label={t('dashboard.totalRuns')} />
         <StatCard value={activeRuns} label={t('dashboard.active')} valueStyle={{ color: activeRuns > 0 ? 'var(--color-warning)' : 'var(--color-success)' }} />
         <StatCard value={sys ? `${sys.os}/${sys.arch}` : '-'} label={t('dashboard.platform')} />
-        {health?.resources && (
-          <StatCard value={`${Math.round(health.resources.memory_used_pct * 100)}%`} label={t('dashboard.memory')} />
+        {metrics && metrics.host.total_memory_mb > 0 && (
+          <StatCard
+            value={`${Math.round((metrics.host.used_memory_mb / metrics.host.total_memory_mb) * 100)}%`}
+            label={t('dashboard.memory')}
+          />
         )}
       </div>
 
