@@ -45,6 +45,13 @@ pub struct WorkflowDag {
     /// directories, multi-tool fan-ins). Collapsing to one producer
     /// silently dropped the other's exact-match edges.
     output_to_node: HashMap<String, Vec<NodeIndex>>,
+
+    /// Consumer rule name → (expanded input path → producer rule names).
+    /// Records which producers satisfy each input group so dead-node
+    /// propagation can apply OR-per-output semantics (issue #340): an
+    /// input is satisfiable when ANY of its producers survives, while
+    /// `depends_on`-only edges never gate a consumer's dataflow at all.
+    input_producers: HashMap<String, HashMap<String, HashSet<String>>>,
 }
 
 impl WorkflowDag {
@@ -78,6 +85,26 @@ impl WorkflowDag {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
         let mut output_to_node: HashMap<String, Vec<NodeIndex>> = HashMap::new();
+        // Consumer name → expanded input → producer names (see
+        // `input_producers`). Populated during edge inference below.
+        let mut input_producers: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
+
+        // Helper closure: record that `consumer_name` reads `input_path`
+        // (config-expanded) from `producer_name`. OR-per-output semantics
+        // in dead-node propagation need this per-input provenance — graph
+        // edges carry no input identity (issue #340).
+        let record_producer =
+            |consumer_name: &str,
+             input_path: &str,
+             producer_name: &str,
+             map: &mut HashMap<String, HashMap<String, HashSet<String>>>| {
+                map.entry(consumer_name.to_string())
+                    .or_default()
+                    .entry(input_path.to_string())
+                    .or_default()
+                    .insert(producer_name.to_string());
+            };
+
         // Strings claimed via `output_pattern` (issue #296). They register
         // producer-side for exact matching, but are EXCLUDED from the
         // template matchers below: a raw pattern like `refs/{build}/bt2.gz`
@@ -169,78 +196,113 @@ impl WorkflowDag {
 
             // String-based inference for one input path. All steps are
             // strictly best-effort: anything unresolvable keeps the legacy
-            // behavior (no edge), never an error.
-            let infer = |input: &str,
-                         graph: &mut DiGraph<DagNode, ()>,
-                         declared_dir: Option<&(String, Option<String>)>| {
-                // Config placeholders are expanded before matching so the
-                // same logical path expressed through different config keys
-                // still connects (see from_rules_with_config).
-                let input = expand(input);
-                // 1. Exact template-level match (legacy behavior, kept first).
-                //    Every producer declaring the same output string links —
-                //    shared-directory outputs must order ALL writers before
-                //    any consumer of the directory.
-                if let Some(producers) = output_to_node.get(&input) {
-                    for &producer_node in producers {
-                        add_edge_dedup(graph, producer_node, consumer_node);
+            // behavior (no edge), never an error. Every producer the
+            // inference connects for this input is recorded in
+            // `input_producers` — dead-node propagation needs the
+            // per-input provenance (OR-per-output semantics, issue #340);
+            // `depends_on` edges below deliberately record nothing.
+            let mut infer =
+                |input: &str,
+                 graph: &mut DiGraph<DagNode, ()>,
+                 declared_dir: Option<&(String, Option<String>)>| {
+                    // Config placeholders are expanded before matching so the
+                    // same logical path expressed through different config keys
+                    // still connects (see from_rules_with_config).
+                    let input = expand(input);
+                    // 1. Exact template-level match (legacy behavior, kept first).
+                    //    Every producer declaring the same output string links —
+                    //    shared-directory outputs must order ALL writers before
+                    //    any consumer of the directory.
+                    if let Some(producers) = output_to_node.get(&input) {
+                        for &producer_node in producers {
+                            add_edge_dedup(graph, producer_node, consumer_node);
+                            record_producer(
+                                &rule.name,
+                                &input,
+                                &graph[producer_node].name,
+                                &mut input_producers,
+                            );
+                        }
                     }
-                }
 
-                if let Some((dir_path, filter)) = declared_dir {
-                    // 2. Declared directory: any output under the directory is
-                    //    a dependency. Multiple producers → all edges
-                    //    (conservative correctness).
-                    let base = dir_path.trim_end_matches('/');
-                    let prefix = format!("{base}/");
-                    let filter_re = filter.as_deref().and_then(glob_pattern_to_regex);
-                    for (output, producer_node) in &producer_outputs {
-                        if let Some(suffix) = output.strip_prefix(&prefix)
-                            && filter_re.as_ref().is_none_or(|re| re.is_match(suffix))
-                        {
-                            add_edge_dedup(graph, *producer_node, consumer_node);
-                        }
-                    }
-                } else if has_glob_chars(&input) {
-                    // 3. Glob input (`mapped/*.bam`): compile the glob and
-                    //    match it against producer outputs. A glob that
-                    //    cannot be compiled (unbalanced bracket, …) keeps the
-                    //    legacy behavior — no edges, no error.
-                    if let Some(glob_re) = glob_pattern_to_regex(&input) {
-                        for (output, producer_node) in &producer_outputs {
-                            if glob_re.is_match(output) {
-                                add_edge_dedup(graph, *producer_node, consumer_node);
-                            }
-                        }
-                    }
-                } else if !input.contains('{') {
-                    // 4. Concrete path (no engine wildcards): try
-                    //    template-level producer outputs first
-                    //    (`variants/{sample}.g.vcf.gz` covers
-                    //    `variants/NA12878.g.vcf.gz`), then the directory
-                    //    heuristic for extension-less inputs.
-                    for (output, matcher) in &template_matchers {
-                        if let Some(re) = matcher
-                            && re.is_match(&input)
-                            && let Some(producers) = output_to_node.get(output)
-                        {
-                            for &producer_node in producers {
-                                add_edge_dedup(graph, producer_node, consumer_node);
-                            }
-                        }
-                    }
-                    if looks_like_directory(&input) {
-                        let base = input.trim_end_matches('/');
+                    if let Some((dir_path, filter)) = declared_dir {
+                        // 2. Declared directory: any output under the directory is
+                        //    a dependency. Multiple producers → all edges
+                        //    (conservative correctness).
+                        let base = dir_path.trim_end_matches('/');
                         let prefix = format!("{base}/");
+                        let filter_re = filter.as_deref().and_then(glob_pattern_to_regex);
                         for (output, producer_node) in &producer_outputs {
-                            if output.starts_with(&prefix) {
+                            if let Some(suffix) = output.strip_prefix(&prefix)
+                                && filter_re.as_ref().is_none_or(|re| re.is_match(suffix))
+                            {
                                 add_edge_dedup(graph, *producer_node, consumer_node);
+                                record_producer(
+                                    &rule.name,
+                                    &input,
+                                    &graph[*producer_node].name,
+                                    &mut input_producers,
+                                );
+                            }
+                        }
+                    } else if has_glob_chars(&input) {
+                        // 3. Glob input (`mapped/*.bam`): compile the glob and
+                        //    match it against producer outputs. A glob that
+                        //    cannot be compiled (unbalanced bracket, …) keeps the
+                        //    legacy behavior — no edges, no error.
+                        if let Some(glob_re) = glob_pattern_to_regex(&input) {
+                            for (output, producer_node) in &producer_outputs {
+                                if glob_re.is_match(output) {
+                                    add_edge_dedup(graph, *producer_node, consumer_node);
+                                    record_producer(
+                                        &rule.name,
+                                        &input,
+                                        &graph[*producer_node].name,
+                                        &mut input_producers,
+                                    );
+                                }
+                            }
+                        }
+                    } else if !input.contains('{') {
+                        // 4. Concrete path (no engine wildcards): try
+                        //    template-level producer outputs first
+                        //    (`variants/{sample}.g.vcf.gz` covers
+                        //    `variants/NA12878.g.vcf.gz`), then the directory
+                        //    heuristic for extension-less inputs.
+                        for (output, matcher) in &template_matchers {
+                            if let Some(re) = matcher
+                                && re.is_match(&input)
+                                && let Some(producers) = output_to_node.get(output)
+                            {
+                                for &producer_node in producers {
+                                    add_edge_dedup(graph, producer_node, consumer_node);
+                                    record_producer(
+                                        &rule.name,
+                                        &input,
+                                        &graph[producer_node].name,
+                                        &mut input_producers,
+                                    );
+                                }
+                            }
+                        }
+                        if looks_like_directory(&input) {
+                            let base = input.trim_end_matches('/');
+                            let prefix = format!("{base}/");
+                            for (output, producer_node) in &producer_outputs {
+                                if output.starts_with(&prefix) {
+                                    add_edge_dedup(graph, *producer_node, consumer_node);
+                                    record_producer(
+                                        &rule.name,
+                                        &input,
+                                        &graph[*producer_node].name,
+                                        &mut input_producers,
+                                    );
+                                }
                             }
                         }
                     }
-                }
-                // If no producer found, the input is assumed to be a source file
-            };
+                    // If no producer found, the input is assumed to be a source file
+                };
 
             for input in rule.input.iter() {
                 infer(input, &mut graph, declared_dir.as_ref());
@@ -275,6 +337,7 @@ impl WorkflowDag {
             graph,
             name_to_node,
             output_to_node,
+            input_producers,
         };
 
         // Step 3: Verify it's actually a DAG (no cycles)
@@ -514,10 +577,13 @@ impl WorkflowDag {
             }
         }
 
-        // Dead-node propagation to a fixpoint: a node whose parent is
-        // pruned cannot receive its input, so it is pruned as well (the
-        // executor fails such a rule on the missing file — surfacing that
-        // at plan time is the point of the instantiated-DAG closure).
+        // Dead-node propagation to a fixpoint under OR-per-output
+        // semantics (issue #340): a node is un-runnable only when one of
+        // its recorded input groups has NO surviving producer — the
+        // executor would fail it on the missing file. Nodes without
+        // recorded groups (source-file inputs) never propagate death,
+        // and `depends_on` records nothing: a pruned depends_on parent
+        // does not gate the consumer's dataflow.
         let mut pruned: HashSet<String> = skip.clone();
         loop {
             let mut grew = false;
@@ -526,12 +592,13 @@ impl WorkflowDag {
                 if pruned.contains(name) {
                     continue;
                 }
-                let has_pruned_parent = self
-                    .graph
-                    .neighbors_directed(idx, petgraph::Direction::Incoming)
-                    .any(|dep| pruned.contains(&self.graph[dep].name));
-                if has_pruned_parent && pruned.insert(name.clone()) {
-                    grew = true;
+                if let Some(groups) = self.input_producers.get(name) {
+                    let is_unrunnable = groups.values().any(|producers| {
+                        !producers.is_empty() && producers.iter().all(|p| pruned.contains(p))
+                    });
+                    if is_unrunnable && pruned.insert(name.clone()) {
+                        grew = true;
+                    }
                 }
             }
             if !grew {
@@ -2154,6 +2221,18 @@ mod tests {
         }
     }
 
+    fn make_rule_with_depends_on(
+        name: &str,
+        inputs: Vec<&str>,
+        outputs: Vec<&str>,
+        depends_on: Vec<&str>,
+    ) -> Rule {
+        Rule {
+            depends_on: depends_on.into_iter().map(String::from).collect(),
+            ..make_rule(name, inputs, outputs)
+        }
+    }
+
     #[test]
     fn linear_dag() {
         let rules = vec![
@@ -2381,6 +2460,69 @@ mod tests {
         assert!(order.contains(&"trim_hisat".to_string()));
         assert!(order.contains(&"raw".to_string()));
         assert!(!order.contains(&"trim_star".to_string()));
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_depends_on_union_does_not_kill_consumer() {
+        // Issue #340: depends_on is a conservative union of mutually
+        // exclusive variants (eager's `malt` lists all four
+        // samtools_filter_* rules plus the optional complexity filter while
+        // reading the unmapped FASTQs through expand_inputs). With one
+        // mapper configured, the pruned variants are depends_on-only
+        // parents — they never gate malt's dataflow, so malt must survive.
+        let rules = vec![
+            make_rule("bwa", vec!["reads"], vec!["unmapped.fq.gz"]),
+            make_rule("bwa_variant", vec!["reads"], vec!["unmapped.fq.gz"]),
+            make_rule("complexity", vec!["unmapped.fq.gz"], vec!["clean.fq.gz"]),
+            make_rule_with_depends_on(
+                "malt",
+                vec!["unmapped.fq.gz"],
+                vec!["malt.log"],
+                vec!["bwa", "bwa_variant", "complexity"],
+            ),
+        ];
+        // bwa is the configured mapper; the other three parents are
+        // when-gated false under that configuration.
+        let skip =
+            std::collections::HashSet::from(["bwa_variant".to_string(), "complexity".to_string()]);
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        // A depends_on-only parent being pruned must not kill the consumer.
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["malt"], &skip)
+            .unwrap();
+        assert!(
+            skipped_targets.is_empty(),
+            "malt is reachable — its producer (bwa) is alive; got {skipped_targets:?}"
+        );
+        assert!(order.contains(&"malt".to_string()), "{order:?}");
+        assert!(order.contains(&"bwa".to_string()), "{order:?}");
+        assert!(!order.contains(&"bwa_variant".to_string()), "{order:?}");
+        assert!(!order.contains(&"complexity".to_string()), "{order:?}");
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_multi_producer_or_semantics() {
+        // Issue #340 (samtools_filter_bwaaln shape): two rules declare the
+        // same output; the consumer's input is satisfied by ANY alive
+        // producer. Pruning one must not dead-propagate through the shared
+        // output when the other still runs.
+        let rules = vec![
+            make_rule("bwa_aln", vec!["reads"], vec!["mapped.bam"]),
+            make_rule("indexinputbam", vec!["bam"], vec!["mapped.bam"]),
+            make_rule("filter", vec!["mapped.bam"], vec!["filtered.bam"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let skip = std::collections::HashSet::from(["indexinputbam".to_string()]);
+        let (order, skipped_targets) = dag
+            .execution_order_for_targets_skipping(&["filter"], &skip)
+            .unwrap();
+        assert!(
+            skipped_targets.is_empty(),
+            "filter's input has a live producer (bwa_aln); got {skipped_targets:?}"
+        );
+        assert!(order.contains(&"bwa_aln".to_string()), "{order:?}");
+        assert!(order.contains(&"filter".to_string()), "{order:?}");
     }
 
     #[test]
