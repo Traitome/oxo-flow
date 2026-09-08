@@ -4468,7 +4468,14 @@
 <p>Domain-specific codes (all 400) include <code>PARSE_ERROR</code>, <code>VALIDATE_ERROR</code>, <code>PREPARE_ERROR</code>, <code>DAG_ERROR</code>, <code>LINT_ERROR</code>, <code>STATS_ERROR</code>, <code>DIFF_ERROR</code>, <code>EXPORT_ERROR</code>, <code>SEARCH_ERROR</code>, <code>RUN_ERROR</code>, <code>RETRY_ERROR</code>, <code>DATA_ERROR</code>, <code>REF_ERROR</code>, <code>PLUGIN_ERROR</code>, <code>AI_TRANSLATE_ERROR</code>, <code>CHAT_ERROR</code>, <code>INVALID_URL</code>.</p>
 <hr />
 <h2 id="list-responses">List Responses<a class="headerlink" href="#list-responses" title="Permanent link">#</a></h2>
-<p>List endpoints return bare JSON arrays. There is currently no pagination envelope: <code>GET /api/pipelines</code> returns at most 100 items (ordered by last update), and <code>GET /api/templates</code> returns all templates.</p>
+<p>List endpoints do not share a single uniform envelope:</p>
+<ul>
+<li><code>GET /api/runs</code> uses cursor pagination — <code>{items, next_cursor, total}</code>,
+  where <code>next_cursor: null</code> means the last page.</li>
+<li>Most other list endpoints return bare JSON arrays capped at 100 items:
+  <code>GET /api/pipelines</code> returns at most 100 items (ordered by last update),
+  and <code>GET /api/templates</code> returns all templates.</li>
+</ul>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">[{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}]</span>
 </span></code></pre></div>
 <hr />

@@ -3963,7 +3963,7 @@
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"1.0.0"</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Quality control for paired-end sequencing data"</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Your Name"</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw_data/{sample}_R1.fastq.gz"</span><span class="w">   </span><span class="c1"># ← plain paths only; {config.*} is not expanded here</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw_data/{sample}_R1.fastq.gz"</span><span class="w">   </span><span class="c1"># ← {config.*} is expanded here too: "{config.samples_dir}/{sample}_R1.fastq.gz" works</span>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">[config]</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">samples_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw_data"</span>
@@ -4184,6 +4184,16 @@ sequence and quality lines the same length — or FastQC/fastp abort with a
 </span><span id="__span-7-60"><a id="__codelineno-7-60" name="__codelineno-7-60" href="#__codelineno-7-60"></a>To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 </span></code></pre></div>
 <p>The dry-run has expanded the <code>{sample}</code> wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (<code>_auto-discovered_sample1</code>, <code>_auto-discovered_sample2</code>), for 8 tasks in total. Inputs are not checked for existence in dry-run mode.</p>
+<div class="admonition warning">
+<p class="admonition-title"><code>validate</code> warns; it does not gate</p>
+<p>The <code>✓ qc-pipeline.oxoflow — 4 rules, 3 dependencies</code> line only reports
+that the workflow parsed — <code>validate</code> exits <code>0</code> even when it warns. A
+missing input file, a <code>sample_pattern</code> that matches no files, or a
+<code>{sample}</code> wildcard with no sample source declared (no <code>sample_pattern</code>,
+<code>[[sample_groups]]</code>, or <code>[[pairs]]</code>) — all appear as warnings under that
+line. Read them: <code>run</code> is what fails — it exits non-zero when a rule's
+input is absent or its wildcards cannot be bound.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Aggregation rules are expanded per sample too</p>
 <p><code>multiqc</code> became two tasks, but both aggregate the same <code>results</code> directory and write the same <code>results/multiqc/multiqc_report.html</code> — the second run overwrites the first. This duplication is harmless here (MultiQC re-scans the whole directory), but for truly single-shot aggregation steps you may want to run them separately or via <code>depends_on</code> without a sample wildcard in the inputs.</p>

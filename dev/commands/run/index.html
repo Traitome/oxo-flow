@@ -4731,7 +4731,7 @@
 <td><code>--ai-max-retries</code></td>
 <td>—</td>
 <td>—</td>
-<td>Maximum AI retries (overrides <code>[ai]</code> config)</td>
+<td>Maximum AI attempts for recovery when a call fails (default: 1; only a failed call is retried)</td>
 </tr>
 <tr>
 <td><code>--samples</code></td>
@@ -5189,7 +5189,8 @@ background process and returns to the shell immediately:</p>
   <code>rule_completed</code>, <code>workflow_completed</code>) — the whole run is replayable
   from the single file (issue #194 B1/B3).</li>
 <li>The child's pid is written to <code>.oxo-flow/background.pid</code> in the workdir
-  (also shown in the summary).</li>
+  (also shown in the summary) while the run is in flight; the file is removed
+  when the child exits, so a stale pid never survives a finished run.</li>
 <li>The child gets its own process group, so it survives terminal close and
   Ctrl-C at the shell — it keeps running until it finishes or is killed.</li>
 <li>The foreground exits <strong>0</strong> once the child is spawned; it does not wait.
@@ -5211,12 +5212,14 @@ background process and returns to the shell immediately:</p>
 <code>oxo-flow status .oxo-flow/checkpoint.json</code> (or <code>status --timing</code>), read
 the run log, and check the report snapshots in <code>.oxo-flow/reports/</code>. Stop
 a background run with <code>kill &lt;pid&gt;</code> (Unix) or <code>taskkill /PID &lt;pid&gt;</code> —
-the pid is in the summary line and in <code>.oxo-flow/background.pid</code>.</p>
+the pid is in the summary line and (while the run is in flight) in
+<code>.oxo-flow/background.pid</code>.</p>
 <p>Notes:</p>
 <ul>
-<li>Combined with the global <code>--json</code>, the foreground still prints its
-  one-line summary to <strong>stderr</strong> and exits 0; stdout stays empty (the JSON
-  run summary belongs to the actual run, which happens in the child).</li>
+<li>The global <code>--json</code> is <strong>rejected</strong> with <code>--background</code>: the foreground
+  only launches the detached child, so there is no run summary to emit.
+  Drop <code>--json</code> or run in the foreground to get the machine-readable
+  summary.</li>
 <li>Bundle runs need an explicit <code>--workdir</code> (the bundle's extracted
   directory is created per-process, so it cannot be predicted from the
   foreground invocation) and <code>--yes</code> — a detached child cannot prompt.</li>

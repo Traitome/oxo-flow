@@ -3975,8 +3975,10 @@ upload objects programmatically through the
 <a href="#storage-backend-api"><code>StorageBackend</code></a> trait.</p>
 <h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">#</a></h3>
 <p>Both backends are feature-gated and are <strong>not</strong> included by default.
-Enable them at build time:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--features<span class="w"> </span><span class="s2">"s3-storage,gcs-storage"</span>
+Enable them at build time — the features live on the <code>oxo-flow-cli</code> crate
+(the workspace root package defines none, so <code>--features</code> must be combined
+with <code>-p oxo-flow-cli</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>-p<span class="w"> </span>oxo-flow-cli<span class="w"> </span>--features<span class="w"> </span><span class="s2">"s3-storage,gcs-storage"</span>
 </span></code></pre></div>
 <h2 id="aws-s3">AWS S3<a class="headerlink" href="#aws-s3" title="Permanent link">#</a></h2>
 <p>The S3 backend uses the official <code>aws-sdk-s3</code> Rust SDK. Credentials are

@@ -4128,7 +4128,7 @@
 <h2 id="combining-groups-and-pairs">Combining Groups and Pairs<a class="headerlink" href="#combining-groups-and-pairs" title="Permanent link">#</a></h2>
 <p>You can use both <code>[[sample_groups]]</code> and <code>[[pairs]]</code> in the same workflow.  They expand independently: group-wildcard rules are expanded over samples, and pair-wildcard rules are expanded over pairs.</p>
 <h2 id="full-example">Full Example<a class="headerlink" href="#full-example" title="Permanent link">#</a></h2>
-<p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow"><code>examples/gallery/12_cohort_analysis.oxoflow</code></a> for a complete population genomics pipeline including QC, alignment, deduplication, variant calling, and multi-QC aggregation.</p>
+<p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow"><code>examples/gallery/12_cohort_analysis.oxoflow</code></a> for a complete population genomics pipeline including QC, alignment, deduplication, per-sample GVCF calling, cohort joint genotyping, and multi-QC aggregation.</p>
 <hr />
 <h2 id="loading-groups-from-external-file">Loading Groups from External File<a class="headerlink" href="#loading-groups-from-external-file" title="Permanent link">#</a></h2>
 <p>For large cohorts with many groups and samples, use <code>sample_groups_file</code> in <code>[workflow]</code> instead of inline <code>[[sample_groups]]</code>:</p>

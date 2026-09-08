@@ -3955,14 +3955,11 @@
 <td>—</td>
 <td>Disable colored output</td>
 </tr>
-<tr>
-<td><code>--json</code></td>
-<td>—</td>
-<td>—</td>
-<td>Output machine-readable JSON to stdout</td>
-</tr>
 </tbody>
 </table>
+<blockquote>
+<p>The global <code>--json</code> flag is <strong>not supported</strong> by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: <code>run</code>, <code>dry-run</code>, <code>validate</code>, <code>lint</code>, <code>test</code>, <code>status</code>, <code>batch</code>, <code>info</code>, <code>schema</code>, <code>license</code>, <code>ai</code>, and <code>provenance verify</code>.</p>
+</blockquote>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
 <h3 id="create-a-new-project">Create a new project<a class="headerlink" href="#create-a-new-project" title="Permanent link">#</a></h3>
@@ -4005,7 +4002,11 @@
 </span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"hello_world"</span>
 </span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"A minimal rule that writes a greeting"</span>
 </span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/{config.sample_name}_output.txt"</span><span class="p">]</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"echo '{config.greeting}' &gt; {output[0]}"</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="c1"># The greeting is passed via the environment, not spliced into the shell —</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="c1"># an apostrophe or quote in the config value cannot break the command</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="c1"># (`--arg greeting=...` overrides the default).</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="n">envvars</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">GREETING</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"{config.greeting}"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"echo </span><span class="se">\"</span><span class="s2">$GREETING</span><span class="se">\"</span><span class="s2"> &gt; {output[0]}"</span>
 </span></code></pre></div>
 <p><strong><code>envs/example.yaml</code></strong> — Starter conda environment specification.</p>
 <p><strong><code>scripts/example.sh</code></strong> — Starter helper script.</p>

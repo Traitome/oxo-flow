@@ -4005,7 +4005,8 @@
 optional combine step:</p>
 <ol>
 <li><strong>Split</strong>: Partition work by a variable (<code>by</code>) with explicit <code>values</code>, a
-   config reference (<code>values_from</code>), a chunk count (<code>n</code>), or a <code>glob</code></li>
+   config reference (<code>values_from</code>), an instance count (<code>n</code>, which yields the
+   labels <code>"0"</code>…<code>"n-1"</code> — it does not slice the input data), or a <code>glob</code></li>
 <li><strong>Map</strong>: Run the <code>map</code> command once per split value, in parallel</li>
 <li><strong>Combine</strong>: Merge chunk outputs with an explicit <code>shell</code> command or
    automatic aggregation (<code>aggregate = true</code>, <code>method = "concat" | "json_merge"</code>)</li>
@@ -4053,7 +4054,7 @@ expansion for readability.</p>
 <ul>
 <li><strong>Per-chromosome variant calling</strong> — scatter GVCF calling by chromosome, merge with <code>GatherVcfs</code></li>
 <li><strong>Independent per-chunk QC</strong> — flagstat/coverage metrics per chromosome, no merge needed</li>
-<li><strong>Large file processing</strong> — split big inputs into chunks, process in parallel, concatenate results</li>
+<li><strong>Fan-out over a declared domain</strong> — repeat a command once per value (chromosome, sample, shard file) and concatenate the results. The split values are labels: the engine does not slice the input for you, so the <code>map</code> command (or an input path containing <code>{split_var}</code>) must select each instance's slice</li>
 </ul>
 <h2 id="whats-next">What's Next?<a class="headerlink" href="#whats-next" title="Permanent link">#</a></h2>
 <p>See the <a href="../../reference/workflow-format/#transform-unified-scatter-gather-operator">Workflow Format reference</a> for the full <code>transform</code> operator specification, or revisit <a href="../scatter-gather/">Scatter-Gather</a> for the explicit multi-rule pattern.</p>

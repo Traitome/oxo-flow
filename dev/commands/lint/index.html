@@ -3966,15 +3966,18 @@ W025 flags the deprecated rule-level <code>threads = N</code> / <code>memory = "
 fields (removed in v0.17.2 in favor of <code>[rules.resources]</code>) so old
 workflows surface the migration instead of silently keeping their old
 settings — see <a href="../../reference/workflow-format/#resources-extended">Workflow Format: Rule resources</a>.
-W031 flags a consumer rule that expands the full wildcard output of a
-<code>when</code>-gated producer without a <code>when</code> gate of its own: when the
-producer's gate is off, its files never appear and the consumer's inputs
-cannot be resolved at plan time (dry-run <code>input ✗</code>). The repair is
-either a matching <code>when</code> gate on the consumer or splitting it into
-<code>when</code>-gated variants (the <code>multiqc</code>/<code>multiqc_pseudo</code> idiom). Consumers
-that declare their tolerance for a missing producer are not flagged:
-<code>optional = true</code> / <code>"any"</code> rules, <code>input_groups</code> disk-discovery
-fallbacks, and consumers that already carry any <code>when</code> gate.
+W031 flags a consumer rule that reads the output of a <code>when</code>-gated
+producer without a <code>when</code> gate of its own: when the producer's gate is
+off, its files never appear and the consumer's inputs cannot be resolved
+at plan time (dry-run <code>input ✗</code>) or the run fails outright. Wildcard
+templates match after canonicalizing every <code>{...}</code> placeholder, and
+fully literal paths match literally — a literal input of a gated
+producer is the same hazard. The repair is either a matching <code>when</code> gate
+on the consumer or splitting it into <code>when</code>-gated variants (the
+<code>multiqc</code>/<code>multiqc_pseudo</code> idiom). Consumers that declare their
+tolerance for a missing producer are not flagged: <code>optional = true</code> /
+<code>"any"</code> rules, <code>input_groups</code> disk-discovery fallbacks, and consumers
+that already carry any <code>when</code> gate.
 W032 flags a <code>[config]</code> key whose <em>name</em> looks like a secret
 (<code>token</code>, <code>secret</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
 <code>access_key</code>, <code>private_key</code>, <code>ssh_key</code> — matched at word/segment

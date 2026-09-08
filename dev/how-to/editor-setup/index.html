@@ -1601,10 +1601,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#workspace-zero-setup-ships-with-the-repo" class="md-nav__link">
+  <a href="#workspace-per-repository" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Workspace (zero setup, ships with the repo)
+        Workspace (per repository)
       
     </span>
   </a>
@@ -3807,10 +3807,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#workspace-zero-setup-ships-with-the-repo" class="md-nav__link">
+  <a href="#workspace-per-repository" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Workspace (zero setup, ships with the repo)
+        Workspace (per repository)
       
     </span>
   </a>
@@ -3969,17 +3969,18 @@ declarative workflow format. Most editors do not recognize the <code>.oxoflow</c
 extension yet, so configure one small file-type association and you get full
 TOML support: syntax highlighting, bracket matching, folding, and formatting.</p>
 <h2 id="vs-code">VS Code<a class="headerlink" href="#vs-code" title="Permanent link">#</a></h2>
-<h3 id="workspace-zero-setup-ships-with-the-repo">Workspace (zero setup, ships with the repo)<a class="headerlink" href="#workspace-zero-setup-ships-with-the-repo" title="Permanent link">#</a></h3>
-<p>The oxo-flow repository and every
-<a href="https://github.com/oxo-flow-community">oxo-flow-community</a> workflow repository
-ships a committed <code>.vscode/settings.json</code>:</p>
+<h3 id="workspace-per-repository">Workspace (per repository)<a class="headerlink" href="#workspace-per-repository" title="Permanent link">#</a></h3>
+<p>The <a href="https://github.com/oxo-flow-community">oxo-flow-community</a> workflow
+repositories ship a committed <code>.vscode/settings.json</code> with this content. In
+the oxo-flow repository itself <code>.vscode/</code> is git-ignored, so create the file
+in the folder you work in:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">"files.associations"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">"*.oxoflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"toml"</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Open the repository folder in VS Code and <code>.oxoflow</code> files highlight as TOML
+<p>Open the folder in VS Code and <code>.oxoflow</code> files highlight as TOML
 immediately — nothing to install.</p>
 <h3 id="user-level-all-folders-all-projects">User-level (all folders, all projects)<a class="headerlink" href="#user-level-all-folders-all-projects" title="Permanent link">#</a></h3>
 <p>To apply the association everywhere, open the command palette

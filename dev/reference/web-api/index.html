@@ -5556,9 +5556,12 @@ Chart data built from real sources: <code>files</code> maps the run's file tree 
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>POST /api/runs/{id}/retry
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>Content-Type: application/json
 </span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>
-</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a>{"from_rule": "fastqc", "skip_succeeded": true}
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a>{"skip_succeeded": true}
 </span></code></pre></div>
-The retry <strong>really executes</strong>: the returned <code>new_run_id</code> is a real run in
+<code>from_rule</code> is <strong>not supported</strong>: the engine has no "re-run from rule X
+downstream" mode (<code>--target</code> selects the <em>upstream</em> closure), so the field is
+rejected with <code>400 UNSUPPORTED_FIELD</code> instead of being silently ignored.</p>
+<p>The retry <strong>really executes</strong>: the returned <code>new_run_id</code> is a real run in
 the database (same workdir, same owner), spawned with <code>--resume-failed
 --rerun</code> so the failed rules re-execute despite their existing outputs and
 the checkpoint's cascade invalidation re-runs their downstream dependents.
@@ -5571,7 +5574,7 @@ Cancels a running/pending run.</p>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>POST /api/runs/{id}/pause
 </span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>POST /api/runs/{id}/resume
 </span></code></pre></div>
-Pauses a running run (<code>{"reason": "..."}</code> optional) and resumes it (<code>{"from_rule": "..."}</code> optional).</p>
+Pauses a running run (<code>{"reason": "..."}</code> optional) and resumes it. A <code>from_rule</code> field is rejected with <code>400 UNSUPPORTED_FIELD</code> (see Smart Retry above).</p>
 <h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>GET /api/runs/{id}/logs
 </span></code></pre></div>
