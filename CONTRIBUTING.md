@@ -10,7 +10,7 @@ cargo build --workspace
 
 ## CI Checks (run before PR)
 
-The canonical gate is `make ci` (fmt + clippy + build + test + audit):
+The canonical gate is `make ci` (fmt + clippy + build + test + schema-drift + version-check + audit + frontend-lint):
 
 ```bash
 make ci

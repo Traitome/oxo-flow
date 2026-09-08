@@ -33,7 +33,7 @@ WORKDIR /app
 # on every image build (read from [workspace.package] in Cargo.toml), so the
 # published label can never drift from the tag. This default is only the
 # local-dev fallback: bump it together with the workspace version when the
-# version is bumped (`make docker-version` fails on drift).
+# version is bumped (`make version-check` fails on drift).
 ARG VERSION=0.17.2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
