@@ -3075,16 +3075,34 @@ mod tests {
         let wrapped = resolver
             .wrap_command("echo test", &spec, None, std::path::Path::new("."))
             .unwrap();
-        // Must use the mamba binary, not the conda fallback (which also
-        // renders "run -n").
+        // Deterministic on any host: the resolver must pick the MAMBA backend
+        // for a `mamba = ...` spec. Which binary that backend ends up using
+        // is host-dependent by design (`mamba` → `micromamba` → `conda`
+        // fallback), so assert against the detected binary instead of a
+        // hardcoded "mamba" — the old `contains("run -n")` was satisfied by
+        // the conda fallback too (audit finding).
+        let binary = MambaBackend::new().binary.clone();
         assert!(
-            wrapped.contains("mamba run -n"),
-            "expected the mamba wrapper: {wrapped}"
+            wrapped.contains(&format!("{binary} run -n")),
+            "expected the mamba wrapper (binary {binary}): {wrapped}"
         );
         let cache_key = resolver.cache_key(&spec);
         assert!(
-            cache_key.starts_with("mamba:"),
-            "mamba should take priority over conda: {cache_key}"
+            cache_key.starts_with(&format!("mamba:{binary}:")),
+            "the mamba backend must win over conda: {cache_key}"
+        );
+
+        // And the rendering itself prefers mamba when that binary exists,
+        // independent of what this host has installed.
+        let stubbed = MambaBackend {
+            binary: "mamba".to_string(),
+        };
+        let rendered = stubbed
+            .wrap_command("echo test", "envs/qc.yaml", None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            rendered.contains("mamba run -n"),
+            "a mamba binary must render a mamba wrapper: {rendered}"
         );
     }
 

@@ -439,7 +439,11 @@ jobs:
           echo "$OUT"
 
           echo "::warning::test suite failed — re-running FAILED tests once (flake gate, issue #249)"
-          FAILED_LINES=$(echo "$OUT" | grep -E "^test .* FAILED" || true)
+          # `^test .* FAILED` also matches the per-binary summary line
+          # (`test result: FAILED. N passed; ...`), which is not a test name —
+          # without the second filter every failure would look unparseable and
+          # the flake retry would never run.
+          FAILED_LINES=$(echo "$OUT" | grep -E "^test .* FAILED" | grep -vE "^test result:" || true)
           if [ -z "$FAILED_LINES" ]; then
             echo "could not extract failed test names (compile error or format change) — failing the job"
             exit 1
