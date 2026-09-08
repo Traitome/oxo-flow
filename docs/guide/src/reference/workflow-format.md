@@ -2273,10 +2273,30 @@ shell = "gatk GatherVcfs $(for f in {chunks}; do echo \"-I $f \"; done) -O {outp
 | `by` | String | **Required**. Variable name for splitting (e.g., `"chr"`, `"sample"`) |
 | `values` | Array | Direct list of split values |
 | `values_from` | String | Reference to config variable (e.g., `"config.chromosomes"`) |
-| `n` | String | Number of chunks (generates indices 0, 1, ..., n-1) |
+| `n` | String | Number of map instances — the split values are the labels `"0"`, `"1"`, ..., `"n-1"`. It does **not** partition the input data |
 | `glob` | String | Glob pattern to find split values from files |
 
 Priority: `values` → `values_from` → `n` → `glob`
+
+!!! warning "Split values are labels, not data partitions"
+
+    The engine never reads, slices, or chunks the declared input. It repeats
+    the rule once per split value and substitutes that value wherever
+    `{split_var}` appears. With `n = "3"` and `input = ["in.txt"]`, the map
+    command runs three times with the **same** input:
+
+    ```text
+    process in.txt > .oxo-flow/chunks/chunk/0.txt
+    process in.txt > .oxo-flow/chunks/chunk/1.txt
+    process in.txt > .oxo-flow/chunks/chunk/2.txt
+    ```
+
+    Dividing the work is the map command's job: it must use the split value
+    to select its own slice (e.g. `-L {chr}` for per-chromosome calling), or
+    the rule's `input` must *be* the split value (`input = ["{chr}"]`), so
+    each instance reads its own file. The engine never slices a file, and a
+    split variable embedded in a longer path (`shard_{chr}.txt`) is left
+    literal. `n = "3"` alone does neither.
 
 ### Combine Configuration
 

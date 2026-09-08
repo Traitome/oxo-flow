@@ -97,8 +97,14 @@ pub fn cache_entry_key(
 }
 
 /// Restore a cache entry's outputs into the workdir. Returns `Ok(true)`
-/// when the entry existed and its outputs were restored, `Ok(false)` when
-/// no complete entry is present (no `entry.json` marker).
+/// when the entry existed and every declared output was restored,
+/// `Ok(false)` when no complete entry is present (no `entry.json` marker)
+/// or the entry does not hold one of the declared outputs.
+///
+/// Completeness is checked BEFORE anything is copied: a restore marks the
+/// rule as succeeded, so an entry missing a declared output (populate skips
+/// outputs that did not exist) must fall back to executing the rule — and
+/// must not leave a half-restored workdir behind while it does.
 ///
 /// Output files are copied with the same atomic pattern as cross-filesystem
 /// moves (`copy_tree_atomic`), so a crash mid-restore leaves no truncated
@@ -113,6 +119,7 @@ pub async fn restore_outputs(
     if !entry_dir.join("entry.json").exists() {
         return Ok(false);
     }
+    let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();
     for output in &rule.output {
         let expanded = super::checkpoint::expand_config_in_path(output, wildcard_values);
         if crate::wildcard::has_wildcards(&expanded) {
@@ -120,9 +127,16 @@ pub async fn restore_outputs(
         }
         let src = entry_dir.join(&expanded);
         if !src.exists() {
-            continue;
+            tracing::debug!(
+                rule = %rule.name,
+                output = %expanded,
+                "content cache entry is missing a declared output — not restoring"
+            );
+            return Ok(false);
         }
-        let dest = workdir.join(&expanded);
+        copies.push((src, workdir.join(&expanded)));
+    }
+    for (src, dest) in copies {
         if let Some(parent) = dest.parent()
             && !parent.as_os_str().is_empty()
             && !parent.exists()
@@ -346,6 +360,37 @@ mod tests {
         assert_eq!(
             std::fs::read(workdir.join("out/result.txt")).unwrap(),
             b"result-bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_entry_missing_a_declared_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workdir = dir.path();
+        let rule = Rule {
+            name: "cacheable".to_string(),
+            cache_key: Some("k".to_string()),
+            output: vec!["out/a.txt".to_string(), "out/b.txt".to_string()].into(),
+            ..Default::default()
+        };
+        let entry = cache_entry_dir(workdir, &rule.name, "key");
+        // A marker-bearing entry that holds only ONE of the two declared
+        // outputs (populate skips outputs that did not exist).
+        std::fs::create_dir_all(entry.join("out")).unwrap();
+        std::fs::write(entry.join("out/a.txt"), b"a").unwrap();
+        std::fs::write(entry.join("entry.json"), b"{}").unwrap();
+
+        assert!(
+            !restore_outputs(&rule, workdir, &HashMap::new(), &entry)
+                .await
+                .expect("restore"),
+            "a partial entry must not claim a restore"
+        );
+        // Completeness is checked before any copy, so the present output
+        // must not have been half-restored either.
+        assert!(
+            !workdir.join("out/a.txt").exists(),
+            "a refused restore must not copy part of the entry"
         );
     }
 

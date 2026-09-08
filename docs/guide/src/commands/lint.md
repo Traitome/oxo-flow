@@ -74,15 +74,18 @@ W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
 fields (removed in v0.17.2 in favor of `[rules.resources]`) so old
 workflows surface the migration instead of silently keeping their old
 settings — see [Workflow Format: Rule resources](../reference/workflow-format.md#resources-extended).
-W031 flags a consumer rule that expands the full wildcard output of a
-`when`-gated producer without a `when` gate of its own: when the
-producer's gate is off, its files never appear and the consumer's inputs
-cannot be resolved at plan time (dry-run `input ✗`). The repair is
-either a matching `when` gate on the consumer or splitting it into
-`when`-gated variants (the `multiqc`/`multiqc_pseudo` idiom). Consumers
-that declare their tolerance for a missing producer are not flagged:
-`optional = true` / `"any"` rules, `input_groups` disk-discovery
-fallbacks, and consumers that already carry any `when` gate.
+W031 flags a consumer rule that reads the output of a `when`-gated
+producer without a `when` gate of its own: when the producer's gate is
+off, its files never appear and the consumer's inputs cannot be resolved
+at plan time (dry-run `input ✗`) or the run fails outright. Wildcard
+templates match after canonicalizing every `{...}` placeholder, and
+fully literal paths match literally — a literal input of a gated
+producer is the same hazard. The repair is either a matching `when` gate
+on the consumer or splitting it into `when`-gated variants (the
+`multiqc`/`multiqc_pseudo` idiom). Consumers that declare their
+tolerance for a missing producer are not flagged: `optional = true` /
+`"any"` rules, `input_groups` disk-discovery fallbacks, and consumers
+that already carry any `when` gate.
 W032 flags a `[config]` key whose *name* looks like a secret
 (`token`, `secret`, `password`, `credential`, `api_key`,
 `access_key`, `private_key`, `ssh_key` — matched at word/segment

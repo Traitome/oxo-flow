@@ -173,6 +173,23 @@ pub async fn share_pipeline(
         ));
     }
 
+    // A share link is an anonymous read-only landing page: the token IS the
+    // authorization, so "anyone holding the link" is the only access mode
+    // this endpoint can honour. Storing "private"/"workspace" would persist
+    // a restriction nothing enforces, so unsupported values are rejected
+    // instead of silently ignored.
+    if !matches!(body.visibility.as_str(), "link" | "public") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "UNSUPPORTED_VISIBILITY",
+            format!(
+                "visibility must be \"link\" (alias \"public\") — a share token grants \
+                 anonymous read access to anyone holding it; got '{}'",
+                body.visibility
+            ),
+        ));
+    }
+
     let token = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
     let expires_at = body

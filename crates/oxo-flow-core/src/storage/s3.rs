@@ -351,9 +351,32 @@ mod tests {
         assert_eq!(s3.name(), "s3");
     }
 
-    #[test]
-    fn with_client_accepts_custom_client() {
-        let _ = S3Storage::new();
+    #[tokio::test]
+    async fn with_client_uses_the_supplied_client() {
+        // The test asserted nothing before. A client pointed at a closed
+        // local port makes the difference observable: any request must fail
+        // with a transport error, proving `with_client` really uses the
+        // supplied client (the default one would try real AWS). No external
+        // network is touched.
+        let conf = aws_sdk_s3::config::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                "test-key",
+                "test-secret",
+                None,
+                None,
+                "test",
+            ))
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .endpoint_url("http://127.0.0.1:1")
+            .build();
+        let backend = S3Storage::with_client(aws_sdk_s3::Client::from_conf(conf));
+        assert_eq!(backend.name(), "s3");
+        let sp = StoragePath::parse("s3://bucket/key");
+        assert!(
+            backend.exists(&sp).await.is_err(),
+            "an unreachable endpoint must surface a transport error"
+        );
     }
 
     // ── path parsing errors ───────────────────────────────────────────────

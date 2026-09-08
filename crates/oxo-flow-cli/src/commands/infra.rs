@@ -6,6 +6,26 @@ use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction};
 
+/// Resolve a rule's relative manifest paths against the workflow's
+/// directory — the engine's contract for `pixi = "envs/pixi.toml"`. Absolute
+/// paths are left untouched; specs without a pixi declaration are returned
+/// as-is.
+fn resolve_relative_manifests(
+    spec: &oxo_flow_core::rule::EnvironmentSpec,
+    workflow_dir: &std::path::Path,
+) -> oxo_flow_core::rule::EnvironmentSpec {
+    let Some(pixi) = spec.pixi.as_deref() else {
+        return spec.clone();
+    };
+    let path = std::path::Path::new(pixi);
+    if path.is_absolute() {
+        return spec.clone();
+    }
+    let mut resolved = spec.clone();
+    resolved.pixi = Some(workflow_dir.join(path).to_string_lossy().into_owned());
+    resolved
+}
+
 pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
@@ -50,9 +70,18 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     let config = WorkflowConfig::from_file(&wf_path)
                         .with_context(|| format!("failed to parse {}", wf_path.display()))?;
 
+                    // A rule's `pixi = "envs/pixi.toml"` is resolved relative
+                    // to the WORKFLOW (that is what the engine's error message
+                    // promises), never to wherever the command happens to run.
+                    let workflow_dir = wf_path
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or_else(|| std::path::Path::new("."));
+
                     let mut all_ok = true;
                     for rule in &config.rules {
-                        match resolver.validate_spec(&rule.environment) {
+                        let spec = resolve_relative_manifests(&rule.environment, workflow_dir);
+                        match resolver.validate_spec(&spec) {
                             Ok(()) => {
                                 eprintln!(
                                     "  {} {} ({})",

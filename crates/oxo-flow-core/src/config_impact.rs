@@ -28,6 +28,17 @@ use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
+
+/// `{config.<key>}` — execution-time interpolation channels
+/// (shell/script/IO/…). Compiled once: the scan runs per rule and per
+/// reference fingerprint.
+static CONFIG_BRACED_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\{config\.([^}]+)\}").expect("valid braced regex"));
+
+/// Bare `config.<key>` — `when` conditions (evaluator syntax, no braces).
+static CONFIG_BARE_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"config\.([A-Za-z0-9_.-]+)").expect("valid bare regex"));
 
 /// Engine-injected config keys that churn on every run (rewritten by
 /// `--samples`/`--sample`, sample discovery, and pair consolidation).
@@ -95,9 +106,9 @@ impl ConfigReferenceGraph {
     /// rule (input list, shell) and is caught by the rule fingerprint.
     pub fn from_rules(rules: &[Rule]) -> Self {
         // `{config.<key>}` — execution-time channels (shell/script/IO/…).
-        let braced = regex::Regex::new(r"\{config\.([^}]+)\}").expect("valid braced regex");
+        let braced = &*CONFIG_BRACED_RE;
         // Bare `config.<key>` — `when` conditions (evaluator syntax, no braces).
-        let bare = regex::Regex::new(r"config\.([A-Za-z0-9_.-]+)").expect("valid bare regex");
+        let bare = &*CONFIG_BARE_RE;
 
         let mut interp_key_rules: HashMap<String, HashSet<String>> = HashMap::new();
         let mut when_key_rules: HashMap<String, HashSet<String>> = HashMap::new();
@@ -360,7 +371,7 @@ pub fn reference_fingerprint(
 
     // Config values referenced anywhere in source/output/build, sorted by key
     // so HashMap iteration order never leaks into the fingerprint.
-    let braced = regex::Regex::new(r"\{config\.([^}]+)\}").expect("valid braced regex");
+    let braced = &*CONFIG_BRACED_RE;
     let mut referenced: BTreeMap<String, String> = BTreeMap::new();
     for text in [def.source.as_deref().unwrap_or(""), &def.output, &def.build] {
         for cap in braced.captures_iter(text) {

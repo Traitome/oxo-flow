@@ -125,16 +125,41 @@ pub(crate) async fn require_admin(
         return Ok("local_user".into());
     }
 
-    let token = extract_token(headers).ok_or_else(|| {
-        err(
+    let pool = get_pool()?;
+    resolve_admin(pool, headers).await
+}
+
+/// Resolve an admin identity from either credential the router's
+/// `require_auth` accepts: a Bearer session token or an `X-API-Key`.
+///
+/// API keys are first-class machine credentials (issue #82 P1-13), so an
+/// admin's key must work on admin-only routes instead of 401ing.
+async fn resolve_admin(
+    pool: &sqlx::SqlitePool,
+    headers: &axum::http::HeaderMap,
+) -> Result<String, (StatusCode, Json<ApiError>)> {
+    let (username, role) = if let Some(token) = extract_token(headers) {
+        validate_token(pool, &token).await?
+    } else if let Some(key) = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .filter(|k| !k.is_empty())
+    {
+        let user = resolve_api_key_in(pool, key).await.ok_or_else(|| {
+            err(
+                StatusCode::UNAUTHORIZED,
+                "INVALID_API_KEY",
+                "Invalid or revoked API key".into(),
+            )
+        })?;
+        (user.id, user.role)
+    } else {
+        return Err(err(
             StatusCode::UNAUTHORIZED,
             "AUTH_REQUIRED",
             "Authentication required".into(),
-        )
-    })?;
-
-    let pool = get_pool()?;
-    let (username, role) = validate_token(pool, &token).await?;
+        ));
+    };
 
     if role != "admin" {
         return Err(err(
@@ -780,6 +805,14 @@ pub async fn revoke_api_key(
 /// Used by the auth middleware when no Bearer session is present.
 pub async fn resolve_api_key(key: &str) -> Option<crate::domains::auth::current_user::CurrentUser> {
     let pool = crate::infra::db::sqlite::try_pool().ok()?;
+    resolve_api_key_in(pool, key).await
+}
+
+/// Pool-taking form of [`resolve_api_key`] (shared with `resolve_admin`).
+async fn resolve_api_key_in(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+) -> Option<crate::domains::auth::current_user::CurrentUser> {
     let hash = hash_api_key(key);
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT k.user_id, u.role FROM api_keys k \
@@ -797,4 +830,106 @@ pub async fn resolve_api_key(key: &str) -> Option<crate::domains::auth::current_
         .execute(pool)
         .await;
     Some(crate::domains::auth::current_user::CurrentUser { id: user_id, role })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-connection in-memory pool with just the tables `resolve_admin`
+    /// touches (`sqlite::memory:` is per-connection, so the pool must hold
+    /// exactly one).
+    async fn admin_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        sqlx::query(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, \
+             role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, \
+             password_hash TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE api_keys (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
+             name TEXT NOT NULL, key_hash TEXT NOT NULL, created_at TEXT NOT NULL, \
+             last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn seed_key(pool: &sqlx::SqlitePool, user_id: &str, role: &str, key: &str) {
+        sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, created_at) \
+             VALUES (?, ?, ?, 'password', '2026-01-01T00:00:00Z')",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(role)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO api_keys (id, user_id, name, key_hash, created_at, revoked) \
+             VALUES (?, ?, 'ci', ?, '2026-01-01T00:00:00Z', 0)",
+        )
+        .bind(format!("k-{user_id}"))
+        .bind(user_id)
+        .bind(hash_api_key(key))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn headers_with(name: &'static str, value: &'static str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(name, axum::http::HeaderValue::from_static(value));
+        headers
+    }
+
+    /// Admin-only routes must accept an admin's API key — the router's
+    /// `require_auth` already treats `X-API-Key` as a first-class credential,
+    /// so `require_admin` rejecting it was an inconsistent 401.
+    #[tokio::test]
+    async fn admin_identity_accepts_api_keys() {
+        let pool = admin_pool().await;
+        seed_key(&pool, "u-admin", "admin", "oxo_admin_key").await;
+        seed_key(&pool, "u-user", "user", "oxo_user_key").await;
+
+        let admin = headers_with("x-api-key", "oxo_admin_key");
+        match resolve_admin(&pool, &admin).await {
+            Ok(name) => assert_eq!(
+                name, "u-admin",
+                "an admin API key must resolve to the admin identity"
+            ),
+            Err((status, body)) => {
+                panic!("admin API key rejected: {status} {}", body.0.message)
+            }
+        }
+
+        // Non-admin key: authenticated but forbidden.
+        let user = headers_with("x-api-key", "oxo_user_key");
+        let (status, body) = resolve_admin(&pool, &user).await.unwrap_err();
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body.0.code, "ACCESS_DENIED");
+
+        // Unknown key: unauthenticated.
+        let unknown = headers_with("x-api-key", "not-a-key");
+        let (status, body) = resolve_admin(&pool, &unknown).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.0.code, "INVALID_API_KEY");
+
+        // No credential at all: the original AUTH_REQUIRED contract.
+        let (status, body) = resolve_admin(&pool, &axum::http::HeaderMap::new())
+            .await
+            .unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.0.code, "AUTH_REQUIRED");
+    }
 }

@@ -298,6 +298,16 @@ To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 
 The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (`_auto-discovered_sample1`, `_auto-discovered_sample2`), for 8 tasks in total. Inputs are not checked for existence in dry-run mode.
 
+!!! warning "`validate` warns; it does not gate"
+
+    The `✓ qc-pipeline.oxoflow — 4 rules, 3 dependencies` line only reports
+    that the workflow parsed — `validate` exits `0` even when it warns. A
+    missing input file, a `sample_pattern` that matches no files, or a
+    `{sample}` wildcard with no sample source declared (no `sample_pattern`,
+    `[[sample_groups]]`, or `[[pairs]]`) — all appear as warnings under that
+    line. Read them: `run` is what fails — it exits non-zero when a rule's
+    input is absent or its wildcards cannot be bound.
+
 !!! note "Aggregation rules are expanded per sample too"
     `multiqc` became two tasks, but both aggregate the same `results` directory and write the same `results/multiqc/multiqc_report.html` — the second run overwrites the first. This duplication is harmless here (MultiQC re-scans the whole directory), but for truly single-shot aggregation steps you may want to run them separately or via `depends_on` without a sample wildcard in the inputs.
 

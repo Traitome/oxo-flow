@@ -63,6 +63,11 @@ pub fn set_quiet_mode(quiet: bool) {
     QUIET_MODE.store(quiet, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether `--quiet` is active (suppresses non-essential console output).
+pub fn is_quiet() -> bool {
+    QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn print_banner() {
     if QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         return;

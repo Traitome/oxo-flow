@@ -1167,6 +1167,26 @@ shell = "cp out1.txt out2.txt"
 /// inputs/outputs, summary counters, sample groups and pairs — while the
 /// human stderr listing stays byte-identical with or without --json (the
 /// ecosystem contract: external CIs grep the stderr plan text).
+/// Remove the `tracing` timestamp prefix (`<dim>2026-01-02T03:04:05.123Z<reset>`)
+/// from every line, so two invocations' stderr can be compared for content
+/// rather than for when they ran.
+fn strip_log_timestamps(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| {
+            // Log lines begin with the dim ANSI code, the RFC 3339 instant,
+            // and the reset+space that ends the prefix.
+            match line.find("\u{1b}[0m ") {
+                Some(end) if line.starts_with("\u{1b}[") && line[..end].contains('T') => {
+                    line[end + 5..].to_string()
+                }
+                _ => line.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn cli_dry_run_json_plan_schema() {
     let dir = tempfile::tempdir().unwrap();
@@ -1234,9 +1254,11 @@ shell = "cp out1.txt out2.txt"
     assert!(plain_out.status.success());
 
     // Human stderr listing is byte-identical with or without --json; only
-    // stdout carries the machine payload.
+    // stdout carries the machine payload. Tracing timestamps are clock data,
+    // not listing content — two separate processes can never match on them.
     assert_eq!(
-        json_out.stderr, plain_out.stderr,
+        strip_log_timestamps(&json_out.stderr),
+        strip_log_timestamps(&plain_out.stderr),
         "--json must not change the human stderr output"
     );
     let stdout = String::from_utf8_lossy(&json_out.stdout);
@@ -2626,8 +2648,14 @@ fn cli_completions_functional() {
 
 #[test]
 fn web_binary_exists() {
-    // Verify the web binary was built successfully
-    let _cmd = oxo_flow_web_cmd();
+    // Verify the web binary was built AND answers its CLI contract — merely
+    // constructing a Command asserts nothing about the binary.
+    oxo_flow_web_cmd()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("oxo-flow-web"))
+        .stdout(predicate::str::contains("--mode"));
 }
 
 // ─── Gallery workflow CLI tests ─────────────────────────────────────────────
@@ -3329,6 +3357,65 @@ fn cli_env_check_with_simple_workflow() {
         .args(["env", "check", "examples/gallery/01_hello_world.oxoflow"])
         .assert()
         .success();
+}
+
+/// A rule's `pixi = "envs/pixi.toml"` is relative to the WORKFLOW, so
+/// `env check` run from any CWD must find a manifest that sits next to the
+/// workflow (and still fail for a genuinely missing one).
+#[cfg(unix)]
+#[test]
+fn cli_env_check_resolves_pixi_manifest_against_the_workflow_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join("wf");
+    fs::create_dir_all(wf_dir.join("envs")).unwrap();
+    fs::write(wf_dir.join("envs/pixi.toml"), "[project]\nname = \"x\"\n").unwrap();
+    let wf = wf_dir.join("pixi.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pixi-check\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x\"\n\n[rules.environment]\npixi = \"envs/pixi.toml\"\n",
+    )
+    .unwrap();
+
+    // Stub `pixi` so the backend-availability gate passes on machines without
+    // pixi installed; the manifest check is what this test exercises.
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pixi = bin_dir.join("pixi");
+    fs::write(&pixi, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pixi, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // CWD is the PARENT of the workflow dir: "envs/pixi.toml" does not exist
+    // relative to the process, only relative to the workflow.
+    oxo_flow_cmd()
+        .args(["env", "check", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .success();
+
+    // A manifest that exists only in the process CWD must NOT satisfy the
+    // check: the resolution base is the workflow, not where the CLI runs.
+    fs::create_dir_all(dir.path().join("envs")).unwrap();
+    fs::rename(
+        wf_dir.join("envs/pixi.toml"),
+        dir.path().join("envs/pixi.toml"),
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["env", "check", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pixi manifest"));
 }
 
 // ─── Run subcommand ──────────────────────────────────────────────────────────
@@ -4130,6 +4217,47 @@ fn cli_verbose_flag_produces_debug_output() {
         .success();
 }
 
+/// `--quiet` promises "non-essential output only", so a run must drop its
+/// human narration (DAG list, progress, summary) — while the archived run log
+/// keeps it, because that file is an artifact, not console noise.
+#[test]
+fn cli_quiet_suppresses_run_narration_but_keeps_the_run_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("quiet.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"quiet\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output}\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "--quiet"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "quiet run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("DAG:"),
+        "quiet mode must not print the DAG list:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Done:"),
+        "quiet mode must not print the run summary:\n{stderr}"
+    );
+
+    let log = fs::read_to_string(dir.path().join(".oxo-flow/logs/oxo-flow.log")).unwrap();
+    assert!(
+        log.contains("Running:") && log.contains("Done:"),
+        "the archived run log must keep the narration --quiet only silences the console:\n{log}"
+    );
+}
+
 #[test]
 fn cli_quiet_flag_suppresses_output() {
     let output = oxo_flow_cmd()
@@ -4166,7 +4294,8 @@ fn cli_lint_all_gallery_workflows() {
 
 #[test]
 fn cli_lint_strict_mode() {
-    // A minimal workflow with no description may trigger a lint warning
+    // A minimal workflow with no description/author triggers lint warnings
+    // (W001, W002, W003, ...) but no errors — exactly the strict-mode delta.
     let dir = tempfile::tempdir().unwrap();
     let workflow = dir.path().join("minimal.oxoflow");
     fs::write(
@@ -4183,13 +4312,39 @@ shell = "echo hello > out.txt"
     )
     .unwrap();
 
-    // strict mode: exits non-zero if any warnings
-    let output = oxo_flow_cmd()
-        .args(["lint", workflow.to_str().unwrap(), "--strict"])
+    // Non-strict: warnings alone do not fail the command.
+    let out = oxo_flow_cmd()
+        .args(["lint", workflow.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
-    // We just check it runs without panicking
-    let _ = output.status;
+    assert!(
+        out.status.success(),
+        "warnings must not fail a non-strict lint: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("lint --json stdout must be one JSON document");
+    assert!(
+        json["warning_count"].as_u64().unwrap() > 0,
+        "the minimal workflow must produce warnings: {json}"
+    );
+    assert_eq!(json["error_count"], 0, "no errors expected: {json}");
+    assert_eq!(json["passed"], true, "warnings alone must pass: {json}");
+
+    // Strict: the same warnings are now fatal.
+    let out = oxo_flow_cmd()
+        .args(["lint", workflow.to_str().unwrap(), "--strict", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "strict mode must exit non-zero when warnings are present"
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("strict lint must still emit JSON");
+    assert_eq!(json["strict"], true);
+    assert_eq!(json["passed"], false, "{json}");
+    assert!(json["warning_count"].as_u64().unwrap() > 0, "{json}");
 }
 
 // ─── Bug-fix regression tests ─────────────────────────────────────────────────

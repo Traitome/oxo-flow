@@ -482,15 +482,38 @@ pub fn export_pipeline(toml_content: &str, format: Option<&str>) -> Result<Expor
 
 /// Search saved pipelines by keyword using simple text matching.
 ///
-/// Queries are matched against template name, description, and tags.
-/// Results are scored and sorted by relevance.
+/// Queries are matched against pipeline name/TOML and template name,
+/// description, and tags. Results are scored and sorted by relevance.
 pub fn search_pipelines(
     query: &str,
-    _pipelines: &[Pipeline],
+    pipelines: &[Pipeline],
     templates: &[Template],
 ) -> SearchResponse {
     let q = query.to_lowercase();
     let mut results: Vec<SearchResult> = Vec::new();
+
+    for p in pipelines {
+        // The handler already applied the ownership filter; a pipeline whose
+        // TOML mentions the term scores lower than a name hit (the TOML is
+        // an incidental carrier — comments, sample names, tool flags).
+        let score = if p.name.to_lowercase().contains(&q) {
+            0.9
+        } else if p.toml_content.to_lowercase().contains(&q) {
+            0.4
+        } else {
+            continue;
+        };
+        results.push(SearchResult {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            source: "pipeline".into(),
+            category: None,
+            description: None,
+            tags: None,
+            match_reason: "keyword_match".into(),
+            score,
+        });
+    }
 
     for t in templates {
         let score = if t.name.to_lowercase().contains(&q) {
@@ -586,6 +609,64 @@ pub fn validate_plugin_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pipeline(id: &str, name: &str, toml: &str) -> Pipeline {
+        Pipeline {
+            id: id.into(),
+            user_id: "u1".into(),
+            name: name.into(),
+            version: "1.0.0".into(),
+            toml_content: toml.into(),
+            rules_count: 1,
+            forked_from: None,
+            visibility: "private".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// The ownership-filtered pipelines the handler already loaded must be
+    /// scored — ignoring them returned empty results for a user whose saved
+    /// pipeline matched the query but no template did.
+    #[test]
+    fn search_scores_saved_pipelines_and_templates() {
+        let pipelines = vec![
+            pipeline("p1", "rnaseq-qc", "[workflow]\nname = \"x\""),
+            pipeline("p2", "unrelated", "mentions rnaseq in a comment"),
+            pipeline("p3", "other", "nothing here"),
+        ];
+
+        let resp = search_pipelines("rnaseq", &pipelines, &[]);
+
+        assert_eq!(resp.total, 2, "both matching pipelines must be returned");
+        assert_eq!(resp.results[0].id, "p1", "name hit ranks first");
+        assert_eq!(resp.results[0].source, "pipeline");
+        assert!(
+            resp.results[0].score > resp.results[1].score,
+            "name match must outrank an incidental TOML match"
+        );
+
+        // Templates still score alongside pipelines.
+        let templates = vec![Template {
+            id: "t1".into(),
+            name: "rnaseq-template".into(),
+            category: "rna".into(),
+            description: String::new(),
+            tags: vec![],
+            toml_content: None,
+            is_system: true,
+            created_by: None,
+            usage_count: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }];
+        let resp = search_pipelines("rnaseq", &pipelines, &templates);
+        assert_eq!(resp.total, 3);
+        assert!(
+            resp.results.iter().any(|r| r.source == "template"),
+            "template hits must survive alongside pipeline hits"
+        );
+    }
 
     #[test]
     fn dag_edges_carry_kind() {

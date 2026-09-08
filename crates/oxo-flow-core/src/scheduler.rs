@@ -70,8 +70,14 @@ impl SchedulerState {
     ///
     /// A deadlock occurs if there are pending rules but none are ready to run,
     /// and no rules are currently running to release resources or satisfy
-    /// dependencies. (Resource waits cannot deadlock: over-capacity requests
-    /// are clamped by the pool, so any ready rule is always schedulable.)
+    /// dependencies. (Threads/memory waits cannot deadlock: reservations are
+    /// clamped to the pool capacity by [`reservation_threads`] /
+    /// [`reservation_memory_mb`]. Group waits are NOT clamped —
+    /// [`can_accommodate`] rejects any request above the declared capacity —
+    /// so the real guard against a group rule parking forever is the
+    /// executor's `ResourceGroupExhausted` fast-fail pre-check
+    /// (`Executor::check_resources`), which refuses such a rule before it
+    /// ever reaches the wait loop.)
     pub fn check_deadlock(&self, dag: &WorkflowDag) -> Result<()> {
         let ready = self.ready_rules(dag)?;
 

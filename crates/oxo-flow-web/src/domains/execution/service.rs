@@ -101,7 +101,6 @@ pub fn compute_overall_status(nodes: &[NodeStatusItem], db_status: Option<&str>)
 pub fn compute_retry_plan(
     run_nodes: &[NodeStatusItem],
     dag: &WorkflowDag,
-    _from_rule: Option<&str>,
     skip_succeeded: bool,
 ) -> Result<RetryResponse, String> {
     let mut will_rerun: Vec<String> = run_nodes
@@ -310,7 +309,7 @@ output = ["b.txt"]
                 progress_pct: None,
             },
         ];
-        let plan = compute_retry_plan(&nodes, &dag, None, true).unwrap();
+        let plan = compute_retry_plan(&nodes, &dag, true).unwrap();
         assert!(plan.will_rerun.contains(&"step1".to_string()));
         assert!(plan.will_rerun.contains(&"step2".to_string()));
     }

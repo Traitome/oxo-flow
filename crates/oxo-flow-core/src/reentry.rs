@@ -106,6 +106,12 @@ pub fn parse_manifest(
 /// list (dedup), then re-expand from the rule templates — one expansion
 /// covers both kinds. Returns the names of newly created instances
 /// (already in `config.rules`).
+///
+/// The merge is transactional: it stages on a clone and swaps it in only
+/// after the pair merge AND the re-expansion succeeded. Merging in place
+/// reported the rule failed (E015 pair conflict, E016 name collision) while
+/// the plan already carried the merged samples — a half-merged plan the
+/// caller has no way to roll back (audit finding).
 pub fn apply_reentry(
     config: &mut WorkflowConfig,
     group: Option<&str>,
@@ -114,12 +120,13 @@ pub fn apply_reentry(
 ) -> Result<Vec<String>> {
     let prev: HashSet<String> = config.rules.iter().map(|r| r.name.clone()).collect();
     let group_name = resolve_group_name(config, group);
-    let added_samples = merge_samples(config, &group_name, samples);
-    let added_pairs = merge_pairs(config, pairs)?;
+    let mut staged = config.clone();
+    let added_samples = merge_samples(&mut staged, &group_name, samples);
+    let added_pairs = merge_pairs(&mut staged, pairs)?;
     if added_samples.is_empty() && added_pairs.is_empty() {
         return Ok(Vec::new());
     }
-    reexpand_from_templates(config).map_err(|e| match e {
+    reexpand_from_templates(&mut staged).map_err(|e| match e {
         // expand_wildcards already rejects duplicate instance names; add the
         // re-entry context so a colliding pair_id points at its discoverer.
         OxoFlowError::DuplicateRule { name } => OxoFlowError::DuplicateRule {
@@ -129,12 +136,14 @@ pub fn apply_reentry(
         },
         other => other,
     })?;
-    Ok(config
+    let created = staged
         .rules
         .iter()
         .map(|r| r.name.clone())
         .filter(|n| !prev.contains(n))
-        .collect())
+        .collect();
+    *config = staged;
+    Ok(created)
 }
 
 /// Replay recorded re-entries whose checkpoint rule still stands, then
@@ -146,16 +155,20 @@ pub fn replay_valid_reentries(
     records: &[ReentryRecord],
     valid_rules: &HashSet<String>,
 ) -> Result<Vec<ReentryRecord>> {
+    // Staged like `apply_reentry`: a conflicting record must not leave the
+    // earlier records' samples merged into a plan whose replay failed.
+    let mut staged = config.clone();
     let mut replayed = Vec::new();
     for rec in records {
         if valid_rules.contains(&rec.rule) {
-            let group_name = resolve_group_name(config, rec.group.as_deref());
-            merge_samples(config, &group_name, &rec.samples);
-            merge_pairs(config, &rec.pairs)?;
+            let group_name = resolve_group_name(&staged, rec.group.as_deref());
+            merge_samples(&mut staged, &group_name, &rec.samples);
+            merge_pairs(&mut staged, &rec.pairs)?;
             replayed.push(rec.clone());
         }
     }
-    reexpand_from_templates(config)?;
+    reexpand_from_templates(&mut staged)?;
+    *config = staged;
     Ok(replayed)
 }
 
@@ -223,6 +236,12 @@ fn reexpand_from_templates(config: &mut WorkflowConfig) -> Result<()> {
 }
 
 fn merge_samples(config: &mut WorkflowConfig, group_name: &str, samples: &[String]) -> Vec<String> {
+    // A pairs-only re-entry (no samples) must not leave an empty sample
+    // group behind — the group is created only when it receives one
+    // (audit finding).
+    if samples.is_empty() {
+        return Vec::new();
+    }
     let group = match config
         .sample_groups
         .iter_mut()
@@ -535,6 +554,50 @@ pairs = [
         let err =
             apply_reentry(&mut config, None, &[], &[pair("CASE_T1", "T1", "OTHER")]).unwrap_err();
         assert!(err.to_string().contains("E015"), "{err}");
+    }
+
+    #[test]
+    fn apply_reentry_pairs_conflict_leaves_plan_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = pairs_config(dir.path());
+        let rules_before: Vec<String> = config.rules.iter().map(|r| r.name.clone()).collect();
+        let groups_before = config.sample_groups.clone();
+        // The sample used to merge before the conflicting pair was
+        // validated — the failed re-entry left a half-merged plan.
+        let err = apply_reentry(
+            &mut config,
+            None,
+            &["S2".to_string()],
+            &[pair("CASE_T1", "T1", "OTHER")],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("E015"), "{err}");
+        assert_eq!(
+            config
+                .rules
+                .iter()
+                .map(|r| r.name.clone())
+                .collect::<Vec<_>>(),
+            rules_before
+        );
+        assert_eq!(
+            config.sample_groups, groups_before,
+            "the failed re-entry must not half-merge samples"
+        );
+        assert_eq!(config.pairs.len(), 1, "the existing pair is untouched");
+    }
+
+    #[test]
+    fn pairs_only_reentry_creates_no_sample_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = pairs_config(dir.path());
+        let new = apply_reentry(&mut config, None, &[], &[pair("CASE_T2", "T2", "N2")]).unwrap();
+        assert_eq!(new, vec!["call_CASE_T2".to_string()]);
+        assert!(
+            config.sample_groups.is_empty(),
+            "a pairs-only re-entry must not leave an empty sample group: {:?}",
+            config.sample_groups
+        );
     }
 
     #[test]

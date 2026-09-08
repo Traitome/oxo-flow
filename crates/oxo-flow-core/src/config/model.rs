@@ -1321,6 +1321,12 @@ pub(crate) fn expand_command_text_fields(
     expanded.on_failure = source.on_failure.as_deref().map(&expand);
 }
 
+/// Name of the engine-created sample group holding `sample_pattern`
+/// discovery results. Not a user-declared owner: pairing workflows
+/// legitimately reference the discovered samples from `[[pairs]]`
+/// (see [`WorkflowConfig::duplicate_sample_owners`]).
+pub const AUTO_DISCOVERED_GROUP_NAME: &str = "auto-discovered";
+
 /// A named collection of samples with optional metadata wildcards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SampleGroup {
@@ -1885,6 +1891,13 @@ pub struct WorkflowConfig {
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.
     #[serde(skip)]
     pub expansion_templates: HashMap<String, String>,
+    /// Instance name → canonical binding key for `output_pattern` consumer
+    /// instances. Two distinct producer-domain combos can sanitize to the
+    /// SAME instance name (`A-1` and `A_1` both render `A_1`); only a
+    /// matching key makes a name collision idempotent (re-expansion), any
+    /// other is a hard duplicate. Never serialized.
+    #[serde(skip)]
+    pub expansion_instance_combos: HashMap<String, String>,
     /// Resolved include contracts (issue #112 module slice): one entry per
     /// `[[include]]` that declares an interface. Never serialized.
     #[serde(skip)]

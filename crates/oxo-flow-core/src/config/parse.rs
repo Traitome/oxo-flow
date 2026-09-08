@@ -249,7 +249,7 @@ impl WorkflowConfig {
 
                 if !auto_samples.is_empty() {
                     let auto_group = SampleGroup {
-                        name: "auto-discovered".to_string(),
+                        name: crate::config::AUTO_DISCOVERED_GROUP_NAME.to_string(),
                         samples: auto_samples.clone(),
                         metadata: HashMap::new(),
                     };
@@ -266,6 +266,23 @@ impl WorkflowConfig {
                     );
                 }
             }
+        }
+
+        // ── Cross-owner duplicate sample ids (sample-group/pair merge) ────
+        // The same id in two groups (or in a group and a pair) fans out two
+        // instances that share every output path the rule does not
+        // disambiguate with `{group}`: the second is skipped as "outputs
+        // up-to-date" while the checkpoint records both as completed, so one
+        // sample's data can silently be consumed as the other's. Warn (never
+        // error): orthogonal grouping with `{group}` in the paths is
+        // legitimate.
+        for (sample, first_owner, second_owner) in config.duplicate_sample_owners() {
+            tracing::warn!(
+                "sample '{sample}' is declared by both {first_owner} and {second_owner} — \
+                 unless every rule path distinguishes them (e.g. a {{group}} component), the \
+                 two instances share an output path and one is skipped as up-to-date while \
+                 consuming the other's data"
+            );
         }
 
         // ── Consolidate all sample sources into samples_list ──────────────
@@ -814,6 +831,12 @@ impl WorkflowConfig {
                     if self.defaults.environment.is_none() {
                         self.defaults.environment = profile_defaults.environment;
                     }
+                    if self.defaults.shell_prelude.is_none() {
+                        self.defaults.shell_prelude = profile_defaults.shell_prelude;
+                    }
+                    if self.defaults.time_limit.is_none() {
+                        self.defaults.time_limit = profile_defaults.time_limit;
+                    }
                 }
                 ProfileMode::Override => {
                     if profile_defaults.threads.is_some() {
@@ -824,6 +847,12 @@ impl WorkflowConfig {
                     }
                     if profile_defaults.environment.is_some() {
                         self.defaults.environment = profile_defaults.environment;
+                    }
+                    if profile_defaults.shell_prelude.is_some() {
+                        self.defaults.shell_prelude = profile_defaults.shell_prelude;
+                    }
+                    if profile_defaults.time_limit.is_some() {
+                        self.defaults.time_limit = profile_defaults.time_limit;
                     }
                 }
             }

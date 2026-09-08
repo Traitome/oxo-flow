@@ -18,17 +18,18 @@ threads = 4
 memory = "8G"
 
 [report]
-# template: reserved — supply a real Tera template file path to use one
-# template = "variant_report"
-format = [
-    "html",
-    "json",
-]
+# Optional HTML template override — "report.html" is the built-in default;
+# any other value is a Tera template path resolved next to the workflow file.
+# template = "report.html"
+#
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+# The output format is chosen on the CLI with -f (html, json, md, pdf).
 sections = [
-    "summary",
-    "variants",
-    "coverage",
-    "qc_metrics",
+    "universal",
+    "workflow-info",
+    "execution-status",
+    "metrics",
+    "provenance",
 ]
 
 [[rules]]

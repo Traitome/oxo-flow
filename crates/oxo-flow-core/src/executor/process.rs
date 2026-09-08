@@ -868,7 +868,21 @@ impl LocalExecutor {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn resolve_command(&self, command: &str, rule: &Rule, scratch_dir: Option<&Path>) -> String {
+    /// Render a rule's command through its environment wrapper.
+    ///
+    /// A wrapping failure is a hard rule failure when the rule declares an
+    /// environment: falling back to the bare command silently runs the tool
+    /// from PATH instead of the declared environment (a
+    /// `conda = "bioconda::bwa=0.7.17"` spec — the form the AI prompt
+    /// mandates — cannot derive an env name, so the rule ran whatever `bwa`
+    /// PATH offered; audit finding). A rule that declares no environment has
+    /// nothing to wrap and keeps the plain command.
+    fn resolve_command(
+        &self,
+        command: &str,
+        rule: &Rule,
+        scratch_dir: Option<&Path>,
+    ) -> Result<String> {
         // Container backends use the declared memory as their cgroup limit.
         // Cap it at the PHYSICAL RAM (or the explicit --max-memory override):
         // a cgroup above physical RAM lets a tool allocate past what the
@@ -906,7 +920,7 @@ impl LocalExecutor {
             Some(&resources),
             &self.config.workdir,
         ) {
-            Ok(wrapped) => match scratch_dir {
+            Ok(wrapped) => Ok(match scratch_dir {
                 Some(scratch) => fixup_container_wrapper(
                     &wrapped,
                     rule.environment.kind(),
@@ -914,11 +928,24 @@ impl LocalExecutor {
                     scratch,
                 ),
                 None => wrapped,
-            },
-            Err(e) => {
-                tracing::warn!(rule = %rule.name, error = %e, "environment wrapping failed");
-                command.to_string()
+            }),
+            Err(e) if rule.environment.is_empty() => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    error = %e,
+                    "environment wrapping failed — running the unwrapped command (no environment declared)"
+                );
+                Ok(command.to_string())
             }
+            Err(e) => Err(OxoFlowError::Environment {
+                kind: rule.environment.kind().to_string(),
+                message: format!(
+                    "rule '{}' declares environment '{}' but the wrapper could not be built \
+                     (refusing to run the tool from PATH instead): {e}",
+                    rule.name,
+                    rule.environment.kind()
+                ),
+            }),
         }
     }
 
@@ -1254,13 +1281,37 @@ impl LocalExecutor {
             // relative paths against the run's workdir and decide on real
             // file contents; missing files fail closed here instead of
             // deferring like they do at plan time.
-            let verdict = evaluate_condition_with_workdir_and_base_dir(
-                condition,
-                &config_values,
-                wildcard_values,
-                Some(&self.config.workdir),
-                self.config.base_dir.as_deref(),
-            );
+            //
+            // Those functions do full-file (and gunzip) I/O, so the
+            // evaluation runs on the blocking pool: this is the async
+            // executor path, and a `when` over a multi-GB gzip would
+            // otherwise park a tokio worker for the whole read (audit
+            // finding).
+            let verdict = {
+                let condition = condition.clone();
+                let config_values = config_values.clone();
+                let wildcard_values = wildcard_values.clone();
+                let workdir = self.config.workdir.clone();
+                let base_dir = self.config.base_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    evaluate_condition_with_workdir_and_base_dir(
+                        &condition,
+                        &config_values,
+                        &wildcard_values,
+                        Some(&workdir),
+                        base_dir.as_deref(),
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(
+                        rule = %rule.name,
+                        error = %e,
+                        "when-condition evaluation task failed — treating the gate as false"
+                    );
+                    false
+                })
+            };
             if !verdict {
                 record.status = JobStatus::Skipped;
                 record.skip_reason = Some("condition evaluated to false".to_string());
@@ -1486,7 +1537,7 @@ impl LocalExecutor {
         );
 
         let resolved_commands =
-            vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())];
+            vec![self.resolve_command(&base_cmd, &rule, scratch_dir.as_deref())?];
         record.command = resolved_commands
             .first()
             .cloned()
@@ -1549,20 +1600,39 @@ impl LocalExecutor {
         {
             None
         } else {
-            match super::checkpoint::snapshot_input_manifest(
-                &rule,
-                &self.config.workdir,
-                wildcard_values,
-                &self.config.storage_resolver,
-            ) {
-                Ok(manifest) => Some(manifest.unwrap_or_default()),
-                Err(e) => {
-                    tracing::debug!(
-                        rule = %rule.name,
-                        error = %e,
-                        "input manifest unavailable — content cache lookup skipped"
-                    );
-                    None
+            if rule.input.is_empty() {
+                // A rule that declares no inputs has a provable (empty) input
+                // identity: nothing external feeds it, so `cache_key` + the
+                // rendered command + the outputs fully determine its result.
+                // `snapshot_input_manifest` returns `Ok(None)` for this case
+                // too (it cannot distinguish "no inputs" from "inputs exist
+                // but none resolved"), so handle it here — otherwise every
+                // source rule loses content caching.
+                Some(Vec::new())
+            } else {
+                match super::checkpoint::snapshot_input_manifest(
+                    &rule,
+                    &self.config.workdir,
+                    wildcard_values,
+                    &self.config.storage_resolver,
+                ) {
+                    Ok(Some(manifest)) => Some(manifest),
+                    // `Ok(None)` here is "no provable input identity"
+                    // (declared inputs that do not resolve, engine wildcards
+                    // still unresolved, or a chunk consumer). Mapping it to an
+                    // empty manifest gave every such rule one shared identity
+                    // and reused outputs across different real inputs — no
+                    // reuse is better than unprovable reuse (see
+                    // `content_cache`'s module doc).
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::debug!(
+                            rule = %rule.name,
+                            error = %e,
+                            "input manifest unavailable — content cache lookup skipped"
+                        );
+                        None
+                    }
                 }
             }
         };
@@ -1844,12 +1914,28 @@ impl LocalExecutor {
                 match cmd_result {
                     None => {
                         // Timed out. R3 fix: use id directly and check it.
+                        //
+                        // PID-reuse guard (audit finding): the child may have
+                        // exited at the instant the timeout fired, and tokio's
+                        // SIGCHLD handler reaps exited children in the
+                        // background — freeing the pid for reuse. `try_wait`
+                        // observes that reaped status, so a pid that may now
+                        // belong to an unrelated process is never signalled.
+                        // While it returns `None` the child is an unreaped
+                        // live child of this process, and the kernel does not
+                        // reuse a pid that still has a process behind it. The
+                        // residual window (the child exits and is reaped
+                        // between this check and the signal) is inherent to
+                        // pid-based signalling.
+                        let already_exited = matches!(child.try_wait(), Ok(Some(_)));
                         // The grace poll inside `kill_process_tree` sleeps
                         // up to SIGTERM_GRACE on a blocking thread, so run
                         // it on the blocking pool — N simultaneous timeouts
                         // would otherwise park N tokio workers (starving
                         // every other rule's I/O) for up to 10 s each.
-                        if let Some(pid) = child_id {
+                        if let Some(pid) = child_id
+                            && !already_exited
+                        {
                             match tokio::task::spawn_blocking(move || {
                                 super::timeout::kill_process_tree(pid)
                             })
@@ -2221,9 +2307,18 @@ impl LocalExecutor {
                 let command = rule.shell.clone();
                 // Dry-run is read-only: no scratch dir exists, so the
                 // container wrapper is shown unmodified (a preview).
-                let wrapped = command
-                    .as_deref()
-                    .map(|cmd| self.resolve_command(cmd, rule, None));
+                // Preview only — nothing executes here, so a wrapping failure
+                // shows the raw command rather than failing the dry run.
+                let wrapped = command.as_deref().map(|cmd| {
+                    self.resolve_command(cmd, rule, None).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            error = %e,
+                            "dry-run: environment wrapping failed"
+                        );
+                        cmd.to_string()
+                    })
+                });
 
                 // Apply shell safety checks in dry-run mode so dangerous
                 // commands are visible to users before actual execution.
@@ -4613,15 +4708,124 @@ mod tests {
         let ex = executor_with(4, 2048);
         // 72G (an upstream HPC label) on a 2G box — the container cgroup
         // must reflect the machine, not the declaration.
-        let cmd = ex.resolve_command("echo hi", &docker_rule("72G"), None);
+        let cmd = ex
+            .resolve_command("echo hi", &docker_rule("72G"), None)
+            .unwrap();
         assert!(cmd.contains("--memory 2048M"), "cmd: {cmd}");
     }
 
     #[test]
     fn resolve_command_keeps_declared_memory_when_within_system_total() {
         let ex = executor_with(4, 2048);
-        let cmd = ex.resolve_command("echo hi", &docker_rule("1G"), None);
+        let cmd = ex
+            .resolve_command("echo hi", &docker_rule("1G"), None)
+            .unwrap();
         assert!(cmd.contains("--memory 1G"), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn resolve_command_fails_hard_when_declared_environment_cannot_wrap() {
+        // A conda spec that cannot derive an env name (the `bioconda::bwa=`
+        // form) used to log a warning and run the bare command — silently
+        // using whatever the tool is on PATH instead of the declared env.
+        let ex = executor_with(4, 2048);
+        let rule = Rule {
+            name: "bwa_align".to_string(),
+            environment: EnvironmentSpec {
+                conda: Some("bioconda::bwa=0.7.17".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = ex
+            .resolve_command("bwa mem ref.fa", &rule, None)
+            .expect_err("a declared environment that cannot be wrapped must fail the rule");
+        assert!(
+            matches!(err, OxoFlowError::Environment { .. }),
+            "expected an Environment error, got {err:?}"
+        );
+        assert!(err.to_string().contains("bioconda::bwa=0.7.17"), "{err}");
+
+        // No environment declared: there is nothing to wrap, so the plain
+        // command is still correct.
+        let plain = Rule {
+            name: "plain".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            ex.resolve_command("echo hi", &plain, None).unwrap(),
+            "echo hi"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_cache_skips_rules_without_a_provable_input_identity() {
+        // A rule whose input still carries an engine wildcard cannot be
+        // content-addressed; mapping the `Ok(None)` manifest to an empty one
+        // gave it a shared identity and cached it anyway (audit finding).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "unprovable".to_string(),
+            cache_key: Some("k".to_string()),
+            input: FilePatterns::List(vec!["data/{sample}.bam".to_string()]),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("printf fresh > out.txt".to_string()),
+            ..Default::default()
+        };
+        let record = ex.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(record.status, JobStatus::Success);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "fresh"
+        );
+        assert!(
+            !dir.path().join(".oxo-flow/content-cache").exists(),
+            "a rule with no provable input identity must not populate the cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_cache_covers_rules_with_no_inputs() {
+        // A source rule (no declared inputs) has a PROVABLE empty input
+        // identity — `snapshot_input_manifest` returns Ok(None) for it too,
+        // and treating that as "unprovable" disabled caching for every
+        // source rule (regression caught by the live verification script).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ex = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+        let rule = Rule {
+            name: "source".to_string(),
+            cache_key: Some("k".to_string()),
+            input: FilePatterns::List(vec![]),
+            output: vec!["out.txt".to_string()].into(),
+            shell: Some("printf fresh > out.txt".to_string()),
+            ..Default::default()
+        };
+        ex.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        let cache_root = dir.path().join(".oxo-flow/content-cache");
+        let entries = std::fs::read_dir(cache_root.join("source"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(entries, 1, "a source rule must populate exactly one entry");
+
+        // A second run with the output removed restores it and reuses the
+        // same entry (the identity is stable, so the cache does not grow).
+        std::fs::remove_file(dir.path().join("out.txt")).unwrap();
+        ex.execute_rule(&rule, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "fresh"
+        );
+        let entries = std::fs::read_dir(cache_root.join("source"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(entries, 1, "the identity must be stable across runs");
     }
 
     // ── Resource-wait diagnostics (issue #123 / #136) ────────────────

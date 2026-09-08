@@ -315,7 +315,10 @@ memory = "16G"
 conda = "envs/vep.yaml"
 
 [report]
-# template: reserved — supply a real Tera template file path to use one
-# template = "germline_report"
-format = ["html", "json"]
-sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
+# Optional HTML template override — "report.html" is the built-in default;
+# any other value is a Tera template path resolved next to the workflow file.
+# template = "report.html"
+#
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+# The output format is chosen on the CLI with -f (html, json, md, pdf).
+sections = ["universal", "workflow-info", "execution-status", "metrics", "software-versions", "provenance"]

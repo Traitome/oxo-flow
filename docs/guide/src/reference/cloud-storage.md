@@ -28,10 +28,12 @@ upload objects programmatically through the
 ### Prerequisites
 
 Both backends are feature-gated and are **not** included by default.
-Enable them at build time:
+Enable them at build time — the features live on the `oxo-flow-cli` crate
+(the workspace root package defines none, so `--features` must be combined
+with `-p oxo-flow-cli`):
 
 ```bash
-cargo build --release --features "s3-storage,gcs-storage"
+cargo build --release -p oxo-flow-cli --features "s3-storage,gcs-storage"
 ```
 
 ## AWS S3

@@ -39,8 +39,9 @@ use std::path::{Path, PathBuf};
     version,
     about = "A Rust-native bioinformatics pipeline engine",
     long_about = "oxo-flow is a high-performance, modular bioinformatics pipeline engine\n\
-                   built from first principles in Rust. It supports conda, pixi, docker,\n\
-                   singularity, and venv environments with DAG-based execution."
+                   built from first principles in Rust. It supports conda, mamba, pixi,\n\
+                   docker, singularity, venv, and environment-modules backends (plus the\n\
+                   system environment) with DAG-based execution."
 )]
 pub struct Cli {
     #[command(subcommand)]

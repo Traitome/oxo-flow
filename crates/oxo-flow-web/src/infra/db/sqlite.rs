@@ -153,34 +153,6 @@ impl SqliteBackend {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-
-    /// Recover runs that were left in the 'running' state after a crash.
-    ///
-    /// Only marks runs whose `started_at` is older than 60 seconds, to avoid
-    /// killing runs that are still initialising after a quick restart.
-    pub async fn recover_orphaned_runs(&self) -> Result<u64, String> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(60);
-        let cutoff_str = cutoff.to_rfc3339();
-        let now_str = Self::now();
-        let result = sqlx::query(
-            "UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running' AND started_at < ?",
-        )
-        .bind(&now_str)
-        .bind(&cutoff_str)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let count = result.rows_affected();
-        if count > 0 {
-            tracing::warn!(
-                "Recovered {} orphaned run(s) (started before {}). Runs started within the last 60s were left untouched.",
-                count,
-                cutoff_str,
-            );
-        }
-        Ok(count)
-    }
 }
 
 #[async_trait]
@@ -1350,46 +1322,6 @@ mod tests {
         let runs = backend.list_runs(&user.id, pag).await.unwrap();
         assert_eq!(runs.items.len(), 1);
         assert_eq!(runs.total_items, 1);
-    }
-
-    // -----------------------------------------------------------------------
-    // Test: recover_orphaned_runs marks old running runs as failed
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_recover_orphaned_runs() {
-        let backend = create_backend().await;
-        let user = create_test_user(&backend, "orphan-test").await;
-        let pipeline = create_test_pipeline(&backend, &user.id, "orphan-pipeline").await;
-
-        // Create a run with an old started_at (more than 60 seconds ago)
-        let old_time = (chrono::Utc::now() - chrono::Duration::seconds(120)).to_rfc3339();
-        let run_id = Uuid::new_v4().to_string();
-        let run = models::RunRow {
-            id: run_id.clone(),
-            user_id: user.id.clone(),
-            pipeline_id: Some(pipeline.id.clone()),
-            pipeline_snapshot: pipeline.toml_content.clone(),
-            workflow_name: None,
-            status: "running".to_string(),
-            phase: "executing".to_string(),
-            pid: Some(12345),
-            workdir: None,
-            started_at: Some(old_time),
-            finished_at: None,
-            created_at: String::new(),
-        };
-        backend.create_run(&run).await.unwrap();
-
-        // Mark the run as running with old started_at via direct SQL
-        // (create_run already set it correctly, so proceed directly to recovery)
-        let recovered = backend.recover_orphaned_runs().await.unwrap();
-        assert_eq!(recovered, 1, "Should recover 1 orphaned run");
-
-        // Verify the run was marked as failed
-        let fetched = backend.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(fetched.status, "failed");
-        assert!(fetched.finished_at.is_some());
     }
 
     // -----------------------------------------------------------------------

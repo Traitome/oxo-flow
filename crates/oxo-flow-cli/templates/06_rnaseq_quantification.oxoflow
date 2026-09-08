@@ -115,7 +115,10 @@ multiqc qc/ counts/ -o results/ --force
 conda = "envs/multiqc.yaml"
 
 [report]
-# template: reserved — supply a real Tera template file path to use one
-# template = "rnaseq_report"
-format = ["html", "json"]
-sections = ["summary", "qc_metrics", "alignment_stats", "gene_counts"]
+# Optional HTML template override — "report.html" is the built-in default;
+# any other value is a Tera template path resolved next to the workflow file.
+# template = "report.html"
+#
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+# The output format is chosen on the CLI with -f (html, json, md, pdf).
+sections = ["universal", "workflow-info", "execution-status", "metrics", "aggregate-metrics", "provenance"]

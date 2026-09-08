@@ -3075,8 +3075,12 @@ mod tests {
         let wrapped = resolver
             .wrap_command("echo test", &spec, None, std::path::Path::new("."))
             .unwrap();
-        // Should use mamba binary, not conda
-        assert!(wrapped.contains("run -n"), "expected 'run -n': {wrapped}");
+        // Must use the mamba binary, not the conda fallback (which also
+        // renders "run -n").
+        assert!(
+            wrapped.contains("mamba run -n"),
+            "expected the mamba wrapper: {wrapped}"
+        );
         let cache_key = resolver.cache_key(&spec);
         assert!(
             cache_key.starts_with("mamba:"),

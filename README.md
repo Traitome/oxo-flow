@@ -102,6 +102,13 @@ cargo install oxo-flow-cli
 conda install -c bioconda oxo-flow-cli
 ```
 
+> **Version caveat** — the bioconda recipe lags the project. It currently
+> delivers **0.15.0** (verified 2026-09-09), two minor versions behind the
+> current release, and features documented in this README are missing from it
+> (`oxo-flow graph -f metro`, for example, fails with
+> `unsupported graph format: metro`). Install from the pre-built binaries
+> above or `cargo install oxo-flow-cli` (crates.io) for the current version.
+
 ### Run with Docker
 
 Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.16`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:

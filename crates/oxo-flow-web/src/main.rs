@@ -152,13 +152,8 @@ async fn main() -> Result<()> {
             oxo_flow_web::infra::db::postgres::init_pool(&database_url).await;
             // Issue #207 acceptance: an explicit capability matrix at startup,
             // so operators see the served/gated split before the first 503.
-            tracing::warn!(
-                "PostgreSQL deployment capability matrix:\n  \
-                 available: pipeline library · templates · auth · AI · observability\n  \
-                 degraded: audit trail (SQLite-only, logged-not-persisted)\n  \
-                 gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
-                 (run execution is SQLite-only)"
-            );
+            // Shared const so the log cannot drift from the tested contract.
+            tracing::warn!("{}", oxo_flow_web::PG_CAPABILITY_MATRIX);
         }
         #[cfg(not(feature = "postgres"))]
         {
@@ -215,7 +210,12 @@ async fn main() -> Result<()> {
             tracing::warn!("AI config file tier rejected: {e}");
         }
     }
-    // Cluster import now lives in start_server_with_mode (shared entry).
+    // Cluster definitions from the platform config file are imported by
+    // BOTH entry points (here and in start_server_with_mode) — idempotent,
+    // existing DB rows win, and a no-op when the SQLite pool is absent.
+    if let Some(cfg) = &platform_config {
+        oxo_flow_web::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
+    }
     tracing::info!(
         "AI provider: {}",
         oxo_flow_web::ai_provider::AiProviderRegistry::global()
@@ -251,13 +251,23 @@ async fn main() -> Result<()> {
             .nest(base, app)
     };
 
+    // Background maintenance every serving entry point needs (idempotent):
+    // without the daily quota reset, runs_today only ever grows and every
+    // POST /api/runs answers 429 until the process restarts.
+    oxo_flow_web::start_background_tasks();
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?.port();
     oxo_flow_web::server::set_bound_port(bound);
     tracing::info!("Listening on http://{addr}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(oxo_flow_web::shutdown_signal())
-        .await?;
+    // The connect-info service feeds the rate limiter's peer-address key;
+    // without it the limiter can only fall back to one shared bucket.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(oxo_flow_web::shutdown_signal())
+    .await?;
 
     Ok(())
 }

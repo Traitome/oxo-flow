@@ -326,7 +326,11 @@ impl Report {
             escape_html(&self.workflow_version),
             generated
         ));
-        for (key, value) in &self.metadata {
+        // Sorted: `metadata` is a HashMap, and byte-stable output is a
+        // report contract (two runs must produce identical HTML).
+        let mut meta: Vec<(&String, &String)> = self.metadata.iter().collect();
+        meta.sort_unstable();
+        for (key, value) in meta {
             html.push_str(&format!(
                 "  <p class=\"meta\">{}: {}</p>\n",
                 escape_html(key),
@@ -383,6 +387,13 @@ impl Report {
     /// * `output_path` - Path to save the PDF file
     /// * `options` - Additional wkhtmltopdf options (e.g., "--enable-local-file-access")
     ///
+    /// The report HTML is written to a temporary file whose path is passed
+    /// to wkhtmltopdf — it never appears in the command line. The
+    /// documented caller runs the result through `sh -c`, and the HTML
+    /// embeds workflow-controlled shell text, so inlining it (only `"` and
+    /// `\n` were escaped) let `$(...)`, backticks and `$VAR` reach the
+    /// shell; a large report also risked `E2BIG` on Linux as an argv.
+    ///
     /// # Example
     /// ```rust,ignore
     /// let report = Report::new("Clinical Report", "venus", "1.0.0");
@@ -392,11 +403,18 @@ impl Report {
     pub fn to_pdf_command(&self, output_path: &str, options: Vec<&str>) -> String {
         let html = self.to_printable_html();
         let opts = options.join(" ");
+        let Some(html_path) = persist_report_html(&html) else {
+            tracing::warn!(
+                "could not write report HTML to a temp file for the wkhtmltopdf command"
+            );
+            return "echo 'oxo-flow: cannot write report HTML to a temp file' >&2; false"
+                .to_string();
+        };
         format!(
-            "wkhtmltopdf {} --encoding utf-8 \"{}\" \"{}\"",
+            "wkhtmltopdf {} --encoding utf-8 {} {}",
             if opts.is_empty() { "" } else { &opts },
-            html.replace('"', "\\\"").replace('\n', " "),
-            output_path
+            shell_quote(&html_path.to_string_lossy()),
+            shell_quote(output_path),
         )
     }
 
@@ -715,22 +733,36 @@ pub fn alignment_stats_section(stats: &[AlignmentStats]) -> ReportSection {
     .map(String::from)
     .collect();
 
+    // `total_reads == 0` is real (an empty FASTQ, an unparsed flagstat):
+    // 0/0 is NaN and x/0 is inf, and "NaN%" / "inf%" in a QC table reads
+    // as data. Percentages of an empty sample are unknown, not zero.
+    let ratio_pct = |numerator: u64, denominator: u64| -> String {
+        if denominator == 0 {
+            "N/A".to_string()
+        } else {
+            format!("{:.2}%", numerator as f64 / denominator as f64 * 100.0)
+        }
+    };
     let rows: Vec<Vec<String>> = stats
         .iter()
         .map(|s| {
+            let mapping_rate = if s.mapping_rate.is_finite() {
+                format!("{:.2}%", s.mapping_rate * 100.0)
+            } else {
+                "N/A".to_string()
+            };
             vec![
                 s.sample.clone(),
                 s.total_reads.to_string(),
                 s.mapped_reads.to_string(),
-                format!("{:.2}%", s.mapping_rate * 100.0),
-                format!(
-                    "{:.2}%",
-                    s.properly_paired as f64 / s.total_reads as f64 * 100.0
-                ),
-                format!("{:.2}%", s.duplicates as f64 / s.total_reads as f64 * 100.0),
+                mapping_rate,
+                ratio_pct(s.properly_paired, s.total_reads),
+                ratio_pct(s.duplicates, s.total_reads),
                 s.mean_coverage
+                    .filter(|c| c.is_finite())
                     .map_or("N/A".into(), |c| format!("{:.1}x", c)),
                 s.gc_content
+                    .filter(|g| g.is_finite())
                     .map_or("N/A".into(), |g| format!("{:.1}%", g * 100.0)),
             ]
         })
@@ -759,16 +791,18 @@ pub struct ExpressionRecord {
 
 /// Create an RNA-seq expression summary with top expressed genes.
 pub fn expression_summary_section(records: &[ExpressionRecord], top_n: usize) -> ReportSection {
-    // Aggregate by gene: average TPM across samples
-    let mut gene_tpm: HashMap<String, (f64, u64)> = HashMap::new();
+    // Aggregate by gene: average TPM across SAMPLES. Counting records
+    // instead (the previous behavior) skewed the mean toward whichever
+    // sample had the most records for that gene.
+    let mut gene_tpm: HashMap<String, (f64, std::collections::HashSet<String>)> = HashMap::new();
     for r in records {
-        let entry = gene_tpm.entry(r.gene.clone()).or_insert((0.0, 0));
+        let entry = gene_tpm.entry(r.gene.clone()).or_default();
         entry.0 += r.tpm;
-        entry.1 += 1;
+        entry.1.insert(r.sample.clone());
     }
     let mut genes: Vec<(String, f64)> = gene_tpm
         .into_iter()
-        .map(|(g, (sum, n))| (g, sum / n as f64))
+        .map(|(g, (sum, samples))| (g, sum / samples.len().max(1) as f64))
         .collect();
     genes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     genes.truncate(top_n);
@@ -1289,8 +1323,33 @@ fn escape_html(s: &str) -> String {
 }
 
 /// Escape a table cell for Markdown (GFM: backslash-escape pipes).
+///
+/// Newlines become `<br>`: a raw newline inside a cell ends the table row
+/// and the rest of the cell spills out as broken prose (multi-line shell
+/// commands in the command manifest hit this).
 fn md_cell(s: &str) -> String {
     s.replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace(['\n', '\r'], "<br>")
+}
+
+/// Persist report HTML to a temp file that outlives this call — the
+/// returned command is executed by the caller later. Returns `None` when
+/// no temp file can be written.
+fn persist_report_html(html: &str) -> Option<std::path::PathBuf> {
+    let file = tempfile::Builder::new()
+        .prefix("oxo-flow-report-")
+        .suffix(".html")
+        .tempfile()
+        .ok()?;
+    std::fs::write(file.path(), html).ok()?;
+    file.into_temp_path().keep().ok()
+}
+
+/// Quote one word for `sh -c`: single quotes with embedded single quotes
+/// escaped as `'\''` — the one form the shell never re-interprets.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Render one section (and its subsections) as Markdown.
@@ -1690,7 +1749,7 @@ fn render_section_html(html: &mut String, section: &ReportSection, heading_level
 
 use crate::config::WorkflowConfig;
 use crate::executor::CheckpointState;
-use crate::report_metrics::{CustomContent, CustomValue, MetricsScanner, ParsedMetrics};
+use crate::report_metrics::{CustomContent, CustomValue, MetricsScanner, ParsedMetrics, ScanStats};
 
 /// Classifies a workflow into a broad domain for report tailoring.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1791,7 +1850,12 @@ impl SectionRegistry {
         registry.register(Box::new(CommandManifestGenerator));
         registry.register(Box::new(IoManifestGenerator));
         registry.register(Box::new(EnvironmentInfoGenerator));
-        registry.register(Box::new(MetricsGenerator));
+        // MetricsGenerator and AggregateMetricsGenerator consume the same
+        // workdir scan — share one cache so a report walks it once.
+        let scans = std::sync::Arc::new(MetricsScanCache::default());
+        registry.register(Box::new(MetricsGenerator {
+            scans: std::sync::Arc::clone(&scans),
+        }));
         registry.register(Box::new(SampleMatrixGenerator));
         registry.register(Box::new(ProvenanceGenerator));
         registry.register(Box::new(TaskSummaryGenerator));
@@ -1799,7 +1863,7 @@ impl SectionRegistry {
             crate::software_versions::SoftwareVersionsGenerator,
         ));
         registry.register(Box::new(RuleCaptionsGenerator));
-        registry.register(Box::new(AggregateMetricsGenerator));
+        registry.register(Box::new(AggregateMetricsGenerator { scans }));
         registry
     }
 
@@ -2550,6 +2614,13 @@ fn human_size(bytes: u64) -> String {
         value /= 1024.0;
         unit += 1;
     }
+    // One-decimal rounding can push a value back up to 1024.0
+    // (1_048_575 B → 1023.999 KiB → "1024.0 KiB"): carry into the next
+    // unit so a size never reads as 1024.0 of a smaller one.
+    if unit > 0 && unit < UNITS.len() - 1 && (value * 10.0).round() >= 10240.0 {
+        value /= 1024.0;
+        unit += 1;
+    }
     if unit == 0 {
         format!("{bytes} {}", UNITS[0])
     } else {
@@ -2558,7 +2629,14 @@ fn human_size(bytes: u64) -> String {
 }
 
 /// Format a nanosecond Unix epoch timestamp as UTC, or "-" when invalid.
+///
+/// A recorded mtime of 0 is the "unknown" sentinel (remote inputs,
+/// unreadable metadata) — rendering it as `1970-01-01T00:00:00Z` claims a
+/// fact the engine does not have.
 fn format_mtime_nanos(nanos: i128) -> String {
+    if nanos == 0 {
+        return "-".into();
+    }
     // Realistic mtimes fit comfortably in i64 nanoseconds (the epoch is
     // ~1.77e18 ns in 2026; i64 max is 9.2e18).
     i64::try_from(nanos)
@@ -2620,12 +2698,41 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
     }
 }
 
+/// One recursive scan shared by the generators that both need it.
+///
+/// `MetricsGenerator` (per-tool tables) and `AggregateMetricsGenerator`
+/// (sample × metric matrix) each ran `MetricsScanner::scan_with_stats` on
+/// the same workdir — two full recursive walks and parses per report.
+/// `SectionRegistry::with_defaults` hands them one cache; the key is the
+/// workdir, so a registry reused across workdirs re-scans instead of
+/// serving stale metrics.
+#[derive(Default)]
+struct MetricsScanCache {
+    last: std::sync::Mutex<Option<(std::path::PathBuf, std::sync::Arc<ScanStats>)>>,
+}
+
+impl MetricsScanCache {
+    fn scan(&self, workdir: &std::path::Path) -> std::sync::Arc<ScanStats> {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((path, stats)) = last.as_ref()
+            && path == workdir
+        {
+            return std::sync::Arc::clone(stats);
+        }
+        let stats = std::sync::Arc::new(MetricsScanner::new().scan_with_stats(workdir));
+        *last = Some((workdir.to_path_buf(), std::sync::Arc::clone(&stats)));
+        std::sync::Arc::clone(&stats)
+    }
+}
+
 /// QC metrics parsed from real tool outputs in the working directory (issue
 /// #83 P1-5): fastp report.json, samtools flagstat, STAR Log.final.out,
 /// featureCounts .summary, bcftools stats, kraken2 .report. One subsection
 /// per (tool × sample); the section is hidden entirely when nothing parses
 /// — a report never fabricates metrics.
-struct MetricsGenerator;
+struct MetricsGenerator {
+    scans: std::sync::Arc<MetricsScanCache>,
+}
 impl ReportSectionGenerator for MetricsGenerator {
     fn name(&self) -> &str {
         "metrics"
@@ -2640,7 +2747,7 @@ impl ReportSectionGenerator for MetricsGenerator {
         let Some(workdir) = report_workdir(ctx) else {
             return Vec::new();
         };
-        let stats = MetricsScanner::new().scan_with_stats(&workdir);
+        let stats = self.scans.scan(&workdir);
         if stats.parsed.is_empty() {
             return Vec::new();
         }
@@ -2728,7 +2835,9 @@ impl ReportSectionGenerator for MetricsGenerator {
 /// found in the scan. The per-(tool × sample) detail tables stay in the
 /// `metrics` section; this section is the cross-tool view that makes the
 /// report a credible MultiQC replacement for ported repos.
-struct AggregateMetricsGenerator;
+struct AggregateMetricsGenerator {
+    scans: std::sync::Arc<MetricsScanCache>,
+}
 impl ReportSectionGenerator for AggregateMetricsGenerator {
     fn name(&self) -> &str {
         "aggregate-metrics"
@@ -2743,7 +2852,7 @@ impl ReportSectionGenerator for AggregateMetricsGenerator {
         let Some(workdir) = report_workdir(ctx) else {
             return Vec::new();
         };
-        let stats = MetricsScanner::new().scan_with_stats(&workdir);
+        let stats = self.scans.scan(&workdir);
         // Skipped-only scans still surface their Scan Notes subsection —
         // a scanner that hit files it could not parse must say so instead
         // of hiding the section entirely (issue #83 P1-5 honesty rule).
@@ -3055,7 +3164,7 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
         let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
         failed.sort_unstable();
 
-        let dag = crate::dag::WorkflowDag::from_rules(&ctx.config.rules).ok();
+        let dag = cascade_dag(ctx);
         let mut subsections = Vec::new();
         for rule in &failed {
             let run = cp.rule_runs.get(*rule);
@@ -3117,6 +3226,24 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             subsections,
         }]
     }
+}
+
+/// DAG for failure-cascade analysis.
+///
+/// The checkpoint records rule INSTANCE names (`align_cohort_S1`,
+/// `fastqc_auto-discovered_S1`, `call_CASE_001`). A DAG built from the
+/// declared templates answers `RuleNotFound` for every one of them in a
+/// wildcard workflow, so the cascade silently rendered "none" for exactly
+/// the workflows that fan out. Expand the templates the way the engine
+/// does at run time; fall back to the declared rules when expansion fails.
+fn cascade_dag(ctx: &ReportContext) -> Option<crate::dag::WorkflowDag> {
+    let mut expanded = ctx.config.clone();
+    if expanded.expand_wildcards().is_ok()
+        && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&expanded.rules)
+    {
+        return Some(dag);
+    }
+    crate::dag::WorkflowDag::from_rules(&ctx.config.rules).ok()
 }
 
 /// All rules a failure propagates to: transitive dependents in the DAG.
@@ -4895,6 +5022,245 @@ shell = "bwa mem"
                 .any(|r| r[0] == "align" && r[1].contains("no execution record")),
             "the never-run rule keeps the declared-template marker: {rows:?}"
         );
+    }
+    // ── Audit remediation: injection, cascade, formatting, determinism ─────
+
+    #[test]
+    fn to_pdf_command_keeps_html_off_the_command_line() {
+        // Arrange: report content is workflow-controlled text, and the
+        // documented caller runs the returned string through `sh -c`.
+        let mut report = Report::new("t", "wf", "1.0.0");
+        report.add_section(ReportSection {
+            title: "Injection".into(),
+            id: "injection".into(),
+            content: ReportContent::Text {
+                text: "$(rm -rf /)".into(),
+            },
+            subsections: vec![],
+        });
+
+        // Act
+        let cmd = report.to_pdf_command("/tmp/it's out.pdf", vec![]);
+
+        // Assert: the payload never reaches the command line...
+        assert!(
+            !cmd.contains("$(rm -rf /)"),
+            "HTML must not be inlined in the shell command: {cmd}"
+        );
+        // ...it went to a temp file instead...
+        let html_path = cmd.split('\'').nth(1).expect("quoted html path");
+        let html = std::fs::read_to_string(html_path).expect("temp html readable");
+        assert!(
+            html.contains("$(rm -rf /)"),
+            "the temp file carries the report HTML"
+        );
+        let _ = std::fs::remove_file(html_path);
+        // ...and the output path is single-quoted, so its quote cannot escape.
+        assert!(
+            cmd.contains("'/tmp/it'\\''s out.pdf'"),
+            "output path must be shell-quoted: {cmd}"
+        );
+    }
+
+    #[test]
+    fn metrics_generators_share_one_workdir_scan() {
+        // Arrange: one fastp file, two generators that both need it.
+        let workdir = tempfile::tempdir().unwrap();
+        std::fs::write(workdir.path().join("S1.fastp.json"), fastp_fixture(1234)).unwrap();
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+
+        let scans = std::sync::Arc::new(MetricsScanCache::default());
+        let metrics = MetricsGenerator {
+            scans: std::sync::Arc::clone(&scans),
+        };
+        let aggregate = AggregateMetricsGenerator { scans };
+
+        // Act / Assert: the first generator scans and reports...
+        assert!(!metrics.generate(&ctx).is_empty());
+        // ...and the second reuses that scan: with the file gone, a fresh
+        // walk could find nothing, so a non-empty matrix proves sharing.
+        std::fs::remove_file(workdir.path().join("S1.fastp.json")).unwrap();
+        assert!(
+            !aggregate.generate(&ctx).is_empty(),
+            "aggregate generator must reuse the cached scan"
+        );
+    }
+
+    #[test]
+    fn failure_diagnosis_cascades_through_expanded_instances() {
+        // Arrange: a wildcard workflow — the checkpoint records instance
+        // names, so the cascade DAG must be built from expanded rules.
+        let config = workflow_config(
+            r#"[[sample_groups]]
+name = "cohort"
+samples = ["S1"]
+
+[[rules]]
+name = "align"
+input = ["reads/{sample}.fq"]
+output = ["bam/{sample}.bam"]
+shell = "align"
+
+[[rules]]
+name = "call"
+input = ["bam/{sample}.bam"]
+output = ["vcf/{sample}.vcf"]
+shell = "call"
+"#,
+        );
+        let mut cp = CheckpointState::new();
+        cp.failed_rules.insert("align_cohort_S1".to_string());
+
+        // Act
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+
+        // Assert
+        let diagnosis = sections
+            .iter()
+            .find(|s| s.id == "failure-diagnosis")
+            .expect("failure diagnosis section");
+        let details = diagnosis.subsections[0]
+            .subsections
+            .iter()
+            .find(|s| s.id.ends_with("-details"))
+            .expect("details subsection");
+        let ReportContent::KeyValue { pairs } = &details.content else {
+            panic!("details must be key-value");
+        };
+        let cascade = &pairs
+            .iter()
+            .find(|(k, _)| k == "Affected Downstream")
+            .expect("cascade pair")
+            .1;
+        assert!(
+            cascade.contains("call_cohort_S1"),
+            "cascade must name the expanded dependent instance: {cascade}"
+        );
+    }
+
+    #[test]
+    fn format_mtime_nanos_zero_is_unknown() {
+        // A recorded mtime of 0 is the "no metadata" sentinel, not 1970.
+        assert_eq!(format_mtime_nanos(0), "-");
+        assert_eq!(
+            format_mtime_nanos(1_700_000_000_000_000_000),
+            "2023-11-14T22:13:20Z"
+        );
+    }
+
+    #[test]
+    fn md_cell_replaces_newlines_in_table_cells() {
+        // A raw newline ends the GFM row; multi-line shell commands in the
+        // command manifest hit exactly this.
+        assert_eq!(md_cell("a\nb"), "a<br>b");
+        assert_eq!(md_cell("a\r\nb"), "a<br>b");
+        assert_eq!(md_cell("a|b"), "a\\|b");
+
+        let section = ReportSection {
+            title: "Commands".into(),
+            id: "commands".into(),
+            content: ReportContent::Table {
+                headers: vec!["Task".into(), "Command".into()],
+                rows: vec![vec!["a".into(), "line1\nline2".into()]],
+            },
+            subsections: vec![],
+        };
+        let mut md = String::new();
+        render_section_markdown(&mut md, &section, 2);
+        let row = md
+            .lines()
+            .find(|l| l.contains("line1"))
+            .expect("rendered row");
+        assert!(row.contains("line1<br>line2"), "row stays one line: {row}");
+    }
+
+    #[test]
+    fn alignment_stats_section_no_nan_for_empty_sample() {
+        let stats = vec![AlignmentStats {
+            sample: "empty".into(),
+            total_reads: 0,
+            mapped_reads: 0,
+            properly_paired: 0,
+            singletons: 0,
+            duplicates: 0,
+            mapping_rate: f64::NAN,
+            mean_coverage: Some(f64::NAN),
+            mean_insert_size: None,
+            gc_content: Some(f64::INFINITY),
+        }];
+        let section = alignment_stats_section(&stats);
+        let ReportContent::Table { rows, .. } = &section.content else {
+            panic!("expected table");
+        };
+        let rendered = rows[0].join(" | ");
+        assert!(
+            !rendered.contains("NaN") && !rendered.contains("inf"),
+            "empty samples must not render NaN/inf: {rendered}"
+        );
+        assert!(
+            rendered.contains("N/A"),
+            "unknown values render N/A: {rendered}"
+        );
+    }
+
+    #[test]
+    fn human_size_rounds_into_next_unit() {
+        // 1_048_575 B is 1023.999 KiB — one decimal must not render it as
+        // "1024.0 KiB".
+        assert_eq!(human_size(1_048_575), "1.0 MiB");
+        assert_eq!(human_size(1_048_576), "1.0 MiB");
+        assert_eq!(human_size(1_048_000), "1023.4 KiB");
+        assert_eq!(human_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn expression_summary_mean_tpm_divides_by_sample_count() {
+        // Sample B contributes two records for the gene; the mean is
+        // (10 + 20 + 20) / 2 samples = 25, not / 3 records.
+        let records = vec![
+            ExpressionRecord {
+                gene: "G".into(),
+                sample: "A".into(),
+                tpm: 10.0,
+                count: 1,
+            },
+            ExpressionRecord {
+                gene: "G".into(),
+                sample: "B".into(),
+                tpm: 20.0,
+                count: 1,
+            },
+            ExpressionRecord {
+                gene: "G".into(),
+                sample: "B".into(),
+                tpm: 20.0,
+                count: 1,
+            },
+        ];
+        let section = expression_summary_section(&records, 10);
+        let ReportContent::Table { rows, .. } = &section.content else {
+            panic!("expected table");
+        };
+        assert_eq!(rows[0][2], "25.00");
+    }
+
+    #[test]
+    fn report_metadata_renders_in_sorted_order() {
+        // `metadata` is a HashMap — the HTML must not depend on its
+        // iteration order.
+        let mut report = Report::new("t", "wf", "1.0.0");
+        report.add_metadata("z_last", "1");
+        report.add_metadata("a_first", "2");
+        report.add_metadata("m_middle", "3");
+        let html = report.to_html();
+        let a = html.find("a_first").expect("a_first rendered");
+        let m = html.find("m_middle").expect("m_middle rendered");
+        let z = html.find("z_last").expect("z_last rendered");
+        assert!(a < m && m < z, "metadata renders sorted: {a} {m} {z}");
     }
 }
 

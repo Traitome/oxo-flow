@@ -99,6 +99,7 @@ impl AiRegistry {
                 config.api_url.clone(),
                 config.model.clone(),
             )
+            .with_temperature(config.temperature)
         } else {
             AiProvider::Noop
         };
@@ -172,6 +173,7 @@ impl AiRegistry {
                 config.api_url.clone(),
                 config.model.clone(),
             )
+            .with_temperature(config.temperature)
         } else {
             AiProvider::Noop
         };

@@ -1,10 +1,11 @@
 # Cohort Analysis with Sample Groups
 
-A population-scale study: multiple `[[sample_groups]]` expand per-sample instances, and a single multiqc aggregation step consumes the whole cohort's QC directory.
+A population-scale study: multiple `[[sample_groups]]` expand per-sample instances, the per-sample GVCFs are gathered and joint-genotyped as one cohort, and a single multiqc aggregation step consumes the whole cohort's QC directory.
 
 ## What It Demonstrates
 
 - `{sample}` rules expand once per sample across all groups (case/control here)
+- Cohort-level joint genotyping: `combine_gvcfs` gathers every per-sample GVCF via `expand_inputs` (`config.samples_list`), and `genotype_gvcfs` calls the whole cohort in one pass
 - The aggregation rule has no wildcard inputs → exactly one instance; `depends_on` keeps it behind every per-sample rule (directory inputs form no DAG edges)
 - Per-rule conda environments keep tool versions isolated (fastp / bwa-mem2+samtools / gatk / multiqc)
 

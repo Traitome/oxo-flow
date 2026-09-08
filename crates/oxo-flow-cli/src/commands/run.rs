@@ -44,7 +44,11 @@ type SharedRunLog = Arc<std::sync::Mutex<Option<crate::logging::RunLogGuard>>>;
 /// Background runs hold no run log (their stderr already lands in it), so
 /// only the console copy is written.
 fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
-    eprintln!("{msg}");
+    // --quiet silences the console copy only: the run log is an artifact the
+    // report/web UI reads, not terminal noise.
+    if !crate::commands::is_quiet() {
+        eprintln!("{msg}");
+    }
     let mut slot = run_log
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1163,14 +1167,16 @@ pub async fn run_command(
         None,
     )
     .await;
-    eprintln!(
-        "{} {} rules in execution order",
-        "DAG:".bold().green(),
-        order.len()
-    );
+    if !crate::commands::is_quiet() {
+        eprintln!(
+            "{} {} rules in execution order",
+            "DAG:".bold().green(),
+            order.len()
+        );
 
-    for (i, rule_name) in order.iter().enumerate() {
-        eprintln!("  {}. {}", i + 1, rule_name);
+        for (i, rule_name) in order.iter().enumerate() {
+            eprintln!("  {}. {}", i + 1, rule_name);
+        }
     }
 
     // ── Load checkpoint + config-change impact analysis (issue #62) ─────

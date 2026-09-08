@@ -72,9 +72,12 @@ const PREFIX_STAGES: &[(&str, &str)] = &[
 ];
 
 /// `(stage, keyword, tool display)` pairs for shell/script inference, matched
-/// against the lowercased command text. Order matters: more specific signals
-/// (a variant caller) win over generic ones (an aligner), mirroring
-/// `WorkflowDomain`. The tool display is the curated process name used when
+/// against the lowercased command text. The **longest matching keyword** wins,
+/// so a specific signal (`picard merge`, a variant caller) beats a generic one
+/// (`picard`, an aligner) regardless of table position, mirroring
+/// `WorkflowDomain`; equal-length matches keep table order, which lists the
+/// more specific signals first. The tool display is the curated process name
+/// used when
 /// the metro export groups rules into process-level stations (granularity
 /// `process`): several rules driven by the same tool collapse into one
 /// station named after the tool, the nf-core transit-map idiom
@@ -130,8 +133,8 @@ const KEYWORDS: &[(&str, &str, &str)] = &[
     ("qc", "qualimap", "Qualimap"),
     ("qc", "fq_lint", "fq lint"),
     ("qc", "fqlint", "fq lint"),
-    // Merge / concatenation (substring " cat"/" merge"/" concat" to avoid
-    // matching "scatter" or "concatenate" noise).
+    // Merge / concatenation (tool + subcommand spelled out, so prose
+    // "merge"/"concat" or "scatter" noise cannot match).
     ("merge", "samtools merge", "SAMtools"),
     ("merge", "bcftools merge", "BCFtools"),
     ("merge", "bcftools concat", "BCFtools"),
@@ -198,7 +201,10 @@ pub fn detect_tool(rule: &Rule) -> Option<&'static str> {
     match_keyword(rule).map(|(_, _, tool)| tool)
 }
 
-/// First `(stage, keyword, tool)` match over the rule's shell/script text.
+/// The most specific `(stage, keyword, tool)` match over the rule's
+/// shell/script text: the longest matching keyword wins (a table-position
+/// `find` made the specific `picard merge` entry unreachable behind the
+/// generic `picard` one), with table order breaking equal-length ties.
 fn match_keyword(rule: &Rule) -> Option<(&'static str, &'static str, &'static str)> {
     let mut text = String::new();
     if let Some(shell) = &rule.shell {
@@ -211,8 +217,10 @@ fn match_keyword(rule: &Rule) -> Option<(&'static str, &'static str, &'static st
     let text = text.to_lowercase();
     KEYWORDS
         .iter()
-        .find(|(_, keyword, _)| text.contains(keyword))
-        .copied()
+        .enumerate()
+        .filter(|(_, (_, keyword, _))| text.contains(keyword))
+        .min_by_key(|(i, (_, keyword, _))| (std::cmp::Reverse(keyword.len()), *i))
+        .map(|(_, entry)| *entry)
 }
 
 /// Friendly section title for a module namespace (metro-map sections).
@@ -450,6 +458,30 @@ mod tests {
     }
 
     #[test]
+    fn most_specific_keyword_wins() {
+        // `picard MergeVcfs` must stage as merge: the generic "picard" entry
+        // used to win by table position, making the "picard merge" entry
+        // unreachable (contradicting the file's own specificity rule).
+        assert_eq!(
+            detect_stage(&rule("m", "picard MergeVcfs I=a.vcf O=merged.vcf", vec![])),
+            "merge"
+        );
+        assert_eq!(
+            detect_stage(&rule(
+                "d",
+                "picard MarkDuplicates I=in.bam O=out.bam",
+                vec![]
+            )),
+            "align"
+        );
+        // The tool display follows the same winner.
+        assert_eq!(
+            detect_tool(&rule("m", "picard MergeVcfs I=a.vcf", vec![])),
+            Some("Picard")
+        );
+    }
+
+    #[test]
     fn detect_tool_returns_curated_display_name() {
         assert_eq!(
             detect_tool(&rule("a", "samtools sort in.bam", vec![])),
@@ -471,7 +503,17 @@ mod tests {
     #[test]
     fn canonical_colors_are_stable() {
         assert_eq!(stage_color("qc"), "#4C78A8");
-        assert_eq!(stage_color("custom_thing"), stage_color("custom_thing"));
+        // Custom stages derive their colour from a stable hash of the name:
+        // repeated calls agree, the result comes from the fallback palette,
+        // and they are never mistaken for a canonical stage.
+        let custom = stage_color("custom_thing");
+        assert_eq!(custom, stage_color("custom_thing"));
+        assert!(
+            EXTRA_COLORS.contains(&custom),
+            "custom stage must use the fallback palette, got {custom}"
+        );
+        assert!(is_canonical_stage("qc"));
+        assert!(!is_canonical_stage("custom_thing"));
     }
 
     #[test]

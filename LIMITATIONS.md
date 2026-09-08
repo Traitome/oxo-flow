@@ -77,6 +77,27 @@ WDL, and no importers for those formats are currently available.
   (the gallery examples' pattern); for genuine per-read/per-replicate
   fan-out, declare the domain with `[[pairs]]`/`[[sample_groups]]` or bind
   the extra wildcards with `input_groups`.
+- **Undeclared intermediates are invisible to provenance** — only declared
+  `input`/`output` paths are recorded. A file a rule creates but does not
+  declare — `samtools index`'s `.bai`, `tabix`'s `.tbi`, GATK's
+  `.recal_data.table` (gallery 07 produces one without declaring it) — is
+  not tracked, and deleting it does **not** re-run its producer: the
+  producer's declared outputs still exist, so the next run skips the rule and
+  the file stays missing until you force it with `--rerun`. Declare every
+  artifact a downstream step depends on.
+- **A duplicate sample id across groups silently shares one output path** —
+  the same `{sample}` value in two `[[sample_groups]]` (or in a group and a
+  `sample_pattern` discovery) expands to two rule instances that write the
+  identical output path. `validate` exits 0 and `dry-run` lists both
+  instances without complaint; whichever finishes last overwrites the other.
+  Keep sample ids unique across groups.
+- **`transform` `n = N` chunks the value space, not the data** — it generates
+  the labels `"0"`…`"N-1"` and repeats the rule once per label, and every map
+  instance receives the rule's whole input. The engine never slices a file:
+  the `map` command must use the split value to select its own slice (e.g.
+  `-L {chr}`), or the rule's `input` must be the split value itself
+  (`input = ["{chr}"]`). See the `transform` operator section of the
+  [Workflow Format reference](docs/guide/src/reference/workflow-format.md).
 
 ## Roadmap
 

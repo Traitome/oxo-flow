@@ -109,6 +109,18 @@ impl AiProvider {
         }
     }
 
+    /// Apply a configured sampling temperature to the underlying backend
+    /// (no-op for backends that do not take one: scripted/noop).
+    pub fn with_temperature(self, temperature: Option<f64>) -> Self {
+        match self {
+            Self::Claude(p) => Self::Claude(p.with_temperature(temperature)),
+            Self::OpenAi(p) => Self::OpenAi(p.with_temperature(temperature)),
+            Self::DeepSeek(p) => Self::DeepSeek(p.with_temperature(temperature)),
+            Self::Ollama(p) => Self::Ollama(p.with_temperature(temperature)),
+            other => other,
+        }
+    }
+
     /// Simple chat — convenience wrapper for single-turn messaging.
     pub async fn chat(&self, system: &str, user: &str) -> Result<String, AiError> {
         let messages = vec![Message::system(system), Message::user(user)];
@@ -206,6 +218,12 @@ pub const COMPRESS_KEEP_TAIL: usize = 6;
 /// message and the last [`COMPRESS_KEEP_TAIL`] non-system messages, replace
 /// everything dropped in between with a single marker turn.
 ///
+/// The kept tail never begins on a tool result whose declaring assistant
+/// turn was dropped: Anthropic rejects `tool_result` blocks whose
+/// `tool_use_id` was never declared, so such a transcript would turn a
+/// recoverable overflow into a hard 400. Dropping the unpaired results
+/// (rather than pulling the cut back) also shrinks the retry request.
+///
 /// Returns `None` when there is nothing to drop (compression cannot help).
 pub fn compress_transcript(messages: &[Message]) -> Option<Vec<Message>> {
     let non_system = messages
@@ -215,7 +233,10 @@ pub fn compress_transcript(messages: &[Message]) -> Option<Vec<Message>> {
     if non_system.len() <= COMPRESS_KEEP_TAIL {
         return None;
     }
-    let dropped = non_system.len() - COMPRESS_KEEP_TAIL;
+    let mut dropped = non_system.len() - COMPRESS_KEEP_TAIL;
+    while dropped < non_system.len() && non_system[dropped].role == MessageRole::Tool {
+        dropped += 1;
+    }
     let mut out: Vec<Message> = messages
         .iter()
         .filter(|m| m.role == MessageRole::System)
@@ -249,17 +270,42 @@ fn mask_secret(text: &str, secret: &str) -> String {
     text.replace(secret, MASKED_KEY)
 }
 
+/// The `Retry-After` value of a failed response, if the endpoint sent one.
+///
+/// Only the delay-seconds form is read; the HTTP-date form is left as
+/// `None` rather than guessed (the caller's retry policy is seconds-based).
+fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        .map(String::from)
+}
+
 /// Classify a non-success HTTP status + error body into an [`AiError`].
 ///
 /// Body matching is keyword-based: context-window markers map to
 /// [`AiError::ContextOverflow`] (retrying the same transcript is
 /// pointless), output-size markers to [`AiError::OutputLimit`].
 pub fn classify_http_error(provider: &str, status: u16, body: &str) -> AiError {
+    classify_http_error_with_retry_after(provider, status, body, None)
+}
+
+/// [`classify_http_error`] carrying the response's `Retry-After` value (see
+/// [`retry_after_header`]) so callers can honor the endpoint's back-off
+/// instead of guessing.
+pub fn classify_http_error_with_retry_after(
+    provider: &str,
+    status: u16,
+    body: &str,
+    retry_after: Option<String>,
+) -> AiError {
     let body_lower = body.to_lowercase();
     if status == 429 {
         return AiError::RateLimited {
             provider: provider.into(),
-            retry_after: None,
+            retry_after,
         };
     }
     if status == 401 || status == 403 {
@@ -314,6 +360,9 @@ pub struct ClaudeBackend {
     pub api_key: String,
     pub model: String,
     pub api_url: String,
+    /// Sampling temperature sent as the request's `temperature` field;
+    /// `None` omits the field and lets the endpoint apply its default.
+    pub temperature: Option<f64>,
 }
 
 impl ClaudeBackend {
@@ -329,14 +378,19 @@ impl ClaudeBackend {
                 }
                 url
             },
+            temperature: None,
         }
     }
 
-    async fn chat_with_tools(
-        &self,
-        messages: &[Message],
-        tools: &[ToolDef],
-    ) -> Result<AiResponse, AiError> {
+    /// Set the sampling temperature for every request from this backend.
+    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    /// Build the Anthropic `/v1/messages` body (extracted so the request
+    /// shape — including `temperature` — is unit-testable without network).
+    fn build_body(&self, messages: &[Message], tools: &[ToolDef]) -> serde_json::Value {
         let (system, anthropic_msgs) = to_anthropic_messages(messages);
 
         let mut body = serde_json::json!({
@@ -345,6 +399,10 @@ impl ClaudeBackend {
             "messages": anthropic_msgs,
             "max_tokens": 4096,
         });
+
+        if let Some(temperature) = self.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
 
         // Add tools in Anthropic format if provided
         if !tools.is_empty() {
@@ -361,6 +419,16 @@ impl ClaudeBackend {
             body["tools"] = serde_json::json!(anthropic_tools);
         }
 
+        body
+    }
+
+    async fn chat_with_tools(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+    ) -> Result<AiResponse, AiError> {
+        let body = self.build_body(messages, tools);
+
         let resp = self
             .client
             .post(&self.api_url)
@@ -376,6 +444,7 @@ impl ClaudeBackend {
             })?;
 
         let status = resp.status();
+        let retry_after = retry_after_header(resp.headers());
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
             provider: "claude".into(),
             message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
@@ -383,10 +452,11 @@ impl ClaudeBackend {
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(classify_http_error(
+            return Err(classify_http_error_with_retry_after(
                 "claude",
                 status.as_u16(),
                 &mask_secret(err_msg, &self.api_key),
+                retry_after,
             ));
         }
 
@@ -397,8 +467,10 @@ impl ClaudeBackend {
 /// Convert internal messages to Anthropic's wire format.
 ///
 /// Returns (system, messages). Assistant turns that carry tool calls emit
-/// explicit `tool_use` blocks — Anthropic rejects `tool_result` blocks whose
-/// `tool_use_id` was never declared in a prior assistant turn.
+/// explicit `tool_use` blocks, and `tool_result` blocks whose `tool_use_id`
+/// was never declared are dropped — Anthropic rejects such a request
+/// outright (400), so a transcript that lost its declaring turn (compressed
+/// or otherwise) must not be sent verbatim.
 fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value>) {
     let system = messages
         .iter()
@@ -411,6 +483,8 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
     // tool_result blocks for an assistant turn's tool_use blocks to appear in
     // the message that immediately follows it.
     let mut anthropic_msgs: Vec<serde_json::Value> = Vec::new();
+    let mut declared_tool_use_ids: std::collections::HashSet<&str> =
+        std::collections::HashSet::new();
     for m in messages.iter().filter(|m| m.role != MessageRole::System) {
         let role = match m.role {
             MessageRole::User => "user",
@@ -438,6 +512,7 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
                     "name": tc.name,
                     "input": input,
                 }));
+                declared_tool_use_ids.insert(tc.id.as_str());
             }
             anthropic_msgs.push(serde_json::json!({"role": role, "content": blocks}));
             continue;
@@ -446,11 +521,20 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
         // tool-result message (coalescing), else start a new one.
         if m.role == MessageRole::Tool {
             let block = match &m.tool_call_id {
-                Some(tc_id) => serde_json::json!({
-                    "type": "tool_result",
-                    "tool_use_id": tc_id,
-                    "content": m.content,
-                }),
+                Some(tc_id) if declared_tool_use_ids.contains(tc_id.as_str()) => {
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": m.content,
+                    })
+                }
+                Some(tc_id) => {
+                    tracing::warn!(
+                        tool_use_id = tc_id.as_str(),
+                        "dropping tool_result whose tool_use was never declared"
+                    );
+                    continue;
+                }
                 None => serde_json::json!({
                     "type": "text",
                     "text": m.content,
@@ -542,6 +626,9 @@ pub struct OpenAiBackend {
     /// Provider name carried in error messages — the openai-compatible
     /// backend also serves DeepSeek, whose errors must not claim "openai".
     pub label: String,
+    /// Sampling temperature sent as the request's `temperature` field;
+    /// `None` omits the field and lets the endpoint apply its default.
+    pub temperature: Option<f64>,
 }
 
 impl OpenAiBackend {
@@ -573,7 +660,14 @@ impl OpenAiBackend {
                     format!("{}/v1/chat/completions", url.trim_end_matches('/'))
                 }
             },
+            temperature: None,
         }
+    }
+
+    /// Set the sampling temperature for every request from this backend.
+    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     /// Build the base request body shared by chat() and chat_with_tools().
@@ -591,8 +685,14 @@ impl OpenAiBackend {
                     "content": m.content,
                 });
                 // DeepSeek reasoning models require the assistant's reasoning
-                // content to be echoed back verbatim on subsequent calls.
-                if let Some(ref rc) = m.reasoning_content {
+                // content to be echoed back verbatim on subsequent calls. An
+                // EMPTY string is not "reasoning content": transcripts built
+                // by the agent loop default it to `Some("")` for every
+                // assistant turn, and some openai-compatible endpoints reject
+                // an empty `reasoning_content` field outright — omit it.
+                if let Some(rc) = &m.reasoning_content
+                    && !rc.is_empty()
+                {
                     obj["reasoning_content"] = serde_json::Value::String(rc.clone());
                 }
                 if let Some(ref tc) = m.tool_calls {
@@ -612,6 +712,10 @@ impl OpenAiBackend {
             "model": self.model,
             "messages": openai_msgs,
         });
+
+        if let Some(temperature) = self.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
 
         if !tools.is_empty() {
             let openai_tools: Vec<serde_json::Value> = tools
@@ -655,6 +759,7 @@ impl OpenAiBackend {
             })?;
 
         let status = resp.status();
+        let retry_after = retry_after_header(resp.headers());
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
             provider: self.label.clone(),
             message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
@@ -662,10 +767,11 @@ impl OpenAiBackend {
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(classify_http_error(
+            return Err(classify_http_error_with_retry_after(
                 &self.label,
                 status.as_u16(),
                 &mask_secret(err_msg, &self.api_key),
+                retry_after,
             ));
         }
 
@@ -769,6 +875,9 @@ pub struct OllamaBackend {
     pub client: reqwest::Client,
     pub model: String,
     pub api_url: String,
+    /// Sampling temperature sent in the request's `options.temperature`;
+    /// `None` omits it and lets the model's own default apply.
+    pub temperature: Option<f64>,
 }
 
 impl OllamaBackend {
@@ -784,7 +893,14 @@ impl OllamaBackend {
                     url
                 }
             },
+            temperature: None,
         }
+    }
+
+    /// Set the sampling temperature for every request from this backend.
+    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     async fn chat_with_tools(
@@ -792,7 +908,7 @@ impl OllamaBackend {
         messages: &[Message],
         tools: &[ToolDef],
     ) -> Result<AiResponse, AiError> {
-        let body = build_ollama_body(messages, tools, &self.model);
+        let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
         let resp = self
             .client
@@ -832,7 +948,12 @@ impl OllamaBackend {
     }
 }
 
-fn build_ollama_body(messages: &[Message], tools: &[ToolDef], model: &str) -> serde_json::Value {
+fn build_ollama_body(
+    messages: &[Message],
+    tools: &[ToolDef],
+    model: &str,
+    temperature: Option<f64>,
+) -> serde_json::Value {
     let ollama_msgs: Vec<serde_json::Value> = messages
         .iter()
         .map(|m| {
@@ -853,6 +974,10 @@ fn build_ollama_body(messages: &[Message], tools: &[ToolDef], model: &str) -> se
         "messages": ollama_msgs,
         "stream": false,
     });
+
+    if let Some(temperature) = temperature {
+        body["options"] = serde_json::json!({"temperature": temperature});
+    }
 
     // Ollama supports tools in newer versions; include if provided
     if !tools.is_empty() {
@@ -924,6 +1049,36 @@ fn parse_openai_sse(body: &str) -> Vec<SseEvent> {
     events
 }
 
+/// Append a raw SSE chunk to `buffer` and return every frame it completes.
+///
+/// Carriage returns are discarded on the way in so CRLF-terminated streams
+/// (proxies that re-frame SSE with `\r\n`) split on the same blank-line
+/// boundary as LF-terminated ones — including when a `\r\n` pair straddles
+/// two chunks, because the `\r` is dropped wherever it lands. A raw CR can
+/// only be a line terminator here: any CR inside event data is escaped
+/// inside the JSON payload.
+fn push_sse_chunk(buffer: &mut String, chunk: &str) -> Vec<String> {
+    buffer.extend(chunk.chars().filter(|c| *c != '\r'));
+    let mut frames = Vec::new();
+    while let Some(pos) = buffer.find("\n\n") {
+        frames.push(buffer[..pos].to_string());
+        buffer.drain(..pos + 2);
+    }
+    frames
+}
+
+/// Token usage carried by a streamed frame, when the endpoint sends one
+/// (requested via `stream_options.include_usage`).
+fn usage_from_frame(frame: &str) -> Option<Usage> {
+    let line = frame.lines().find(|l| l.contains("\"usage\""))?;
+    let json: serde_json::Value =
+        serde_json::from_str(line.trim().strip_prefix("data:").unwrap_or("").trim()).ok()?;
+    Some(Usage {
+        prompt_tokens: json["usage"]["prompt_tokens"].as_u64()?,
+        completion_tokens: json["usage"]["completion_tokens"].as_u64()?,
+    })
+}
+
 /// A chunk of a streamed chat completion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatStreamChunk {
@@ -964,6 +1119,11 @@ impl OpenAiBackend {
         ];
         let mut body = self.build_body(&messages, &[]);
         body["stream"] = serde_json::json!(true);
+        // Ask the endpoint to close the stream with a usage frame: without
+        // it a streamed call reports no token counts at all, so the caller's
+        // cost and session accounting sees zeros. The openai-compatible
+        // endpoints this backend serves (OpenAI, DeepSeek) support it.
+        body["stream_options"] = serde_json::json!({"include_usage": true});
 
         let resp = self
             .client
@@ -979,16 +1139,18 @@ impl OpenAiBackend {
             })?;
 
         let status = resp.status();
+        let retry_after = retry_after_header(resp.headers());
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             let err_msg = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(String::from))
                 .unwrap_or(text);
-            return Err(classify_http_error(
+            return Err(classify_http_error_with_retry_after(
                 &self.label,
                 status.as_u16(),
                 &mask_secret(&err_msg, &self.api_key),
+                retry_after,
             ));
         }
 
@@ -1009,39 +1171,25 @@ impl OpenAiBackend {
                         return;
                     }
                 };
-                buffer.push_str(&String::from_utf8_lossy(&bytes));
-                // SSE frames end with a blank line; keep any trailing partial
-                // frame in the buffer for the next read.
-                while let Some(pos) = buffer.find("\n\n") {
-                    let frame = buffer[..pos].to_string();
-                    buffer.drain(..pos + 2);
-                    let events = parse_openai_sse(&frame);
-                    // capture usage from the final frames (best-effort)
-                    if let Some(line) = frame.lines().find(|l| l.contains("\"usage\""))
-                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(
-                            line.trim().strip_prefix("data:").unwrap_or("").trim(),
-                        )
-                        && let (Some(p), Some(c)) = (
-                            v["usage"]["prompt_tokens"].as_u64(),
-                            v["usage"]["completion_tokens"].as_u64(),
-                        )
-                    {
-                        usage = Some(Usage { prompt_tokens: p, completion_tokens: c });
+                // SSE frames end with a blank line; `push_sse_chunk` keeps any
+                // trailing partial frame in the buffer for the next read.
+                for frame in push_sse_chunk(&mut buffer, &String::from_utf8_lossy(&bytes)) {
+                    if let Some(u) = usage_from_frame(&frame) {
+                        usage = Some(u);
                     }
-                    for event in events {
-                        match event {
-                            SseEvent::Delta(d) => {
-                                content.push_str(&d);
-                                yield Ok(ChatStreamChunk::Text(d));
-                            }
-                            SseEvent::Done => {}
-                            SseEvent::Other => {}
+                    for event in parse_openai_sse(&frame) {
+                        if let SseEvent::Delta(d) = event {
+                            content.push_str(&d);
+                            yield Ok(ChatStreamChunk::Text(d));
                         }
                     }
                 }
             }
             // Flush any remaining partial frame.
             if !buffer.trim().is_empty() {
+                if let Some(u) = usage_from_frame(&buffer) {
+                    usage = Some(u);
+                }
                 for event in parse_openai_sse(&buffer) {
                     if let SseEvent::Delta(d) = event {
                         content.push_str(&d);
@@ -1244,17 +1392,26 @@ fn save_ai_config_to(
         "model": model.unwrap_or(""),
     });
     if let Ok(json) = serde_json::to_string_pretty(&config) {
-        // The file holds a live API key in plaintext — restrict it to the
-        // owner so shared HPC systems and group-readable homes don't leak it.
-        match std::fs::File::create(path) {
+        match create_private_file(path) {
             Ok(file) => {
                 use std::io::Write;
+                let mut file = file;
+                // The file holds a live API key in plaintext — restrict it
+                // to the owner so shared HPC systems and group-readable
+                // homes don't leak it. The mode is applied at creation
+                // (below), so there is no world-readable window; this
+                // second step also narrows a pre-existing wider file, and a
+                // failure is reported rather than swallowed.
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                    if let Err(e) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                        tracing::warn!(
+                            "Failed to restrict AI config {} to owner-only: {e}",
+                            path.display()
+                        );
+                    }
                 }
-                let mut file = file;
                 if let Err(e) = file.write_all(json.as_bytes()) {
                     tracing::warn!("Failed to write AI config to {}: {e}", path.display());
                 } else {
@@ -1264,6 +1421,20 @@ fn save_ai_config_to(
             Err(e) => tracing::warn!("Failed to create AI config at {}: {e}", path.display()),
         }
     }
+}
+
+/// Create/truncate a config file owner-only on unix (`0600` at creation —
+/// a `File::create` + later `chmod` leaves the key world-readable until the
+/// chmod lands, and the chmod's error was previously ignored).
+fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 /// The api_key currently stored at `path` (empty when absent/unreadable).
@@ -1886,6 +2057,282 @@ mod tests {
     }
 
     #[test]
+    fn compress_transcript_drops_unpaired_tool_results() {
+        // A cut that lands mid tool group would keep tool_result blocks
+        // whose declaring assistant turn was dropped — Anthropic rejects
+        // those outright, turning a recoverable overflow into a hard 400.
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::assistant("a1"),
+            Message::user("u2"),
+            Message::assistant_with_tools(vec![
+                ToolCall {
+                    id: "call_00".into(),
+                    name: "lookup_tool".into(),
+                    arguments: "{}".into(),
+                },
+                ToolCall {
+                    id: "call_01".into(),
+                    name: "lookup_skill".into(),
+                    arguments: "{}".into(),
+                },
+            ]),
+            Message::tool("call_00", "lookup_tool", "found 8"),
+            Message::tool("call_01", "lookup_skill", "none"),
+            Message::user("u3"),
+            Message::assistant("a3"),
+            Message::user("u4"),
+            Message::assistant("a4"),
+        ];
+        // 10 non-system turns, keep 6 → the cut lands on call_00's result;
+        // both of its unpaired results are dropped with the declaring turn.
+        let compressed = compress_transcript(&messages).expect("droppable turns exist");
+        assert_eq!(compressed.len(), 2 + 4, "got {compressed:#?}");
+        assert!(
+            compressed.iter().all(|m| m.role != MessageRole::Tool),
+            "unpaired tool results must not survive compression: {compressed:#?}"
+        );
+        assert!(compressed[1].content.contains("6 earlier turns omitted"));
+        assert_eq!(compressed.last().unwrap().content, "a4");
+
+        // Whatever survives must still convert to a paired Anthropic
+        // transcript (no tool_result without a preceding tool_use).
+        let (_system, msgs) = to_anthropic_messages(&compressed);
+        let mut declared: Vec<String> = Vec::new();
+        for m in &msgs {
+            for block in m["content"].as_array().into_iter().flatten() {
+                match block["type"].as_str() {
+                    Some("tool_use") => {
+                        declared.push(block["id"].as_str().unwrap_or("").to_string());
+                    }
+                    Some("tool_result") => assert!(
+                        declared.contains(&block["tool_use_id"].as_str().unwrap_or("").to_string()),
+                        "tool_result {} without a declared tool_use",
+                        block["tool_use_id"]
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            declared.is_empty(),
+            "the compressed tail declares no tool_use, so none may remain"
+        );
+
+        // A cut that does NOT break a tool group keeps the pairing intact.
+        let paired = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::assistant("a1"),
+            Message::user("u2"),
+            Message::assistant("a2"),
+            Message::user("u3"),
+            Message::assistant("a3"),
+            Message::user("u4"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "call_09".into(),
+                name: "lookup_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            Message::tool("call_09", "lookup_tool", "found 8"),
+        ];
+        let compressed = compress_transcript(&paired).expect("droppable turns exist");
+        assert!(
+            compressed.iter().any(|m| m.role == MessageRole::Tool),
+            "a tool group inside the kept tail must survive: {compressed:#?}"
+        );
+        let (_system, msgs) = to_anthropic_messages(&compressed);
+        let last = msgs.last().unwrap();
+        assert_eq!(last["content"][0]["tool_use_id"], "call_09");
+    }
+
+    #[test]
+    fn to_anthropic_messages_drops_undeclared_tool_result() {
+        // A transcript that lost its declaring assistant turn (compressed,
+        // reloaded from a session, or hand-built) must not be sent verbatim:
+        // Anthropic rejects a tool_result whose tool_use_id was never
+        // declared and the whole request fails with a 400.
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::tool("call_orphan", "lookup_tool", "found 8"),
+            Message::user("u2"),
+        ];
+        let (_system, msgs) = to_anthropic_messages(&messages);
+        assert_eq!(
+            msgs.len(),
+            2,
+            "the orphan tool_result turn is dropped: {msgs:#?}"
+        );
+        assert!(
+            msgs.iter().all(|m| m["content"].as_array().is_none()),
+            "no block array may remain: {msgs:#?}"
+        );
+
+        // A declared result still passes through unchanged.
+        let paired = vec![
+            Message::system("sys"),
+            Message::user("u1"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "call_ok".into(),
+                name: "lookup_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            Message::tool("call_ok", "lookup_tool", "found 8"),
+        ];
+        let (_system, msgs) = to_anthropic_messages(&paired);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[2]["content"][0]["tool_use_id"], "call_ok");
+    }
+
+    #[test]
+    fn request_bodies_include_temperature_when_set() {
+        let messages = vec![Message::user("hi")];
+        // 0.0 is a meaningful value ("deterministic") and must be sent,
+        // not treated as unset.
+        let claude = ClaudeBackend::new("k".into(), None, None).with_temperature(Some(0.0));
+        assert_eq!(claude.build_body(&messages, &[])["temperature"], 0.0);
+        let openai = OpenAiBackend::new("k".into(), None, None).with_temperature(Some(0.3));
+        assert_eq!(openai.build_body(&messages, &[])["temperature"], 0.3);
+        let ollama = build_ollama_body(&messages, &[], "llama3", Some(0.7));
+        assert_eq!(ollama["options"]["temperature"], 0.7);
+
+        // Unset → the field is omitted and the endpoint default applies.
+        let claude = ClaudeBackend::new("k".into(), None, None);
+        assert!(
+            claude
+                .build_body(&messages, &[])
+                .get("temperature")
+                .is_none()
+        );
+        let openai = OpenAiBackend::new("k".into(), None, None);
+        assert!(
+            openai
+                .build_body(&messages, &[])
+                .get("temperature")
+                .is_none()
+        );
+        assert!(
+            build_ollama_body(&messages, &[], "llama3", None)
+                .get("options")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rate_limited_carries_retry_after_header() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "30".parse().unwrap());
+        assert_eq!(retry_after_header(&headers).as_deref(), Some("30"));
+        match classify_http_error_with_retry_after(
+            "openai",
+            429,
+            "slow down",
+            retry_after_header(&headers),
+        ) {
+            AiError::RateLimited { retry_after, .. } => {
+                assert_eq!(retry_after.as_deref(), Some("30"))
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+
+        // The HTTP-date form is not guessed, and an absent header stays None.
+        let mut http_date = reqwest::header::HeaderMap::new();
+        http_date.insert(
+            reqwest::header::RETRY_AFTER,
+            "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+        );
+        assert!(retry_after_header(&http_date).is_none());
+        assert!(retry_after_header(&reqwest::header::HeaderMap::new()).is_none());
+        // Callers that classify without a header keep the old behavior.
+        assert!(matches!(
+            classify_http_error("openai", 429, "rate limit"),
+            AiError::RateLimited {
+                retry_after: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn build_body_omits_empty_reasoning_content() {
+        // The agent loop builds every assistant turn with
+        // `reasoning_content: Some("")` when the model sent none; some
+        // openai-compatible endpoints reject an empty reasoning field.
+        let messages = vec![
+            Message::system("sys"),
+            Message::assistant_with_reasoning("answer", ""),
+            Message::assistant_with_tools_and_reasoning(
+                vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "lookup_tool".into(),
+                    arguments: "{}".into(),
+                }],
+                "",
+            ),
+            Message::assistant_with_reasoning("answer", "step by step"),
+        ];
+        let backend = OpenAiBackend::new("k".into(), None, None);
+        let body = backend.build_body(&messages, &[]);
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(
+            msgs[1].get("reasoning_content").is_none(),
+            "empty reasoning must be omitted: {}",
+            msgs[1]
+        );
+        assert!(
+            msgs[2].get("reasoning_content").is_none(),
+            "empty reasoning must be omitted: {}",
+            msgs[2]
+        );
+        assert_eq!(msgs[3]["reasoning_content"], "step by step");
+    }
+
+    #[test]
+    fn sse_frames_split_on_crlf_and_split_crlf_pairs() {
+        // A proxy that re-frames SSE with CRLF must still stream
+        // incrementally: the frame boundary is a blank line in either
+        // convention.
+        let mut buffer = String::new();
+        let frames = push_sse_chunk(
+            &mut buffer,
+            "data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\r\n\r\n",
+        );
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].contains("fast"));
+        assert!(buffer.is_empty(), "no partial frame may remain");
+
+        // The \r\n pair straddles two reads — the \r must not block the split.
+        let mut buffer = String::new();
+        assert!(push_sse_chunk(&mut buffer, "data: {\"a\":1}\r").is_empty());
+        let frames = push_sse_chunk(&mut buffer, "\n\r\ndata: {\"b\":2}\n\n");
+        assert_eq!(frames.len(), 2, "got {frames:#?}");
+        assert!(frames[0].contains("\"a\""));
+        assert!(frames[1].contains("\"b\""));
+    }
+
+    #[test]
+    fn usage_from_frame_reads_streamed_usage() {
+        // `stream_options.include_usage` makes the endpoint close the stream
+        // with a usage-only frame; without reading it a streamed call
+        // reports zero tokens.
+        let frame =
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}";
+        assert_eq!(
+            usage_from_frame(frame),
+            Some(Usage {
+                prompt_tokens: 12,
+                completion_tokens: 7,
+            })
+        );
+        assert!(
+            usage_from_frame("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}").is_none()
+        );
+        assert!(usage_from_frame("data: {\"usage\":null}").is_none());
+    }
+
+    #[test]
     fn save_ai_config_none_key_preserves_stored_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ai_config.json");
@@ -1912,5 +2359,28 @@ mod tests {
         // An explicit empty key clears it.
         save_ai_config_to(&path, "openai", Some(""), None, None);
         assert_eq!(read(&path)["api_key"], "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_ai_config_creates_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_config.json");
+        save_ai_config_to(&path, "claude", Some("sk-secret"), None, None);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the config holds an API key and must never be created group/world readable"
+        );
+
+        // A pre-existing wider file is narrowed by the next save.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_ai_config_to(&path, "claude", Some("sk-secret"), None, None);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "an existing world-readable config must be narrowed"
+        );
     }
 }

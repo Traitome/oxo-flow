@@ -790,9 +790,12 @@ pub fn metadata_columns(table: &MetadataTable) -> std::collections::HashSet<Stri
 /// value, and a missing row OR column substitutes an empty string (the
 /// `when = "config.single_end_mode || {meta.endedness} == 'SE'"` gate
 /// therefore evaluates false for samples without the data — the gate is
-/// closed, never a literal token). Unresolvable references in rules that
-/// never fan out (no sample-like binding at all) stay untouched; the
-/// execution-time residual-placeholder guard warns about those.
+/// closed, never a literal token). This holds for EVERY `{meta.<column>}`
+/// reference, including rules that never fan out: with no sample-like
+/// binding at all, `metadata_row_for` is `None` and every reference still
+/// renders empty — never a literal token. (Only callers that skip this
+/// pass entirely leave the token in place; the execution-time
+/// residual-placeholder guard warns about those.)
 #[must_use = "expanding returns a new String"]
 pub fn expand_meta_namespace(
     text: &str,
@@ -1629,5 +1632,43 @@ mod tests {
         use crate::config::SampleGroup;
         let combos = wildcard_combinations_from_groups(&[] as &[SampleGroup]);
         assert!(combos.is_empty());
+    }
+
+    #[test]
+    fn expand_meta_namespace_renders_unresolvable_references_empty() {
+        // The doc promises the code's behavior: a missing row (no
+        // sample-like binding at all — a rule that never fans out) renders
+        // EVERY `{meta.<column>}` empty, never a literal token. The
+        // execution-time residual-placeholder guard is what catches rules
+        // that skip this pass entirely.
+        let mut table = MetadataTable::new();
+        let mut row = std::collections::HashMap::new();
+        row.insert("endedness".to_string(), "SE".to_string());
+        table.insert("S1".to_string(), row);
+
+        let empty = WildcardValues::new();
+        assert_eq!(
+            expand_meta_namespace("reads/{meta.endedness}/x", &table, &empty),
+            "reads//x",
+            "no binding → empty, not a literal token"
+        );
+        let mut other = WildcardValues::new();
+        other.insert("sample".to_string(), "S9".to_string());
+        assert_eq!(
+            expand_meta_namespace("{meta.endedness}", &table, &other),
+            "",
+            "unknown sample → empty"
+        );
+        let mut known = WildcardValues::new();
+        known.insert("sample".to_string(), "S1".to_string());
+        assert_eq!(
+            expand_meta_namespace("{meta.endedness}", &table, &known),
+            "SE"
+        );
+        assert_eq!(
+            expand_meta_namespace("{meta.absent}", &table, &known),
+            "",
+            "known sample, unknown column → empty"
+        );
     }
 }

@@ -105,6 +105,7 @@ mkdir -p expression
 featureCounts -T {threads} \
               -a {config.gene_annotation} \
               -o {output[0]} -p --countReadPairs \
+              -s 2 \
               {input[0]}
 """
 

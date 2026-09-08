@@ -105,13 +105,16 @@ impl WorkflowDag {
                     .insert(producer_name.to_string());
             };
 
-        // Strings claimed via `output_pattern` (issue #296). They register
-        // producer-side for exact matching, but are EXCLUDED from the
-        // template matchers below: a raw pattern like `refs/{build}/bt2.gz`
+        // Strings claimed via `output_pattern` (issue #296), keyed by the
+        // declaring rule. They register producer-side for exact matching, but
+        // the CLAIMING producer's entry is excluded from the template
+        // matchers below: a raw pattern like `refs/{build}/bt2.gz`
         // regex-matches arbitrary concrete inputs (`refs/legacy/bt2.gz`)
         // that no dataflow connects, and the fabricated edges can serialize
-        // unrelated rules or fabricate cycles.
-        let mut pattern_claims: HashSet<String> = HashSet::new();
+        // unrelated rules or fabricate cycles. The key is the rule, not the
+        // string: another rule declaring the same string as a plain `output`
+        // keeps its own matcher (audit finding).
+        let mut pattern_claims: HashMap<NodeIndex, HashSet<String>> = HashMap::new();
 
         // Step 1: Add all rules as nodes
         for (idx, rule) in rules.iter().enumerate() {
@@ -141,7 +144,10 @@ impl WorkflowDag {
             // patterns against the baked instance patterns.
             if let Some(ref op) = rule.output_pattern {
                 let claimed = expand(op);
-                pattern_claims.insert(claimed.clone());
+                pattern_claims
+                    .entry(node)
+                    .or_default()
+                    .insert(claimed.clone());
                 output_to_node.entry(claimed).or_default().push(node);
             }
         }
@@ -165,21 +171,29 @@ impl WorkflowDag {
             .iter()
             .flat_map(|(output, nodes)| nodes.iter().map(|&n| (output.clone(), n)))
             .collect();
-        // Pre-compile one matcher per template-level output (e.g.
-        // `variants/{sample}.g.vcf.gz` → `^variants/(?P<sample>\S+)\.g\.vcf\.gz$`).
-        // Outputs referencing `{config.x}` cannot compile a valid regex group
-        // name — those are skipped (None) and simply never match.
-        // Output_pattern claims stay out (see `pattern_claims`).
-        let template_matchers: Vec<(String, Option<Regex>)> = producer_outputs
+        // Pre-compile one matcher per (producer, template-level output) pair
+        // (e.g. `variants/{sample}.g.vcf.gz` →
+        // `^variants/(?P<sample>\S+)\.g\.vcf\.gz$`). Outputs referencing
+        // `{config.x}` cannot compile a valid regex group name — those are
+        // skipped (None) and simply never match. Carrying the producer node
+        // (rather than looking it up by output string) keeps a producer that
+        // only CLAIMED the string as an `output_pattern` out of the template
+        // matching, while a rule that declares the same string as a plain
+        // `output` keeps its matcher (see `pattern_claims`).
+        let template_matchers: Vec<(NodeIndex, Option<Regex>)> = producer_outputs
             .iter()
-            .filter(|(output, _)| !pattern_claims.contains(output))
-            .map(|(output, _)| {
+            .filter(|(output, node)| {
+                !pattern_claims
+                    .get(node)
+                    .is_some_and(|claims| claims.contains(output))
+            })
+            .map(|(output, node)| {
                 let matcher = if output.contains('{') {
                     crate::wildcard::pattern_to_regex(output).ok()
                 } else {
                     None
                 };
-                (output.clone(), matcher)
+                (*node, matcher)
             })
             .collect();
 
@@ -269,20 +283,17 @@ impl WorkflowDag {
                         //    (`variants/{sample}.g.vcf.gz` covers
                         //    `variants/NA12878.g.vcf.gz`), then the directory
                         //    heuristic for extension-less inputs.
-                        for (output, matcher) in &template_matchers {
+                        for (producer_node, matcher) in &template_matchers {
                             if let Some(re) = matcher
                                 && re.is_match(&input)
-                                && let Some(producers) = output_to_node.get(output)
                             {
-                                for &producer_node in producers {
-                                    add_edge_dedup(graph, producer_node, consumer_node);
-                                    record_producer(
-                                        &rule.name,
-                                        &input,
-                                        &graph[producer_node].name,
-                                        &mut input_producers,
-                                    );
-                                }
+                                add_edge_dedup(graph, *producer_node, consumer_node);
+                                record_producer(
+                                    &rule.name,
+                                    &input,
+                                    &graph[*producer_node].name,
+                                    &mut input_producers,
+                                );
                             }
                         }
                         if looks_like_directory(&input) {
@@ -1487,10 +1498,12 @@ impl WorkflowDag {
 
         for (section, display) in &sections {
             if multi_section {
+                let section_id =
+                    unique_metro_id(&sanitize_metro_id(section), &mut taken_section_ids);
                 out.push_str(&format!(
                     "    subgraph {} [{}]\n",
-                    unique_metro_id(&sanitize_metro_id(section), &mut taken_section_ids),
-                    sanitize_mermaid_text(display)
+                    section_id,
+                    metro_section_title(display, &section_id)
                 ));
             }
 
@@ -1786,6 +1799,22 @@ fn emit_metro_line_defs<'a>(
     line_ids
 }
 
+/// Mermaid keywords that cannot be used as a `subgraph` id — `subgraph end
+/// [...]` terminates the diagram at that line, the others collide with
+/// declaration syntax.
+const MERMAID_RESERVED_IDS: [&str; 10] = [
+    "end",
+    "graph",
+    "subgraph",
+    "flowchart",
+    "direction",
+    "click",
+    "style",
+    "class",
+    "classdef",
+    "linkstyle",
+];
+
 fn sanitize_metro_id(s: &str) -> String {
     let mut out: String = s
         .chars()
@@ -1798,13 +1827,29 @@ fn sanitize_metro_id(s: &str) -> String {
         })
         .collect();
     // Mermaid ids must not start with a digit (module file stems like
-    // "01_preprocessing" do).
+    // "01_preprocessing" do), be empty (a section with no usable
+    // characters), or collide with a Mermaid keyword (a section named
+    // `end` closes the subgraph it was meant to open).
     if out.is_empty() {
         out = "stage".to_string();
-    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+    } else if out.chars().next().is_some_and(|c| c.is_ascii_digit())
+        || MERMAID_RESERVED_IDS.contains(&out.as_str())
+    {
         out = format!("s_{out}");
     }
     out
+}
+
+/// Section title for a `subgraph <id> [<title>]` line: never empty — an
+/// empty title emits `subgraph stage []`, which Mermaid rejects — and
+/// meta-characters go through [`sanitize_mermaid_text`].
+fn metro_section_title(display: &str, id: &str) -> String {
+    let sanitized = sanitize_mermaid_text(display);
+    if sanitized.trim().is_empty() {
+        id.to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Sanitize text that appears inside a Mermaid quoted node label
@@ -1945,7 +1990,10 @@ impl WorkflowDag {
             dot.push_str("    style = dashed;\n");
             dot.push_str("    color = \"#cccccc\";\n");
             for name in group {
-                dot.push_str(&format!("    \"{}\";\n", name));
+                // `{:?}` escapes quotes and backslashes the way `to_dot`
+                // does — `--expanded` names concatenate arbitrary scatter
+                // values, so a raw `"` would end the DOT string early.
+                dot.push_str(&format!("    {:?};\n", name));
             }
             dot.push_str("  }\n\n");
         }
@@ -1954,7 +2002,7 @@ impl WorkflowDag {
         for edge in self.graph.edge_indices() {
             if let Some((src, dst)) = self.graph.edge_endpoints(edge) {
                 dot.push_str(&format!(
-                    "  \"{}\" -> \"{}\";\n",
+                    "  {:?} -> {:?};\n",
                     self.graph[src].name, self.graph[dst].name
                 ));
             }
@@ -2006,8 +2054,19 @@ impl WorkflowDag {
             predecessor.insert(node_idx, best_parent);
         }
 
-        // Find the node with maximum depth
-        let end_node = depth.iter().max_by_key(|&(_, &d)| d).map(|(&n, _)| n);
+        // Find the node with maximum depth. `depth` is a HashMap, so a bare
+        // `max_by_key` picks an arbitrary member of a tied set per process —
+        // the tiebreak is the same one the parent choice above uses
+        // (alphabetically first name wins).
+        let end_node = depth
+            .iter()
+            .map(|(&node, &node_depth)| (node_depth, node))
+            .max_by(|(a_depth, a_node), (b_depth, b_node)| {
+                a_depth
+                    .cmp(b_depth)
+                    .then_with(|| self.graph[*b_node].name.cmp(&self.graph[*a_node].name))
+            })
+            .map(|(_, node)| node);
 
         let Some(mut current) = end_node else {
             return Ok(vec![]);
@@ -2778,6 +2837,44 @@ mod tests {
         assert_eq!(path.len(), 3);
         assert_eq!(path[0], "source");
         assert_eq!(path[2], "merge");
+    }
+
+    #[test]
+    fn critical_path_end_node_tiebreak_is_deterministic() {
+        // Two equal-length chains tie on depth: the end node must be chosen
+        // by name (alphabetically first), not by HashMap iteration order,
+        // which varies per process — and the path must not depend on the
+        // order the rules were declared in.
+        let rules = vec![
+            make_rule("z_start", vec!["in_z.txt"], vec!["mid_z.txt"]),
+            make_rule("z_end", vec!["mid_z.txt"], vec!["out_z.txt"]),
+            make_rule("a_start", vec!["in_a.txt"], vec!["mid_a.txt"]),
+            make_rule("a_end", vec!["mid_a.txt"], vec!["out_a.txt"]),
+        ];
+        let forward = WorkflowDag::from_rules(&rules).unwrap();
+        let mut reversed = rules.clone();
+        reversed.reverse();
+        let backward = WorkflowDag::from_rules(&reversed).unwrap();
+        assert_eq!(forward.critical_path().unwrap(), vec!["a_start", "a_end"]);
+        assert_eq!(
+            backward.critical_path().unwrap(),
+            forward.critical_path().unwrap(),
+            "the critical path must not depend on declaration order"
+        );
+    }
+
+    #[test]
+    fn output_declaration_keeps_its_matcher_when_another_rule_claims_the_pattern() {
+        // Rule A declares the string as a plain `output`; rule B claims the
+        // same string via `output_pattern`. The claim filter is keyed by
+        // declaring rule, so A keeps its template matcher (the old
+        // string-keyed filter dropped it, losing A's edge).
+        let a = make_rule("index_ref", vec![], vec!["refs/{build}/bt2.gz"]);
+        let mut b = make_rule("pattern_ref", vec![], vec![]);
+        b.output_pattern = Some("refs/{build}/bt2.gz".to_string());
+        let consumer = make_rule("align", vec!["refs/hg38/bt2.gz"], vec!["aln.bam"]);
+        let dag = WorkflowDag::from_rules(&[a, b, consumer]).unwrap();
+        assert_eq!(dag.dependencies("align").unwrap(), vec!["index_ref"]);
     }
 
     #[test]
@@ -3772,5 +3869,53 @@ mod tests {
             mmd.contains("n0 -->|qc| n3"),
             "fastq_qc -> report edge:\n{mmd}"
         );
+    }
+
+    // ── Audit remediation: DOT escaping, metro reserved ids ────────────────
+
+    #[test]
+    fn to_dot_clustered_escapes_rule_names() {
+        // `--expanded` concatenates arbitrary scatter values into rule
+        // names: a raw `"` or `\` would end the DOT string early and break
+        // the graph. `to_dot` escapes via `{:?}`; the clustered export must
+        // match.
+        let rules = vec![
+            make_rule(r#"say "hi""#, vec![], vec!["a.txt"]),
+            make_rule(r"back\slash", vec!["a.txt"], vec!["b.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let dot = dag.to_dot_clustered().unwrap();
+        assert!(
+            dot.contains(r#""say \"hi\"""#),
+            "quoted name escaped:\n{dot}"
+        );
+        assert!(
+            dot.contains(r#""back\\slash""#),
+            "backslash name escaped:\n{dot}"
+        );
+    }
+
+    #[test]
+    fn metro_export_escapes_reserved_section_ids_and_empty_titles() {
+        // A section named `end` would emit `subgraph end [...]`, closing
+        // the diagram at that line; an empty title would emit
+        // `subgraph stage []`.
+        let mut align = make_rule("alignment::star_align", vec!["reads.fq"], vec!["a.bam"]);
+        align.shell = Some("STAR".to_string());
+        let mut finish = make_rule("end::finalize", vec!["a.bam"], vec!["b.txt"]);
+        finish.shell = Some("echo done".to_string());
+        let rules = vec![align, finish];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mmd = dag.to_metro(&rules, None, MetroGranularity::Rule).unwrap();
+        assert!(
+            mmd.contains("subgraph s_end ["),
+            "reserved id escaped:\n{mmd}"
+        );
+        assert!(!mmd.contains("subgraph end"), "raw reserved id:\n{mmd}");
+
+        // Titles never render empty.
+        assert_eq!(metro_section_title("", "stage"), "stage");
+        assert_eq!(metro_section_title("   ", "stage"), "stage");
+        assert_eq!(metro_section_title("Read QC", "x"), "Read QC");
     }
 }

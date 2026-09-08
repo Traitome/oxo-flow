@@ -4,6 +4,7 @@
 //! Additional tools can be registered by plugins or MCP servers.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 
 use super::{Tool, ToolDef};
 use crate::error::AiError;
@@ -237,6 +238,53 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
     Err("too many redirects (>5)".into())
 }
 
+/// Maximum bytes of a fetched response body handed back to the model. The
+/// 15 s request timeout bounds *time*, not size: a fast endpoint can stream
+/// hundreds of megabytes in that window, and nothing near that fits the
+/// model's context (or the tool-result budget) anyway.
+const MAX_FETCH_BYTES: usize = 256 * 1024;
+
+/// Accumulates a response body up to [`MAX_FETCH_BYTES`] and reports whether
+/// the source had more. Reading happens chunk-at-a-time so an oversized (or
+/// endless) response is abandoned once the cap is reached instead of being
+/// buffered whole.
+struct CappedBody {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl CappedBody {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    /// Append one chunk; returns `false` once the cap is reached, telling
+    /// the caller to stop reading.
+    fn push(&mut self, chunk: &[u8]) -> bool {
+        let room = MAX_FETCH_BYTES.saturating_sub(self.bytes.len());
+        if chunk.len() > room {
+            self.bytes.extend_from_slice(&chunk[..room]);
+            self.truncated = true;
+            return false;
+        }
+        self.bytes.extend_from_slice(chunk);
+        self.bytes.len() < MAX_FETCH_BYTES
+    }
+
+    /// The body as text, with a marker appended when it was cut short.
+    fn finish(self) -> String {
+        let text = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            format!("{text}\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]")
+        } else {
+            text
+        }
+    }
+}
+
 /// Fetch content from a URL.
 #[derive(Default)]
 pub struct FetchUrlTool {
@@ -296,12 +344,19 @@ impl Tool for FetchUrlTool {
                     message: format!("blocked: {reason}"),
                 })?;
 
-        let text = response.text().await.map_err(|e| AiError::ToolError {
-            tool: "fetch_url".into(),
-            message: format!("read response failed: {e}"),
-        })?;
+        let mut body = CappedBody::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("read response failed: {e}"),
+            })?;
+            if !body.push(&chunk) {
+                break;
+            }
+        }
 
-        Ok(text)
+        Ok(body.finish())
     }
 }
 
@@ -903,6 +958,27 @@ mod fetch_url_ssrf_tests {
             vec!["metadata.internal".to_string(), "example.com".to_string()]
         );
         assert!(parse_allowlist("").is_empty());
+    }
+
+    #[test]
+    fn capped_body_stops_at_cap_and_marks_truncation() {
+        // The 15 s timeout bounds time, not size: without a byte cap a fast
+        // endpoint can hand the model hundreds of megabytes.
+        let mut body = CappedBody::new();
+        assert!(body.push(b"hello "));
+        assert!(body.push(b"world"));
+        let oversized = vec![b'x'; MAX_FETCH_BYTES + 1024];
+        assert!(!body.push(&oversized), "the cap must stop the read");
+        let text = body.finish();
+        let marker = format!("\n[... response truncated at {MAX_FETCH_BYTES} bytes ...]");
+        assert_eq!(text.len(), MAX_FETCH_BYTES + marker.len());
+        assert!(text.starts_with("hello world"));
+        assert!(text.ends_with(&marker));
+
+        // A body under the cap is returned verbatim, with no marker.
+        let mut body = CappedBody::new();
+        assert!(body.push(b"all of it"));
+        assert_eq!(body.finish(), "all of it");
     }
 
     #[test]

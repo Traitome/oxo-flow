@@ -1498,7 +1498,10 @@ fn filter_samples_knows_pair_names() {
     let (kept, unknown) = config
         .filter_samples(&["T1".to_string(), "N1".to_string()])
         .unwrap();
-    assert!(kept.is_empty()); // pairs-only workflow: kept tracks group samples
+    // Pair members are selectable samples in their own right (a pairs-only
+    // workflow declares no group samples, so `first:N`/explicit names must
+    // still address them).
+    assert_eq!(kept, vec!["T1", "N1"]);
     assert!(unknown.is_empty(), "pair names are known: {unknown:?}");
     // Both sides selected → the pair survives filtering.
     assert_eq!(config.pairs.len(), 1);
@@ -3897,7 +3900,8 @@ fn filter_samples_syncs_injected_pairs_list() {
     let (kept, unknown) = config
         .filter_samples(&["T1".to_string(), "N1".to_string()])
         .unwrap();
-    assert!(kept.is_empty());
+    // Pair members are selectable samples themselves (pairs-only workflow).
+    assert_eq!(kept, vec!["T1", "N1"]);
     assert!(unknown.is_empty());
     assert_eq!(config.pairs.len(), 1);
     assert_eq!(
@@ -6929,6 +6933,16 @@ fn output_pattern_fully_bound_by_values_needs_no_discovery() {
         name = "assemble"
         output_pattern = "results/{assembler}/part.txt"
         shell = "scripts/build_all.sh"
+
+        [[rules]]
+        name = "assemble_fresh"
+        output_pattern = "results/{assembler}/{part}.txt"
+        shell = "scripts/build_all.sh"
+
+        [[rules]]
+        name = "assemble_dotted"
+        output_pattern = "results/{assembler}/{values.other}/part.txt"
+        shell = "scripts/build_all.sh"
         "#,
     )
     .unwrap();
@@ -6940,6 +6954,10 @@ fn output_pattern_fully_bound_by_values_needs_no_discovery() {
     let spades = config
         .get_rule("assemble_assembler_spades")
         .expect("values instance");
+    assert_eq!(
+        spades.output_pattern.as_deref(),
+        Some("results/spades/part.txt")
+    );
     assert!(
         !config.output_pattern_needs_discovery(spades),
         "fully-bound pattern: nothing left to discover"
@@ -6947,16 +6965,30 @@ fn output_pattern_fully_bound_by_values_needs_no_discovery() {
 
     // A pattern whose wildcards are not all bound by fan-out sources
     // (here: a fresh wildcard the runtime must enumerate) keeps discovery.
-    let mut fresh = spades.clone();
-    fresh.output_pattern = Some("results/spades/{part}.txt".to_string());
-    assert!(config.output_pattern_needs_discovery(&fresh));
+    // Built by the real fan-out, not by hand: the values dimension bakes,
+    // the fresh one survives.
+    let fresh = config
+        .get_rule("assemble_fresh_assembler_spades")
+        .expect("fresh-wildcard instance");
+    assert_eq!(
+        fresh.output_pattern.as_deref(),
+        Some("results/spades/{part}.txt")
+    );
+    assert!(config.output_pattern_needs_discovery(fresh));
 
     // A residual DOTTED token ({values.x}/{config.x}/{meta.x}) is invisible
     // to the wildcard extractor but still means "never baked" — discovery
-    // (or at least its zero-match warning) must stay loud.
-    let mut dotted = spades.clone();
-    dotted.output_pattern = Some("results/{values.assembler}/part.txt".to_string());
-    assert!(config.output_pattern_needs_discovery(&dotted));
+    // (or at least its zero-match warning) must stay loud. `{values.other}`
+    // has no table, so the fan-out leaves it untouched on the real
+    // instance (a bound `{values.assembler}` would be baked away).
+    let dotted = config
+        .get_rule("assemble_dotted_assembler_spades")
+        .expect("residual-dotted instance");
+    assert_eq!(
+        dotted.output_pattern.as_deref(),
+        Some("results/spades/{values.other}/part.txt")
+    );
+    assert!(config.output_pattern_needs_discovery(dotted));
 }
 
 #[test]
@@ -7522,4 +7554,552 @@ fn sample_groups_csv_sheet_columns_work_too() {
     let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
     assert!(names.iter().any(|n| n.starts_with("assemble_long_LR1")));
     assert!(!names.iter().any(|n| n.starts_with("assemble_short")));
+}
+
+// ---------------------------------------------------------------------------
+// Audit remediation: deferred-consumer name collisions, profile defaults,
+// glob `**`, transform combine output, {meta.} in output_pattern, sample
+// selection on pairs-only workflows, duplicate sample owners.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn output_pattern_consumer_colliding_sanitized_names_is_an_error() {
+    // Two distinct producer-domain values can sanitize to ONE instance name
+    // ('A-1' and 'A_1' both render 'A_1'). Treating the second as an
+    // idempotent re-instantiation silently dropped a whole domain value
+    // while the run still reported success; it must be a hard plan-time
+    // error naming both values.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("collide.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "collide"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/{part}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/{part}.txt"]
+        output = ["out/{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    for part in ["A-1", "A_1"] {
+        let path = dir.path().join(format!("results/{part}.txt"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "x").unwrap();
+    }
+    let instance = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    assert_eq!(combos.len(), 2, "both domain values discovered");
+    config.contribute_output_pattern_domain("split", combos);
+
+    let err = config
+        .expand_output_pattern_consumers()
+        .expect_err("colliding sanitized names must not be silently dropped");
+    let message = err.to_string();
+    assert!(message.contains("A-1"), "names the first value: {message}");
+    assert!(message.contains("A_1"), "names the second value: {message}");
+    assert!(
+        message.contains("collect_A_1"),
+        "names the colliding instance: {message}"
+    );
+}
+
+#[test]
+fn output_pattern_consumer_reinstantiates_same_combo_idempotently() {
+    // The counterpart of the collision guard: re-instantiating the SAME
+    // combo (checkpoint re-entry replays the pending set) stays a no-op.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("idem.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "idem"
+
+        [[rules]]
+        name = "split"
+        output_pattern = "results/{part}.txt"
+        shell = "scripts/build_chunks.sh"
+
+        [[rules]]
+        name = "collect"
+        input = ["results/{part}.txt"]
+        output = ["out/{part}.txt"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let path = dir.path().join("results/1.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "x").unwrap();
+    let instance = config.get_rule("split").cloned().unwrap();
+    let combos = config
+        .discover_output_pattern_files(&instance, dir.path())
+        .unwrap();
+    config.contribute_output_pattern_domain("split", combos);
+
+    assert_eq!(
+        config.expand_output_pattern_consumers().unwrap(),
+        vec!["collect_1"]
+    );
+    // Same combo replayed (checkpoint re-entry re-adds the template to the
+    // pending set): idempotent, no error, no duplicate instance.
+    let rules_before = config.rules.len();
+    let consumer_template = config
+        .rule_templates
+        .iter()
+        .find(|r| r.name == "collect")
+        .cloned()
+        .expect("consumer template");
+    config.pending_output_pattern.push(consumer_template);
+    assert!(
+        config.expand_output_pattern_consumers().unwrap().is_empty(),
+        "the same combo re-instantiates nothing"
+    );
+    assert_eq!(config.rules.len(), rules_before);
+}
+
+#[test]
+fn merge_profile_defaults_carries_shell_prelude_and_time_limit() {
+    // The profile [defaults] merge copied only threads/memory/environment,
+    // so a profile setting the documented shell_prelude/time_limit keys was
+    // silently ignored.
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+    "#;
+
+    // fill mode: unset workflow defaults take the profile's values.
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    let profile: toml::Value = toml::from_str(
+        r#"
+        [defaults]
+        shell_prelude = "set -euo pipefail"
+        time_limit = "48h"
+        "#,
+    )
+    .unwrap();
+    config.merge_profile(&profile).unwrap();
+    config.apply_defaults();
+    assert_eq!(
+        config.defaults.shell_prelude.as_deref(),
+        Some("set -euo pipefail")
+    );
+    assert_eq!(config.defaults.time_limit.as_deref(), Some("48h"));
+    assert_eq!(
+        config.rules[0].resources.time_limit.as_deref(),
+        Some("48h"),
+        "the profile time_limit reaches the rule resources"
+    );
+
+    // fill mode: a workflow value wins.
+    let toml_own = toml.replace(
+        "[[rules]]",
+        "[defaults]\nshell_prelude = \"set -e\"\ntime_limit = \"2h\"\n\n[[rules]]",
+    );
+    let mut config = WorkflowConfig::parse(&toml_own).unwrap();
+    config.merge_profile(&profile).unwrap();
+    assert_eq!(config.defaults.shell_prelude.as_deref(), Some("set -e"));
+    assert_eq!(config.defaults.time_limit.as_deref(), Some("2h"));
+
+    // override mode: the profile replaces both.
+    let toml_override = toml.replace(
+        "version = \"1.0.0\"",
+        "version = \"1.0.0\"\nprofile_mode = \"override\"",
+    );
+    let mut config = WorkflowConfig::parse(&toml_override).unwrap();
+    config.merge_profile(&profile).unwrap();
+    assert_eq!(
+        config.defaults.shell_prelude.as_deref(),
+        Some("set -euo pipefail")
+    );
+    assert_eq!(config.defaults.time_limit.as_deref(), Some("48h"));
+
+    // override mode with a workflow value: the profile still wins.
+    let toml_override_own = toml_own.replace(
+        "version = \"1.0.0\"",
+        "version = \"1.0.0\"\nprofile_mode = \"override\"",
+    );
+    let mut config = WorkflowConfig::parse(&toml_override_own).unwrap();
+    config.merge_profile(&profile).unwrap();
+    assert_eq!(
+        config.defaults.shell_prelude.as_deref(),
+        Some("set -euo pipefail")
+    );
+    assert_eq!(config.defaults.time_limit.as_deref(), Some("48h"));
+}
+
+#[test]
+fn input_groups_double_star_pattern_is_a_hard_error() {
+    // `**` is an unsupported cross-segment glob. It used to bypass the glob
+    // matcher (which rejects it) and compile as a literal `**`, so the run
+    // reported a misleading "matched no files" instead of the real problem.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("doublestar.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "doublestar"
+
+        [[rules]]
+        name = "lanemerge"
+        input_groups = [
+            { pattern = "raw/{sample}/**.fq", group_by = "sample" }
+        ]
+        output = ["merged/{sample}.fq"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    let err = config
+        .expand_wildcards()
+        .expect_err("'**' must be rejected, not matched literally");
+    let message = err.to_string();
+    assert!(
+        message.contains("**"),
+        "the error names the offending token: {message}"
+    );
+    assert!(
+        message.contains("cross-segment") || message.contains("not supported"),
+        "the error explains the unsupported glob: {message}"
+    );
+}
+
+#[test]
+fn transform_combine_rejects_split_var_in_output() {
+    // The combine stage is one rule with one merged output: cloning the
+    // declared output verbatim left a literal `{chr}` the executor could
+    // never expand, aborting the run late. Fail at plan time instead.
+    let toml = r#"
+        [workflow]
+        name = "test"
+
+        [config]
+        chromosomes = ["chr1", "chr2"]
+
+        [[rules]]
+        name = "variant_calling"
+        input = ["aligned/sample.bam"]
+        output = ["variants/{chr}.vcf.gz"]
+
+        [rules.transform.split]
+        by = "chr"
+        values_from = "config.chromosomes"
+
+        [rules.transform]
+        map = "call -L {chr} -O {output}"
+
+        [rules.transform.combine]
+        shell = "gather {chunks} > {output}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+    let err = config
+        .expand_wildcards()
+        .expect_err("a combine stage with {chr} in its output must fail fast");
+    let message = err.to_string();
+    assert!(
+        message.contains("variant_calling") && message.contains("{chr}"),
+        "names the rule and the unresolved split variable: {message}"
+    );
+
+    // The per-value map stage alone (no combine) stays legal.
+    let toml_map_only = toml.replace(
+        "        [rules.transform.combine]\n        shell = \"gather {chunks} > {output}\"\n",
+        "",
+    );
+    let mut config = WorkflowConfig::parse(&toml_map_only).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    assert!(
+        config
+            .rules
+            .iter()
+            .any(|r| r.name == "variant_calling_chr1"),
+        "split→map without combine keeps per-value outputs"
+    );
+}
+
+#[test]
+fn output_pattern_resolves_meta_namespace() {
+    // `{meta.<column>}` is substituted in input/output/shell/log/when/
+    // script/hooks — `output_pattern` was missing, so a pattern using it
+    // stayed literal and runtime discovery found nothing.
+    let (_dir, workflow_path) = metadata_workflow(
+        "sample\tassay\nS1\tRNA\nS2\tATAC\n",
+        r#"
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+        "#,
+        r#"
+        [[rules]]
+        name = "produce"
+        output_pattern = "results/{sample}/{meta.assay}/done.txt"
+        shell = "mkdir -p results && touch {output_pattern}"
+        "#,
+    );
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let s1 = config.get_rule("produce_cohort_S1").expect("S1 instance");
+    assert_eq!(
+        s1.output_pattern.as_deref(),
+        Some("results/S1/RNA/done.txt"),
+        "the pattern's {{meta.assay}} is resolved per instance"
+    );
+    let s2 = config.get_rule("produce_cohort_S2").expect("S2 instance");
+    assert_eq!(
+        s2.output_pattern.as_deref(),
+        Some("results/S2/ATAC/done.txt")
+    );
+}
+
+#[test]
+fn filter_samples_first_n_selects_pairs_only_workflow() {
+    // `first:N` counted only group samples, so a pairs-only workflow could
+    // never select anything and the CLI reported the misleading
+    // "--samples matched no samples in this workflow".
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+        control = "N1"
+
+        [[pairs]]
+        pair_id = "P2"
+        experiment = "T2"
+        control = "N2"
+
+        [[rules]]
+        name = "align"
+        input = ["data/{experiment}.fq", "data/{control}.fq"]
+        output = ["results/{experiment}_{control}.bam"]
+        shell = "touch {output}"
+    "#;
+
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    let (kept, unknown) = config.filter_samples(&["first:2".to_string()]).unwrap();
+    assert_eq!(kept, vec!["T1", "N1"], "pair members are selectable");
+    assert!(unknown.is_empty());
+    assert_eq!(config.pairs.len(), 1, "only the fully selected pair stays");
+    assert_eq!(config.pairs[0].pair_id, "P1");
+
+    // A pair ID selects both of its samples.
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    let (kept, unknown) = config.filter_samples(&["P2".to_string()]).unwrap();
+    assert_eq!(kept, vec!["T2", "N2"]);
+    assert!(unknown.is_empty(), "a pair id is a known identifier");
+    assert_eq!(config.pairs.len(), 1);
+    assert_eq!(config.pairs[0].pair_id, "P2");
+}
+
+#[test]
+fn duplicate_sample_owners_reports_cross_owner_ids() {
+    // The same sample id in two groups (or a group and a pair) fans out two
+    // instances sharing every output path the rule does not disambiguate —
+    // the second is skipped as up-to-date while the checkpoint records both.
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "case"
+        samples = ["S1", "S2"]
+
+        [[sample_groups]]
+        name = "control"
+        samples = ["S1", "S3", "S3"]
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S2"
+        control = "S4"
+    "#;
+    let config = WorkflowConfig::parse(toml).unwrap();
+    let duplicates = config.duplicate_sample_owners();
+    assert_eq!(
+        duplicates,
+        vec![
+            (
+                "S1".to_string(),
+                "group 'case'".to_string(),
+                "group 'control'".to_string()
+            ),
+            (
+                "S2".to_string(),
+                "group 'case'".to_string(),
+                "pair 'P1'".to_string()
+            ),
+        ],
+        "cross-owner ids are reported; a repeat inside one owner is silent"
+    );
+
+    // No duplicates: a clean workflow reports nothing.
+    let clean = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "clean"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "case"
+        samples = ["S1", "S1"]
+        "#,
+    )
+    .unwrap();
+    assert!(clean.duplicate_sample_owners().is_empty());
+
+    // Auto-discovery feeding pairs is the documented pairing workflow
+    // (`sample_pattern` + `[[pairs]]`), not a competing declaration — it
+    // stays silent, while a user-declared group with the same id does not.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("S1_R1.fq.gz"), "").unwrap();
+    let wf = dir.path().join("pair.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "pair"
+        version = "1.0.0"
+        sample_pattern = "{sample}_R1.fq.gz"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S1"
+        "#,
+    )
+    .unwrap();
+    let discovered = WorkflowConfig::from_file(&wf).unwrap();
+    assert!(
+        discovered.duplicate_sample_owners().is_empty(),
+        "auto-discovered samples legitimately feed [[pairs]]"
+    );
+
+    let declared = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "declared"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1"]
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        declared.duplicate_sample_owners(),
+        vec![(
+            "S1".to_string(),
+            "group 'cohort'".to_string(),
+            "pair 'P1'".to_string()
+        )],
+        "a user-declared group competes with the pair for the same id"
+    );
+}
+
+#[test]
+fn transform_n_chunking_substitutes_the_split_variable_everywhere() {
+    // The documented `n` chunking form (`by = "chunk"`, `n = "3"`) left the
+    // split variable literal in the map rule's INPUT, so a command
+    // rendering `{input}` showed the braces verbatim. The shell already
+    // baked per value; the input must too, for every split source.
+    let toml = r#"
+        [workflow]
+        name = "test"
+
+        [[rules]]
+        name = "process"
+        input = ["data/{chunk}.txt"]
+        output = ["out/merged.txt"]
+
+        [rules.transform.split]
+        by = "chunk"
+        n = "3"
+
+        [rules.transform]
+        map = "run --part {chunk} --in {input} --out {output}"
+
+        [rules.transform.combine]
+        aggregate = true
+        method = "concat"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let map_rules: Vec<&Rule> = config
+        .rules
+        .iter()
+        .filter(|r| r.name.starts_with("process_") && r.name != "process_combine")
+        .collect();
+    assert_eq!(map_rules.len(), 3, "one map rule per generated chunk index");
+    for (index, rule) in map_rules.iter().enumerate() {
+        let shell = rule.shell.as_deref().unwrap_or_default();
+        assert!(
+            !shell.contains("{chunk}"),
+            "map shell bakes the chunk index: {shell}"
+        );
+        assert!(
+            shell.contains(&format!("--part {index}")),
+            "map shell carries the generated index: {shell}"
+        );
+        assert_eq!(
+            rule.input.to_vec(),
+            vec![format!("data/{index}.txt")],
+            "map input bakes the same index (no literal {{chunk}})"
+        );
+    }
+
+    // The other split sources keep working: `values` and a `chr` name.
+    let values_toml = toml.replace(
+        "by = \"chunk\"\n        n = \"3\"",
+        "by = \"chunk\"\n        values = [\"a\", \"b\"]",
+    );
+    let mut config = WorkflowConfig::parse(&values_toml).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let map_a = config.get_rule("process_a").expect("values chunk a");
+    assert_eq!(map_a.input.to_vec(), vec!["data/a.txt".to_string()]);
 }
