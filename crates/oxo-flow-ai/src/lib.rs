@@ -187,7 +187,9 @@ impl AiRegistry {
         if let Ok(cfg) = self.config() {
             provider::save_ai_config(
                 &format!("{:?}", cfg.provider).to_lowercase(),
-                None, // Don't persist API key when reconfiguring at runtime
+                // `None` keeps the key already on disk: runtime reconfiguration
+                // must not destroy a credential the user saved earlier.
+                None,
                 cfg.api_url.as_deref(),
                 cfg.model.as_deref(),
             );

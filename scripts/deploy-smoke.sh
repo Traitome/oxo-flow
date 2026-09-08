@@ -18,7 +18,11 @@
 # Exits non-zero if any assertion fails. Safe to re-run — every scenario
 # runs in its own temp dir and kills its own server.
 
-set -u
+# Assertion outcomes are counted by check/bad and decide the exit status, but
+# an unexpected setup failure (mktemp, cd, binary discovery) must abort rather
+# than let a scenario run against the wrong directory and report a false PASS.
+# `-e` is therefore on; the few deliberately-soft spots below carry `|| true`.
+set -eu
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Binary discovery: explicit override first, then repo-relative, then PATH.
@@ -54,11 +58,11 @@ start_server() { # $1=logfile, rest=args
 }
 
 cleanup() {
-  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
+  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true
   # Kill only servers this script started (by exact binary path) — broad
   # patterns would also match the caller's own ssh session command line.
-  [ -n "${BIN:-}" ] && pkill -f "$BIN serve" 2>/dev/null
-  [ -n "${WEB:-}" ] && pkill -f "$WEB" 2>/dev/null
+  [ -n "${BIN:-}" ] && pkill -f "$BIN serve" 2>/dev/null || true
+  [ -n "${WEB:-}" ] && pkill -f "$WEB" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -93,10 +97,10 @@ cleanup
 echo "— 3. sub-path mount (/oxoflow)"
 D="$WORK/subpath"; mkdir -p "$D"; cd "$D"
 P=$(next_port); BASE="http://127.0.0.1:$P/oxoflow"
-start_server "$D/srv.log" -p "$P" --base-path /oxoflow
+start_server "$D/srv.log" -p "$P" --base-path /oxoflow || bad "server start"
 check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/runs")" "200" "API under mount"
 check "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$P/api/runs")" "404" "root is NOT mounted"
-SPA_HTML=$(curl -s "$BASE/")
+SPA_HTML=$(curl -s "$BASE/" || true)
 case "$SPA_HTML" in *"__OXO_BASE__"*) ok "SPA base injection";; *) bad "SPA base injection";; esac
 ASSET=$(printf '%s' "$SPA_HTML" | grep -o 'src="[^"]*\.js"' | head -1 | sed 's/src="//;s/"//')
 ASSET="${ASSET#./}"; ASSET="${ASSET#/}"
@@ -134,10 +138,10 @@ OXO_FLOW_ADMIN_PASSWORD="smoke-admin-pw" "$BIN" serve --mode team -p "$P" > "$D/
 SRV=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/api/runs" && break; sleep 0.25; done
 check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/runs")" "401" "team mode requires auth"
-TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"smoke-admin-pw"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' 2>/dev/null)
+TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"smoke-admin-pw"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' 2>/dev/null || true)
 if [ -n "$TOKEN" ] && [ "$TOKEN" != "None" ]; then
   ok "admin login with env credential"
-  ME=$(curl -s "$BASE/api/auth/me" -H "Authorization: Bearer $TOKEN")
+  ME=$(curl -s "$BASE/api/auth/me" -H "Authorization: Bearer $TOKEN" || true)
   check "$(printf '%s' "$ME" | python3 -c 'import json,sys;print(json.load(sys.stdin)["authenticated"])')" "True" "session authenticates"
   check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/runs" -H "Authorization: Bearer $TOKEN")" "200" "authenticated request allowed"
 else
@@ -154,8 +158,8 @@ SRV=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/api/runs" && break; sleep 0.25; done
 # /api/hpc left the anonymous whitelist in the v0.11 hardening — auth first.
 check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/hpc")" "401" "hpc endpoint requires auth"
-TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"smoke-admin-pw"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' 2>/dev/null)
-HPC=$(curl -s "$BASE/api/hpc" -H "Authorization: Bearer $TOKEN")
+TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"smoke-admin-pw"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' 2>/dev/null || true)
+HPC=$(curl -s "$BASE/api/hpc" -H "Authorization: Bearer $TOKEN" || true)
 case "$HPC" in *'"available"'*) ok "hpc status structured";; *) bad "hpc status structured: $HPC";; esac
 cleanup
 
@@ -167,7 +171,7 @@ if [ -n "$APP_BUNDLE" ] && [ -x "$APP_BUNDLE/Contents/MacOS/oxo-flow" ]; then
   "$APP_BUNDLE/Contents/MacOS/oxo-flow" serve -p "$P" > "$D/srv.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 40); do curl -s -o /dev/null "$BASE/api/runs" && break; sleep 0.25; done
-  SPA=$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "$BASE/")
+  SPA=$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "$BASE/" || true)
   case "$SPA" in "200 5"*|"200 6"*) ok "bundled SPA self-contained ($SPA)";; *) bad "bundled SPA self-contained ($SPA)";; esac
   cleanup
 else

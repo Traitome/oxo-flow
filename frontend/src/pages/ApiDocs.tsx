@@ -26,6 +26,9 @@ export default function ApiDocs() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
+  // A failed spec fetch used to render as "no endpoints match" — the page
+  // looked empty rather than broken.
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOpenApiSpec()
@@ -46,9 +49,17 @@ export default function ApiDocs() {
           }
         }
         setEndpoints(eps);
+        setError(null);
       })
-      .catch(() => {});
-  }, []);
+      .catch((err: unknown) =>
+        setError(
+          t('common.loadFailed').replace(
+            '{{error}}',
+            err instanceof Error ? err.message : t('common.unknownError'),
+          ),
+        ),
+      );
+  }, [t]);
 
   const tags = [...new Set(endpoints.flatMap((e) => e.tags))];
   const openApiUrl = apiUrl('/api/openapi.json');
@@ -95,7 +106,9 @@ export default function ApiDocs() {
         ))}
       </div>
 
-      {filtered.length === 0 && <div className="empty-state">{t('apiDocs.empty')}</div>}
+      {error && <div className="tool-palette-hint error">{error}</div>}
+
+      {!error && filtered.length === 0 && <div className="empty-state">{t('apiDocs.empty')}</div>}
 
       {spec && (
         <details style={{ marginTop: '2rem' }}>

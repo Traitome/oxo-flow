@@ -47,7 +47,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--bundle` | — | — | Execute from a published bundle (`.tar.zst` or `.tar.gz`). Extracts, verifies checksums, shows resource requirements, and prompts for confirmation |
 | `--yes` | — | — | Skip the confirmation prompt when running a bundle (required in non-interactive sessions: CI, scripts, redirected input, or `--json`) |
 | `--ai-recover` | — | — | Enable AI error recovery on rule failure |
-| `--ai-max-retries` | — | — | Maximum AI retries (overrides `[ai]` config) |
+| `--ai-max-retries` | — | — | Maximum AI attempts for recovery when a call fails (default: 1; only a failed call is retried) |
 | `--samples` | — | all discovered samples | Sample selection: `@path` **replaces** the workflow's samples from a samplesheet, `+@path` **appends** (same-name groups merge, new groups added); names **filter** (or **declare** when the workflow ships no samples), `first:N` (pilot) and `ready` (samples whose entry inputs are complete) **filter**. Repeatable, comma-separated |
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
@@ -599,7 +599,8 @@ Mechanics:
   `rule_completed`, `workflow_completed`) — the whole run is replayable
   from the single file (issue #194 B1/B3).
 - The child's pid is written to `.oxo-flow/background.pid` in the workdir
-  (also shown in the summary).
+  (also shown in the summary) while the run is in flight; the file is removed
+  when the child exits, so a stale pid never survives a finished run.
 - The child gets its own process group, so it survives terminal close and
   Ctrl-C at the shell — it keeps running until it finishes or is killed.
 - The foreground exits **0** once the child is spawned; it does not wait.
@@ -621,13 +622,15 @@ Monitoring a background run works exactly like a foreground one: poll
 `oxo-flow status .oxo-flow/checkpoint.json` (or `status --timing`), read
 the run log, and check the report snapshots in `.oxo-flow/reports/`. Stop
 a background run with `kill <pid>` (Unix) or `taskkill /PID <pid>` —
-the pid is in the summary line and in `.oxo-flow/background.pid`.
+the pid is in the summary line and (while the run is in flight) in
+`.oxo-flow/background.pid`.
 
 Notes:
 
-- Combined with the global `--json`, the foreground still prints its
-  one-line summary to **stderr** and exits 0; stdout stays empty (the JSON
-  run summary belongs to the actual run, which happens in the child).
+- The global `--json` is **rejected** with `--background`: the foreground
+  only launches the detached child, so there is no run summary to emit.
+  Drop `--json` or run in the foreground to get the machine-readable
+  summary.
 - Bundle runs need an explicit `--workdir` (the bundle's extracted
   directory is created per-process, so it cannot be predicted from the
   foreground invocation) and `--yes` — a detached child cannot prompt.

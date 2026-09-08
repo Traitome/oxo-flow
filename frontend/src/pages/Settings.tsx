@@ -209,7 +209,16 @@ export default function Settings() {
                 </select>
               </div>
               <div style={{ marginTop: '8px' }}>
+                {/* PUT /api/ai/config/user replaces the whole row: sending
+                    only the toggles reset provider to "disabled" and blanked
+                    the stored config. Carry the current provider/model/url
+                    over; the api_key is sent only when the user typed a new
+                    one (the API never returns the stored key). */}
                 <button className="btn-sm" onClick={() => api.aiUpdateConfigUser({
+                  provider,
+                  model: model || undefined,
+                  api_url: apiUrl || undefined,
+                  ...(apiKey ? { api_key: apiKey } : {}),
                   search_enabled: adv.search_enabled,
                   monitor_enabled: adv.monitor_enabled,
                   auto_retry_enabled: adv.auto_retry_enabled,
@@ -274,17 +283,16 @@ export default function Settings() {
             {t('settings.env.default')}: <strong>{t('settings.env.defaultValue')}</strong>
           </div>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {['conda', 'docker', 'singularity', 'pixi'].map(envName => {
-              const available = null; // env detection via system API
-              return (
+            {/* Backend availability is not reported by any API endpoint, so
+                the rows list the supported backends without a fabricated
+                per-backend status. */}
+            {['conda', 'docker', 'singularity', 'pixi'].map(envName => (
               <div key={envName} className="ref-row">
                 <div>
                   <strong>{envName}</strong>
-                  <span className="muted" style={{ marginLeft: '8px' }}>{available ? t('settings.env.available') : t('settings.env.unavailable')}</span>
                 </div>
-                <span className={`status-badge ${available ? 'success' : 'cancelled'}`}>{available ? t('settings.env.available') : t('settings.env.unavailable')}</span>
               </div>
-            )})}
+            ))}
           </div>
         </div>
       </Section>
@@ -412,7 +420,16 @@ export default function Settings() {
       <Section title={t('settings.license.title')} icon={<Shield size={16} color="var(--color-primary)" />}>
         <div style={{ fontSize: '0.85rem' }}>
           <div>{t('settings.license.type')}: <strong>{health?.license?.license_type || t('layout.academicLicense')}</strong></div>
-          <div>{t('settings.license.status')}: <span className="status-badge success">{t('settings.license.valid')}</span></div>
+          <div>
+            {t('settings.license.status')}:{' '}
+            {/* The badge was hardcoded "valid"; render what /api/health
+                actually reports (nothing until it loads). */}
+            {health ? (
+              <span className={`status-badge ${health.license.valid ? 'success' : 'failed'}`}>
+                {health.license.valid ? t('settings.license.valid') : t('settings.license.invalid')}
+              </span>
+            ) : null}
+          </div>
           <div style={{ marginTop: '4px' }}>{t('settings.license.contact')}: <strong>{health?.license?.contact || t('settings.license.defaultContact')}</strong></div>
           <div style={{ marginTop: '4px', color: 'var(--color-text-secondary)' }}>{health?.license?.message || t('settings.license.defaultMessage')}</div>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px', alignItems: 'center' }}>

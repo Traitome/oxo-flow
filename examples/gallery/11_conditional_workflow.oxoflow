@@ -57,7 +57,7 @@ conda = "envs/fastqc.yaml"
 [[rules]]
 name = "wgs_coverage"
 input = ["aligned/sample.sorted.bam"]
-output = ["qc/sample_wgs_coverage.txt"]
+output = ["qc/sample.mosdepth.summary.txt"]
 shell = "mosdepth --quantize 0:1:10:50: qc/sample aligned/sample.sorted.bam"
 when = 'config.sequencing_mode == "WGS"'
 
@@ -67,7 +67,7 @@ conda = "envs/mosdepth.yaml"
 [[rules]]
 name = "wes_coverage"
 input = ["aligned/sample.sorted.bam"]
-output = ["qc/sample_wes_coverage.txt"]
+output = ["qc/sample.mosdepth.summary.txt"]
 shell = "mosdepth --by {config.target_bed} qc/sample aligned/sample.sorted.bam"
 when = 'config.sequencing_mode == "WES" && config.target_bed != ""'
 

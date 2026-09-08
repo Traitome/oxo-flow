@@ -23,7 +23,7 @@ export default function Share() {
     token ? { phase: 'loading' } : { phase: 'error', message: t('share.missingToken') },
   );
   const [importing, setImporting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -44,11 +44,18 @@ export default function Share() {
       // the token locally.
       const url = `oxo+https://${window.location.host}/share/${token}`;
       const result = await api.importPipeline(url);
-      setNotice(t('share.imported'));
+      setNotice({ text: t('share.imported') });
       navigate(`/editor?pipeline=${result.pipeline_id}`);
-    } catch {
-      setNotice(t('share.importFailed'));
-      navigate('/login');
+    } catch (err: unknown) {
+      // Only a genuine auth failure belongs on the login page (team/hpc mode
+      // gates the import); routing every failure there discarded the message
+      // and mis-explained expired shares and network errors.
+      if (err instanceof ApiError && ['AUTH_REQUIRED', 'INVALID_TOKEN', 'AUTH_FAILED'].includes(err.code)) {
+        navigate('/login', { state: { notice: t('share.importFailed') } });
+        return;
+      }
+      const msg = err instanceof ApiError ? err.message : t('common.unknownError');
+      setNotice({ text: `${t('share.importFailed')} ${msg}`, error: true });
     } finally {
       setImporting(false);
     }
@@ -130,7 +137,9 @@ export default function Share() {
       )}
 
       {notice && (
-        <div className="result-bar success" style={{ marginTop: '0.75rem' }}>{notice}</div>
+        <div className={`result-bar ${notice.error ? 'error' : 'success'}`} style={{ marginTop: '0.75rem' }}>
+          {notice.text}
+        </div>
       )}
     </div>
   );

@@ -14,7 +14,9 @@ use tokio::sync::Mutex;
 
 /// Flatten workflow config values into the `{config.key}` placeholder map
 /// used for path expansion (DAG edge matching, run-time rendering, …).
-fn config_placeholder_values(config: &HashMap<String, toml::Value>) -> HashMap<String, String> {
+pub(crate) fn config_placeholder_values(
+    config: &HashMap<String, toml::Value>,
+) -> HashMap<String, String> {
     config
         .iter()
         .map(|(key, value)| {
@@ -369,12 +371,15 @@ const RUN_FLAG_NAMES: &[&str] = &[
     "keep-going",
     "workdir",
     "target",
+    "module",
     "retry",
     "timeout",
+    "log-file",
     "resume-failed",
     "profile",
     "max-threads",
     "max-memory",
+    "max-submitted",
     "skip-env-setup",
     "skip-ref-build",
     "cache-dir",
@@ -382,18 +387,31 @@ const RUN_FLAG_NAMES: &[&str] = &[
     "bundle",
     "yes",
     "arg",
-    "sample",
     "ai-recover",
     "ai-max-retries",
     "samples",
     "rerun",
+    "no-report-snapshot",
+    "background",
     "json",
+    "quiet",
+    "verbose",
+    "no-color",
     "help",
     "version",
 ];
 
 /// Short-form run flag names (same contract as [`RUN_FLAG_NAMES`]).
 const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
+
+/// Flags removed from `run`, mapped to their replacement.
+///
+/// They must NOT live in [`RUN_FLAG_NAMES`]: that list names real command
+/// flags, and a workflow declaring a config key with one of these names
+/// (`sample = {...}`) would have its `--sample VALUE` override rejected as a
+/// command flag (audit finding). Reaching the unknown-argument path instead
+/// still gets a migration hint.
+const REMOVED_RUN_FLAGS: &[(&str, &str)] = &[("sample", "--samples")];
 
 /// Validate a config value against its ConfigDef declaration.
 fn validate_config_value(
@@ -553,6 +571,18 @@ fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
     removed
 }
 
+/// Attempt count for a single-shot AI operation in `run`/`dry-run`.
+///
+/// `--ai-max-retries N` bounds how many times a FAILED AI call is attempted
+/// (1 when the flag is absent — the pre-flag behavior); a successful call is
+/// never repeated. The workflow's `[ai] max_retries` is not consulted here:
+/// that budget drives the agentic orchestrator used by `template`, which
+/// neither the recovery diagnosis nor the dry-run analysis goes through
+/// (audit finding: the flag was accepted and discarded).
+fn ai_attempts(cli_max_retries: Option<u32>) -> u32 {
+    cli_max_retries.unwrap_or(1).max(1)
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Parse CLI config overrides — the SAME accepted forms for `run` and
 /// `dry-run` (issue #77 parity):
@@ -600,7 +630,21 @@ fn parse_cli_overrides(
             (k, arg_str[eq + 1..].to_string())
         } else if let Some(k) = arg_str.strip_prefix("--") {
             if declared_config_keys.contains(k) {
-                // `--KEY VALUE` — consume the next argument as the value
+                // `--KEY VALUE` — consume the next argument as the value.
+                // A following token that starts with `--` is a command flag
+                // the user meant to pass, never a config value: swallowing
+                // it silently disabled the flag (`dry-run wf --mode --json`
+                // ran without JSON output, audit finding). The `=` form
+                // already errors on the unknown token, so point there.
+                if let Some(next) = cli_args_iter.peek()
+                    && next.starts_with("--")
+                {
+                    anyhow::bail!(
+                        "config flag '--{k}' expects a value, but the next argument '{next}' \
+                         is a command flag.\n  Use the '=' form (--{k}=<value>) or place the \
+                         override after the command flags as {k}=<value>."
+                    );
+                }
                 let v = cli_args_iter.next().with_context(|| {
                     format!(
                         "invalid config flag: '{arg_str}' — expected --KEY=VALUE or --KEY VALUE"
@@ -612,8 +656,15 @@ fn parse_cli_overrides(
                 // registered flag (caught above) nor a declared config key
                 // is almost certainly a typo'd command flag (e.g.
                 // `--config x`). Never silently swallow it as an override.
+                let rename = REMOVED_RUN_FLAGS
+                    .iter()
+                    .find(|(removed, _)| *removed == k)
+                    .map(|(removed, replacement)| {
+                        format!("\n  '--{removed}' was renamed to {replacement}.")
+                    })
+                    .unwrap_or_default();
                 anyhow::bail!(
-                    "unknown argument '{arg_str}' — did you mean KEY=VALUE overrides?\n  \
+                    "unknown argument '{arg_str}' — did you mean KEY=VALUE overrides?{rename}\n  \
                      Config overrides take KEY=VALUE (e.g. threads=8) or --KEY=VALUE; \
                      for a config key that itself starts with dashes, use --arg KEY=VALUE"
                 );
@@ -686,6 +737,81 @@ fn apply_cli_overrides(
             .insert(k.clone(), toml::Value::String(v.clone()));
     }
     Ok(())
+}
+
+/// Warn about `KEY=VALUE` overrides the workflow never uses.
+///
+/// Undeclared override keys are a documented escape hatch (issue #62), so
+/// this warns rather than fails — but a TYPO (`samplename` for
+/// `sample_name`) used to pass in total silence and exit 0 having changed
+/// nothing (audit finding). A key counts as used when `[config]` declares it
+/// or the workflow references `{config.KEY}` anywhere; the closest declared
+/// key is named when it is within a two-edit typo.
+fn warn_unknown_override_keys(
+    overrides: &HashMap<String, String>,
+    declared: &HashSet<String>,
+    workflow: &Path,
+) {
+    let unknown: Vec<&String> = overrides
+        .keys()
+        .filter(|key| !declared.contains(*key))
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    // The workflow parsed a moment ago; if it cannot be re-read the
+    // reference scan is skipped and every undeclared key warns.
+    let text = std::fs::read_to_string(workflow).unwrap_or_default();
+    for key in unknown {
+        if text.contains(&format!("config.{key}")) {
+            continue;
+        }
+        let hint = closest_declared_key(key, declared)
+            .map(|candidate| format!(" — did you mean '{candidate}'?"))
+            .unwrap_or_default();
+        eprintln!(
+            "{} override '{key}' is not a declared [config] key and the workflow never \
+             references {{config.{key}}}{hint} It changes nothing.",
+            "Warning:".bold().yellow(),
+        );
+    }
+}
+
+/// Nearest declared config key within a two-edit typo of `key` (the same
+/// heuristic `oxo-flow-core`'s unknown-key check applies).
+fn closest_declared_key<'a>(key: &str, declared: &'a HashSet<String>) -> Option<&'a str> {
+    let lowered = key.to_ascii_lowercase();
+    declared
+        .iter()
+        .map(|candidate| {
+            (
+                edit_distance(&lowered, &candidate.to_ascii_lowercase(), 2),
+                candidate,
+            )
+        })
+        .filter(|(distance, _)| *distance <= 2)
+        .min_by_key(|(distance, candidate)| (*distance, candidate.as_str()))
+        .map(|(_, candidate)| candidate.as_str())
+}
+
+/// Levenshtein edit distance, capped so unrelated pairs exit early.
+fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > cap {
+        return cap + 1;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 /// Quote a path for safe embedding in a reference build command (executed
@@ -765,13 +891,22 @@ pub async fn run_command(
     json: bool,
     cli_args: Vec<String>,
     ai_recover: bool,
-    _ai_max_retries: Option<u32>,
+    ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
     rerun: bool,
     no_report_snapshot: bool,
     max_submitted: Option<usize>,
 ) -> Result<()> {
     print_banner();
+
+    // `--json` consumers get the summary document on every exit path — the
+    // guard emits it from `Drop` when a path returns before the explicit
+    // emission below (audit finding: preflight/parse aborts exited 1 with
+    // zero bytes on stdout).
+    let mut json_summary = RunJsonSummary::new(json, workflow.as_deref());
+    // A detached background child removes the pid file its launcher wrote
+    // when this run finishes; a foreground run gets an inert guard.
+    let _background_pid_file = crate::background::BackgroundPidFileGuard::from_env();
 
     // `-j 0` means "no explicit concurrency limit": clamp once at the
     // boundary so every downstream consumer — the scheduler submit cap,
@@ -806,6 +941,7 @@ pub async fn run_command(
         }
         None => (resolve_workflow(None)?, false),
     };
+    json_summary.set_workflow(&workflow);
     let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
     // Workdir default: the workflow's own directory, EXCEPT for repository
     // runs, where the current directory holds the user's data (the clone is
@@ -846,6 +982,9 @@ pub async fn run_command(
     let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
 
     apply_cli_overrides(&mut config, &cli_arg_values)?;
+    // A typo'd override key must not pass silently (audit finding): warn
+    // when it is neither declared nor referenced anywhere in the workflow.
+    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
 
     // ── Filter to a sample subset (--samples @path / first:N / names / ready) ────
     // Runs after CLI overrides so `ready` resolution sees the final config
@@ -880,9 +1019,7 @@ pub async fn run_command(
     // produce literal-placeholder outputs with exit 0.
     let e005 = undefined_config_findings(&config);
     if !e005.is_empty() {
-        if json {
-            emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
-        }
+        json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
             "workflow references undefined config variable(s) — fix before running:\n  {}",
             e005.join("\n  ")
@@ -906,7 +1043,7 @@ pub async fn run_command(
             None => {
                 // Pre-execution abort: nothing ran, but the summary
                 // contract still holds for --json (issue #142 H6).
-                emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
+                json_summary.emit("failed", &RunCounts::default(), vec![]);
                 return Err(anyhow::anyhow!(
                     "unknown module '{m}' — known modules: {}",
                     known_modules_hint(&config.module_rules)
@@ -1009,7 +1146,7 @@ pub async fn run_command(
             print_target_skipped_note(skipped, &when_false_rules);
         }
         if filtered_order.is_empty() {
-            emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
+            json_summary.emit("failed", &RunCounts::default(), vec![]);
             return Err(anyhow::anyhow!(
                 "all requested targets are when-gated false — nothing to run"
             ));
@@ -1408,14 +1545,15 @@ pub async fn run_command(
     } else if let Ok(n) = timeout.parse::<u64>() {
         n
     } else {
-        parse_duration_secs(&timeout).unwrap_or_else(|| {
-            eprintln!(
-                "{} Invalid timeout format '{}', defaulting to no timeout",
-                "Warning:".bold().yellow(),
-                timeout
-            );
-            0
-        })
+        // A typo'd --timeout must fail fast: silently disabling the timeout
+        // turns "kill the job after 30m" into "let it run forever", which is
+        // the opposite of what the flag promises (audit finding).
+        parse_duration_secs(&timeout).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid --timeout value '{timeout}'.\n  \
+                 Expected seconds (e.g. 3600) or a duration like 1h / 30m / 2d."
+            )
+        })?
     };
 
     // ── Cluster path (issue #74 phase 2) ───────────────────────────────────
@@ -1455,14 +1593,12 @@ pub async fn run_command(
         // The cluster path returns before the common summary emission, so
         // it routes through the same `--json` contract itself (issue #142
         // H6): the document must appear on both outcomes.
-        emit_run_json_summary(
-            json,
+        json_summary.emit(
             if summary.is_success() {
                 "completed"
             } else {
                 "failed"
             },
-            &workflow,
             &RunCounts {
                 succeeded: summary.succeeded,
                 skipped: summary.skipped,
@@ -1571,7 +1707,7 @@ pub async fn run_command(
             .join("\n");
         // Pre-execution abort: nothing ran — the summary still reports
         // the failed run for --json consumers (issue #142 H6).
-        emit_run_json_summary(json, "failed", &workflow, &RunCounts::default(), vec![]);
+        json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
             "resource budget too small for {} rule(s); no rules were run:\n{}",
             breaches.len(),
@@ -1901,13 +2037,7 @@ pub async fn run_command(
                                 let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
                                 // Pre-execution abort — the summary still
                                 // reports the failed run (issue #142 H6).
-                                emit_run_json_summary(
-                                    json,
-                                    "failed",
-                                    &workflow,
-                                    &RunCounts::default(),
-                                    vec![],
-                                );
+                                json_summary.emit("failed", &RunCounts::default(), vec![]);
                                 return Err(anyhow::anyhow!(
                                     "failed to set up the environment for reference '{}': {}",
                                     ref_def.name,
@@ -1915,13 +2045,7 @@ pub async fn run_command(
                                 ));
                             }
                             Err(e) => {
-                                emit_run_json_summary(
-                                    json,
-                                    "failed",
-                                    &workflow,
-                                    &RunCounts::default(),
-                                    vec![],
-                                );
+                                json_summary.emit("failed", &RunCounts::default(), vec![]);
                                 return Err(anyhow::anyhow!(
                                     "failed to run the environment setup for reference '{}': {e}",
                                     ref_def.name
@@ -2892,10 +3016,8 @@ pub async fn run_command(
                     // name at spawn. Fail the run rather than leak the cap.
                     // The engine fault counts as a failure in the summary
                     // (issue #142 H6).
-                    emit_run_json_summary(
-                        json,
+                    json_summary.emit(
                         "failed",
-                        &workflow,
                         &RunCounts {
                             succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
                             skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
@@ -3197,10 +3319,26 @@ pub async fn run_command(
                     && let Some(provider) =
                         crate::commands::ai_template::try_resolve_ai(Some(&workflow), true)
                 {
-                    let result = crate::commands::ai_recover::diagnose_failure(
-                        &workflow, rule, -1, error, &provider,
-                    )
-                    .await;
+                    // `--ai-max-retries` bounds the recovery attempts: a
+                    // failed diagnosis call is retried up to the flag's
+                    // value, a successful one is never repeated.
+                    let attempts = ai_attempts(ai_max_retries);
+                    let mut result: Result<crate::commands::ai_recover::DiagnoseResult> =
+                        Err(anyhow::anyhow!("AI recovery did not run"));
+                    for attempt in 1..=attempts {
+                        result = crate::commands::ai_recover::diagnose_failure(
+                            &workflow, rule, -1, error, &provider,
+                        )
+                        .await;
+                        if result.is_ok() || attempt == attempts {
+                            break;
+                        }
+                        if let Err(e) = &result {
+                            eprintln!(
+                                "  AI diagnosis attempt {attempt}/{attempts} failed: {e} — retrying"
+                            );
+                        }
+                    }
                     match result {
                         Ok(diag) => {
                             if let Some(ref toml) = diag.modified_toml {
@@ -3234,10 +3372,8 @@ pub async fn run_command(
             // The plain-failure abort: emit the summary BEFORE returning,
             // mirroring the keep-going path's document (issue #142 H6).
             let ck = checkpoint.lock().await;
-            emit_run_json_summary(
-                json,
+            json_summary.emit(
                 "failed",
-                &workflow,
                 &RunCounts {
                     succeeded: success_count.load(std::sync::atomic::Ordering::Relaxed),
                     skipped: skipped_count.load(std::sync::atomic::Ordering::Relaxed),
@@ -3769,14 +3905,12 @@ pub async fn run_command(
     // JSON output mode (issue #142 H6): the summary is emitted on EVERY
     // path — completed, failed, and aborted — so `--json` consumers can
     // rely on the document regardless of how the run ended.
-    emit_run_json_summary(
-        json,
+    json_summary.emit(
         if fail_count > 0 {
             "failed"
         } else {
             "completed"
         },
-        &workflow,
         &RunCounts {
             succeeded: success_count,
             skipped: skipped_count,
@@ -3801,15 +3935,6 @@ pub async fn run_command(
     Ok(())
 }
 
-/// Emit the machine-readable run summary (`--json`) in the canonical
-/// `{"command":"run",...}` shape.
-///
-/// Shared by the happy path AND every abort path (preflight failures,
-/// budget breaches, cluster runs, the plain-failure abort) so a failed run
-/// never leaves stdout at zero bytes while the keep-going path emits the
-/// document (issue #142 H6). Only emits when `--json` was requested;
-/// stdout carries nothing else, so the document is always the sole output.
-#[allow(clippy::too_many_arguments)] // matching the crate's established convention
 /// Run the workflow-level terminal hook (`on_complete` after a fully
 /// successful run, `on_error` after any failure) on every terminal path of
 /// the run loop. Rendered with `{config.*}` plus the run counters and
@@ -3901,30 +4026,65 @@ struct RunCounts {
     blocked: usize,
 }
 
-fn emit_run_json_summary(
+/// The `--json` summary for one `run`/`resume` invocation, emitted at most
+/// once in the canonical `{"command":"run",...}` shape.
+///
+/// The document is documented as appearing on EVERY exit path
+/// (docs/guide/src/commands/run.md): the explicit [`Self::emit`] calls carry
+/// the terminal counts, and the `Drop` fallback covers the early aborts that
+/// never reach one (workflow parse errors, preflight failures, repository
+/// checkout errors) — those used to exit non-zero with zero bytes on stdout.
+struct RunJsonSummary {
     json: bool,
-    status: &str,
-    workflow: &Path,
-    counts: &RunCounts,
-    resources: Vec<serde_json::Value>,
-) {
-    if !json {
-        return;
+    workflow: PathBuf,
+    emitted: bool,
+}
+
+impl RunJsonSummary {
+    fn new(json: bool, workflow: Option<&Path>) -> Self {
+        Self {
+            json,
+            // Until the workflow is resolved the CLI argument is the best
+            // name available; `set_workflow` replaces it with the resolved
+            // path (a repository spec resolves to a checkout path).
+            workflow: workflow.unwrap_or_else(|| Path::new("")).to_path_buf(),
+            emitted: false,
+        }
     }
-    let output = serde_json::json!({
-        "command": "run",
-        "status": status,
-        "workflow": workflow.to_string_lossy(),
-        "results": serde_json::json!({
-            "succeeded": counts.succeeded,
-            "skipped": counts.skipped,
-            "failed": counts.failed,
-            "non_required_failed": counts.non_required_failed,
-            "blocked": counts.blocked,
-        }),
-        "resources": resources,
-    });
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+
+    /// Point the summary at the resolved workflow file.
+    fn set_workflow(&mut self, workflow: &Path) {
+        self.workflow = workflow.to_path_buf();
+    }
+
+    fn emit(&mut self, status: &str, counts: &RunCounts, resources: Vec<serde_json::Value>) {
+        if !self.json || self.emitted {
+            return;
+        }
+        self.emitted = true;
+        let output = serde_json::json!({
+            "command": "run",
+            "status": status,
+            "workflow": self.workflow.to_string_lossy(),
+            "results": serde_json::json!({
+                "succeeded": counts.succeeded,
+                "skipped": counts.skipped,
+                "failed": counts.failed,
+                "non_required_failed": counts.non_required_failed,
+                "blocked": counts.blocked,
+            }),
+            "resources": resources,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
+}
+
+impl Drop for RunJsonSummary {
+    fn drop(&mut self) {
+        // Only the failure paths return without an explicit emission, so an
+        // abort that never reached one still reports `status: "failed"`.
+        self.emit("failed", &RunCounts::default(), vec![]);
+    }
 }
 
 /// Per-rule resource rows for the `--json` summary (issue #163): the same
@@ -4039,7 +4199,7 @@ pub async fn dry_run_command(
     verbose: bool,
     json: bool,
     ai: bool,
-    _ai_max_retries: Option<u32>,
+    ai_max_retries: Option<u32>,
     samples_filter: Vec<String>,
     workdir: Option<PathBuf>,
     profile: Option<String>,
@@ -4067,6 +4227,8 @@ pub async fn dry_run_command(
         config.config.keys().cloned().collect();
     let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
     apply_cli_overrides(&mut config, &cli_arg_values)?;
+    // Same typo guard as `run` (shared override machinery).
+    warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
 
     // ── Filter to a sample subset (--samples first:N / names / ready) ──
     // `ready` resolves against a scratch expanded clone; the report covers
@@ -4104,13 +4266,26 @@ pub async fn dry_run_command(
 
     // AI: auto-detect from workflow [ai] or explicit --ai flag
     if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
-        crate::commands::ai_check::analyze_workflow(
-            &workflow,
-            &provider,
-            "dry-run",
-            &scientific_context,
-        )
-        .await?;
+        // `--ai-max-retries` bounds the attempts, same contract as `run`'s
+        // recovery (only a FAILED analysis call is retried).
+        let attempts = ai_attempts(ai_max_retries);
+        let mut result = Err(anyhow::anyhow!("AI analysis did not run"));
+        for attempt in 1..=attempts {
+            result = crate::commands::ai_check::analyze_workflow(
+                &workflow,
+                &provider,
+                "dry-run",
+                &scientific_context,
+            )
+            .await;
+            if result.is_ok() || attempt == attempts {
+                break;
+            }
+            if let Err(e) = &result {
+                eprintln!("  AI analysis attempt {attempt}/{attempts} failed: {e} — retrying");
+            }
+        }
+        result?;
         println!();
     }
 
@@ -5450,15 +5625,17 @@ pub async fn resume_command(
         workflow_path.display()
     );
     eprintln!("  Checkpoint: {}", checkpoint.display());
-    eprintln!(
-        "  State: {} completed, {} failed, {} remaining",
-        completed,
-        failed,
-        state
-            .completed_rules
-            .len()
-            .saturating_sub(completed.saturating_sub(failed))
-    );
+    // Remaining = the rules this resume will actually execute: everything
+    // the checkpoint has not completed (failed rules are retried). The
+    // checkpoint records only what ran, so the workflow supplies the total
+    // (its template count — wildcards expand later); if it cannot be read
+    // here, `run_command` reports that error with full context a moment
+    // later and the failed count is the fallback. The old arithmetic
+    // reduced to `failed` (audit finding).
+    let remaining = WorkflowConfig::from_file(&workflow_path)
+        .map(|cfg| cfg.rules.len().saturating_sub(completed))
+        .unwrap_or(failed);
+    eprintln!("  State: {completed} completed, {failed} failed, {remaining} remaining");
 
     if completed == 0 && failed == 0 {
         eprintln!(
@@ -5521,8 +5698,8 @@ pub async fn resume_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        age_ready_list, cleanup_cache_dir, known_modules_hint, parse_cli_overrides,
-        substitute_source_placeholder,
+        age_ready_list, ai_attempts, cleanup_cache_dir, closest_declared_key, known_modules_hint,
+        parse_cli_overrides, substitute_source_placeholder,
     };
     use std::collections::HashSet;
 
@@ -5693,6 +5870,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("invalid config flag"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_space_form_that_would_swallow_a_command_flag() {
+        // Audit finding: `dry-run wf --mode --json` consumed `--json` as the
+        // value of the declared key `mode`, so the run silently dropped its
+        // JSON output. The `=` form already errors; the space form must too.
+        let err = parse_cli_overrides(
+            vec!["--mode".to_string(), "--json".to_string()],
+            &declared(&["mode"]),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("--mode"), "{msg}");
+        assert!(msg.contains("--json"), "{msg}");
+        assert!(msg.contains("--mode=<value>"), "{msg}");
+    }
+
+    #[test]
+    fn ai_attempts_defaults_to_one_and_never_zero() {
+        // Audit finding: the flag was accepted and discarded. It now bounds
+        // the recovery/analysis attempts; absent → the pre-flag single try,
+        // and an explicit 0 still means one attempt (never none).
+        assert_eq!(ai_attempts(None), 1);
+        assert_eq!(ai_attempts(Some(0)), 1);
+        assert_eq!(ai_attempts(Some(3)), 3);
+    }
+
+    #[test]
+    fn closest_declared_key_names_a_typo_but_not_an_unrelated_key() {
+        // Audit finding: `samplename=world` was silently accepted.
+        let keys = declared(&["sample_name", "threads", "min_quality"]);
+        assert_eq!(
+            closest_declared_key("samplename", &keys),
+            Some("sample_name")
+        );
+        assert_eq!(closest_declared_key("threds", &keys), Some("threads"));
+        assert_eq!(closest_declared_key("completely_different", &keys), None);
     }
 
     #[test]

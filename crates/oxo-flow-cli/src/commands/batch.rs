@@ -31,11 +31,16 @@ pub async fn batch_command(
     dry_run: bool,
     workdir: Option<PathBuf>,
     environment: Option<String>,
-    checksum: bool,
     generate_workflow: bool,
     output: Option<PathBuf>,
 ) -> Result<()> {
     print_banner();
+
+    // `-j 0` means "no explicit concurrency limit": clamp once at the
+    // boundary so the semaphore below is never a zero-permit gate that
+    // hangs the first item forever (`run` clamps identically, issue #136
+    // fix 1; audit finding: `batch -j 0` hung).
+    let jobs = jobs.max(1);
 
     // Collect items from command line or file (validates non-empty)
     let items = collect_batch_items(&items, file.as_ref())?;
@@ -149,9 +154,6 @@ pub async fn batch_command(
                         });
                         if exit_code != 0 && stop_on_error {
                             stop_flag_clone.store(true, Ordering::Relaxed);
-                        }
-                        if checksum {
-                            tracing::info!("checksum verification for {}", item_clone);
                         }
                     }
                     Err(e) => {

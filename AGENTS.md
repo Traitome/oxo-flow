@@ -58,7 +58,7 @@ The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 
 - **Structured errors**: All responses use `{code, message, detail, suggestion}` format
 - **API discovery**: `GET /api/openapi.json` returns full OpenAPI 3.1 schema
-- **Intent-driven authoring**: `POST /api/workflows/generate` maps natural language to pipelines
+- **Intent-driven authoring**: `POST /api/ai/translate` maps a natural-language intent to a validated `.oxoflow` pipeline (SSE variant: `POST /api/ai/translate/stream`)
 - **SSE streaming**: `GET /api/events` provides real-time execution events
 - **Pagination**: `GET /api/runs` uses cursor pagination `{items, next_cursor, total}`; most other list endpoints return bare capped arrays (≤ 100); the storage layer exposes an offset-style `Paginated<T> {items, page, per_page, total_items, total_pages}` internally. There is deliberately no single uniform envelope — document per endpoint (see web-api.md)
 - **Backend capability boundary (issue #207)**: run execution and its lifecycle bookkeeping are SQLite-only. PostgreSQL-backed team servers serve library/AI/auth; every `/api/runs*` request answers `503 {code:"RUNS_REQUIRE_SQLITE"}` via a router-layer gate (`require_sqlite_for_runs` in server.rs)
@@ -119,7 +119,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
-| `OXO_FLOW_PORT` | No | `3000` | Web server port (also settable via `--port`) |
+| `OXO_FLOW_PORT` | No | `8080` | Web server port (also settable via `--port`). The standalone `oxo-flow-web` binary defaults to `3000` |
 | `OXO_FLOW_ADMIN_PASSWORD` | Team/HPC | — | Admin sign-in password. Without at least one of ADMIN/USER/VIEWER_PASSWORD in team/hpc mode the server refuses weak setups (see below) |
 | `OXO_FLOW_USER_PASSWORD` | Team/HPC | — | Standard-user sign-in password |
 | `OXO_FLOW_VIEWER_PASSWORD` | Team/HPC | — | Read-only sign-in password |

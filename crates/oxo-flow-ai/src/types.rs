@@ -130,7 +130,7 @@ pub fn bound_tool_result(content: &str) -> String {
 }
 
 /// Largest prefix of `s` with at most `max_bytes` bytes (char-boundary safe).
-fn truncate_utf8_from_start(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn truncate_utf8_from_start(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }

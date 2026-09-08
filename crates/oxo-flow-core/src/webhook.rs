@@ -202,13 +202,12 @@ impl WebhookClient {
                 Err(e) if retries < self.config.max_retries => {
                     retries += 1;
                     tracing::warn!(
-                        webhook_url = %self.config.url,
+                        webhook_url = %redact_webhook_url(&self.config.url),
                         retry = retries,
                         error = %e,
                         "webhook request failed, retrying"
                     );
-                    // Simple backoff: 1s, 2s, 4s...
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1 << retries)).await;
+                    tokio::time::sleep(backoff_delay(retries)).await;
                 }
                 Err(e) => return Err(e),
             }
@@ -268,7 +267,7 @@ impl WebhookClient {
         }
 
         tracing::info!(
-            webhook_url = %self.config.url,
+            webhook_url = %redact_webhook_url(&self.config.url),
             event = ?self.config.events,
             "webhook notification sent successfully"
         );
@@ -298,6 +297,48 @@ impl WebhookClient {
             }
         }
     }
+}
+
+/// Upper bound on the exponential backoff exponent: 2^9 = 512 s between
+/// retries, so a large `max_retries` cannot overflow the shift or sleep for
+/// hours between attempts.
+const MAX_BACKOFF_SHIFT: u32 = 9;
+
+/// Delay before retry number `retries` (1-based: the first retry waits 1 s).
+///
+/// Split out so the "1s, 2s, 4s…" contract is testable: the previous inline
+/// `1 << retries` ran *after* the increment and therefore slept 2 s before
+/// the first retry.
+fn backoff_delay(retries: u32) -> std::time::Duration {
+    let shift = retries.saturating_sub(1).min(MAX_BACKOFF_SHIFT);
+    std::time::Duration::from_secs(1u64 << shift)
+}
+
+/// Redact a webhook URL for logs.
+///
+/// A Slack/Discord webhook URL *is* a bearer credential (`…/services/T/B/<token>`),
+/// so logging it verbatim leaks the ability to post to the channel. Keep
+/// scheme + host + port and the path *prefix*, mask the final path segment
+/// (the secret), and drop query/fragment (which can carry tokens too).
+/// Unparseable URLs are fully masked rather than echoed.
+fn redact_webhook_url(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "<invalid webhook url>".to_string();
+    };
+    let mut out = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("?"));
+    if let Some(port) = parsed.port() {
+        out.push_str(&format!(":{port}"));
+    }
+    let segments: Vec<&str> = parsed
+        .path_segments()
+        .map(|s| s.filter(|seg| !seg.is_empty()).collect())
+        .unwrap_or_default();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        out.push('/');
+        out.push_str(segment);
+    }
+    out.push_str("/***");
+    out
 }
 
 /// Slack-specific webhook payload format.
@@ -383,6 +424,38 @@ mod tests {
         assert_eq!(config.timeout_secs, 30);
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.events, vec![WebhookEvent::WorkflowCompleted]);
+    }
+
+    #[test]
+    fn redact_webhook_url_masks_the_secret_segment() {
+        // Slack/Discord webhook URLs are bearer credentials: the last path
+        // segment is the token and must never reach the logs.
+        let redacted = redact_webhook_url("https://hooks.slack.com/services/T000/B000/XXsecretXX");
+        assert_eq!(redacted, "https://hooks.slack.com/services/T000/B000/***");
+        assert!(!redacted.contains("XXsecretXX"));
+
+        // Query strings and fragments can carry tokens too — dropped whole.
+        let redacted = redact_webhook_url("https://example.com/hook?token=abc#frag");
+        assert_eq!(redacted, "https://example.com/***");
+        assert!(!redacted.contains("abc"));
+
+        // Ports survive; unparseable input is masked, never echoed.
+        assert_eq!(
+            redact_webhook_url("http://localhost:8080/api/v1/notify"),
+            "http://localhost:8080/api/v1/***"
+        );
+        assert_eq!(redact_webhook_url("not a url"), "<invalid webhook url>");
+    }
+
+    #[test]
+    fn backoff_delay_starts_at_one_second() {
+        // The documented contract is "1s, 2s, 4s…"; the old inline
+        // `1 << retries` slept 2s before the first retry.
+        assert_eq!(backoff_delay(1).as_secs(), 1);
+        assert_eq!(backoff_delay(2).as_secs(), 2);
+        assert_eq!(backoff_delay(3).as_secs(), 4);
+        // Bounded: no shift overflow / multi-hour sleep for huge retry counts.
+        assert_eq!(backoff_delay(u32::MAX).as_secs(), 512);
     }
 
     #[test]

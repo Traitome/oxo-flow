@@ -64,8 +64,12 @@ pub fn cache_entry_key(
     hasher.update(b"\n");
     hasher.update(cache_key.as_bytes());
     hasher.update(b"\n");
-    for output in &rule.output {
-        let expanded = super::checkpoint::expand_config_in_path(output, wildcard_values);
+    // `FilePatterns::to_vec` orders map-form outputs by key, so the identity
+    // is stable across processes. Hashing raw `iter()` order (HashMap) made
+    // the key differ per run: the cache never hit and every run added another
+    // full copy of the outputs (audit finding).
+    for output in rule.output.to_vec() {
+        let expanded = super::checkpoint::expand_config_in_path(&output, wildcard_values);
         hasher.update(expanded.as_bytes());
         hasher.update(b"\n");
     }

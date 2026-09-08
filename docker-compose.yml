@@ -6,8 +6,13 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Persist database, logs, and workspace across container restarts
-      - oxo-flow-data:/app
+      # Persist only the state directory: /app/data holds the SQLite DB
+      # (oxo-flow.db, relative to the image's WORKDIR /app/data), logs/ and
+      # workspace/. Mounting the volume over /app would shadow the image's
+      # binaries (/app/oxo-flow-web, /app/oxo-flow, /app/frontend/dist) once
+      # the volume is non-empty, so a pull/rebuild would keep serving the old
+      # binaries.
+      - oxo-flow-data:/app/data
     environment:
       - OXO_FLOW_MODE=team
       - OXO_FLOW_HOST=0.0.0.0

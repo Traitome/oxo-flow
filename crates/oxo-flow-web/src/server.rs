@@ -7,6 +7,7 @@
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -405,8 +406,19 @@ pub fn build_router(mode: &str) -> Router {
     }
 
     // ---- File service routes (issue #82 P0-1/P0-2) ----
+    //
+    // Uploads need an explicit body limit: axum's `Multipart` extractor
+    // otherwise applies the 2 MiB `DefaultBodyLimit`, which silently
+    // truncated large FASTQs while the handler still answered 200 (audit
+    // finding C2). The layer sits above the handler's own per-file cap so a
+    // multipart frame's boundary overhead cannot trip it first.
     let file_routes = Router::new()
-        .route("/api/files", post(execution::files::upload_files))
+        .route(
+            "/api/files",
+            post(execution::files::upload_files).layer(DefaultBodyLimit::max(
+                execution::files::MAX_UPLOAD_BODY_BYTES,
+            )),
+        )
         .route("/api/files", get(execution::files::list_uploaded_files));
 
     // ---- Data routes ----

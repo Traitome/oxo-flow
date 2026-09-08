@@ -56,7 +56,7 @@ name = "qc-pipeline"
 version = "1.0.0"
 description = "Quality control for paired-end sequencing data"
 author = "Your Name"
-sample_pattern = "raw_data/{sample}_R1.fastq.gz"   # ← plain paths only; {config.*} is not expanded here
+sample_pattern = "raw_data/{sample}_R1.fastq.gz"   # ← {config.*} is expanded here too: "{config.samples_dir}/{sample}_R1.fastq.gz" works
 
 [config]
 samples_dir = "raw_data"

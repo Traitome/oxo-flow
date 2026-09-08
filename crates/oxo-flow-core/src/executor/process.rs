@@ -1661,8 +1661,15 @@ impl LocalExecutor {
 
         // Create the scratch working directory now that execution is
         // certain; its name was already decided for env wrapping above.
-        if let Some(scratch) = &scratch_dir {
-            create_rule_dir(scratch, &rule, "scratch")?;
+        if let Some(scratch) = &scratch_dir
+            && let Err(e) = create_rule_dir(scratch, &rule, "scratch")
+        {
+            // `check_resources` above already reserved pool capacity; every
+            // other post-reservation exit releases it. Leaking here parks
+            // later rules in the wait loop forever (the holder is gone, so
+            // the wait diagnostic names a rule that no longer runs).
+            self.release_resources(&rule).await;
+            return Err(e);
         }
         // The rule's shell cwd: scratch for scratch rules, main workdir
         // otherwise (docker/singularity run with `-w`/inherited cwd in the
@@ -1783,7 +1790,7 @@ impl LocalExecutor {
                 // orphaned. Timeout enforcement kills the rule's subtree instead
                 // (see timeout::kill_process_tree), so per-rule semantics are
                 // unchanged.
-                let child = match spawn_rule_shell(cmd, rule_cwd, &rule_envs) {
+                let mut child = match spawn_rule_shell(cmd, rule_cwd, &rule_envs) {
                     Ok(child) => child,
                     Err(e) => {
                         // The shell never started — no diagnostic files can
@@ -1809,35 +1816,73 @@ impl LocalExecutor {
 
                 let rss_handle = child_id.map(|pid| self.rss_sampler.track(pid));
 
+                // Drain both pipes through the bounded collector: the old
+                // `wait_with_output` buffered the rule's ENTIRE stdout and
+                // stderr in RAM (then copied them again), so a rule
+                // streaming GBs OOMed the engine before any diagnostic
+                // reached the user. The pipes are taken here so the reader
+                // and `child.wait()` run concurrently.
+                let stdout_pipe = child.stdout.take();
+                let stderr_pipe = child.stderr.take();
+                let mut stdout_cap = CappedCapture::new();
+                let mut stderr_cap = CappedCapture::new();
+                let wait_and_drain = async {
+                    let (status, _, _) = tokio::join!(
+                        child.wait(),
+                        drain_capped(stdout_pipe, &mut stdout_cap),
+                        drain_capped(stderr_pipe, &mut stderr_cap),
+                    );
+                    status
+                };
+
                 let cmd_result = if let Some(duration) = timeout {
-                    match tokio::time::timeout(duration, child.wait_with_output()).await {
-                        Ok(inner) => inner,
-                        Err(_) => {
-                            // R3 fix: use id directly and check it
-                            if let Some(pid) = child_id {
-                                let _ = super::timeout::kill_process_tree(pid);
-                            }
-                            all_commands_succeeded = false;
-                            record.status = JobStatus::TimedOut;
-                            last_exit_code = Some(124);
-                            combined_stderr.push_str("command timed out");
-                            if let Some(handle) = rss_handle {
-                                cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
-                                peak_bytes = peak_bytes.max(handle.finish());
-                            }
-                            break;
-                        }
-                    }
+                    tokio::time::timeout(duration, wait_and_drain).await.ok()
                 } else {
-                    child.wait_with_output().await
+                    Some(wait_and_drain.await)
                 };
 
                 match cmd_result {
-                    Ok(output) => {
-                        combined_stdout.push_str(&String::from_utf8_lossy(&output.stdout));
-                        combined_stderr.push_str(&String::from_utf8_lossy(&output.stderr));
-                        last_exit_code = output.status.code();
-                        if !output.status.success() {
+                    None => {
+                        // Timed out. R3 fix: use id directly and check it.
+                        // The grace poll inside `kill_process_tree` sleeps
+                        // up to SIGTERM_GRACE on a blocking thread, so run
+                        // it on the blocking pool — N simultaneous timeouts
+                        // would otherwise park N tokio workers (starving
+                        // every other rule's I/O) for up to 10 s each.
+                        if let Some(pid) = child_id {
+                            match tokio::task::spawn_blocking(move || {
+                                super::timeout::kill_process_tree(pid)
+                            })
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    tracing::warn!(pid, error = %e, "process tree kill reported an error");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(pid, error = %e, "process tree kill task failed");
+                                }
+                            }
+                        }
+                        // Keep whatever the rule managed to print before
+                        // the kill — it is the only diagnosis available.
+                        combined_stdout.push_str(&stdout_cap.into_string());
+                        combined_stderr.push_str(&stderr_cap.into_string());
+                        all_commands_succeeded = false;
+                        record.status = JobStatus::TimedOut;
+                        last_exit_code = Some(124);
+                        combined_stderr.push_str("command timed out");
+                        if let Some(handle) = rss_handle {
+                            cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
+                            peak_bytes = peak_bytes.max(handle.finish());
+                        }
+                        break;
+                    }
+                    Some(Ok(status)) => {
+                        combined_stdout.push_str(&stdout_cap.into_string());
+                        combined_stderr.push_str(&stderr_cap.into_string());
+                        last_exit_code = status.code();
+                        if !status.success() {
                             all_commands_succeeded = false;
                             record.status = JobStatus::Failed;
                             if let Some(handle) = rss_handle {
@@ -1847,7 +1892,9 @@ impl LocalExecutor {
                             break;
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
+                        combined_stdout.push_str(&stdout_cap.into_string());
+                        combined_stderr.push_str(&stderr_cap.into_string());
                         all_commands_succeeded = false;
                         record.status = JobStatus::Failed;
                         combined_stderr.push_str(&e.to_string());
@@ -2366,6 +2413,89 @@ pub(super) fn spawn_rule_shell(
     }
 }
 
+/// Bytes of a rule's stdout/stderr kept verbatim from the head of the
+/// stream (the tool banner, the first error).
+const CAPTURE_HEAD_BYTES: usize = 1 << 20;
+/// Bytes kept from the tail of the stream — the last error / stack trace is
+/// what diagnosis needs from a long log. Head + tail ≈ 2 MiB per stream.
+const CAPTURE_TAIL_BYTES: usize = 1 << 20;
+
+/// Bounded capture of one stream: the first [`CAPTURE_HEAD_BYTES`] and the
+/// last [`CAPTURE_TAIL_BYTES`], with the dropped middle replaced by a
+/// marker line when rendering.
+///
+/// The engine used to buffer a rule's whole output (`wait_with_output`)
+/// and then copy it again — a rule streaming GBs OOMed the engine before
+/// any diagnostic reached the user. The cap is applied at the capture
+/// boundary, so masking, the checkpoint's `stderr_tail`, the report and
+/// the web UI all see the same bounded text.
+#[derive(Debug, Default)]
+struct CappedCapture {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    /// Total bytes seen, kept or dropped.
+    total: u64,
+}
+
+impl CappedCapture {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.total += bytes.len() as u64;
+        let head_room = CAPTURE_HEAD_BYTES.saturating_sub(self.head.len());
+        let take = head_room.min(bytes.len());
+        self.head.extend_from_slice(&bytes[..take]);
+        let rest = &bytes[take..];
+        if rest.is_empty() {
+            return;
+        }
+        self.tail.extend(rest.iter().copied());
+        let overflow = self.tail.len().saturating_sub(CAPTURE_TAIL_BYTES);
+        self.tail.drain(..overflow);
+    }
+
+    /// Render to text, inserting the truncation marker between head and
+    /// tail when the middle was dropped. Truncation is announced here (so
+    /// it lands in the job record) and logged once per stream.
+    fn into_string(self) -> String {
+        let kept = self.head.len() + self.tail.len();
+        if self.total as usize <= kept {
+            return String::from_utf8_lossy(&self.head).into_owned();
+        }
+        let dropped = self.total as usize - kept;
+        let mut out = String::from_utf8_lossy(&self.head).into_owned();
+        out.push_str(&format!(
+            "\n[oxo-flow] output truncated: {dropped} bytes dropped \
+             (capture capped at {} MiB)\n",
+            (CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES) / (1 << 20)
+        ));
+        let tail: Vec<u8> = self.tail.into_iter().collect();
+        out.push_str(&String::from_utf8_lossy(&tail));
+        out
+    }
+}
+
+/// Read one pipe to EOF, feeding the bounded capture.
+async fn drain_capped(
+    pipe: Option<impl tokio::io::AsyncRead + Unpin>,
+    capture: &mut CappedCapture,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let Some(mut pipe) = pipe else {
+        return Ok(());
+    };
+    let mut buf = vec![0u8; 32 * 1024];
+    loop {
+        let n = pipe.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        capture.push(&buf[..n]);
+    }
+}
+
 /// Emit the bash→sh fallback warning at most once per process.
 fn warn_shell_fallback_once() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2427,9 +2557,22 @@ pub(super) fn fixup_container_wrapper(
         Some(i) => (&wrapped[..i], &wrapped[i..]),
         None => (wrapped, ""),
     };
+    // The backends single-quote host paths (`-v '/a b':'/a b'`) so a workdir
+    // with a space cannot split the mount; hand-built wrappers (and the
+    // tests pinning this helper) use the unquoted form. Detect which form
+    // this wrapper carries and emit the same one — matching only the
+    // unquoted form silently dropped the scratch bind for every real
+    // container wrapper.
+    let q = crate::environment::escape_for_sh_single_quote;
     let fixed = match kind {
         "docker" => {
-            let main_mount = format!("-v {workdir_str}:{workdir_str}");
+            let quoted =
+                prefix.contains(&format!("-v '{}':'{}'", q(&workdir_str), q(&workdir_str)));
+            let main_mount = if quoted {
+                format!("-v '{}':'{}'", q(&workdir_str), q(&workdir_str))
+            } else {
+                format!("-v {workdir_str}:{workdir_str}")
+            };
             if !prefix.contains(&main_mount) {
                 tracing::warn!(
                     wrapper = %prefix,
@@ -2437,15 +2580,34 @@ pub(super) fn fixup_container_wrapper(
                 );
                 return wrapped.to_string();
             }
-            prefix
-                .replace(
-                    &main_mount,
-                    &format!("{main_mount} -v {scratch_str}:{scratch_str}"),
+            let (scratch_mount, w_flag, scratch_w) = if quoted {
+                (
+                    format!("-v '{}':'{}'", q(&scratch_str), q(&scratch_str)),
+                    format!("-w '{}'", q(&workdir_str)),
+                    format!("-w '{}'", q(&scratch_str)),
                 )
-                .replace(&format!("-w {workdir_str}"), &format!("-w {scratch_str}"))
+            } else {
+                (
+                    format!("-v {scratch_str}:{scratch_str}"),
+                    format!("-w {workdir_str}"),
+                    format!("-w {scratch_str}"),
+                )
+            };
+            prefix
+                .replace(&main_mount, &format!("{main_mount} {scratch_mount}"))
+                .replace(&w_flag, &scratch_w)
         }
         "singularity" => {
-            let main_bind = format!("--bind {workdir_str}:{workdir_str}");
+            let quoted = prefix.contains(&format!(
+                "--bind '{}':'{}'",
+                q(&workdir_str),
+                q(&workdir_str)
+            ));
+            let main_bind = if quoted {
+                format!("--bind '{}':'{}'", q(&workdir_str), q(&workdir_str))
+            } else {
+                format!("--bind {workdir_str}:{workdir_str}")
+            };
             if !prefix.contains(&main_bind) {
                 tracing::warn!(
                     wrapper = %prefix,
@@ -2453,10 +2615,12 @@ pub(super) fn fixup_container_wrapper(
                 );
                 return wrapped.to_string();
             }
-            prefix.replace(
-                &main_bind,
-                &format!("{main_bind} --bind {scratch_str}:{scratch_str}"),
-            )
+            let scratch_bind = if quoted {
+                format!("--bind '{}':'{}'", q(&scratch_str), q(&scratch_str))
+            } else {
+                format!("--bind {scratch_str}:{scratch_str}")
+            };
+            prefix.replace(&main_bind, &format!("{main_bind} {scratch_bind}"))
         }
         _ => return wrapped.to_string(),
     };
@@ -2492,6 +2656,18 @@ pub(super) fn copy_tree_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
         return Err(e);
     }
     if let Err(e) = sync_path(&tmp) {
+        discard_tmp(&tmp);
+        return Err(e);
+    }
+    // `rename(2)` refuses to replace a non-empty directory (ENOTEMPTY), so a
+    // scratch rule whose output is a directory failed on its second run and a
+    // cached directory output could never be restored (audit finding). The
+    // freshly built tree is authoritative: clear the destination directory
+    // first. File destinations keep rename's normal overwrite semantics.
+    if tmp.is_dir()
+        && dest.is_dir()
+        && let Err(e) = std::fs::remove_dir_all(dest)
+    {
         discard_tmp(&tmp);
         return Err(e);
     }
@@ -2905,6 +3081,7 @@ fn render_shell_command_inner(
     // byte-identical to the historical raw-pattern pass.
     let all_inputs: Vec<String> = rule
         .input
+        .to_vec()
         .iter()
         .map(|inp| absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values)))
         .collect();
@@ -4061,6 +4238,50 @@ pub fn hostname() -> String {
 mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
+
+    #[test]
+    fn capped_capture_keeps_small_streams_verbatim() {
+        let mut cap = CappedCapture::new();
+        cap.push(b"hello ");
+        cap.push(b"world");
+        assert_eq!(cap.into_string(), "hello world");
+    }
+
+    #[test]
+    fn capped_capture_keeps_head_and_tail_with_truncation_marker() {
+        // A rule streaming GBs must not be buffered whole: the capture keeps
+        // the first MiB and the last MiB and names what it dropped.
+        let mut cap = CappedCapture::new();
+        let chunk = vec![b'a'; 64 * 1024];
+        let chunks = (CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES) / chunk.len() + 8;
+        for _ in 0..chunks {
+            cap.push(&chunk);
+        }
+        cap.push(b"LAST-ERROR");
+        let total = cap.total;
+        let out = cap.into_string();
+
+        assert!(out.starts_with(&"a".repeat(64 * 1024)), "head is kept");
+        assert!(out.ends_with("LAST-ERROR"), "tail is kept");
+        assert!(out.contains("output truncated:"), "{out:?}");
+        assert!(out.contains("bytes dropped"), "{out:?}");
+        assert!(
+            out.len() < total as usize,
+            "the middle must actually be dropped"
+        );
+    }
+
+    #[test]
+    fn capped_capture_drops_only_the_middle_after_the_head_fills() {
+        let mut cap = CappedCapture::new();
+        cap.push(b"HEAD");
+        cap.push(&vec![b'x'; CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES]);
+        cap.push(b"TAIL");
+        let out = cap.into_string();
+        assert!(out.starts_with("HEADxxx"));
+        assert!(out.ends_with("TAIL"));
+        assert_eq!(out.matches("output truncated:").count(), 1);
+    }
 
     #[test]
     fn residual_wildcard_token_flags_unbound_wildcards() {

@@ -236,7 +236,11 @@ shell = "echo ok > out.txt"
             }
         }
         Err(e) => {
+            // A FAIL must end the command non-zero: it used to print FAIL
+            // and then "All tests completed." with exit 0, so CI and scripts
+            // read a broken provider as healthy (audit finding).
             println!("{} ({})", "FAIL".red(), e);
+            anyhow::bail!("AI self-test failed — the analysis test could not reach the provider");
         }
     }
 

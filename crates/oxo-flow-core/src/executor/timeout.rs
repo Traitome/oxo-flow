@@ -23,7 +23,6 @@ pub fn kill_process_tree(pid: u32) -> std::io::Result<()> {
 /// one; production passes [`SIGTERM_GRACE`]).
 #[cfg(unix)]
 pub fn kill_process_tree_with_grace(pid: u32, grace: std::time::Duration) -> std::io::Result<()> {
-    use nix::errno::Errno;
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
@@ -32,18 +31,19 @@ pub fn kill_process_tree_with_grace(pid: u32, grace: std::time::Duration) -> std
 
     // Deepest first: children die before their parents so no subtree can be
     // re-parented into init and survive the kill.
-    let signal_subtree = |sig: Signal, targets: &[Pid]| -> std::io::Result<()> {
-        for p in targets.iter().rev() {
-            match kill(*p, sig) {
-                Ok(()) => {}
-                // Already exited between the snapshot and the signal — fine.
-                Err(Errno::ESRCH) => {}
-                Err(e) => return Err(std::io::Error::other(e.to_string())),
-            }
-        }
-        Ok(())
+    //
+    // A target the engine cannot signal (EPERM: setuid helper, root-owned
+    // tool, container process) must not abort the sweep — targets are
+    // signalled deepest-first, so an early error used to leave the shell
+    // itself alive and skip the SIGKILL escalation entirely (audit finding).
+    // The first error is returned after the whole sweep so callers can log it.
+    let signal_subtree = |sig: Signal, targets: &[Pid]| -> Option<std::io::Error> {
+        signal_each(targets, sig, kill)
     };
-    signal_subtree(Signal::SIGTERM, &targets)?;
+    // The TERM sweep's failures are logged per pid and deliberately do not
+    // stop the escalation; only a failure of the final KILL sweep is
+    // surfaced to the caller.
+    let _term_error = signal_subtree(Signal::SIGTERM, &targets);
 
     // Poll the grace window; a process that honors TERM gets to flush.
     let deadline = std::time::Instant::now() + grace;
@@ -88,7 +88,41 @@ pub fn kill_process_tree_with_grace(pid: u32, grace: std::time::Duration) -> std
         targets = targets.len(),
         "process subtree survived SIGTERM grace; escalating to SIGKILL"
     );
-    signal_subtree(Signal::SIGKILL, &targets)
+    signal_subtree(Signal::SIGKILL, &targets).map_or(Ok(()), Err)
+}
+
+/// Signal every target (deepest first), continuing past per-process failures.
+///
+/// Returns the first error encountered. `send` is injectable so a test can
+/// prove the sweep does not stop at the first un-signalable process — the
+/// regression that left a timed-out rule's shell alive (audit finding).
+#[cfg(unix)]
+fn signal_each(
+    targets: &[nix::unistd::Pid],
+    sig: nix::sys::signal::Signal,
+    mut send: impl FnMut(nix::unistd::Pid, nix::sys::signal::Signal) -> Result<(), nix::errno::Errno>,
+) -> Option<std::io::Error> {
+    use nix::errno::Errno;
+    let mut first_error = None;
+    for p in targets.iter().rev() {
+        match send(*p, sig) {
+            Ok(()) => {}
+            // Already exited between the snapshot and the signal — fine.
+            Err(Errno::ESRCH) => {}
+            Err(e) => {
+                tracing::warn!(
+                    pid = p.as_raw(),
+                    signal = ?sig,
+                    error = %e,
+                    "could not signal process — continuing the sweep"
+                );
+                if first_error.is_none() {
+                    first_error = Some(std::io::Error::other(e.to_string()));
+                }
+            }
+        }
+    }
+    first_error
 }
 
 /// Snapshot parent→child links and walk outward from `root` to collect
@@ -317,5 +351,27 @@ mod tests {
         {
             let _ = kill(Pid::from_raw(grandchild as i32), Signal::SIGKILL);
         }
+    }
+
+    #[test]
+    fn signal_sweep_continues_past_unsignalable_targets() {
+        use nix::errno::Errno;
+        use nix::sys::signal::Signal;
+        use nix::unistd::Pid;
+
+        let targets = [Pid::from_raw(11), Pid::from_raw(22), Pid::from_raw(33)];
+        let mut attempted = Vec::new();
+        let err = signal_each(&targets, Signal::SIGTERM, |p, _| {
+            attempted.push(p.as_raw());
+            if p.as_raw() == 22 {
+                Err(Errno::EPERM)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(err.is_some(), "the failure must be reported");
+        // Deepest-first: 33, 22, 11. The EPERM on 22 must not stop 11 —
+        // otherwise the shell itself survives the kill sweep.
+        assert_eq!(attempted, vec![33, 22, 11]);
     }
 }

@@ -16,7 +16,14 @@
 set -euo pipefail
 
 # 定位仓库根（脚本可能被 bash 直接执行；无 git 时退回脚本上两级目录）
-REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || cd "$(dirname "$0")/../.." && pwd)"
+# 必须分两步：写成 "$(git … || cd … && pwd)" 会被解析为 (git||cd)&&pwd，
+# git 成功时右侧的 cd/pwd 仍会执行，捕获到两行路径（仓库根 + pwd），
+# 后面的 cd "${REPO_ROOT}" 必失败（已复现）。
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "${REPO_ROOT}" ]; then
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+fi
 cd "${REPO_ROOT}"
 OUTPUT="benches/comparative/results"
 mkdir -p "${OUTPUT}"

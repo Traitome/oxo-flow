@@ -15,7 +15,7 @@ threads = 8
 memory = "32G"
 
 # Define the sample cohort for {sample} wildcard expansion.
-# Edit this list (or pass --sample on the CLI) to match your data.
+# Edit this list (or pass --samples on the CLI) to match your data.
 [[sample_groups]]
 name = "cohort"
 samples = ["sample1", "sample2"]

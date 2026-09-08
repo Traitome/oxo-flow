@@ -1,6 +1,6 @@
 # 16 — 16S Amplicon Analysis with QIIME2
 
-A 16S rRNA amplicon pipeline built on QIIME2's standard moving-pictures backbone: import demultiplexed reads, trim primers, denoise with DADA2, assign taxonomy, build a phylogenetic tree, compute core diversity metrics, and export the feature table for downstream analysis in R/Python.
+A 16S rRNA amplicon pipeline built on QIIME2's standard moving-pictures backbone: import demultiplexed reads, trim low-quality ends with cutadapt, denoise with DADA2, assign taxonomy, build a phylogenetic tree, compute core diversity metrics, and export the feature table for downstream analysis in R/Python.
 
 !!! info "Concepts Covered"
     - QIIME2 artifact (.qza) and visualization (.qzv) chaining
@@ -24,7 +24,7 @@ graph TD
 **Steps:**
 
 1. **import_reads** — Import Casava demultiplexed FASTQs into a QIIME2 `SampleData[PairedEndSequencesWithQuality]` artifact
-2. **cutadapt_trim** — Trim adapter/primer bases and truncate to the configured quality length
+2. **cutadapt_trim** — Trim low-quality 3' ends (`quality_cutoff_3end`) and drop reads shorter than `min_length`; quality truncation itself is DADA2's job (`trunc_len_f`/`trunc_len_r`)
 3. **dada2_denoise** — Error-correcting denoising → feature table, representative sequences, denoising statistics
 4. **feature_table_summary** — Per-sample frequency and depth summary (needs `metadata.tsv`)
 5. **classify_taxonomy** — Sklearn taxonomy classification against a pre-trained classifier (see prerequisites)

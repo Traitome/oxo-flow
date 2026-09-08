@@ -141,11 +141,18 @@ fn canonical_resource(bucket: &str, key: &str) -> String {
 }
 
 /// GCS HTTP client (shared request-level client).
+///
+/// The overall cap is generous because object bodies are streamed, not
+/// buffered: a multi-GB reference genome legitimately takes longer than a
+/// metadata call, and the old 60 s total timeout killed any large transfer
+/// before it finished. A hung connection is still bounded (connect timeout
+/// catches the dead-peer case quickly).
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(30 * 60))
             .build()
             .expect("failed to create GCS HTTP client")
     })
@@ -155,8 +162,13 @@ fn http_client() -> &'static reqwest::Client {
 // Request helpers
 // ---------------------------------------------------------------------------
 
-/// Make a signed GET request for a GCS object and return the response bytes.
-async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
+/// Send a signed GET and return the live response after the status check.
+///
+/// [`gcs_get`] buffers the whole object for callers that need the bytes
+/// (a small text object); the stage path streams this response to disk
+/// chunk by chunk — a reference genome is routinely multi-GB and buffering
+/// it first OOMed the engine (the S3 backend stages via `tokio::io::copy`).
+async fn gcs_get_response(bucket: &str, key: &str) -> Result<reqwest::Response> {
     let creds = load_credentials()?;
     let url = gcs_url(bucket, key);
     let date = rfc1123_date();
@@ -171,8 +183,7 @@ async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
         .await
         .map_err(|e| gcs_io_error("GET", bucket, key, &e.to_string()))?;
 
-    let status = resp.status();
-    if !status.is_success() {
+    if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         return Err(gcs_io_error(
@@ -182,8 +193,14 @@ async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
             &format!("HTTP {status}: {body}"),
         ));
     }
+    Ok(resp)
+}
 
-    resp.bytes()
+/// Make a signed GET request for a GCS object and return the response bytes.
+async fn gcs_get(bucket: &str, key: &str) -> Result<Vec<u8>> {
+    gcs_get_response(bucket, key)
+        .await?
+        .bytes()
         .await
         .map(|b| b.to_vec())
         .map_err(|e| gcs_io_error("GET", bucket, key, &e.to_string()))
@@ -255,22 +272,37 @@ fn parse_md5_hash_header(header: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Make a signed PUT request with a body.
+/// Make a signed PUT request with an in-memory body.
 async fn gcs_put(bucket: &str, key: &str, data: &[u8], content_type: &str) -> Result<()> {
+    let md5 = compute_md5(data);
+    gcs_put_body(bucket, key, data.to_vec().into(), &md5, content_type).await
+}
+
+/// [`gcs_put`] with a pre-computed Content-MD5 and an arbitrary body.
+///
+/// The upload path hands reqwest a file-backed stream
+/// (`reqwest::Body::from(tokio::fs::File)`), so a multi-GB local output is
+/// never read into RAM just to be sent.
+async fn gcs_put_body(
+    bucket: &str,
+    key: &str,
+    body: reqwest::Body,
+    md5: &str,
+    content_type: &str,
+) -> Result<()> {
     let creds = load_credentials()?;
     let url = gcs_url(bucket, key);
     let date = rfc1123_date();
-    let md5 = compute_md5(data);
     let resource = canonical_resource(bucket, key);
-    let auth = gcs_authorization(creds, "PUT", &md5, content_type, &date, &resource);
+    let auth = gcs_authorization(creds, "PUT", md5, content_type, &date, &resource);
 
     let resp = http_client()
         .put(&url)
         .header("Date", &date)
         .header("Authorization", &auth)
         .header("Content-Type", content_type)
-        .header("Content-MD5", &md5)
-        .body(data.to_vec())
+        .header("Content-MD5", md5)
+        .body(body)
         .send()
         .await
         .map_err(|e| gcs_io_error("PUT", bucket, key, &e.to_string()))?;
@@ -291,9 +323,31 @@ async fn gcs_put(bucket: &str, key: &str, data: &[u8], content_type: &str) -> Re
 
 /// Compute the Content-MD5 header value (base64-encoded MD5).
 fn compute_md5(data: &[u8]) -> String {
-    let digest = md5::Md5::digest(data);
+    encode_md5(md5::Md5::digest(data))
+}
+
+/// Streaming Content-MD5 for a local file: the header is part of the signed
+/// string-to-sign, so the upload path hashes the file in one pass (no
+/// full-object buffer) before streaming it.
+async fn streaming_md5(path: &Path) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = md5::Md5::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(encode_md5(hasher.finalize()))
+}
+
+/// base64-encode a raw MD5 digest (the Content-MD5 header value).
+fn encode_md5(digest: impl AsRef<[u8]>) -> String {
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(&digest[..])
+    base64::engine::general_purpose::STANDARD.encode(digest.as_ref())
 }
 
 fn gcs_io_error(op: &str, bucket: &str, key: &str, detail: &str) -> OxoFlowError {
@@ -360,10 +414,18 @@ impl StorageBackend for GcsStorage {
             let bucket = bucket.clone();
             let key = key.clone();
             async move {
-                let bytes = gcs_get(&bucket, &key).await?;
-                tokio::io::AsyncWriteExt::write_all(&mut file, &bytes)
+                // Stream to disk chunk by chunk — buffering the whole object
+                // first (old `gcs_get`) doubled peak memory for every stage.
+                let mut resp = gcs_get_response(&bucket, &key).await?;
+                while let Some(chunk) = resp
+                    .chunk()
                     .await
-                    .map_err(|e| gcs_io_error("stage write", &bucket, &key, &e.to_string()))?;
+                    .map_err(|e| gcs_io_error("stage read", &bucket, &key, &e.to_string()))?
+                {
+                    tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                        .await
+                        .map_err(|e| gcs_io_error("stage write", &bucket, &key, &e.to_string()))?;
+                }
                 Ok(())
             }
         })
@@ -373,10 +435,23 @@ impl StorageBackend for GcsStorage {
 
     async fn upload(&self, local: &Path, remote: &StoragePath) -> Result<()> {
         let bucket = require_gcs_bucket(remote)?;
-        let data = tokio::fs::read(local)
+        // Hash the file (streaming) for the signed Content-MD5, then stream
+        // it as the request body — `tokio::fs::read` held the whole object
+        // in RAM, unlike the S3 backend's `ByteStream::from_path`.
+        let md5 = streaming_md5(local)
             .await
             .map_err(|e| gcs_io_error("upload read", bucket, &remote.key, &e.to_string()))?;
-        gcs_put(bucket, &remote.key, &data, "application/octet-stream").await
+        let file = tokio::fs::File::open(local)
+            .await
+            .map_err(|e| gcs_io_error("upload open", bucket, &remote.key, &e.to_string()))?;
+        gcs_put_body(
+            bucket,
+            &remote.key,
+            reqwest::Body::from(file),
+            &md5,
+            "application/octet-stream",
+        )
+        .await
     }
 
     fn name(&self) -> &'static str {
@@ -441,6 +516,24 @@ mod tests {
         assert!(!md5.is_empty());
         // "XUFAKrxLKna5cZ2REBfFkg==" is the base64 MD5 of "hello"
         assert_eq!(md5, "XUFAKrxLKna5cZ2REBfFkg==");
+    }
+
+    #[tokio::test]
+    async fn streaming_md5_matches_compute_md5() {
+        // The upload path hashes the file in a streaming pass; it must
+        // produce exactly the same Content-MD5 the in-memory path would
+        // (a mismatch breaks the signed request).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("object.bin");
+        // Larger than the 64 KiB read buffer, so the loop iterates.
+        let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &payload).unwrap();
+
+        assert_eq!(
+            streaming_md5(&path).await.unwrap(),
+            compute_md5(&payload),
+            "streamed and buffered MD5 must agree"
+        );
     }
 
     #[test]

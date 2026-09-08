@@ -488,7 +488,12 @@ fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError
         for block in arr {
             match block["type"].as_str() {
                 Some("text") => {
-                    content = block["text"].as_str().map(String::from);
+                    // A Claude response can carry several text blocks (text,
+                    // tool_use, text) — appending keeps all assistant prose;
+                    // overwriting silently dropped every block but the last.
+                    if let Some(text) = block["text"].as_str() {
+                        content.get_or_insert_with(String::new).push_str(text);
+                    }
                 }
                 Some("tool_use") => {
                     tool_calls.push(ToolCall {
@@ -1208,20 +1213,40 @@ pub fn save_ai_config(
     api_url: Option<&str>,
     model: Option<&str>,
 ) {
-    let path = ai_config_path();
+    save_ai_config_to(&ai_config_path(), kind, api_key, api_url, model);
+}
+
+/// [`save_ai_config`] against an explicit path (testable without touching
+/// `$HOME`).
+///
+/// `api_key: None` means "keep the stored key": a runtime reconfiguration
+/// (`POST /api/ai/config`, `AI::reconfigure`) that carries no key must not
+/// destroy a credential the user saved earlier. Pass `Some("")` to clear it
+/// deliberately.
+fn save_ai_config_to(
+    path: &std::path::Path,
+    kind: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    model: Option<&str>,
+) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
+    let api_key = match api_key {
+        Some(key) => key.to_string(),
+        None => read_stored_api_key(path),
+    };
     let config = serde_json::json!({
         "provider": kind,
-        "api_key": api_key.unwrap_or(""),
+        "api_key": api_key,
         "api_url": api_url.unwrap_or(""),
         "model": model.unwrap_or(""),
     });
     if let Ok(json) = serde_json::to_string_pretty(&config) {
         // The file holds a live API key in plaintext — restrict it to the
         // owner so shared HPC systems and group-readable homes don't leak it.
-        match std::fs::File::create(&path) {
+        match std::fs::File::create(path) {
             Ok(file) => {
                 use std::io::Write;
                 #[cfg(unix)]
@@ -1239,6 +1264,15 @@ pub fn save_ai_config(
             Err(e) => tracing::warn!("Failed to create AI config at {}: {e}", path.display()),
         }
     }
+}
+
+/// The api_key currently stored at `path` (empty when absent/unreadable).
+fn read_stored_api_key(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| json["api_key"].as_str().map(String::from))
+        .unwrap_or_default()
 }
 
 /// Read the persisted AI config: `(provider, api_key, api_url, model)`.
@@ -1289,6 +1323,29 @@ pub struct ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_response_concatenates_multiple_text_blocks() {
+        // Claude can interleave blocks (text, tool_use, text). Overwriting
+        // dropped every text block but the last — the model's reasoning
+        // around a tool call disappeared from the response.
+        let json = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Let me look at the workflow. "},
+                {"type": "tool_use", "id": "tu_1", "name": "read_file",
+                 "input": {"path": "main.oxoflow"}},
+                {"type": "text", "text": "Then I will patch rule B."}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 20}
+        });
+        let parsed = parse_claude_response(&json).unwrap();
+        assert_eq!(
+            parsed.content.as_deref(),
+            Some("Let me look at the workflow. Then I will patch rule B.")
+        );
+        assert_eq!(parsed.tool_calls.as_ref().map(|c| c.len()), Some(1));
+    }
 
     #[test]
     fn provider_kind_parse() {
@@ -1826,5 +1883,34 @@ mod tests {
         );
         assert!(chunks.iter().any(|c| matches!(c, SseEvent::Done)));
         assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn save_ai_config_none_key_preserves_stored_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_config.json");
+        save_ai_config_to(
+            &path,
+            "claude",
+            Some("sk-original"),
+            Some("https://x"),
+            Some("m1"),
+        );
+        // Runtime reconfiguration without a key must not wipe the credential.
+        save_ai_config_to(&path, "openai", None, Some("https://y"), Some("m2"));
+        let read = |p: &std::path::Path| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+        };
+        let after = read(&path);
+        assert_eq!(after["provider"], "openai");
+        assert_eq!(
+            after["api_key"], "sk-original",
+            "stored key must survive a keyless save"
+        );
+        assert_eq!(after["api_url"], "https://y");
+        assert_eq!(after["model"], "m2");
+        // An explicit empty key clears it.
+        save_ai_config_to(&path, "openai", Some(""), None, None);
+        assert_eq!(read(&path)["api_key"], "");
     }
 }

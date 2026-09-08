@@ -146,7 +146,7 @@ conda = "envs/gatk.yaml"
 name = "bqsr_experiment"
 input = ["dedup/EXP_01.dedup.bam"]
 output = ["recal/EXP_01.recal.bam"]
-shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/EXP_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/EXP_01.recal.table -O {output[0]}"
+shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/EXP_01.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/EXP_01.recal.table -O {output[0]}"
 
 [rules.resources]
 threads = 4
@@ -159,7 +159,7 @@ conda = "envs/gatk.yaml"
 name = "bqsr_control"
 input = ["dedup/CTRL_01.dedup.bam"]
 output = ["recal/CTRL_01.recal.bam"]
-shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/CTRL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R /data/references/GRCh38/genome.fa --bqsr-recal-file recal/CTRL_01.recal.table -O {output[0]}"
+shell = "gatk BaseRecalibrator --read-validation-stringency SILENT -I {input[0]} -R {config.reference_fasta} --known-sites {config.known_sites} -O recal/CTRL_01.recal.table && gatk ApplyBQSR -I {input[0]} -R {config.reference_fasta} --bqsr-recal-file recal/CTRL_01.recal.table -O {output[0]}"
 
 [rules.resources]
 threads = 4

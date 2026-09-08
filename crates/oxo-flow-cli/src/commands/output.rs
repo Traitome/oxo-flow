@@ -92,7 +92,15 @@ pub fn handle_graph(
             .context("failed to expand wildcard rules")?;
     }
 
-    let dag = WorkflowDag::from_rules(&config.rules).context("failed to build workflow DAG")?;
+    // Same DAG construction as `run` (config placeholders expanded): with an
+    // empty config map an output like `{config.outdir}/x.txt` never matches a
+    // consumer's concrete input, so `--expanded` showed fewer edges than the
+    // runtime DAG it promises (audit finding).
+    let dag = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &crate::commands::run::config_placeholder_values(&config.config),
+    )
+    .context("failed to build workflow DAG")?;
     if dag.node_count() == 0 {
         // An empty export (bare "graph LR") is indistinguishable from a
         // successful render downstream — fail loudly instead.
@@ -100,7 +108,17 @@ pub fn handle_graph(
     }
 
     let result = match format {
-        GraphFormat::Ascii => dag.to_ascii().map_err(|e| anyhow::anyhow!(e)),
+        GraphFormat::Ascii => {
+            // Colour only for terminal stdout: `-o FILE` and `-o -` piped
+            // elsewhere must stay plain text, so the file branch forces it
+            // off even when stdout is a TTY. `should_colorize` already
+            // honours --no-color / NO_COLOR.
+            let writes_to_file = output
+                .as_deref()
+                .is_some_and(|path| path.as_os_str() != "-");
+            let color = !writes_to_file && colored::control::SHOULD_COLORIZE.should_colorize();
+            dag.to_ascii(color).map_err(|e| anyhow::anyhow!(e))
+        }
         GraphFormat::Dot => Ok(dag.to_dot()),
         GraphFormat::DotClustered => dag.to_dot_clustered().map_err(|e| anyhow::anyhow!(e)),
         GraphFormat::Tree => dag.to_ascii_tree().map_err(|e| anyhow::anyhow!(e)),
@@ -114,11 +132,15 @@ pub fn handle_graph(
             .map_err(|e| anyhow::anyhow!(e)),
     }?;
 
-    if let Some(path) = output {
-        std::fs::write(&path, result)?;
-        eprintln!("{} Graph saved to {}", "✓".green(), path.display());
-    } else {
-        println!("{}", result);
+    match output {
+        // "-o -" targets stdout explicitly, exactly like `report -o -`
+        // (audit finding: it used to create a file literally named `-`).
+        Some(path) if path.as_os_str() == "-" => println!("{result}"),
+        Some(path) => {
+            std::fs::write(&path, result)?;
+            eprintln!("{} Graph saved to {}", "✓".green(), path.display());
+        }
+        None => println!("{result}"),
     }
 
     Ok(())
@@ -698,21 +720,47 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         "json" => report.to_json().map_err(|e| anyhow::anyhow!(e))?,
         "md" | "markdown" => report.to_markdown(),
         "pdf" => {
-            let pdf_output = output
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(format!("{}_report.pdf", config.workflow.name)));
+            // `-o -` means stdout (audit finding: it wrote a file named `-`).
+            // The renderer writes a file, so stdout is served through a
+            // scratch file that is read back and removed.
+            let to_stdout = output.as_deref().is_some_and(|p| p.as_os_str() == "-");
+            let pdf_output = if to_stdout {
+                std::env::temp_dir().join(format!("oxo-flow-report-{}.pdf", std::process::id()))
+            } else {
+                output.clone().unwrap_or_else(|| {
+                    PathBuf::from(format!("{}_report.pdf", config.workflow.name))
+                })
+            };
             if wkhtmltopdf_available() {
                 let rt = tokio::runtime::Runtime::new()?;
-                rt.block_on(async { report.to_pdf(&pdf_output).await })?;
+                let pdf_result = rt.block_on(async { report.to_pdf(&pdf_output).await });
+                if to_stdout && pdf_result.is_err() {
+                    // Never leave the stdout scratch file behind.
+                    let _ = std::fs::remove_file(&pdf_output);
+                }
+                pdf_result?;
+                if to_stdout {
+                    let bytes = std::fs::read(&pdf_output)?;
+                    let _ = std::fs::remove_file(&pdf_output);
+                    std::io::Write::write_all(&mut std::io::stdout(), &bytes)?;
+                } else {
+                    eprintln!(
+                        "{} PDF report written to {}",
+                        "✓".green(),
+                        pdf_output.display()
+                    );
+                }
+            } else if to_stdout {
+                // wkhtmltopdf's upstream is archived; when it is absent,
+                // degrade to printable HTML instead of failing (issue #83
+                // P1-7) — on stdout the fallback replaces the PDF bytes.
+                print!("{}", report.to_printable_html());
                 eprintln!(
-                    "{} PDF report written to {}",
-                    "✓".green(),
-                    pdf_output.display()
+                    "{} wkhtmltopdf not found — wrote printable HTML to stdout instead. \
+                     Install wkhtmltopdf (note: upstream archived) for PDF output.",
+                    "⚠".yellow()
                 );
             } else {
-                // wkhtmltopdf's upstream is archived; when it is absent,
-                // degrade to a printable HTML file instead of failing
-                // (issue #83 P1-7).
                 let fallback = pdf_output.with_extension("html");
                 std::fs::write(&fallback, report.to_printable_html())?;
                 eprintln!(
@@ -758,7 +806,12 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
                 let reports_dir = dir.join(".oxo-flow").join("reports");
                 std::fs::create_dir_all(&reports_dir)?;
                 let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-                let path = reports_dir.join(format!("report-{stamp}.html"));
+                // The extension follows the requested format: the path used
+                // to be hard-coded `.html`, so `report -f json` wrote a JSON
+                // document into a file named `report-<stamp>.html` (audit
+                // finding).
+                let path =
+                    reports_dir.join(format!("report-{stamp}.{}", report_extension(&format)));
                 std::fs::write(&path, &content)?;
                 eprintln!("Report written to {}", path.display());
             }
@@ -1063,10 +1116,29 @@ fn sorted_map_keys(maps: &[&HashMap<String, String>]) -> Vec<String> {
     keys
 }
 
+/// File extension for a report format, used when the report path is derived
+/// (auto-discovery). Mirrors the `-f` value set of `handle_report`.
+fn report_extension(format: &str) -> &str {
+    match format {
+        "md" | "markdown" => "md",
+        "json" => "json",
+        "pdf" => "pdf",
+        _ => "html",
+    }
+}
+
 /// Abbreviate a `sha256:<hex>` checksum for diff lines.
+///
+/// The cut is made on a char boundary: a hand-edited checkpoint can carry a
+/// non-ASCII value, and byte-slicing at a fixed offset panicked (audit
+/// finding).
 fn short_checksum(value: &str) -> String {
     let bare = value.strip_prefix("sha256:").unwrap_or(value);
-    let end = bare.len().min(12);
+    let end = bare
+        .char_indices()
+        .nth(12)
+        .map(|(index, _)| index)
+        .unwrap_or(bare.len());
     bare[..end].to_string()
 }
 
@@ -1482,32 +1554,35 @@ pub fn handle_diff(workflow_a: PathBuf, workflow_b: PathBuf) -> Result<()> {
 
     let diffs = oxo_flow_core::format::diff_workflows(&config_a, &config_b);
 
+    // The diff IS the command's result, so it goes to stdout (audit finding:
+    // everything went to stderr, leaving stdout empty), and a diff with
+    // differences exits non-zero like `diff(1)` so scripts can branch on it.
     if diffs.is_empty() {
-        eprintln!("{} Workflows are identical", "✓".green().bold());
-    } else {
-        eprintln!(
-            "{} {} difference(s) between {} and {}:",
-            "Diff:".bold().yellow(),
-            diffs.len(),
-            workflow_a.display(),
-            workflow_b.display()
-        );
-        for diff in &diffs {
-            let cat_color = match diff.category.as_str() {
-                "added" | "rule added" => "✓".green(),
-                "removed" | "rule removed" => "✗".red(),
-                "changed" => "~".yellow(),
-                _ => "•".cyan(),
-            };
-            eprintln!(
-                "  {} [{}] {}",
-                cat_color,
-                diff.category.cyan(),
-                diff.description
-            );
-        }
+        println!("{} Workflows are identical", "✓".green().bold());
+        return Ok(());
     }
-    Ok(())
+    println!(
+        "{} {} difference(s) between {} and {}:",
+        "Diff:".bold().yellow(),
+        diffs.len(),
+        workflow_a.display(),
+        workflow_b.display()
+    );
+    for diff in &diffs {
+        let cat_color = match diff.category.as_str() {
+            "added" | "rule added" => "✓".green(),
+            "removed" | "rule removed" => "✗".red(),
+            "changed" => "~".yellow(),
+            _ => "•".cyan(),
+        };
+        println!(
+            "  {} [{}] {}",
+            cat_color,
+            diff.category.cyan(),
+            diff.description
+        );
+    }
+    std::process::exit(1);
 }
 
 pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>) -> Result<()> {
@@ -1644,7 +1719,36 @@ Keep the total under 200 words. Use simple language; explain jargon.
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hms_to_secs, parse_maxrss_to_mb, resolve_report_workflow};
+    use super::{
+        parse_hms_to_secs, parse_maxrss_to_mb, report_extension, resolve_report_workflow,
+        short_checksum,
+    };
+
+    #[test]
+    fn report_extension_follows_the_requested_format() {
+        // The auto-discovery path hard-coded `.html`, so `report -f json`
+        // wrote a JSON document into `report-<stamp>.html` (audit finding).
+        assert_eq!(report_extension("json"), "json");
+        assert_eq!(report_extension("md"), "md");
+        assert_eq!(report_extension("markdown"), "md");
+        assert_eq!(report_extension("pdf"), "pdf");
+        assert_eq!(report_extension("html"), "html");
+        assert_eq!(report_extension("htm"), "html");
+    }
+
+    #[test]
+    fn short_checksum_cuts_on_a_char_boundary() {
+        // A hand-edited checkpoint can carry non-ASCII: byte-slicing at a
+        // fixed offset panicked (audit finding).
+        assert_eq!(short_checksum("sha256:abcdefghijklmnop"), "abcdefghijkl");
+        assert_eq!(short_checksum("abcdefghijkl"), "abcdefghijkl");
+        assert_eq!(short_checksum("short"), "short");
+        // 12 bytes would split the 5th char here; the cut must back off.
+        let value = "ααααααααααααα";
+        let shortened = short_checksum(value);
+        assert!(value.starts_with(&shortened));
+        assert_eq!(shortened.chars().count(), 12);
+    }
 
     /// With no explicit workflow, `report --versions-yml` must still pick
     /// up the auto-discovered checkpoint — its `workflow_git_sha` feeds the

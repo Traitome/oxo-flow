@@ -369,13 +369,21 @@ impl Tool for WriteFileTool {
 
         // Archive the previous contents so an agent's overwrite is always
         // recoverable — this is what the tool description promises.
+        //
+        // The stamp carries nanoseconds and the loop below breaks any
+        // residual tie: a second-granular name let two writes to the same
+        // path within one second overwrite the first backup, silently
+        // destroying the earlier version.
         let mut backed_up_to = None;
         if path.exists() {
-            let backup = std::path::PathBuf::from(format!(
-                "{}.bak.{}",
-                path.display(),
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ));
+            let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S%.9f").to_string();
+            let mut backup = std::path::PathBuf::from(format!("{}.bak.{stamp}", path.display()));
+            let mut collision = 0u32;
+            while backup.exists() {
+                collision += 1;
+                backup =
+                    std::path::PathBuf::from(format!("{}.bak.{stamp}.{collision}", path.display()));
+            }
             match std::fs::copy(path, &backup) {
                 Ok(_) => backed_up_to = Some(backup),
                 Err(e) => {
@@ -491,13 +499,55 @@ mod tests {
         assert_eq!(content, "hello world");
         std::fs::remove_file(&tmp).ok();
     }
+
+    #[tokio::test]
+    async fn write_file_tool_keeps_every_backup_within_one_second() {
+        // Two overwrites inside the same second must BOTH be recoverable —
+        // the old second-granular backup name overwrote the first backup.
+        let tool = WriteFileTool::new();
+        let dir = std::env::temp_dir().join("oxo-flow-ai-backup-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("main.oxoflow");
+
+        for content in ["version one", "version two", "version three"] {
+            tool.execute(&format!(
+                r#"{{"path": "{}", "content": "{content}"}}"#,
+                target.display()
+            ))
+            .await
+            .unwrap();
+        }
+
+        let mut backups: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".bak."))
+            .collect();
+        backups.sort();
+        assert_eq!(
+            backups.len(),
+            2,
+            "each overwrite of an existing file must leave its own backup: {backups:?}"
+        );
+        let contents: Vec<String> = backups
+            .iter()
+            .map(|n| std::fs::read_to_string(dir.join(n)).unwrap())
+            .collect();
+        assert!(contents.contains(&"version one".to_string()));
+        assert!(contents.contains(&"version two".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
-/// Look up tools in the embedded Bioconda CLI database (6103 tools).
+/// Look up tools in the embedded Bioconda CLI database.
 ///
 /// Query by exact name, name prefix/substring, or summary keyword.
 /// Returns real tool names, current Bioconda versions, descriptions,
-/// and supported platforms.
+/// and supported platforms. The advertised record count is derived from
+/// the embedded data (never hardcoded — it drifted twice already).
 #[derive(Default)]
 pub struct LookupTool;
 
@@ -512,10 +562,13 @@ impl Tool for LookupTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "lookup_tool".into(),
-            description: "Search the embedded Bioconda CLI database (6103 tools) for bioinformatics tools. \
-                          Query by tool name, name fragment, or purpose keyword (e.g. 'star', 'align', 'variant calling'). \
-                          Returns tool names, current Bioconda versions, descriptions, and platform support. \
-                          Use this to pick the right tool and pin its current version instead of guessing.".into(),
+            description: format!(
+                "Search the embedded Bioconda CLI database ({} tools) for bioinformatics tools. \
+                 Query by tool name, name fragment, or purpose keyword (e.g. 'star', 'align', 'variant calling'). \
+                 Returns tool names, current Bioconda versions, descriptions, and platform support. \
+                 Use this to pick the right tool and pin its current version instead of guessing.",
+                crate::knowledge::bioconda::tool_count()
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -630,9 +683,10 @@ impl Tool for LookupSkillTool {
     }
 }
 
-/// Query the embedded bioinformatics pipeline knowledge graph (79 skills,
-/// 470 literature-backed transitions). Understand what feeds into or out
-/// of a workflow step, or find the pipeline path between two steps.
+/// Query the embedded bioinformatics pipeline knowledge graph. Understand
+/// what feeds into or out of a workflow step, or find the pipeline path
+/// between two steps. The advertised counts are derived from the embedded
+/// data (never hardcoded — they drifted already).
 #[derive(Default)]
 pub struct LookupPipelineTool;
 
@@ -645,9 +699,15 @@ impl LookupPipelineTool {
 #[async_trait]
 impl Tool for LookupPipelineTool {
     fn def(&self) -> ToolDef {
+        let (skills, transitions) = crate::knowledge::pipeline_graph::graph_stats();
         ToolDef {
             name: "lookup_pipeline".into(),
-            description: "Query the embedded bioinformatics pipeline knowledge graph (79 workflow skills, 469 data-flow transitions with data types and literature evidence). Use 'transitions' to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation).".into(),
+            description: format!(
+                "Query the embedded bioinformatics pipeline knowledge graph ({skills} workflow skills, \
+                 {transitions} data-flow transitions with data types and literature evidence). Use 'transitions' \
+                 to see what feeds into/out of a step, or 'path' to find the pipeline between two steps. Use this \
+                 to design correct multi-step workflow topologies (e.g. from alignment to variant calling to annotation)."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

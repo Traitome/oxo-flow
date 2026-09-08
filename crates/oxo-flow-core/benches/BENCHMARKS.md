@@ -5,14 +5,25 @@ performance regression tracking and scientific publication.
 
 ## Structure
 
-| File | Benchmarks | Scope |
-|---|---|---|
-| `dag_bench.rs` | 12 | DAG construction, validation, analysis (chain/tree/star, 10–10k rules) |
-| `wildcard_bench.rs` | 9 | Pattern expansion, Cartesian product, regex conversion |
-| `parsing_bench.rs` | 9 | TOML parse, full lifecycle, serialisation round-trip |
-| `scheduling_bench.rs` | 5 | Ready-rule queries, strategy comparison, simulation |
+Every file below is declared as a `[[bench]] harness = false` target in
+`Cargo.toml`; criterion supplies `main`, libtest does not wrap it. A file
+missing from that list still compiles but reports "0 tests" instead of
+running — keep this table in sync when benches are added or removed.
 
-**Total: 35 benchmark functions** across 4 binary targets.
+| File | Criterion functions | Measurements | Scope |
+|---|---|---|---|
+| `dag_bench.rs` | 11 | 20 | DAG construction, validation, analysis (chain/tree/star, 10–10k rules) |
+| `wildcard_bench.rs` | 9 | 9 | Pattern expansion, Cartesian product, regex conversion |
+| `parsing_bench.rs` | 9 | 9 | TOML parse, full lifecycle, serialisation round-trip |
+| `scheduling_bench.rs` | 5 | 7 | Ready-rule queries, strategy comparison, simulation |
+| `dag_scale_bench.rs` | 1 | 12 | Build/order/groups across 10–500 rule chains (3 sites × 4 sizes) |
+| `api_response_bench.rs` | 1 | 5 | API status JSON serialisation/parse at 10/200 nodes |
+| `diagnostics_bench.rs` | 1 | 2 | Log-pattern matching at 3/1000 logs |
+| `wildcard_large_bench.rs` | 1 | 2 | Large Cartesian expansion (10/200 combos) |
+
+**Total: 38 criterion functions / 66 measurements** across 8 binary targets.
+(Criterion functions are the entry points registered in `criterion_group!`;
+measurements count each `bench_function` site after loop expansion.)
 
 ## Design
 

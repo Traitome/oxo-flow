@@ -41,8 +41,10 @@ WDL, and no importers for those formats are currently available.
   Streaming support is on the roadmap.
 - **No HIPAA/GDPR de-identification tools** — PHI handling and data
   de-identification must be managed by the user or external tools.
-- **No native PDF export** — reports are HTML and JSON; converting to
-  PDF is left to external tools. See `oxo-flow report --help`.
+- **PDF export requires an external renderer** — `oxo-flow report -f pdf`
+  shells out to `wkhtmltopdf`; `-f pdf-command` prints the equivalent
+  command without running it, and `-f md` emits Markdown. HTML and JSON
+  need no external tooling. See `oxo-flow report --help`.
 - **Regulatory certification** — oxo-flow provides audit trails, checksums,
   and provenance tracking, but formal regulatory certification (FDA, CLIA,
   etc.) is the responsibility of the deploying organization.
@@ -58,6 +60,23 @@ WDL, and no importers for those formats are currently available.
 - **Hot-reload of `.oxoflow` files** — Changes to workflow files during
   execution are not detected; the workflow must be re-validated and
   re-executed explicitly.
+- **A tampered output is verified, not re-executed** — `oxo-flow provenance
+  verify` reports an output file whose content no longer matches its recorded
+  checksum, but a re-run skips rules already marked completed in the
+  checkpoint (their outputs exist), so the tampered file is served as-is even
+  with `--provenance`. Use `--rerun` to force re-execution.
+- **Content hashing has a 64 MiB cap** — input manifests (and the freshness
+  gate) content-hash files up to 64 MiB; larger files — typically BAM/CRAM
+  intermediates — are tracked by size + mtime, so an in-place change that
+  preserves both is not detected.
+- **`sample_pattern` binds `{sample}` only** — `{read}`, `{replicate}`, or any
+  other wildcard name in `sample_pattern` does not create per-read or
+  per-replicate instances: every matching file collapses to the same
+  `{sample}` value and expansion fails with `duplicate rule name`. For
+  paired-end data, point the pattern at R1 and list R2 in each rule's `input`
+  (the gallery examples' pattern); for genuine per-read/per-replicate
+  fan-out, declare the domain with `[[pairs]]`/`[[sample_groups]]` or bind
+  the extra wildcards with `input_groups`.
 
 ## Roadmap
 

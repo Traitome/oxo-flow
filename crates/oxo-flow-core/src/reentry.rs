@@ -208,7 +208,18 @@ fn reexpand_from_templates(config: &mut WorkflowConfig) -> Result<()> {
         });
     }
     config.rules = config.rule_templates.clone();
-    config.expand_wildcards()
+    config.expand_wildcards()?;
+    // Runtime-instantiated `output_pattern` consumers live only in
+    // `config.rules` (plan-time expansion defers them to
+    // `pending_output_pattern`), so rebuilding `rules` from the templates
+    // dropped them. The scheduler still holds their names in
+    // statuses/order, and the rebuilt DAG no longer contains them — the next
+    // `ready_rules` call then aborts with `RuleNotFound`, or a dependent
+    // loses its edge. `expand_wildcards` rebuilds the pending set and the
+    // persisted discovery domains are still present, so re-instantiating
+    // here reproduces the same instances (idempotent by design).
+    config.expand_output_pattern_consumers()?;
+    Ok(())
 }
 
 fn merge_samples(config: &mut WorkflowConfig, group_name: &str, samples: &[String]) -> Vec<String> {
@@ -327,6 +338,68 @@ mod tests {
             metadata: Default::default(),
             when: None,
         }
+    }
+
+    fn write_output_pattern_wf(dir: &std::path::Path) -> std::path::PathBuf {
+        // `{part}` has no plan-time binding source, so the producer keeps its
+        // output_pattern and the consumer defers to runtime discovery.
+        let toml = r#"
+            [workflow]
+            name = "reentry-pattern"
+
+            [[rules]]
+            name = "producer"
+            shell = "mkdir -p results && touch results/{part}.txt"
+            output_pattern = "results/{part}.txt"
+            checkpoint = true
+            checkpoint_manifest = "producer.toml"
+
+            [[rules]]
+            name = "consumer"
+            input = ["results/{part}.txt"]
+            output = ["out/{part}.txt"]
+            shell = "touch out/{part}.txt"
+        "#;
+        let path = dir.join("pattern.oxoflow");
+        std::fs::write(&path, toml).unwrap();
+        path
+    }
+
+    #[test]
+    fn apply_reentry_keeps_runtime_output_pattern_consumers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = WorkflowConfig::from_file(&write_output_pattern_wf(dir.path())).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+
+        // What `run` does once the producer's instances have completed: the
+        // discovery domain is contributed, then the deferred consumer is
+        // instantiated.
+        let mut combo = crate::wildcard::WildcardValues::new();
+        combo.insert("part".to_string(), "A".to_string());
+        assert_eq!(
+            config.contribute_output_pattern_domain("producer", vec![combo]),
+            1
+        );
+        let created = config.expand_output_pattern_consumers().unwrap();
+        // The producer is deferred too (its only binding source is the
+        // runtime domain), so one pass instantiates both.
+        assert_eq!(
+            created,
+            vec!["producer_A".to_string(), "consumer_A".to_string()],
+            "both instances must materialize"
+        );
+        let consumer = "consumer_A".to_string();
+
+        // Re-entry rebuilds `rules` from the templates. The runtime instance
+        // must survive: the scheduler still holds its status, and a rebuilt
+        // DAG without it aborts the run with RuleNotFound.
+        apply_reentry(&mut config, None, &["S2".into()], &[]).unwrap();
+        assert!(
+            config.rules.iter().any(|r| r.name == consumer),
+            "runtime consumer {consumer} dropped by re-entry: {:?}",
+            config.rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]

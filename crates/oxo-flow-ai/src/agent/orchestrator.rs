@@ -231,20 +231,18 @@ impl Orchestrator {
                         break;
                     }
 
-                    // Validation failed — feed errors back
+                    // Validation failed — the model must see its OWN rejected
+                    // output, then the errors. The transcript previously held
+                    // only a fabricated "your output failed" assistant line,
+                    // so the model regenerated blind and could burn every
+                    // round without ever learning what it wrote.
+                    let rc = response.reasoning_content.as_deref().unwrap_or("");
+                    messages.push(Message::assistant_with_reasoning(text, rc));
                     let feedback = format!(
                         "Your previous output failed validation:\n{}\n\nPlease fix these issues and provide the corrected output.",
                         validation.errors.join("\n")
                     );
                     messages.push(Message::user(&feedback));
-                    let rc = response.reasoning_content.as_deref().unwrap_or("");
-                    messages.push(Message::assistant_with_reasoning(
-                        &format!(
-                            "The previous output failed validation. Here are the issues:\n{}",
-                            validation.errors.join("\n")
-                        ),
-                        rc,
-                    ));
                     // Continue loop — model will fix
                     continue;
                 }
@@ -451,6 +449,66 @@ mod tests {
         let ctx = test_context();
         let result = orch.execute(&agent, &ctx).await;
         assert!(result.is_err());
+    }
+
+    /// An agent that rejects everything except content containing `ACCEPTED`.
+    struct PickyAgent;
+    #[async_trait]
+    impl Agent for PickyAgent {
+        fn name(&self) -> &str {
+            "picky-agent"
+        }
+        fn plan(&self, _ctx: &AgentContext) -> Message {
+            Message::system("sys")
+        }
+        fn user_message(&self, _ctx: &AgentContext) -> Message {
+            Message::user("write it")
+        }
+        fn validate(&self, content: &str, _ctx: &AgentContext) -> ValidationResult {
+            if content.contains("ACCEPTED") {
+                ValidationResult::passed()
+            } else {
+                ValidationResult::failed(vec!["rule R1 must exist".into()])
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn validation_failure_replays_the_rejected_output() {
+        // The model must see its own rejected output before the error list;
+        // with only a fabricated summary it regenerated blindly and could
+        // burn every round (audit finding).
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("BAD OUTPUT v1"),
+            ScriptedTurn::content("ACCEPTED v2"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let outcome = orch.execute(&PickyAgent, &test_context()).await.unwrap();
+        assert!(outcome.success, "the corrected output must be accepted");
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 2, "one provider call per round");
+        let second = &calls[1];
+        let rejected = second
+            .iter()
+            .position(|m| {
+                matches!(m.role, crate::types::MessageRole::Assistant)
+                    && m.content.contains("BAD OUTPUT v1")
+            })
+            .expect("the rejected assistant output must be in the transcript");
+        let feedback = second
+            .iter()
+            .position(|m| {
+                matches!(m.role, crate::types::MessageRole::User)
+                    && m.content.contains("failed validation")
+            })
+            .expect("the validation feedback must follow");
+        assert!(
+            rejected < feedback,
+            "rejected output must precede the feedback: {second:?}"
+        );
     }
 
     #[tokio::test]

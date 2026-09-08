@@ -2203,6 +2203,75 @@ shell = "echo {config.database} > {output[0]}"
 }
 
 #[test]
+fn config_def_non_string_default_is_stringified() {
+    // TOML users write `default = false` / `default = 30`. The old
+    // `Option<String>` deserializer rejected those, and the silent
+    // `if let Ok(..)` in `extract_declarative_config` left the raw inline
+    // table as the runtime value: `{config.do_qc}` rendered TOML text into
+    // the command and `when = "config.do_qc"` evaluated truthy.
+    let toml_str = r#"
+[workflow]
+name = "test"
+version = "1.0.0"
+
+[config]
+do_qc = { default = false, help = "run QC" }
+retries = { default = 3, help = "retry count" }
+ratio = { default = 0.5, help = "float default" }
+
+[[rules]]
+name = "s"
+output = ["out.txt"]
+shell = "echo {config.do_qc} {config.retries} {config.ratio} > {output[0]}"
+"#;
+    let config = WorkflowConfig::parse(toml_str).unwrap();
+    assert_eq!(
+        config.config.get("do_qc").and_then(|v| v.as_str()),
+        Some("false"),
+        "boolean default must become the runtime string value"
+    );
+    assert_eq!(
+        config.config.get("retries").and_then(|v| v.as_str()),
+        Some("3")
+    );
+    assert_eq!(
+        config.config.get("ratio").and_then(|v| v.as_str()),
+        Some("0.5")
+    );
+    assert_eq!(
+        config.config_meta["do_qc"].default.as_deref(),
+        Some("false")
+    );
+    assert_eq!(config.config_meta["retries"].default.as_deref(), Some("3"));
+}
+
+#[test]
+fn config_def_array_default_is_a_hard_error() {
+    // Arrays are not representable as a scalar default. Silently keeping the
+    // raw table (old behavior) injected TOML text into every command that
+    // referenced the key, so this must fail loudly at parse time.
+    let toml_str = r#"
+[workflow]
+name = "test"
+version = "1.0.0"
+
+[config]
+samples = { default = ["a", "b"], help = "sample list" }
+
+[[rules]]
+name = "s"
+output = ["out.txt"]
+shell = "echo {config.samples} > {output[0]}"
+"#;
+    let err = WorkflowConfig::parse(toml_str).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("samples") && msg.contains("default"),
+        "error must name the offending key and field: {msg}"
+    );
+}
+
+#[test]
 fn sensitive_only_inline_config_registers_metadata() {
     // issue #99 B1: the declarative-config promotion trigger was
     // default/required/help only, so a sensitive-ONLY declaration

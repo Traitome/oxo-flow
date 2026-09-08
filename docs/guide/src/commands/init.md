@@ -28,7 +28,9 @@ oxo-flow init [OPTIONS] <NAME>
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
 | `--no-color` | — | — | Disable colored output |
-| `--json` | — | — | Output machine-readable JSON to stdout |
+
+
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `schema`, `license`, `ai`, and `provenance verify`.
 
 ---
 
@@ -87,7 +89,11 @@ memory = "1G"
 name = "hello_world"
 description = "A minimal rule that writes a greeting"
 output = ["results/{config.sample_name}_output.txt"]
-shell = "echo '{config.greeting}' > {output[0]}"
+# The greeting is passed via the environment, not spliced into the shell —
+# an apostrophe or quote in the config value cannot break the command
+# (`--arg greeting=...` overrides the default).
+envvars = { GREETING = "{config.greeting}" }
+shell = "echo \"$GREETING\" > {output[0]}"
 ```
 
 **`envs/example.yaml`** — Starter conda environment specification.

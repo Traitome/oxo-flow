@@ -161,6 +161,7 @@ Progressive disclosure — open only what the current stage needs.
 | Reference | `reference/architecture`, `gallery/` (16 workflows), `tutorials/custom-scripts`, `tutorials/environment-management` |
 | Knowledge bases (raw) | `crates/oxo-flow-ai/src/knowledge/bioconda_tools.jsonl`, `skills_index.jsonl`, `nfcore_modules.jsonl`, `pipeline_graph.jsonl` |
 
-Docs links resolve under `https://traitome.github.io/oxo-flow/<path>`; raw
-file links under
+Docs links resolve under `https://traitome.github.io/oxo-flow/latest/<path>`
+(mike serves each version under `/latest/`, `/dev/`, or `/<tag>/`); raw file
+links under
 `https://raw.githubusercontent.com/Traitome/oxo-flow/main/<path>`.

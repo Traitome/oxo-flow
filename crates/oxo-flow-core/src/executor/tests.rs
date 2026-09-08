@@ -246,6 +246,44 @@ async fn execute_shell_creates_outputs_succeeds() {
 }
 
 #[tokio::test]
+async fn execute_caps_unbounded_output_capture() {
+    // A rule streaming GBs was buffered whole into RAM by
+    // `wait_with_output` (then copied again). The capture keeps the first
+    // and last MiB and says in the record what it dropped.
+    let dir = tempfile::tempdir().unwrap();
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: dir.path().to_path_buf(),
+        keep_going: false,
+        retry_count: 0,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // ~2.7 MB of stdout — above the 2 MiB head+tail cap.
+    let rule = RuleBuilder::new("big_output")
+        .shell("seq 1 400000; seq 1 400000 > out.txt")
+        .output(vec!["out.txt".to_string()])
+        .build();
+
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let stdout = record.stdout.unwrap();
+    assert!(
+        stdout.contains("output truncated:"),
+        "the record must announce the cap: {} bytes",
+        stdout.len()
+    );
+    assert!(
+        stdout.len() < 3 * 1024 * 1024,
+        "capture must stay bounded, got {} bytes",
+        stdout.len()
+    );
+    assert!(stdout.starts_with("1\n2\n"), "head of the stream is kept");
+    assert!(stdout.trim_end().ends_with("400000"), "tail is kept");
+}
+
+#[tokio::test]
 async fn execute_wildcard_expansion() {
     let config = ExecutorConfig {
         max_jobs: 1,
@@ -2585,6 +2623,47 @@ fn scratch_docker_wrapper_mounts_scratch_and_switches_cwd() {
 }
 
 #[test]
+fn scratch_fixup_handles_the_quoted_backend_wrapper() {
+    // The container backends single-quote host paths (`-v '/a b':'/a b'`);
+    // matching only the unquoted form made the fixup no-op for every real
+    // wrapper, silently dropping the scratch bind (and the -w switch).
+    use crate::environment::{DockerBackend, EnvironmentBackend, SingularityBackend};
+
+    let dir = tempfile::Builder::new()
+        .prefix("oxo scratch test")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let workdir = dir.path().to_path_buf();
+    let scratch = workdir.join(".oxo-flow/scratch/demo-1-0");
+    let w = workdir.display().to_string();
+    let s = scratch.display().to_string();
+
+    let wrapped = DockerBackend
+        .wrap_command(
+            "bwa mem reads.fq > data.txt",
+            "ubuntu:24.04",
+            None,
+            &workdir,
+        )
+        .unwrap();
+    let fixed = fixup_container_wrapper(&wrapped, "docker", &workdir, &scratch);
+    assert!(
+        fixed.contains(&format!("-v '{w}':'{w}' -v '{s}':'{s}'")),
+        "scratch mount must be added in the quoted form: {fixed}"
+    );
+    assert!(fixed.contains(&format!("-w '{s}'")), "fixed: {fixed}");
+
+    let wrapped = SingularityBackend::new()
+        .wrap_command("bwa mem reads.fq > data.txt", "ubuntu.sif", None, &workdir)
+        .unwrap();
+    let fixed = fixup_container_wrapper(&wrapped, "singularity", &workdir, &scratch);
+    assert!(
+        fixed.contains(&format!("--bind '{w}':'{w}' --bind '{s}':'{s}'")),
+        "scratch bind must be added in the quoted form: {fixed}"
+    );
+}
+
+#[test]
 fn scratch_singularity_wrapper_adds_scratch_bind() {
     let workdir = Path::new("/data/work");
     let scratch = Path::new("/data/work/.oxo-flow/scratch/demo-1-0");
@@ -2968,4 +3047,70 @@ fn strip_matching_quotes_keeps_cross_style_edge_quotes() {
         super::process::strip_matching_quotes("unquoted"),
         "unquoted"
     );
+}
+#[tokio::test]
+async fn scratch_creation_failure_releases_pool_reservation() {
+    // A rule whose scratch dir cannot be created must release the resource
+    // reservation `check_resources` made. Before the fix the reservation
+    // leaked, so a later rule needing the same capacity parked forever.
+    let workdir = std::env::temp_dir().join(format!("oxo-scratch-leak-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    std::fs::create_dir_all(&workdir).unwrap();
+    // A FILE at `.oxo-flow` makes `create_dir_all(<workdir>/.oxo-flow/scratch/...)` fail.
+    std::fs::write(workdir.join(".oxo-flow"), b"not a directory").unwrap();
+
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: workdir.clone(),
+        max_threads: Some(1),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+
+    let mut failing = make_rule("scratch_fail", "echo hi > out.txt");
+    failing.scratch = true;
+    let result = executor.execute_rule(&failing, &HashMap::new()).await;
+    assert!(
+        result.is_err(),
+        "scratch dir creation must fail when .oxo-flow is a file: {result:?}"
+    );
+
+    // The single pool slot must be free again: a rule asking for it has to
+    // run (a leak shows up here as a timeout, not a hang).
+    let ok_rule = make_rule("after_leak", "echo ok > out.txt");
+    let record = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        executor.execute_rule(&ok_rule, &HashMap::new()),
+    )
+    .await
+    .expect("resource pool leaked: a rule with the whole capacity never ran")
+    .unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}
+
+#[test]
+fn copy_tree_atomic_replaces_existing_non_empty_directory() {
+    // `rename(2)` returns ENOTEMPTY for a non-empty destination directory:
+    // a scratch rule with a directory output failed on its second run, and a
+    // cached directory output could never be restored.
+    let dir = std::env::temp_dir().join(format!("oxo-cta-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    let dest = dir.join("dest");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(src.join("new.txt"), "new").unwrap();
+    std::fs::write(dest.join("old.txt"), "old").unwrap();
+
+    copy_tree_atomic(&src, &dest).unwrap();
+
+    assert!(dest.join("new.txt").exists(), "new tree must land at dest");
+    assert!(
+        !dest.join("old.txt").exists(),
+        "stale destination content must be replaced, not merged"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

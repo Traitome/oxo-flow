@@ -23,6 +23,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # `gh label create` and the issue fallback below (taken when org policy
+  # refuses Actions-created PRs) need issue scope. Unlisted scopes are
+  # `none`, so without this the documented fallback would 403 and the run
+  # would go red instead of staying green.
+  issues: write
 
 concurrency:
   group: knowledge-refresh

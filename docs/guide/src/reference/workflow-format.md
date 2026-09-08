@@ -36,6 +36,7 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 ## Top-level Structure
 
 ```toml
+reference_dir = "..."   # Optional: base directory for auto-derived reference paths
 [workflow]          # Required: metadata
 [config]            # Optional: user variables (plain or declarative form)
 [defaults]          # Optional: rule defaults
@@ -45,6 +46,8 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [[rules]]           # Required: one or more rules
 [[pairs]]           # Optional: experiment-control pairs (WC-01)
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
+[[values]]          # Optional: named value lists for parameter wildcards
+[metadata]          # Optional: per-sample metadata columns ({meta.<column>})
 [resource_budget]   # Optional: resource limits
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
@@ -56,6 +59,10 @@ Workflow files must use the `.oxoflow` extension (e.g., `qc_pipeline.oxoflow`).
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications (issue #227)
 ```
+
+`reference_dir` is a bare top-level key, so it must appear before the first
+`[table]` header; it is also accepted inside `[config]`. See
+[Auto-Derivation from `reference_dir`](#auto-derivation-from-reference_dir).
 
 ---
 
@@ -1867,17 +1874,37 @@ sample_pattern = "raw/{sample}_R1.fastq.gz"
 
 # # Single-end reads
 # sample_pattern = "raw/{sample}.fastq.gz"
+```
 
-# # With technical replicates
-# sample_pattern = "raw/{sample}_rep{replicate}_R1.fastq.gz"
+`sample_pattern` binds **`{sample}` only** — `{config.*}` placeholders are
+expanded, but any other wildcard name (`{read}`, `{replicate}`, `{lane}`, …)
+is captured by the glob and never bound: every matching file collapses to the
+same `{sample}` value and expansion fails with `duplicate rule name`. Point
+the pattern at one file per sample (R1 for paired-end data) and list the mate
+in each rule's `input`:
+
+```toml
+sample_pattern = "raw/{sample}_R1.fastq.gz"
+
+[[rules]]
+name  = "align"
+input = ["raw/{sample}_R1.fastq.gz", "raw/{sample}_R2.fastq.gz"]
+output = ["aligned/{sample}.bam"]
+shell = "bwa mem ref.fa {input[0]} {input[1]} > {output[0]}"
 ```
 
 Supported wildcards in `sample_pattern`:
+
 | Wildcard | Description | Example match |
 |---|---|---|
 | `{sample}` | Sample identifier | `SAMPLE_01` from `SAMPLE_01_R1.fastq.gz` |
-| `{replicate}` | Technical replicate number | `1`, `2`, `3` |
-| `{read}` | Read pair identifier | `1` or `2` (R1/R2) |
+
+For genuine per-read/per-replicate fan-out, declare the domain explicitly with
+[`[[sample_groups]]`](#sample_groups-multi-sample-cohorts-wc-02),
+[`[[pairs]]`](#pairs-experiment-control-pairing-wc-01), or `[[values]]`, and
+reference the extra paths in each rule;
+[`input_groups`](#input-groups-input_groups) binds additional wildcards
+discovered from files.
 
 ### Merging Multiple Sample Sources
 
@@ -1890,8 +1917,9 @@ sample_pattern = "raw/{sample}_R1.fastq.gz"
 # CSV/TSV file
 sample_groups_file = "metadata/samples.csv"
 
-# Ad-hoc via CLI
-oxo-flow run pipeline.oxoflow --sample EXTRA_01 --sample EXTRA_02
+# Ad-hoc via CLI — filters the declared set (unknown names fail);
+# declares samples only when the workflow ships none
+oxo-flow run pipeline.oxoflow --samples EXTRA_01,EXTRA_02
 ```
 
 All sources deduplicate — the same sample from multiple sources appears once.
@@ -2032,7 +2060,7 @@ Supported multi-omics pair patterns:
 | Unmatched tumor vs pooled | `experiment = "T1"` | None |
 | Tumor-only (CNV, somatic) | `experiment = "T1"` | None |
 | Paired-end case-control | `experiment = "CASE", control = "CTRL"` | Required |
-| Time-series (no control) | `experiment = "T0", experiment = "T6"` | None |
+| Time-series (no control) | two entries: `experiment = "T0"` and `experiment = "T6"` | None |
 
 ---
 

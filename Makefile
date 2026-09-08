@@ -1,7 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift docker-version contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
-## Run all local CI quality-gate checks (mirrors the "Test" job in ci.yml).
-ci: fmt clippy build test schema-drift audit frontend-lint
+## Run all local CI quality-gate checks. Same gates as the "Test" job in
+## ci.yml, but the invocations are not identical: `test` runs single-threaded
+## (--test-threads=1, deterministic locally; CI runs the default parallelism)
+## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
+ci: fmt clippy build test schema-drift docker-version audit frontend-lint
 
 fmt:
 	cargo fmt -- --check
@@ -18,7 +21,8 @@ test:
 audit:
 	cargo audit --no-fetch 2>&1 || cargo audit
 
-## Lint and type-check the frontend SPA (mirrors the "Frontend" job in ci.yml).
+## Lint and type-check the frontend SPA (same gate as the "Frontend" job in
+## ci.yml; uses `npm install` rather than CI's `npm ci`).
 frontend-lint:
 	cd frontend && npm install --no-audit --no-fund && npm run lint
 
@@ -32,13 +36,20 @@ frontend-test:
 schema-drift:
 	diff -q crates/oxo-flow-cli/schema/oxoflow-v1.schema.json docs/schema/oxoflow-v1.schema.json >/dev/null 2>&1 || { echo "schema drift: sync crates/oxo-flow-cli/schema with docs/schema"; exit 1; }
 
+## Single-source rule: the Dockerfile's local-dev ARG VERSION default must
+## match the workspace version. CI always passes --build-arg VERSION, so only
+## local builds use the default — drift silently mislabels local images.
+docker-version:
+	@grep -q "^ARG VERSION=$(VERSION)$$" Dockerfile || { echo "docker version drift: Dockerfile ARG VERSION != workspace $(VERSION)"; exit 1; }
+
 ## Generate code coverage report (requires cargo-tarpaulin).
 coverage:
 	cargo tarpaulin --workspace --out Xml --out Html --output-dir target/coverage
 
-## Run micro-benchmarks for performance regression tracking.
+## Run micro-benchmarks for performance regression tracking. --save-baseline
+## is a criterion flag, so it must come after `--` (cargo bench rejects it).
 bench:
-	cargo bench --workspace --save-baseline baseline
+	cargo bench -p oxo-flow-core -- --save-baseline baseline
 
 ## Run macro-benchmarks (CLI-driven lifecycle, scaling, reliability).
 bench-macro:

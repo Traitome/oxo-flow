@@ -39,7 +39,14 @@ type ApiErrorRes = (StatusCode, Json<ApiError>);
 /// Per-file upload cap. 8 GiB covers the largest realistic single upload
 /// (paired-end fastqs, archives); total-request abuse is bounded by the
 /// global rate limiter.
-const MAX_UPLOAD_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub const MAX_UPLOAD_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Whole-request body limit for `POST /api/files`.
+///
+/// Axum's `Multipart` extractor applies `DefaultBodyLimit` (2 MiB) unless the
+/// route overrides it, which silently truncated every larger upload while the
+/// handler still answered 200 (audit finding C2). This sits one MiB above the
+/// per-file cap so multipart boundary overhead cannot trip it first.
+pub const MAX_UPLOAD_BODY_BYTES: usize = MAX_UPLOAD_FILE_BYTES as usize + 1024 * 1024;
 /// Zip archive bounds: entry count and total size.
 const MAX_ZIP_ENTRIES: usize = 4096;
 const MAX_ZIP_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -647,19 +654,46 @@ pub async fn upload_files(
     let mut subdir = String::new();
     let mut saved: Vec<serde_json::Value> = Vec::new();
 
-    while let Ok(Some(mut field)) = multipart.next_field().await {
+    // Errors are explicit: the old `while let Ok(Some(..))` / `while let
+    // Ok(Some(chunk))` shape ended the loop silently on a body-limit or
+    // transport error and still answered 200 with a truncated file (audit
+    // finding C2). A read error now aborts the request and removes any
+    // partial file.
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                return err(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "UPLOAD_READ_ERROR",
+                    format!("Upload aborted while reading the request body: {e}"),
+                )
+                .into_response();
+            }
+        };
         let field_name = field.name().unwrap_or("").to_string();
         if field_name == "path" {
-            if let Ok(value) = field.text().await {
-                subdir = value.trim().trim_matches('/').to_string();
-                if subdir
-                    .split('/')
-                    .any(|c| c.is_empty() || c == ".." || c.contains('\\'))
-                {
+            match field.text().await {
+                Ok(value) => {
+                    subdir = value.trim().trim_matches('/').to_string();
+                    if subdir
+                        .split('/')
+                        .any(|c| c.is_empty() || c == ".." || c.contains('\\'))
+                    {
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "INVALID_PATH",
+                            "path must be a clean relative directory".into(),
+                        )
+                        .into_response();
+                    }
+                }
+                Err(e) => {
                     return err(
                         StatusCode::BAD_REQUEST,
-                        "INVALID_PATH",
-                        "path must be a clean relative directory".into(),
+                        "UPLOAD_READ_ERROR",
+                        format!("Failed to read the 'path' field: {e}"),
                     )
                     .into_response();
                 }
@@ -724,19 +758,29 @@ pub async fn upload_files(
             }
         };
         let mut over = false;
-        while let Ok(Some(chunk)) = field.chunk().await {
-            written += chunk.len() as u64;
-            if written > MAX_UPLOAD_FILE_BYTES {
-                over = true;
-                break;
-            }
-            if file.write_all(&chunk).await.is_err() {
-                return err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "IO_ERROR",
-                    "Failed to write upload".into(),
-                )
-                .into_response();
+        let mut read_error: Option<String> = None;
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    written += chunk.len() as u64;
+                    if written > MAX_UPLOAD_FILE_BYTES {
+                        over = true;
+                        break;
+                    }
+                    if file.write_all(&chunk).await.is_err() {
+                        return err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "IO_ERROR",
+                            "Failed to write upload".into(),
+                        )
+                        .into_response();
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    read_error = Some(e.to_string());
+                    break;
+                }
             }
         }
         let _ = file.flush().await;
@@ -747,6 +791,16 @@ pub async fn upload_files(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "FILE_TOO_LARGE",
                 format!("File exceeds the {MAX_UPLOAD_FILE_BYTES}-byte upload cap"),
+            )
+            .into_response();
+        }
+        if let Some(e) = read_error {
+            // Never report success for a partial file.
+            let _ = tokio::fs::remove_file(&dest).await;
+            return err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "UPLOAD_READ_ERROR",
+                format!("Upload aborted after {written} bytes: {e}"),
             )
             .into_response();
         }

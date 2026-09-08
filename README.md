@@ -47,7 +47,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 
 | Feature | **oxo-flow** | Snakemake | Nextflow |
 |---------|------------|-----------|----------|
-| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` in all four crates | Python | Groovy/JVM |
+| **Language** | Rust — compiled, type-safe, `#![forbid(unsafe_code)]` in the core, AI, CLI, and web crates | Python | Groovy/JVM |
 | **Performance** | Native binary, instant startup | Python + JIT overhead | JVM startup overhead |
 | **Workflow format** | TOML (`.oxoflow`) — declarative, composable | Snakefile (Python DSL) | Nextflow DSL (Groovy) |
 | **Environment support** | 8 backends — conda, mamba, pixi, docker, singularity, venv, system, modules — per-rule | conda, singularity, docker | conda, docker, singularity, modules |
@@ -56,7 +56,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | ~2,270 tests (unit, integration, doc) | pytest-based | Varied |
+| **Testing** | 2,700+ tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 
@@ -247,7 +247,9 @@ See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands
 The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **100+ endpoints** across 9 domains (observability, pipeline, execution, AI, auth, collaboration, data, chat, clusters). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/latest/reference/api/).
 
 
-oxo-flow is organized as a Cargo workspace with four crates:
+oxo-flow is organized as a Cargo workspace with four crates, plus a fifth
+(`oxo-flow-desktop`) that lives in `crates/` but is excluded from the
+workspace so headless builds never need GUI toolchains:
 
 ```
 oxo-flow/
@@ -256,7 +258,9 @@ oxo-flow/
 │   │                      # config parsing, scheduler, wildcard expansion, reporting
 │   ├── oxo-flow-ai/       # AI companion: provider abstraction, skill system, agents
 │   ├── oxo-flow-cli/      # CLI binary ("oxo-flow") — Clap-based, 30 subcommands
-│   └── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
+│   ├── oxo-flow-web/      # Web server ("oxo-flow-web") — axum REST API + frontend
+│   └── oxo-flow-desktop/  # Native desktop shell ("oxo-flow-desktop", wry + tao) —
+│                          # excluded from the workspace (own Cargo.toml)
 ├── examples/              # Example .oxoflow workflows
 ├── tests/                 # Integration tests
 └── docs/                  # Documentation (MkDocs)
@@ -268,15 +272,16 @@ oxo-flow/
 | `oxo-flow-ai` | Library | — | Apache-2.0 |
 | `oxo-flow-cli` | Binary | `oxo-flow` | Apache-2.0 |
 | `oxo-flow-web` | Binary | `oxo-flow-web` | Dual Academic / Commercial |
+| `oxo-flow-desktop` | Binary | `oxo-flow-desktop` | Apache-2.0 |
 
 ### Key modules
 
 | Module | Crate | Responsibility |
 |--------|-------|----------------|
 | `dag.rs` | core | DAG construction, validation, topological sort |
-| `executor.rs` | core | Task execution (local, cluster, cloud) |
+| `executor/` | core | Task execution (local, cluster, cloud), checkpointing, staging |
 | `environment.rs` | core | Environment management (conda, mamba, pixi, docker, singularity, venv, system, modules) |
-| `config.rs` | core | Workflow configuration and `.oxoflow` file parsing |
+| `config/` | core | Workflow configuration and `.oxoflow` file parsing |
 | `rule.rs` | core | Rule/step definitions with inputs, outputs, shell, resources |
 | `scheduler.rs` | core | Job scheduling with resource constraints |
 | `wildcard.rs` | core | Wildcard pattern expansion (`{sample}`, `{chr}`, etc.) |

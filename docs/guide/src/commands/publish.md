@@ -40,7 +40,8 @@ each environment YAML, ensuring exact reproducibility across time.
 | `--verbose` | `-v` | Enable verbose (debug-level) logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |
-| `--json` | | Output machine-readable JSON to stdout |
+
+> The global `--json` flag is **not supported** by this command — passing it fails fast instead of being silently ignored. Machine-readable output is available from: `run`, `dry-run`, `validate`, `lint`, `test`, `status`, `batch`, `info`, `schema`, `license`, `ai`, and `provenance verify`.
 
 ## Examples
 
@@ -72,6 +73,10 @@ oxo-flow run --bundle repo-bundle.tar.zst --yes
 
 ## Manifest Format
 
+Bundle members keep the workflow's own relative paths (an environment declared as
+`envs/fastp.yaml` lands at `envs/fastp.yaml` inside the bundle, not at the
+archive root), so the bundled workflow's references resolve unchanged.
+
 The `manifest.json` inside each bundle:
 
 ```json
@@ -88,7 +93,7 @@ The `manifest.json` inside each bundle:
       "size": 1024
     },
     {
-      "path": "fastp.yaml",
+      "path": "envs/fastp.yaml",
       "sha256": "sha256:123456...",
       "size": 256
     }

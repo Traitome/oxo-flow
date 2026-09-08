@@ -855,15 +855,14 @@ mod tests {
 
     #[test]
     fn derive_meta_config_description_from_comments() {
-        let meta = meta(
+        let meta_16s = meta(
             "16_16s_qiime2_amplicon.oxoflow",
             "../../examples/gallery/16_16s_qiime2_amplicon.oxoflow",
         );
 
         // `classifier` carries a 4-line comment block (newline-joined, so
-        // the author's line structure survives); uncommented keys omit the
-        // field entirely.
-        let records = meta["config"].as_array().unwrap();
+        // the author's line structure survives).
+        let records = meta_16s["config"].as_array().unwrap();
         let classifier = records
             .iter()
             .find(|record| record["key"] == "classifier")
@@ -875,11 +874,20 @@ mod tests {
              `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`;\n\
              without it, skip the classify step or train a classifier first."
         );
-        let trim_left_f = records
+
+        // Uncommented keys omit the field entirely. Example 11 has a bare
+        // `[config]` block with no comments, so none of its keys carries a
+        // description.
+        let bare = meta(
+            "11_conditional_workflow.oxoflow",
+            "../../examples/gallery/11_conditional_workflow.oxoflow",
+        );
+        let bare_records = bare["config"].as_array().unwrap();
+        let sequencing_mode = bare_records
             .iter()
-            .find(|record| record["key"] == "trim_left_f")
+            .find(|record| record["key"] == "sequencing_mode")
             .unwrap();
-        assert!(trim_left_f.get("description").is_none());
+        assert!(sequencing_mode.get("description").is_none());
     }
 
     #[test]

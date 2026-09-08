@@ -50,7 +50,7 @@ recorded instance set exactly.
 |--------|-------------|
 | `-j, --jobs <JOBS>` | Number of parallel jobs (default: 1) |
 | `--ai-recover` | Enable AI error recovery on rule failure |
-| `--ai-max-retries <N>` | Maximum AI retries (overrides `[ai]` config) |
+| `--ai-max-retries <N>` | Maximum AI attempts for recovery when a call fails (default: 1; only a failed call is retried) |
 | `--workdir <DIR>` | `-d` | Working directory to resume in (default: the one recorded in the checkpoint) |
 | `--keep-going` | `-k` | Continue execution when a job fails (same semantics as `run`) |
 | `--timeout <SECS>` | — | Timeout per job in seconds (0 = disabled), or a duration like `1h`/`30m` |

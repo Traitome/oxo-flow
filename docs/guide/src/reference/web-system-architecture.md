@@ -271,7 +271,13 @@ Domain-specific codes (all 400) include `PARSE_ERROR`, `VALIDATE_ERROR`, `PREPAR
 
 ## List Responses
 
-List endpoints return bare JSON arrays. There is currently no pagination envelope: `GET /api/pipelines` returns at most 100 items (ordered by last update), and `GET /api/templates` returns all templates.
+List endpoints do not share a single uniform envelope:
+
+- `GET /api/runs` uses cursor pagination — `{items, next_cursor, total}`,
+  where `next_cursor: null` means the last page.
+- Most other list endpoints return bare JSON arrays capped at 100 items:
+  `GET /api/pipelines` returns at most 100 items (ordered by last update),
+  and `GET /api/templates` returns all templates.
 
 ```json
 [{ "id": "...", "name": "...", ... }]

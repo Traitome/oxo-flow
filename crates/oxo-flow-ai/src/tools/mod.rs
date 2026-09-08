@@ -37,6 +37,51 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
 }
 
+// ── Tool-name sanitization ─────────────────────────────────────────────────
+
+/// Longest tool name the OpenAI-compatible function-calling API accepts.
+const MAX_TOOL_NAME_LEN: usize = 64;
+
+/// Normalize a tool name to `^[a-zA-Z0-9_-]{1,64}$`.
+///
+/// OpenAI-compatible providers reject the WHOLE request when any tool name
+/// breaks that pattern, so one badly named MCP tool (names come from remote
+/// servers and are not under our control) failed every call. Sanitization
+/// happens on the name the model sees and on every registry lookup, so a
+/// renamed tool still resolves.
+///
+/// Long names are truncated with an FNV-1a suffix rather than sliced: a
+/// plain truncation could map two distinct MCP tools onto one registry key.
+pub fn sanitize_tool_name(name: &str) -> String {
+    let mut cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        return "tool".to_string();
+    }
+    if cleaned.len() <= MAX_TOOL_NAME_LEN {
+        return cleaned;
+    }
+    // FNV-1a over the ORIGINAL name keeps the suffix stable for a given tool.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let suffix = format!("-{:08x}", hash as u32);
+    let keep = MAX_TOOL_NAME_LEN - suffix.len();
+    cleaned.truncate(keep);
+    cleaned.push_str(&suffix);
+    cleaned
+}
+
 // ── Tool registry ──────────────────────────────────────────────────────────
 
 /// Registry of tools available to an AI agent.
@@ -69,35 +114,54 @@ impl ToolRegistry {
     }
 
     /// Register a tool in the registry.
+    ///
+    /// The key is [`sanitize_tool_name`]-normalized so it always matches
+    /// the name the model is given (see [`Self::to_defs`]) and calls back.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        let name = tool.name().to_string();
+        let name = sanitize_tool_name(tool.name());
         self.tools.insert(name, Arc::from(tool));
     }
 
     /// Get all tool definitions for passing to the AI model.
+    ///
+    /// Names are normalized here too: providers validate every tool name
+    /// against `^[a-zA-Z0-9_-]{1,64}$` and reject the whole request if any
+    /// one breaks it.
     pub fn to_defs(&self) -> Vec<ToolDef> {
-        self.tools.values().map(|t| t.def()).collect()
+        self.tools
+            .values()
+            .map(|t| {
+                let mut def = t.def();
+                def.name = sanitize_tool_name(&def.name);
+                def
+            })
+            .collect()
     }
 
     /// Get a tool by name.
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|t| t.as_ref())
+        self.tools
+            .get(&sanitize_tool_name(name))
+            .map(|t| t.as_ref())
     }
 
     /// Whether a tool is read-only (safe to auto-execute).
     /// Unknown tools are treated as NOT read-only — deny by default.
     pub fn is_read_only(&self, name: &str) -> bool {
         self.tools
-            .get(name)
+            .get(&sanitize_tool_name(name))
             .map(|t| t.is_read_only())
             .unwrap_or(false)
     }
 
     /// Execute a tool by name with JSON-encoded arguments.
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String, AiError> {
-        let tool = self.tools.get(name).ok_or_else(|| AiError::ToolNotFound {
-            tool: name.to_string(),
-        })?;
+        let tool =
+            self.tools
+                .get(&sanitize_tool_name(name))
+                .ok_or_else(|| AiError::ToolNotFound {
+                    tool: name.to_string(),
+                })?;
         tool.execute(arguments).await
     }
 
@@ -144,6 +208,54 @@ mod tests {
         fn name(&self) -> &str {
             "echo"
         }
+    }
+
+    #[test]
+    fn sanitize_tool_name_normalizes_illegal_names() {
+        assert_eq!(sanitize_tool_name("read_file"), "read_file");
+        assert_eq!(sanitize_tool_name("mcp-srv.tool:v2"), "mcp-srv_tool_v2");
+        assert_eq!(sanitize_tool_name(""), "tool");
+        // Long names are truncated but stay unique (hash suffix).
+        let long_a = sanitize_tool_name(&"a".repeat(80));
+        let long_b = sanitize_tool_name(&format!("{}b", "a".repeat(79)));
+        assert_eq!(long_a.len(), MAX_TOOL_NAME_LEN);
+        assert_eq!(long_b.len(), MAX_TOOL_NAME_LEN);
+        assert_ne!(long_a, long_b, "truncation must not collide");
+    }
+
+    /// A tool whose declared name is illegal on the wire.
+    struct IllegalNameTool;
+    #[async_trait]
+    impl Tool for IllegalNameTool {
+        fn def(&self) -> ToolDef {
+            ToolDef {
+                name: "read.file (v2)".into(),
+                description: "illegal".into(),
+                parameters: serde_json::json!({}),
+            }
+        }
+        async fn execute(&self, _args: &str) -> Result<String, AiError> {
+            Ok("ran".into())
+        }
+        fn name(&self) -> &str {
+            "read.file (v2)"
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_normalizes_illegal_names_end_to_end() {
+        // One wire-illegal name fails every provider request, so the name
+        // the model sees, the registry key and the lookup all normalize.
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(IllegalNameTool));
+        let defs = reg.to_defs();
+        assert_eq!(defs[0].name, "read_file__v2_");
+        assert!(reg.get("read.file (v2)").is_some());
+        assert_eq!(
+            reg.execute("read.file (v2)", "{}").await.unwrap(),
+            "ran",
+            "the model's call (normalized name) must resolve"
+        );
     }
 
     #[test]

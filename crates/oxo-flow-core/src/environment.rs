@@ -72,7 +72,7 @@ pub trait EnvironmentBackend: Send + Sync {
 /// deseq2 collision, issue #159). Same content → same name, so
 /// identical specs keep deduplicating. Non-file specs (inline strings)
 /// keep the plain name.
-fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
+pub(crate) fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String> {
     conda_env_name_parts(kind, spec).map(|(_, full)| full)
 }
 
@@ -133,6 +133,26 @@ fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
             ),
         })
     }
+}
+
+/// Missing-manifest check for [`EnvironmentManager::validate_spec`].
+///
+/// The workflow contract names the manifest FILE (`pixi = "envs/pixi.toml"`,
+/// consumed as `pixi run --manifest-path <spec>`), so validate the declared
+/// path — a hardcoded CWD `pixi.toml` reports "ok" for a workflow whose
+/// manifest is missing and fails for one that keeps it anywhere else.
+/// Pure (no pixi probe) so a test can cover both branches without pixi.
+fn validate_pixi_manifest(spec: &str) -> Result<()> {
+    if std::path::Path::new(spec).exists() {
+        return Ok(());
+    }
+    Err(OxoFlowError::Environment {
+        kind: "pixi".to_string(),
+        message: format!(
+            "pixi manifest '{spec}' not found — the rule declares it via \
+             `pixi = \"{spec}\"` (resolved relative to the workflow directory)"
+        ),
+    })
 }
 
 /// Parse `conda env list` output into the set of NAMED environments. Named
@@ -413,7 +433,7 @@ then exec bash -c \"$1\"; else exec sh -c \"$1\"; fi";
 ///
 /// Replaces every `'` with `'\''` (close quote, escaped literal quote, reopen quote)
 /// so the value is safe regardless of what shell interprets the outer wrapper.
-fn escape_for_sh_single_quote(s: &str) -> String {
+pub(crate) fn escape_for_sh_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
@@ -949,9 +969,18 @@ impl DockerBackend {
         // Inputs referenced by absolute host path are invisible inside the
         // container unless they are mounted — only the workdir is. Read-only:
         // the container consumes these files, it does not own them.
+        //
+        // Every host path is single-quoted: a workdir or input under a
+        // directory with a space (`/Users/john doe/run`) would otherwise
+        // split the `-v`/`-w` value into two shell words and mount the
+        // wrong source (docker: "invalid mode: doe/run").
+        let quoted_workdir = escape_for_sh_single_quote(&workdir);
         let mounts = external_bind_mounts(command, &workdir)
             .iter()
-            .map(|path| format!(" -v {path}:{path}:ro"))
+            .map(|path| {
+                let quoted = escape_for_sh_single_quote(path);
+                format!(" -v '{quoted}':'{quoted}':ro")
+            })
             .collect::<String>();
         let escaped_cmd = escape_for_sh_single_quote(command);
         let spec = escape_for_sh_single_quote(&mirrored_spec(spec));
@@ -983,7 +1012,7 @@ impl DockerBackend {
         };
 
         Ok(format!(
-            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg}{cpu_arg} -v {workdir}:{workdir}{mounts} -w {workdir} '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
+            "docker run --rm --user $(id -u):$(id -g){mem_arg}{gpus_arg}{cpu_arg} -v '{quoted_workdir}':'{quoted_workdir}'{mounts} -w '{quoted_workdir}' '{spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'"
         ))
     }
 }
@@ -1115,11 +1144,14 @@ impl EnvironmentBackend for SingularityBackend {
             ensure_container_spec_safe(&spec)?;
         }
         let workdir = absolute_host_path(workdir);
+        // Single-quoted bind source/destination: a workdir under a path
+        // with a space would otherwise split `--bind` into two words.
+        let quoted_workdir = escape_for_sh_single_quote(&workdir);
         let escaped_cmd = escape_for_sh_single_quote(command);
         let quoted_spec = escape_for_sh_single_quote(&spec);
 
         Ok(format!(
-            "{} exec --bind {workdir}:{workdir} '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
+            "{} exec --bind '{quoted_workdir}':'{quoted_workdir}' '{quoted_spec}' sh -c '{CONTAINER_BASH_SHIM}' sh '{escaped_cmd}'",
             self.binary
         ))
     }
@@ -1200,8 +1232,10 @@ impl EnvironmentBackend for VenvBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
+        // POSIX `.` (not `source` — a bashism): setup commands run under
+        // `sh` (process.rs), where dash has no `source` builtin.
         Ok(format!(
-            "python3 -m venv {spec} && source {spec}/bin/activate && pip install -r requirements.txt"
+            "python3 -m venv {spec} && . {spec}/bin/activate && pip install -r requirements.txt"
         ))
     }
 
@@ -1910,21 +1944,14 @@ impl EnvironmentResolver {
                 message: "conda is not installed or not in PATH".to_string(),
             });
         }
-        if env_spec.pixi.is_some() {
+        if let Some(ref pixi_spec) = env_spec.pixi {
             if !self.pixi.is_available() {
                 return Err(OxoFlowError::Environment {
                     kind: "pixi".to_string(),
                     message: "pixi is not installed or not in PATH".to_string(),
                 });
             }
-            if !std::path::Path::new("pixi.toml").exists() {
-                return Err(OxoFlowError::Environment {
-                    kind: "pixi".to_string(),
-                    message:
-                        "pixi.toml not found in current directory — required for pixi environments"
-                            .to_string(),
-                });
-            }
+            validate_pixi_manifest(pixi_spec)?;
         }
         if env_spec.docker.is_some() && !self.docker.is_available() {
             return Err(OxoFlowError::Environment {
@@ -2031,14 +2058,48 @@ mod tests {
             .wrap_command("echo hi", "ubuntu:24.04", None, std::path::Path::new("."))
             .unwrap();
         assert!(
-            docker.contains(&format!("-v {expected}:{expected}")),
+            docker.contains(&format!("-v '{expected}':'{expected}'")),
             "{docker}"
         );
         let sing = SingularityBackend::new()
             .wrap_command("echo hi", "ubuntu:24.04", None, std::path::Path::new("."))
             .unwrap();
         assert!(
-            sing.contains(&format!("--bind {expected}:{expected}")),
+            sing.contains(&format!("--bind '{expected}':'{expected}'")),
+            "{sing}"
+        );
+    }
+
+    #[test]
+    fn container_wrappers_quote_workdir_paths_with_spaces() {
+        // A workdir under a directory with a space (`/Users/john doe/run`)
+        // must survive shell word-splitting: unquoted, the `-v` value splits
+        // into `-v /Users/john` + `doe/run:...` and docker mounts the wrong
+        // source (or rejects the mode).
+        let dir = tempfile::Builder::new()
+            .prefix("oxo bind test")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let expected = dir.path().display().to_string();
+        assert!(
+            expected.contains(' '),
+            "fixture must contain a space: {expected}"
+        );
+
+        let docker = DockerBackend
+            .wrap_command("echo hi", "ubuntu:24.04", None, dir.path())
+            .unwrap();
+        assert!(
+            docker.contains(&format!("-v '{expected}':'{expected}'")),
+            "{docker}"
+        );
+        assert!(docker.contains(&format!("-w '{expected}'")), "{docker}");
+
+        let sing = SingularityBackend::new()
+            .wrap_command("echo hi", "ubuntu:24.04", None, dir.path())
+            .unwrap();
+        assert!(
+            sing.contains(&format!("--bind '{expected}':'{expected}'")),
             "{sing}"
         );
     }
@@ -2049,7 +2110,7 @@ mod tests {
         let docker = DockerBackend
             .wrap_command("echo hi", "ubuntu:24.04", None, &abs)
             .unwrap();
-        assert!(docker.contains(&format!("-v {}:{}", abs.display(), abs.display())));
+        assert!(docker.contains(&format!("-v '{}':'{}'", abs.display(), abs.display())));
     }
 
     // ── Container bash re-exec shim ─────────────────────────────────
@@ -2415,7 +2476,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            wrapped.contains(&format!(" -v {reference}:{reference}:ro ")),
+            wrapped.contains(&format!(" -v '{reference}':'{reference}':ro ")),
             "the referenced absolute input must be bind-mounted read-only: {wrapped}"
         );
     }
@@ -2470,7 +2531,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            wrapped.matches(&format!("-v {db}:{db}:ro")).count(),
+            wrapped.matches(&format!("-v '{db}':'{db}':ro")).count(),
             1,
             "one mount per distinct path: {wrapped}"
         );
@@ -2722,6 +2783,13 @@ mod tests {
         let cmd = backend.setup_command(".venv").unwrap();
         assert!(cmd.contains("python3 -m venv .venv"));
         assert!(cmd.contains("pip install -r requirements.txt"));
+        // Setup runs under `sh` (process.rs), where `source` does not exist
+        // — POSIX `.` is the activation builtin.
+        assert!(
+            !cmd.contains("source "),
+            "setup must not use the bashism `source`: {cmd}"
+        );
+        assert!(cmd.contains(". .venv/bin/activate"));
     }
 
     #[test]
@@ -3558,6 +3626,31 @@ mod tests {
             ..Default::default()
         };
         assert!(resolver.validate_spec(&spec).is_err());
+    }
+
+    #[test]
+    fn validate_pixi_manifest_checks_the_declared_spec_path() {
+        // `env check` used to require a hardcoded `pixi.toml` in the CWD,
+        // contradicting the wrapper contract (`pixi = "envs/pixi.toml"` →
+        // `pixi run --manifest-path <spec>`): a workflow keeping its
+        // manifest anywhere else was rejected.
+        let dir = tempfile::tempdir().unwrap();
+        let envs = dir.path().join("envs");
+        std::fs::create_dir_all(&envs).unwrap();
+        let manifest = envs.join("pixi.toml");
+        std::fs::write(&manifest, "[project]\nname = \"x\"\n").unwrap();
+
+        assert!(
+            validate_pixi_manifest(manifest.to_str().unwrap()).is_ok(),
+            "a declared manifest outside the CWD must validate"
+        );
+
+        let missing = envs.join("absent.toml");
+        let err = validate_pixi_manifest(missing.to_str().unwrap()).unwrap_err();
+        assert!(
+            err.to_string().contains("absent.toml"),
+            "the diagnosis must name the declared path: {err}"
+        );
     }
 
     // ── Bootstrap progress (conda/mamba setup no longer self-mutes) ──

@@ -526,10 +526,13 @@ impl WorkflowDag {
     /// closure does not expand through them (their upstream exists only
     /// to feed them).
     ///
-    /// Dead-node propagation: a surviving node with a pruned DAG parent is
-    /// un-runnable (its input comes from a variant that never executes —
-    /// the executor would fail it on the missing file), so it is pruned
-    /// too, transitively to a fixpoint.
+    /// Dead-node propagation (issue #340): a node is pruned only when one of
+    /// its recorded input groups has **no surviving producer** — the
+    /// executor would fail it on the missing file. Producers are recorded
+    /// per input path, so several rules declaring the same output are
+    /// alternatives (any survivor keeps the consumer alive), while
+    /// `depends_on` edges record nothing and therefore never gate a
+    /// consumer's dataflow. Propagation runs to a fixpoint.
     ///
     /// - A when-false node that is also an explicit target is REPORTED via
     ///   the returned `Vec` of skipped target names (the caller warns) and
@@ -2029,18 +2032,21 @@ impl WorkflowDag {
     ///
     /// This output is suitable for terminal display without requiring Graphviz.
     #[must_use = "generating ASCII graph returns a Result that must be used"]
-    pub fn to_ascii(&self) -> Result<String> {
+    pub fn to_ascii(&self, color: bool) -> Result<String> {
         let groups = self.parallel_groups()?;
         let metrics = self.metrics()?;
 
         let mut output = String::new();
 
-        // ANSI color codes for terminal output
-        let cyan = "\x1b[36m";
-        let green = "\x1b[32m";
-        let yellow = "\x1b[33m";
-        let bold = "\x1b[1m";
-        let reset = "\x1b[0m";
+        // ANSI color codes for terminal output. Empty when the caller's
+        // colour policy is off (`--no-color`, `NO_COLOR`, or a redirected
+        // stdout) — the escapes used to be hardcoded, so `-o file` and pipes
+        // carried raw escape bytes (audit finding).
+        let (cyan, green, yellow, bold, reset) = if color {
+            ("\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[1m", "\x1b[0m")
+        } else {
+            ("", "", "", "", "")
+        };
 
         // Calculate content widths for proper alignment
         let line1 = format!(
@@ -2850,13 +2856,40 @@ mod tests {
     // ---- ASCII output tests --------------------------------------------------
 
     #[test]
+    fn ascii_escapes_only_when_color_is_requested() {
+        // Hardcoded ANSI made `-o file` and pipes carry raw escapes.
+        let rules = vec![
+            make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
+            make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let plain = dag.to_ascii(false).unwrap();
+        assert!(
+            !plain.contains('\x1b'),
+            "plain output must carry no escape bytes"
+        );
+        let colored = dag.to_ascii(true).unwrap();
+        assert!(
+            colored.contains('\x1b'),
+            "colored output must carry escape bytes"
+        );
+        let stripped = colored
+            .replace("\x1b[36m", "")
+            .replace("\x1b[32m", "")
+            .replace("\x1b[33m", "")
+            .replace("\x1b[1m", "")
+            .replace("\x1b[0m", "");
+        assert_eq!(stripped, plain, "colour must not change the text");
+    }
+
+    #[test]
     fn ascii_output_basic() {
         let rules = vec![
             make_rule("a", vec!["in.txt"], vec!["mid.txt"]),
             make_rule("b", vec!["mid.txt"], vec!["out.txt"]),
         ];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let ascii = dag.to_ascii().unwrap();
+        let ascii = dag.to_ascii(false).unwrap();
         assert!(ascii.contains("Workflow DAG"));
         assert!(ascii.contains("Level 0"));
         assert!(ascii.contains("a"));
@@ -2873,7 +2906,7 @@ mod tests {
             make_rule("merge", vec!["left.txt", "right.txt"], vec!["final.txt"]),
         ];
         let dag = WorkflowDag::from_rules(&rules).unwrap();
-        let ascii = dag.to_ascii().unwrap();
+        let ascii = dag.to_ascii(false).unwrap();
         assert!(ascii.contains("parallel"));
         assert!(ascii.contains("left"));
         assert!(ascii.contains("right"));

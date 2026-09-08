@@ -297,20 +297,47 @@ fn github_clone_url(repo: &str) -> String {
 
 /// Cache directory name for a repo checkout (git refs are sanitized).
 ///
-/// The owner (the URL segment before the leaf) is included so unrelated
-/// repositories sharing a leaf name can never alias one cache dir: existing
-/// checkouts are reused without re-verification, and `gh:a/foo` + `gh:b/foo`
-/// colliding at `.oxo-flow/repos/foo` would silently run the wrong repo.
+/// The host and owner are part of the name so unrelated repositories can
+/// never alias one cache dir: `gitlab.com/a/foo` and `github.com/a/foo` both
+/// reduce to `a-foo` without the host, and a reused cache dir runs whatever
+/// it holds (audit finding).
 pub(crate) fn repo_cache_name(repo_url: &str, git_ref: Option<&str>) -> String {
     let segments: Vec<&str> = repo_url.rsplit('/').filter(|s| !s.is_empty()).collect();
     let base = match segments.as_slice() {
-        [leaf, owner, ..] => format!("{owner}-{}", leaf.trim_end_matches(".git")),
+        [leaf, owner, host, ..] => format!(
+            "{}-{owner}-{}",
+            sanitize_host(host),
+            leaf.trim_end_matches(".git")
+        ),
         _ => repo_dir_name(repo_url),
     };
     match git_ref {
         Some(r) if !r.is_empty() => format!("{base}-{}", r.replace(['/', '\\'], "-")),
         _ => base,
     }
+}
+
+/// Host component of a cache directory name: drops any `user@` prefix and
+/// replaces the characters that are unsafe or confusing in a path.
+fn sanitize_host(host: &str) -> String {
+    let host = host.rsplit('@').next().unwrap_or(host);
+    host.replace([':', '/', '\\'], "-")
+}
+
+/// Whether a cached checkout's `origin` is the requested repository.
+///
+/// The mirror fallback can leave a mirror URL in `origin` (it embeds the
+/// canonical URL), so a suffix match counts as the same repository.
+fn same_repo(origin: &str, requested: &str) -> bool {
+    let norm = |s: &str| {
+        s.trim()
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .to_string()
+    };
+    let origin = norm(origin);
+    let requested = norm(requested);
+    origin == requested || origin.ends_with(&format!("/{requested}"))
 }
 
 /// Cache directory for a repo checkout: `<cwd>/.oxo-flow/repos/<name>`.
@@ -324,13 +351,29 @@ pub(crate) fn repo_cache_dir(repo_url: &str, git_ref: Option<&str>) -> Result<Pa
 
 /// Clone (or reuse) a repository checkout and return the discovered workflow.
 ///
-/// Existing cache directories are reused as-is — delete the directory to
-/// force a fresh clone.
+/// A cache directory is reused only when its `origin` is the requested
+/// repository: the name is the key, but a stale or hand-populated directory
+/// must never silently run a different repository (audit finding). Delete
+/// the directory to force a fresh clone.
 pub(crate) async fn checkout_repo_workflow(
     repo_url: &str,
     git_ref: Option<&str>,
     cache_dir: &Path,
 ) -> Result<PathBuf> {
+    if cache_dir.exists() && !checkout_origin_matches(cache_dir, repo_url).await {
+        eprintln!(
+            "{} cached checkout at {} is not {} — re-cloning",
+            "↻".yellow(),
+            cache_dir.display(),
+            repo_url
+        );
+        std::fs::remove_dir_all(cache_dir).with_context(|| {
+            format!(
+                "failed to remove the stale checkout at {}",
+                cache_dir.display()
+            )
+        })?;
+    }
     if cache_dir.exists() {
         eprintln!(
             "{} reusing cached checkout at {}",
@@ -351,6 +394,24 @@ pub(crate) async fn checkout_repo_workflow(
         config.rules.len()
     );
     Ok(workflow)
+}
+
+/// Whether the checkout at `cache_dir` was cloned from `repo_url`.
+async fn checkout_origin_matches(cache_dir: &Path, repo_url: &str) -> bool {
+    let output = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(cache_dir)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .await;
+    match output {
+        Ok(o) if o.status.success() => {
+            let origin = String::from_utf8_lossy(&o.stdout);
+            same_repo(&origin, repo_url)
+        }
+        // Not a git repository (or no origin): never reuse it.
+        _ => false,
+    }
 }
 
 /// Download a bundle (http / GitHub release / local file) and verify it.
@@ -392,9 +453,21 @@ async fn pull_bundle(
     std::fs::write(&bundle_path, &data)
         .with_context(|| format!("failed to write bundle: {}", bundle_path.display()))?;
 
-    // Verify the downloaded bundle
+    // Verify the downloaded bundle. A failed verification must not leave the
+    // invalid file at the output path: a later `run --bundle <path>` would
+    // consume it, and the error message would point at a "verified" file
+    // (audit finding).
     eprintln!("{} Verifying bundle integrity...", "→".cyan().bold());
-    let (_wf, _dir) = super::bundle::extract_and_verify_bundle(&bundle_path)?;
+    if let Err(e) = super::bundle::extract_and_verify_bundle(&bundle_path) {
+        if let Err(remove_err) = std::fs::remove_file(&bundle_path) {
+            tracing::warn!(
+                error = %remove_err,
+                path = %bundle_path.display(),
+                "failed to remove the bundle that failed verification"
+            );
+        }
+        return Err(e);
+    }
 
     let size = data.len();
     let size_str = if size > 1_048_576 {
@@ -541,14 +614,17 @@ mod tests {
 
     #[test]
     fn repo_cache_name_sanitizes_ref() {
-        assert_eq!(repo_cache_name("https://github.com/o/r.git", None), "o-r");
+        assert_eq!(
+            repo_cache_name("https://github.com/o/r.git", None),
+            "github.com-o-r"
+        );
         assert_eq!(
             repo_cache_name("https://github.com/o/r.git", Some("v1.0.0")),
-            "o-r-v1.0.0"
+            "github.com-o-r-v1.0.0"
         );
         assert_eq!(
             repo_cache_name("https://github.com/o/r.git", Some("feature/x")),
-            "o-r-feature-x"
+            "github.com-o-r-feature-x"
         );
     }
 
@@ -646,26 +722,62 @@ mod tests {
     }
 
     #[test]
-    fn repo_cache_name_includes_owner() {
-        // Distinct owners sharing a leaf name must not alias one cache dir:
-        // existing checkouts are reused without verification, so a/foo and
-        // b/foo colliding would silently run the wrong repository.
+    fn repo_cache_name_includes_host_and_owner() {
+        // Distinct repositories sharing a leaf name must not alias one cache
+        // dir: a/foo on two forges, and a/foo vs b/foo, are different repos
+        // and a reused cache dir runs whatever it holds.
         assert_eq!(
             repo_cache_name("https://github.com/a/foo.git", None),
-            "a-foo"
+            "github.com-a-foo"
+        );
+        assert_eq!(
+            repo_cache_name("https://gitlab.com/a/foo.git", None),
+            "gitlab.com-a-foo"
+        );
+        assert_eq!(
+            repo_cache_name("https://github.com/b/foo.git", None),
+            "github.com-b-foo"
         );
         assert_eq!(
             repo_cache_name("https://github.com/a/foo.git", Some("v1.0.0")),
-            "a-foo-v1.0.0"
+            "github.com-a-foo-v1.0.0"
         );
         assert_eq!(
             repo_cache_name("https://github.com/a/foo.git", Some("feature/x")),
-            "a-foo-feature-x"
+            "github.com-a-foo-feature-x"
         );
         assert_eq!(
             repo_cache_name("https://example.com/team/p.git", None),
-            "team-p"
+            "example.com-team-p"
         );
+        // A port (or any `:` in the host segment) is path-safe.
+        assert_eq!(
+            repo_cache_name("https://localhost:3000/team/p.git", None),
+            "localhost-3000-team-p"
+        );
+    }
+
+    #[test]
+    fn same_repo_accepts_the_canonical_url_and_mirrors() {
+        assert!(same_repo(
+            "https://github.com/o/r.git",
+            "https://github.com/o/r.git"
+        ));
+        assert!(same_repo(
+            "https://github.com/o/r",
+            "https://github.com/o/r.git"
+        ));
+        // The mirror fallback leaves a prefixed URL in origin.
+        assert!(same_repo(
+            "https://ghfast.top/https://github.com/o/r.git",
+            "https://github.com/o/r.git"
+        ));
+        // A different repository (or a non-git directory) never matches.
+        assert!(!same_repo(
+            "https://github.com/other/r.git",
+            "https://github.com/o/r.git"
+        ));
+        assert!(!same_repo("", "https://github.com/o/r.git"));
     }
 
     #[test]
@@ -797,6 +909,38 @@ mod tests {
         run(&["add", wf_name]);
         run(&["commit", "-qm", "initial"]);
         repo
+    }
+
+    #[tokio::test]
+    async fn checkout_repo_workflow_reclones_a_mismatched_cache() {
+        // A cache dir that holds a DIFFERENT repository (a stale key, a
+        // hand-populated path) must be re-cloned, never reused: reusing it
+        // would silently run the wrong pipeline (audit finding).
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = git_repo_with_workflow(dir.path().join("a").as_path(), "main.oxoflow");
+        let repo_b = git_repo_with_workflow(dir.path().join("b").as_path(), "main.oxoflow");
+        let cache = dir.path().join("cache");
+
+        checkout_repo_workflow(&repo_a.display().to_string(), None, &cache)
+            .await
+            .unwrap();
+        let wf = checkout_repo_workflow(&repo_b.display().to_string(), None, &cache)
+            .await
+            .unwrap();
+        assert_eq!(wf, cache.join("main.oxoflow"));
+
+        let out = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&cache)
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .await
+            .unwrap();
+        let origin = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            origin.ends_with("/b/source-repo"),
+            "the cache must hold the requested repository, got origin {origin}"
+        );
     }
 
     #[tokio::test]

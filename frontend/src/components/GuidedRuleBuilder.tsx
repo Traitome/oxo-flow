@@ -53,7 +53,10 @@ function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: s
       if (c.environment.trim() && c.environment !== 'system') {
         lines.push(`environment = "${c.environment.trim()}"`);
       }
-      const shell = c.shell.replace(/"/g, '\\"');
+      // A basic `"""` string escape-processes its content, so `sed 's/\t/,/g'`
+      // became a literal tab and a trailing backslash broke parsing; escape
+      // backslashes before quotes so the shell round-trips verbatim.
+      const shell = c.shell.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       lines.push(`shell = """${shell}"""`);
       return lines.join('\n');
     })
@@ -83,6 +86,18 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
         lastEmitted.current = toml;
         setWorkflowName(parsed.name || 'my-pipeline');
         setWorkflowVersion(parsed.version || '0.1.0');
+        // `memory` is absent from the parse API's rule summary, but the DAG
+        // nodes carry the full serialized rule — without it a card edit
+        // rebuilt the TOML and silently dropped every memory request. Read
+        // both forms: cards emit the rule-level shorthand, while hand-written
+        // TOML usually uses resources.memory.
+        const memoryByRule = new Map(
+          (parsed.dag?.nodes ?? []).map((n) => {
+            const res = (n.rule?.resources ?? {}) as Record<string, unknown>;
+            const shorthand = typeof n.rule?.memory === 'string' ? n.rule.memory : '';
+            return [n.id, typeof res.memory === 'string' ? res.memory : shorthand];
+          }),
+        );
         setCards(
           parsed.rules.map((r) => ({
             name: r.name,
@@ -90,7 +105,7 @@ export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderP
             inputs: r.inputs,
             outputs: r.outputs,
             threads: (r.threads ?? 0) > 0 ? String(r.threads) : '',
-            memory: '',
+            memory: memoryByRule.get(r.name) ?? '',
             environment: r.environment || 'system',
           })),
         );

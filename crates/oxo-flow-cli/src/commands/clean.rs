@@ -26,6 +26,20 @@ fn replace_oxoflow_wildcards_with_glob(pattern: &str) -> String {
     result
 }
 
+/// Resolve a declared output path against the workdir.
+///
+/// Relative declarations are workdir-relative (the convention `run`,
+/// `validate`, and `quality` all use); absolute ones are left untouched so the
+/// caller's safety check can reject them.
+fn resolve_output_path(workdir: &Path, output: &str) -> PathBuf {
+    let path = Path::new(output);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workdir.join(path)
+    }
+}
+
 pub fn clean_command(
     workflow: PathBuf,
     dry_run: bool,
@@ -169,21 +183,30 @@ pub fn clean_command(
         }
     }
 
-    // Resolve wildcard patterns to actual files via glob
-    let mut resolved_paths: Vec<String> = Vec::new();
+    // Resolve wildcard patterns to actual files via glob.
+    //
+    // Declared outputs are relative to the workdir (the same convention every
+    // other workflow command uses) — resolving them against the process CWD
+    // deleted unrelated files when `clean` ran from another directory
+    // (audit finding C1).
+    let mut resolved: Vec<(String, PathBuf)> = Vec::new();
     let mut unresolved_wildcards: Vec<String> = Vec::new();
     for output in &outputs {
         let has_wildcard = output.contains('{') && output.contains('}');
         if has_wildcard {
             // Convert oxo-flow wildcard {name} to glob * for matching
             let glob_pattern = replace_oxoflow_wildcards_with_glob(output);
-            match glob::glob(&glob_pattern) {
+            let full_glob = if Path::new(&glob_pattern).is_absolute() {
+                glob_pattern.clone()
+            } else {
+                workdir.join(&glob_pattern).to_string_lossy().to_string()
+            };
+            match glob::glob(&full_glob) {
                 Ok(paths) => {
                     let mut found = false;
                     for path in paths.flatten() {
-                        let s = path.to_string_lossy().to_string();
-                        if !resolved_paths.contains(&s) {
-                            resolved_paths.push(s);
+                        if !resolved.iter().any(|(_, r)| *r == path) {
+                            resolved.push((output.clone(), path));
                             found = true;
                         }
                     }
@@ -196,17 +219,20 @@ pub fn clean_command(
                 }
             }
         } else {
-            resolved_paths.push(output.clone());
+            let path = resolve_output_path(&workdir, output);
+            if !resolved.iter().any(|(_, r)| *r == path) {
+                resolved.push((output.clone(), path));
+            }
         }
     }
 
     if is_dry_run {
         eprintln!("{}", "Would clean (dry-run):".bold().yellow());
-        for path in &resolved_paths {
-            if Path::new(path).exists() {
-                eprintln!("  {} (exists)", path.dimmed());
+        for (_, path) in &resolved {
+            if path.exists() {
+                eprintln!("  {} (exists)", path.display().to_string().dimmed());
             } else {
-                eprintln!("  {} (not found)", path.dimmed());
+                eprintln!("  {} (not found)", path.display().to_string().dimmed());
             }
         }
         for pattern in &unresolved_wildcards {
@@ -216,7 +242,7 @@ pub fn clean_command(
             "\n{} {} patterns → {} files{}",
             "Total:".bold(),
             outputs.len(),
-            resolved_paths.len(),
+            resolved.len(),
             if unresolved_wildcards.is_empty() {
                 "".to_string()
             } else {
@@ -232,18 +258,24 @@ pub fn clean_command(
             );
         }
     } else {
-        // Determine which files are deletable
-        let mut deletable: Vec<String> = Vec::new();
+        // Determine which files are deletable. The declared string is what
+        // the safety check inspects (`..`, absolute, `~`); deletion uses the
+        // workdir-resolved path.
+        let mut deletable: Vec<PathBuf> = Vec::new();
         let skipped_wildcard = unresolved_wildcards.len();
         let mut not_found = 0usize;
         let mut rejected = 0usize;
 
-        for output in &resolved_paths {
-            if output.contains("..") || output.starts_with('/') || output.starts_with('~') {
-                eprintln!("  {} {} (rejected: unsafe path)", "✗".red().bold(), output);
+        for (declared, path) in &resolved {
+            if declared.contains("..") || declared.starts_with('/') || declared.starts_with('~') {
+                eprintln!(
+                    "  {} {} (rejected: unsafe path)",
+                    "✗".red().bold(),
+                    declared
+                );
                 rejected += 1;
-            } else if Path::new(output).exists() {
-                deletable.push(output.clone());
+            } else if path.exists() {
+                deletable.push(path.clone());
             } else {
                 not_found += 1;
             }
@@ -276,15 +308,15 @@ pub fn clean_command(
             let mut deleted = 0usize;
             let mut failed = 0usize;
 
-            for path_str in &deletable {
-                match std::fs::remove_file(path_str) {
+            for path in &deletable {
+                match std::fs::remove_file(path) {
                     Ok(()) => {
                         deleted += 1;
-                        eprintln!("  {} {}", "✓".green(), path_str);
+                        eprintln!("  {} {}", "✓".green(), path.display());
                     }
                     Err(e) => {
                         failed += 1;
-                        eprintln!("  {} {} — {}", "✗".red(), path_str, e);
+                        eprintln!("  {} {} — {}", "✗".red(), path.display(), e);
                     }
                 }
             }

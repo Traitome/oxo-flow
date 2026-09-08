@@ -43,7 +43,7 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | `--resume-failed` | — | Preview `run --resume-failed`: failed rules re-run, completed rules stay skipped |
 | `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
-| `--ai-max-retries <N>` | — | Maximum AI analysis rounds (overrides `[ai]` config) |
+| `--ai-max-retries <N>` | — | Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried) |
 | `--verbose` | `-v` | Enable debug-level logging |
 
 ---

@@ -24,6 +24,9 @@ export default function MonitorReport() {
   const { t, lang } = useI18n();
   const locale = getLocale(lang);
   const [runs, setRuns] = useState<RunItem[]>([]);
+  // Cursor for the next page of /api/runs (the endpoint caps one response at
+  // 100 rows); null means the loaded list is complete.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selId, setSelId] = useState<string | null>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus | null>(null);
   const [reportData, setReportData] = useState<ReportData | null>(null);
@@ -49,6 +52,13 @@ export default function MonitorReport() {
   const navigate = useNavigate();
 
 
+  // The selected run's owner id — the value the SSE stream scopes events by
+  // (sse.rs emits the canonical users.id, not the login name the client
+  // stores). Read through a ref so resolving it does not re-subscribe the
+  // stream on every run-list refresh.
+  const runsRef = useRef<RunItem[]>([]);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
+
   // Monotonic selection sequence + abort: a slow response for run A must
   // never overwrite the state of run B (same pattern as the editor's
   // editSeq), and a new selection aborts the previous one in flight.
@@ -62,6 +72,10 @@ export default function MonitorReport() {
     setSelId(id);
     setTab('monitor');
     setQaAnswer(null);
+    // Per-run data must not leak across selections: the null-guarded log and
+    // instance loaders would otherwise keep showing run A's content for run B.
+    setLogs(null);
+    setInstances(null);
     session.setActiveRunId(id);
     session.setChatContext('monitor');
     const [status, report, dag, diag, prev] = await Promise.allSettled([
@@ -85,6 +99,9 @@ export default function MonitorReport() {
   // Abort in-flight detail loads when the page unmounts.
   useEffect(() => () => selectAbort.current?.abort(), []);
 
+  // The URL owns the selection: every in-page selection (row click, retry,
+  // resume) navigates to /runs/:id and this effect loads it. Setting selId
+  // directly would be reverted here on the next render.
   useEffect(() => {
     if (routeId && routeId !== selId) {
       // Defer to a macrotask: selectRun triggers several state updates and
@@ -94,8 +111,29 @@ export default function MonitorReport() {
     }
   }, [routeId, selectRun, selId]);
 
+  const refreshRuns = useCallback(async () => {
+    try {
+      const page = await api.listRuns();
+      setRuns(page.items);
+      setNextCursor(page.next_cursor);
+    } catch { /* keep the previous list on a failed refresh */ }
+  }, []);
+
+  const loadMoreRuns = async () => {
+    if (!nextCursor) return;
+    try {
+      const page = await api.listRuns({ cursor: nextCursor });
+      setRuns((prev) => [...prev, ...page.items]);
+      setNextCursor(page.next_cursor);
+    } catch { /* keep the loaded pages */ }
+  };
+
   useEffect(() => {
-    api.listRuns().then((r) => setRuns(r.items)).catch(() => { /* ignore */ });
+    // Initial page only; the refresh button and SSE handler call refreshRuns.
+    api
+      .listRuns()
+      .then((page) => { setRuns(page.items); setNextCursor(page.next_cursor); })
+      .catch(() => { /* leave the list empty */ });
   }, []);
 
   // Update monitor status in real-time via SSE; the 5s fallback poll only
@@ -115,20 +153,24 @@ export default function MonitorReport() {
     es.onmessage = (evt) => {
       try {
         const event = JSON.parse(evt.data);
-        // Events are scoped to their owning user (issue #82 P0-5); the
-        // server already filters the stream, this is a belt-and-suspenders
-        // guard for anonymous/personal-mode streams.
-        const mine = !event.user || event.user === localStorage.getItem('oxo_user_id');
+        // Events are scoped to the run owner's canonical users.id (sse.rs),
+        // which the login response never exposes — comparing it against the
+        // stored login username dropped every live update. The loaded run row
+        // carries the id the server actually sends; an owner we cannot
+        // resolve yet is accepted (the stream is already ownership-filtered
+        // server-side in team/hpc mode, and personal mode is single-user).
+        const owner = runsRef.current.find((r) => r.id === selId)?.user_id;
+        const mine = !event.user || !owner || event.user === owner;
         if (mine && event.data?.run_id === selId) {
           if (event.type === 'run_completed' || event.type === 'run_failed') {
             if (interval) clearInterval(interval);
-            api.listRuns().then((r) => setRuns(r.items));
+            void refreshRuns();
           }
         }
       } catch { /* ignore */ }
     };
     return () => { if (interval) clearInterval(interval); es.close(); };
-  }, [selId, tab]);
+  }, [selId, tab, refreshRuns]);
 
 
 
@@ -154,7 +196,9 @@ export default function MonitorReport() {
     if (!selId) return;
     try {
       const plan = await api.retryRun(selId);
-      if (plan.new_run_id) setSelId(plan.new_run_id);
+      // The route is the selection source of truth; setSelId alone would be
+      // reverted by the URL sync effect below.
+      if (plan.new_run_id) navigate(`/runs/${plan.new_run_id}`);
     } catch { /* ignore */ }
   };
 
@@ -163,7 +207,7 @@ export default function MonitorReport() {
     if (!window.confirm(t('monitor.cancelConfirm'))) return;
     try {
       await api.cancelRun(selId);
-      api.listRuns().then((r) => setRuns(r.items));
+      void refreshRuns();
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
     } catch { /* ignore */ }
@@ -188,13 +232,20 @@ export default function MonitorReport() {
   }, [tab, selId, logs]);
 
   const ruleNames = (dagStatus?.nodes ?? []).map(n => n.label);
-  const logSections = (logs ?? '').split(/(?=Running: )/);
-  const filteredSections = logSections.filter(sec => {
-    const head = sec.split('\n')[0];
-    const matchesRule = !logRule || head.includes(logRule);
-    const matchesQuery = !logQuery || sec.toLowerCase().includes(logQuery.toLowerCase());
-    return matchesRule && matchesQuery;
-  });
+  // Splitting and lowercasing a multi-MB log on every render made the 5s
+  // poll janky while the tab was hidden; both passes are pure functions of
+  // logs/filters.
+  const logSections = useMemo(() => (logs ?? '').split(/(?=Running: )/), [logs]);
+  const filteredSections = useMemo(
+    () =>
+      logSections.filter(sec => {
+        const head = sec.split('\n')[0];
+        const matchesRule = !logRule || head.includes(logRule);
+        const matchesQuery = !logQuery || sec.toLowerCase().includes(logQuery.toLowerCase());
+        return matchesRule && matchesQuery;
+      }),
+    [logSections, logRule, logQuery],
+  );
 
   const downloadLogs = () => {
     const blob = new Blob([logs ?? ''], { type: 'text/plain' });
@@ -316,7 +367,7 @@ export default function MonitorReport() {
                 if (!window.confirm(t('monitor.resumeCheckpointConfirm'))) return;
                 try {
                   const res = await api.resumeCheckpoint(selId);
-                  setSelId(res.run_id);
+                  navigate(`/runs/${res.run_id}`);
                 } catch { /* ignore */ }
               }}>
               <StepForward size={14} />
@@ -663,7 +714,7 @@ export default function MonitorReport() {
       <div className="section">
         <div className="section-head">
           <h2 className="section-title">{t('monitor.runHistory')}</h2>
-          <button className="btn-sm" onClick={() => api.listRuns().then((r) => setRuns(r.items))}>{t('monitor.refresh')}</button>
+          <button className="btn-sm" onClick={() => void refreshRuns()}>{t('monitor.refresh')}</button>
         </div>
         <table className="run-table">
           <thead><tr><th>{t('monitor.id')}</th><th>{t('monitor.status')}</th><th>{t('monitor.phase')}</th><th>{t('monitor.created')}</th><th>{t('monitor.monitor')}</th></tr></thead>
@@ -671,7 +722,7 @@ export default function MonitorReport() {
             {runs.slice(0, visibleCount).map((r) => (
               <tr
                 key={r.id}
-                onClick={() => selectRun(r.id)}
+                onClick={() => navigate(`/runs/${r.id}`)}
                 style={selId === r.id ? { background: 'var(--color-primary-light)', cursor: 'pointer' } : { cursor: 'pointer' }}
               >
                 <td className="mono">{r.id.slice(0, 8)}</td>
@@ -688,10 +739,21 @@ export default function MonitorReport() {
             ))}
           </tbody>
         </table>
-        {runs.length > visibleCount && (
-          <button className="btn-sm" style={{ marginTop: '0.5rem' }} onClick={() => setVisibleCount((n) => n + 20)}>
-            {t('monitor.showMore').replace('{{n}}', String(Math.min(20, runs.length - visibleCount))).replace('{{total}}', String(runs.length))}
-          </button>
+        {(runs.length > visibleCount || nextCursor) && (
+          <div className="row" style={{ marginTop: '0.5rem', gap: '0.5rem' }}>
+            {runs.length > visibleCount && (
+              <button className="btn-sm" onClick={() => setVisibleCount((n) => n + 20)}>
+                {t('monitor.showMore').replace('{{n}}', String(Math.min(20, runs.length - visibleCount))).replace('{{total}}', String(runs.length))}
+              </button>
+            )}
+            {/* The API returns at most 100 runs per response; the cursor is
+                the only way past that page (audit #16). */}
+            {nextCursor && (
+              <button className="btn-sm" onClick={() => void loadMoreRuns()}>
+                {t('monitor.loadMore')}
+              </button>
+            )}
+          </div>
         )}
       </div>
 

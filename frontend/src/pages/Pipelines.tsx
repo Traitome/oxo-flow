@@ -14,18 +14,27 @@ export default function Pipelines() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  // A failed load used to render as an empty list — indistinguishable from
+  // "you have no templates/pipelines".
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.listTemplates().then(setTemplates).catch(() => {});
-  }, []);
+    api
+      .listTemplates()
+      .then((tpl) => { setTemplates(tpl); setError(null); })
+      .catch((err: unknown) => setError(t('common.loadFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError'))));
+  }, [t]);
 
   useEffect(() => {
     if (tab !== 'mine') return;
     api
       .listPipelines()
-      .then(setPipelines)
-      .catch(() => setPipelines([]));
-  }, [tab]);
+      .then((pl) => { setPipelines(pl); setError(null); })
+      .catch((err: unknown) => {
+        setPipelines([]);
+        setError(t('common.loadFailed').replace('{{error}}', err instanceof Error ? err.message : t('common.unknownError')));
+      });
+  }, [tab, t]);
 
   const categories = [...new Set(templates.map((t) => t.category))];
 
@@ -111,6 +120,8 @@ export default function Pipelines() {
           <span style={{ marginLeft: 'auto', fontSize: '0.7rem', opacity: 0.7 }}>{t('common.dismiss')}</span>
         </div>
       )}
+
+      {error && <div className="tool-palette-hint error" style={{ cursor: 'pointer' }} onClick={() => setError(null)}>{error}</div>}
 
       {tab === 'templates' &&
         (categories.length === 0 ? (

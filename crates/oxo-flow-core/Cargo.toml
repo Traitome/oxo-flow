@@ -60,6 +60,10 @@ tempfile = { workspace = true }
 criterion = { workspace = true }
 filetime = "0.2.29"
 
+# Criterion benches are standalone binaries: `harness = false` stops libtest
+# from wrapping them, so their `criterion_main!` actually runs. A bench file
+# without an entry here is still auto-discovered, but compiles against the
+# default libtest harness and reports "0 tests" — silently never measured.
 [[bench]]
 name = "wildcard_bench"
 harness = false
@@ -69,10 +73,26 @@ name = "dag_bench"
 harness = false
 
 [[bench]]
+name = "dag_scale_bench"
+harness = false
+
+[[bench]]
 name = "parsing_bench"
 harness = false
 
 [[bench]]
 name = "scheduling_bench"
+harness = false
+
+[[bench]]
+name = "api_response_bench"
+harness = false
+
+[[bench]]
+name = "diagnostics_bench"
+harness = false
+
+[[bench]]
+name = "wildcard_large_bench"
 harness = false
 

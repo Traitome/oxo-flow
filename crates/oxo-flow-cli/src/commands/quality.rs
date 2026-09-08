@@ -375,6 +375,30 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
 /// reported; warnings are informational — PATH and reference data are
 /// machine-specific and can arrive later (issue #63).
 pub fn deep_check_command(workflow: &Path, workdir: Option<&Path>, json: bool) -> Result<()> {
+    let (report, document) = run_deep_check(workflow, workdir)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+    }
+
+    if report.error_count > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Run the deep checks, print the human report to stderr, and build the JSON
+/// document.
+///
+/// Shared by `deep-check --json` and the `test --json` aggregate (which
+/// embeds the document instead of printing a second one — audit finding).
+pub fn run_deep_check(
+    workflow: &Path,
+    workdir: Option<&Path>,
+) -> Result<(
+    oxo_flow_core::deep_check::DeepCheckReport,
+    serde_json::Value,
+)> {
     let config = WorkflowConfig::from_file(workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
     // Judge existence from the same base the executor runs rules from:
@@ -386,36 +410,29 @@ pub fn deep_check_command(workflow: &Path, workdir: Option<&Path>, json: bool) -
 
     print_deep_console(&report);
 
-    if json {
-        let diagnostics: Vec<serde_json::Value> = report
-            .findings
-            .iter()
-            .map(|f| {
-                serde_json::json!({
-                    "severity": format!("{:?}", f.severity).to_lowercase(),
-                    "code": f.code,
-                    "message": f.message,
-                    "rule": f.rule,
-                    "suggestion": f.suggestion,
-                    "path": f.path,
-                })
+    let diagnostics: Vec<serde_json::Value> = report
+        .findings
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "severity": format!("{:?}", f.severity).to_lowercase(),
+                "code": f.code,
+                "message": f.message,
+                "rule": f.rule,
+                "suggestion": f.suggestion,
+                "path": f.path,
             })
-            .collect();
-        let output = serde_json::json!({
-            "command": "deep-check",
-            "workflow": workflow.display().to_string(),
-            "diagnostics": diagnostics,
-            "error_count": report.error_count,
-            "warning_count": report.warning_count,
-            "passed": report.passed,
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    }
-
-    if report.error_count > 0 {
-        std::process::exit(1);
-    }
-    Ok(())
+        })
+        .collect();
+    let document = serde_json::json!({
+        "command": "deep-check",
+        "workflow": workflow.display().to_string(),
+        "diagnostics": diagnostics,
+        "error_count": report.error_count,
+        "warning_count": report.warning_count,
+        "passed": report.passed,
+    });
+    Ok((report, document))
 }
 
 /// Print the human-readable deep-check report to stderr, grouped by category
@@ -555,6 +572,13 @@ pub fn touch_command(
         );
     }
 
+    // A typo'd rule name must not exit 0 with "0 file(s) touched" — scripts
+    // would read that as success (audit #276 P4-5). The command fails at the
+    // end when this list is non-empty, after touching whatever it did match.
+    let unknown_rules: Vec<&String> = rules
+        .iter()
+        .filter(|name| !config.rules.iter().any(|rule| &rule.name == *name))
+        .collect();
     let rules_to_touch: Vec<&oxo_flow_core::rule::Rule> = if rules.is_empty() {
         config.rules.iter().collect()
     } else {
@@ -563,20 +587,13 @@ pub fn touch_command(
             .iter()
             .filter(|r| rules.contains(&r.name))
             .collect();
-        // A typo'd rule name must not exit 0 with "0 file(s) touched" —
-        // scripts would read that as success (audit #276 P4-5, the same
-        // unknown-name warning `--samples` gives).
-        let unknown: Vec<&String> = rules
-            .iter()
-            .filter(|n| !config.rules.iter().any(|r| &r.name == *n))
-            .collect();
-        for name in &unknown {
+        for name in &unknown_rules {
             eprintln!(
                 "  {} rule '{name}' not found in workflow — no files touched for it",
                 "⚠".yellow()
             );
         }
-        if !unknown.is_empty() {
+        if !unknown_rules.is_empty() {
             let expanded_hint = if config.rules.len() != config.rule_templates.len() {
                 " (run `oxo-flow dry-run <workflow>` to list expanded rule names)"
             } else {
@@ -691,6 +708,19 @@ pub fn touch_command(
         eprintln!(
             "  {}   oxo-flow touch {} --rule <expanded_name>",
             "   ".dimmed(),
+            workflow.display()
+        );
+    }
+
+    // Requesting a rule that does not exist is a usage error, not a no-op:
+    // exit non-zero so scripts (and the audit that found this) can tell the
+    // difference between "touched" and "nothing matched".
+    if !unknown_rules.is_empty() {
+        anyhow::bail!(
+            "{} requested rule name(s) not found in '{}' — nothing was touched for them.\n  \
+             Run `oxo-flow dry-run {}` to list the expanded rule names.",
+            unknown_rules.len(),
+            workflow.display(),
             workflow.display()
         );
     }
