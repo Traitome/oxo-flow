@@ -222,7 +222,9 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                     meta["rounds"] = s.get("rounds")
                 except json.JSONDecodeError:
                     pass
-        wf = sorted(run_dir.glob("*.oxoflow"))
+        # rglob: a relative -o target resolved inside a relative run_dir can
+        # nest the artifact one level deeper — find it wherever it landed.
+        wf = sorted(run_dir.rglob("*.oxoflow"))
         if wf:
             meta["generated"] = True
         elif not meta["error"]:
@@ -241,7 +243,9 @@ def run_gates(binary: str, wf: Path, run_dir: Path) -> dict:
         out = run_dir / f"{gate}.json"
         err = run_dir / f"{gate}.err"
         try:
-            proc = subprocess.run([binary, gate, "--json", str(wf)],
+            # Same convention as eval/scripts/runner.py: cwd = run dir, file
+            # addressed by basename — safe even when `wf` is a relative path.
+            proc = subprocess.run([binary, gate, "--json", wf.name],
                                   cwd=run_dir, timeout=120,
                                   capture_output=True, text=True)
         except subprocess.TimeoutExpired:
@@ -294,7 +298,8 @@ def main() -> None:
         intents = [i for i in intents if i["id"] in keep]
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = Path(args.out) if args.out else Path(__file__).parent / "results" / stamp
+    out_dir = Path(args.out).resolve() if args.out \
+        else Path(__file__).resolve().parent / "results" / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
     runs = []
@@ -313,8 +318,11 @@ def main() -> None:
                                      creds, binary, args)
                 wf = run_dir / "workflow.oxoflow"
                 if not wf.exists():
-                    alt = sorted(run_dir.glob("*.oxoflow"))
-                    wf = alt[0] if alt else None
+                    alt = sorted(run_dir.rglob("*.oxoflow"))
+                    if alt:
+                        wf.write_text(alt[0].read_text())
+                    else:
+                        wf = None
                 gates = run_gates(binary, wf, run_dir) if wf else {}
                 result = {
                     "intent_id": spec["id"], "tier": spec["tier"],

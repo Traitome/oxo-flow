@@ -53,14 +53,28 @@ const OLLAMA_DEFAULT_MODEL: &str = "llama3";
 const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 /// Shared HTTP client for all provider backends. Without explicit timeouts a
-/// hung endpoint would block the agent loop indefinitely; 120s covers slow
-/// long-form completions while still bounding worst-case latency.
+/// hung endpoint would block the agent loop indefinitely; the request timeout
+/// (default 120s, `OXO_FLOW_AI_TIMEOUT_SECS`) must also cover slow long-form
+/// completions — thinking backends with a raised `OXO_FLOW_AI_MAX_TOKENS`
+/// routinely exceed two minutes, and a mid-body timeout surfaces as a
+/// confusing "error decoding response body".
 fn provider_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(request_timeout_secs()))
         .build()
         .unwrap_or_default()
+}
+
+fn request_timeout_secs() -> u64 {
+    parse_timeout_secs(std::env::var("OXO_FLOW_AI_TIMEOUT_SECS").ok().as_deref())
+}
+
+fn parse_timeout_secs(value: Option<&str>) -> u64 {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(120)
 }
 
 // ── AiProvider enum ────────────────────────────────────────────────────────
@@ -1525,6 +1539,17 @@ mod tests {
         assert_eq!(parse_max_tokens(Some("abc")), 4096);
         assert_eq!(parse_max_tokens(Some("")), 4096);
         assert_eq!(parse_max_tokens(None), 4096);
+    }
+
+    #[test]
+    fn timeout_env_override_parses_strictly() {
+        // Same contract as the max_tokens override: clean positive integers
+        // only, 120s fallback.
+        assert_eq!(parse_timeout_secs(Some("300")), 300);
+        assert_eq!(parse_timeout_secs(Some(" 90 ")), 90);
+        assert_eq!(parse_timeout_secs(Some("0")), 120);
+        assert_eq!(parse_timeout_secs(Some("x")), 120);
+        assert_eq!(parse_timeout_secs(None), 120);
     }
 
     #[test]
