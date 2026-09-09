@@ -152,116 +152,32 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag version: $VERSION"
 
-      - name: Check and patch Cargo.toml files
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # One implementation of "what the version is and where it lives":
+      # scripts/bump-version.sh — the same script `make version-check` runs.
+      # It patches every location (Cargo.toml, CITATION.cff, Dockerfile, the
+      # excluded desktop crate, the frontend manifests, README and the docs),
+      # refreshes both lockfiles with cargo, then re-runs its own check, so a
+      # location it fails to patch aborts the release instead of shipping a
+      # half-bumped tree.
+      - name: Sync version across the tree
         id: patch
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ steps.extract.outputs.version }}"
-          CHANGED=false
-
-          # All crates use version.workspace = true, so we only need to
-          # update the workspace version in the root Cargo.toml.
-          CURRENT=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
-          if [ "$VERSION" != "$CURRENT" ]; then
-            echo "Updating workspace version: $CURRENT → $VERSION"
-            sed -i "/^\[workspace\.package\]/,/^\[/{ s/^version = \"$CURRENT\"/version = \"$VERSION\"/; }" Cargo.toml
-            CHANGED=true
+          SCRIPT="scripts/bump-version.sh"
+          if [ ! -f "$SCRIPT" ]; then
+            # Tag-push release of a tag that predates this script: run the
+            # default branch's copy so the bump logic is never stale.
+            SCRIPT="$RUNNER_TEMP/bump-version.sh"
+            git show "origin/${{ github.event.repository.default_branch }}:scripts/bump-version.sh" > "$SCRIPT"
           fi
-
-          # Also update the internal workspace crate versions in [workspace.dependencies]
-          # These must carry a version so that `cargo publish` can resolve them on crates.io.
-          CURRENT_DEP=${CURRENT:-$(sed -n '/^\[workspace\.dependencies\]/,/^\[/{/oxo-flow-/ s/.*version = "\([^"]*\)".*/\1/p;}' Cargo.toml | head -1)}
-          if [ -n "$CURRENT_DEP" ] && [ "$VERSION" != "$CURRENT_DEP" ]; then
-            echo "Updating workspace dependency versions: $CURRENT_DEP → $VERSION"
-            sed -i "/^\[workspace\.dependencies\]/,/^\[/{/oxo-flow-/ s/version = \"[^\"]*\"/version = \"$VERSION\"/;}" Cargo.toml
-            CHANGED=true
-          fi
-
-          # Also update the root [package] version
-          ROOT_VER=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          if [ "$VERSION" != "$ROOT_VER" ]; then
-            ROOT_ESC=$(printf '%s' "$ROOT_VER" | sed 's/[.]/\\./g')
-            sed -i "0,/^version = \"$ROOT_ESC\"/{s/^version = \"$ROOT_ESC\"/version = \"$VERSION\"/}" Cargo.toml
-            CHANGED=true
-          fi
-
-          if [ -f CITATION.cff ]; then
-            TODAY=$(date -u +%Y-%m-%d)
-            sed -i "s/^version: .*/version: $VERSION/" CITATION.cff
-            sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
-            CHANGED=true
-          fi
-
-          # Update docs version references (oxo-flow X.Y.Z and vX.Y.Z patterns)
-          if [ -d docs/guide/src ]; then
-            echo "Updating docs version references..."
-            # Match patterns like: oxo-flow 0.4.2 —, "version": "0.4.2", v0.4.2
-            find docs/guide/src -name "*.md" -exec sed -i -E \
-              -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
-              -e "s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$VERSION\"/g" \
-              -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" \
-              -e "s/(X-OxoFlow-Version: |\"oxo_flow_version\": \")[0-9]+\.[0-9]+\.[0-9]+/\1$VERSION/g" \
-              -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\.[0-9]+#\1$VERSION#g" \
-              -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\$#\1${VERSION%.*}#g" \
-              -e "s/(# oxo-flow )[0-9]+\.[0-9]+\.[0-9]+/\1$VERSION/g" \
-              -e "s/[\\(]\`[0-9]+\.[0-9]+\.[0-9]+\`[\\)] by value/(\`$VERSION\`) by value/g" \
-              {} \;
-            # Also update README.md
-            if [ -f README.md ]; then
-              sed -i -E \
-                -e "s/oxo-flow [0-9]+\.[0-9]+\.[0-9]+ —/oxo-flow $VERSION —/g" \
-                -e "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" \
-                -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\.[0-9]+#\1$VERSION#g" \
-                -e "s#(ghcr\.io/traitome/oxo-flow:)[0-9]+\.[0-9]+\$#\1${VERSION%.*}#g" \
-                README.md
-            fi
-            CHANGED=true
-          fi
-
-          # The desktop shell is EXCLUDED from the workspace (its manifest has
-          # an empty [workspace] table), so nothing above touches it — yet it
-          # repeats the release version twice: its own [package] version and
-          # the caret pin on the oxo-flow-web path dependency. Left stale, the
-          # ^old-version requirement cannot resolve against the bumped
-          # workspace and build-macos (a required release leg) fails on the
-          # first release after the pin diverges.
-          DESKTOP_TOML="crates/oxo-flow-desktop/Cargo.toml"
-          if [ -f "$DESKTOP_TOML" ]; then
-            # Portable BRE: `^version` matches only the [package] version
-            # (dependency pins are inline or indented); the oxo-flow-web
-            # line address scopes the second expression to the path-dep pin.
-            sed -i \
-              -e "s/^version = \"[0-9][0-9.]*\"/version = \"$VERSION\"/" \
-              -e "/oxo-flow-web = /s/version = \"[0-9][0-9.]*\"/version = \"$VERSION\"/" \
-              "$DESKTOP_TOML"
-            if ! git diff --quiet -- "$DESKTOP_TOML"; then
-              echo "Updating desktop crate version pins → $VERSION"
-              CHANGED=true
-            fi
-          fi
-
-          # Keep the SPA's package.json version aligned (not a cargo member,
-          # otherwise never bumped; its version ships inside the desktop app).
-          if [ -f frontend/package.json ]; then
-            sed -i "0,/\"version\": \"[0-9][0-9.]*\"/s//\"version\": \"$VERSION\"/" frontend/package.json
-          fi
-
-          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-
-      - name: Install Rust (stable)
-        if: steps.patch.outputs.changed == 'true'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Update Cargo.lock
-        if: steps.patch.outputs.changed == 'true'
-        run: |
-          cargo update --workspace
-          # The desktop crate is excluded from the workspace and commits its
-          # own lockfile; its copy of the internal crate versions must track
-          # the manifest pins patched above or every later desktop build
-          # fails lockfile verification.
-          (cd crates/oxo-flow-desktop && cargo update --workspace)
+          bash "$SCRIPT" --set "$VERSION" --root "$PWD" | tee "$RUNNER_TEMP/bump.log"
+          CHANGED="$(sed -n 's/^changed=//p' "$RUNNER_TEMP/bump.log" | tail -1)"
+          echo "changed=${CHANGED:-false}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push version bump
         id: push
@@ -273,16 +189,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
           [ -f CITATION.cff ] && git add CITATION.cff
+          [ -f Dockerfile ] && git add Dockerfile
+          [ -f Dockerfile.release ] && git add Dockerfile.release
           [ -f README.md ] && git add README.md
-          [ -d docs/guide/src ] && git add docs/guide/src/*.md docs/guide/src/**/*.md
+          # Whole tree: nested docs pages live more than one level down.
+          [ -d docs/guide/src ] && git add docs/guide/src
           # Excluded-desktop crate: manifest pins + its own lockfile.
           [ -f crates/oxo-flow-desktop/Cargo.toml ] && \
             git add crates/oxo-flow-desktop/Cargo.toml crates/oxo-flow-desktop/Cargo.lock
           # SPA manifest ships inside the desktop app bundle.
           [ -f frontend/package.json ] && git add frontend/package.json frontend/package-lock.json
-          # Re-tagging a version whose files are already synced leaves nothing
-          # to commit (CITATION.cff/docs branches set CHANGED unconditionally).
-          # Tolerate it: the dedicated "Create and push release tag" step
+          # Re-running a release whose tree is already synced leaves nothing
+          # to commit; tolerate it — the "Create and push release tag" step
           # still creates the tag against the current tree.
           if git diff --cached --quiet; then
             echo "Version already synced — nothing to commit"
@@ -473,6 +391,14 @@ jobs:
       # docs copy, which is canonical.
       - name: Schema drift check
         run: make schema-drift
+
+      # Mirrors `make version-check`: every version location (Cargo.toml, both
+      # lockfiles, CITATION.cff, Dockerfile, the excluded desktop crate, the
+      # frontend manifests, README and the docs) must agree. The release job
+      # runs the same script with --set; this gate catches a hand-edit that
+      # forgot half of them before it reaches a tag.
+      - name: Version drift check
+        run: make version-check
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2

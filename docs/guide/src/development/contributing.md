@@ -54,7 +54,8 @@ the window before adding retries.
 ```bash
 make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
-#       cargo build, cargo test, schema-drift, cargo audit, frontend-lint
+#       cargo build, cargo test, schema-drift, version-check, cargo audit,
+#       frontend-lint
 ```
 
 ---
@@ -109,13 +110,14 @@ git checkout -b feat/my-feature
 make ci
 ```
 
-All seven checks must pass:
+All eight checks must pass:
 
 - [x] `cargo fmt -- --check`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo build --workspace`
 - [x] `cargo test --workspace`
 - [x] `schema-drift` (OpenAPI spec matches code)
+- [x] `version-check` (every version location agrees with Cargo.toml)
 - [x] `cargo audit`
 - [x] `frontend-lint`
 

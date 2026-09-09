@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift docker-version contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift docker-version audit frontend-lint
+ci: fmt clippy build test schema-drift version-check audit frontend-lint
 
 fmt:
 	cargo fmt -- --check
@@ -36,11 +36,14 @@ frontend-test:
 schema-drift:
 	diff -q crates/oxo-flow-cli/schema/oxoflow-v1.schema.json docs/schema/oxoflow-v1.schema.json >/dev/null 2>&1 || { echo "schema drift: sync crates/oxo-flow-cli/schema with docs/schema"; exit 1; }
 
-## Single-source rule: the Dockerfile's local-dev ARG VERSION default must
-## match the workspace version. CI always passes --build-arg VERSION, so only
-## local builds use the default — drift silently mislabels local images.
-docker-version:
-	@grep -q "^ARG VERSION=$(VERSION)$$" Dockerfile || { echo "docker version drift: Dockerfile ARG VERSION != workspace $(VERSION)"; exit 1; }
+## Single-source rule: every place the project version appears — Cargo.toml
+## ([package], [workspace.package], dep pins), both lockfiles, CITATION.cff,
+## the Dockerfile ARG default, the excluded desktop crate, the frontend
+## manifests, README and the docs — must agree with [workspace.package].
+## scripts/bump-version.sh is the one implementation; the release job runs the
+## same script with --set, so local and CI cannot diverge.
+version-check:
+	@bash scripts/bump-version.sh --check
 
 ## Generate code coverage report (requires cargo-tarpaulin).
 coverage:
