@@ -3,7 +3,7 @@
 # compilation happens here. A companion to ./Dockerfile (which compiles from
 # source and gates every push to main).
 #
-# ARG VERSION selects the release (e.g. 0.17.2) and is deliberately NOT
+# ARG VERSION selects the release (e.g. 0.18.0) and is deliberately NOT
 # defaulted: it must name a tag whose assets exist, so an omitted/typo'd
 # version fails the asset download instead of silently building something
 # else. The target triple follows the build platform: amd64 →
@@ -12,7 +12,7 @@
 #
 # Build it yourself:
 #   docker build -f Dockerfile.release \
-#     --build-arg VERSION=0.17.2 -t oxo-flow:0.17.2 .
+#     --build-arg VERSION=0.18.0 -t oxo-flow:0.18.0 .
 
 # ===== Fetch + verify release binaries (per-TARGETARCH) =====
 FROM debian:trixie-slim AS binaries
