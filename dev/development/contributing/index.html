@@ -3625,6 +3625,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#run-all-ci-checks-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run All CI Checks Locally
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3972,6 +3983,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#run-all-ci-checks-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run All CI Checks Locally
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4251,41 +4273,37 @@
 spawns the web server):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--test<span class="w"> </span>web_role_matrix<span class="w">   </span><span class="c1"># deployment + 3-role simulation matrix (auth, RBAC, persistence, base-path)</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--test<span class="w"> </span>web_integration<span class="w">   </span><span class="c1"># web API integration tests</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="sb">```</span><span class="c1">#### Flaky-test policy (issue #249)</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>CI<span class="w"> </span>runs<span class="w"> </span>the<span class="w"> </span>full<span class="w"> </span>suite<span class="w"> </span>once<span class="p">;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span>it<span class="w"> </span>fails,<span class="w"> </span>ONLY<span class="w"> </span>the<span class="w"> </span>failed<span class="w"> </span>tests<span class="w"> </span>are
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>re-run<span class="w"> </span>a<span class="w"> </span>single<span class="w"> </span><span class="nb">time</span><span class="w"> </span>—<span class="w"> </span>passing<span class="w"> </span><span class="k">then</span><span class="w"> </span>classifies<span class="w"> </span>the<span class="w"> </span>failure<span class="w"> </span>as<span class="w"> </span>a
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>load-timing<span class="w"> </span>flake<span class="w"> </span><span class="o">(</span>the<span class="w"> </span>job<span class="w"> </span>stays<span class="w"> </span>green<span class="w"> </span>with<span class="w"> </span>a<span class="w"> </span>warning<span class="w"> </span>annotation<span class="o">)</span>,
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>failing<span class="w"> </span>again<span class="w"> </span>is<span class="w"> </span>a<span class="w"> </span>genuine<span class="w"> </span>regression<span class="w"> </span><span class="o">(</span>the<span class="w"> </span>job<span class="w"> </span>goes<span class="w"> </span>red<span class="o">)</span>.<span class="w"> </span>The<span class="w"> </span>cap<span class="w"> </span>is
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>exactly<span class="w"> </span>one<span class="w"> </span>re-run:<span class="w"> </span>persistent<span class="w"> </span>breakage<span class="w"> </span>is<span class="w"> </span>never<span class="w"> </span>masked.
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>When<span class="w"> </span>writing<span class="w"> </span>time-sensitive<span class="w"> </span>tests,<span class="w"> </span><span class="k">do</span><span class="w"> </span>not<span class="w"> </span>assert<span class="w"> </span>on<span class="w"> </span>wall-clock<span class="w"> </span>margins
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>that<span class="w"> </span>only<span class="w"> </span>hold<span class="w"> </span>on<span class="w"> </span>an<span class="w"> </span>idle<span class="w"> </span>machine<span class="w"> </span>—<span class="w"> </span>grant<span class="w"> </span>the<span class="w"> </span>generous<span class="w"> </span>window<span class="w"> </span><span class="k">in</span><span class="w"> </span>the
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="nb">test</span><span class="w"> </span>itself<span class="w"> </span><span class="o">(</span>e.g.<span class="w"> </span>an<span class="w"> </span>explicit<span class="w"> </span>long<span class="w"> </span>grace<span class="w"> </span><span class="k">for</span><span class="w"> </span>signal<span class="w"> </span>handling<span class="o">)</span><span class="w"> </span>so<span class="w"> </span>the
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>assertion<span class="w"> </span>measures<span class="w"> </span>the<span class="w"> </span>property<span class="w"> </span>under<span class="w"> </span>test,<span class="w"> </span>not<span class="w"> </span>machine<span class="w"> </span>load.<span class="w"> </span>A<span class="w"> </span>first
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>run<span class="w"> </span>that<span class="w"> </span>flakes<span class="w"> </span>under<span class="w"> </span>CI<span class="w"> </span>load<span class="w"> </span>is<span class="w"> </span>a<span class="w"> </span><span class="nb">test</span><span class="w"> </span>bug,<span class="w"> </span>not<span class="w"> </span>an<span class="w"> </span>engine<span class="w"> </span>bug<span class="p">;</span><span class="w"> </span>fix
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>the<span class="w"> </span>window<span class="w"> </span>before<span class="w"> </span>adding<span class="w"> </span>retries.
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="c1">### Run All CI Checks Locally</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="sb">```</span>bash
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>make<span class="w"> </span>ci
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="c1"># Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,</span>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="c1">#       cargo build, cargo test, schema-drift, version-check, cargo audit,</span>
-</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="c1">#       frontend-lint</span>
+</span></code></pre></div>
+<h4 id="flaky-test-policy-issue-249">Flaky-test policy (issue #249)<a class="headerlink" href="#flaky-test-policy-issue-249" title="Permanent link">#</a></h4>
+<p>CI runs the full suite once; if it fails, ONLY the failed tests are
+re-run a single time — passing then classifies the failure as a
+load-timing flake (the job stays green with a warning annotation),
+failing again is a genuine regression (the job goes red). The cap is
+exactly one re-run: persistent breakage is never masked.</p>
+<p>When writing time-sensitive tests, do not assert on wall-clock margins
+that only hold on an idle machine — grant the generous window in the
+test itself (e.g. an explicit long grace for signal handling) so the
+assertion measures the property under test, not machine load. A first
+run that flakes under CI load is a test bug, not an engine bug; fix
+the window before adding retries.</p>
+<h3 id="run-all-ci-checks-locally">Run All CI Checks Locally<a class="headerlink" href="#run-all-ci-checks-locally" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>ci
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#       cargo build, cargo test, schema-drift, version-check, cargo audit,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#       frontend-lint</span>
 </span></code></pre></div>
 <hr />
 <h2 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow/
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── crates/
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>│   ├── oxo-flow-core/   # Core library: DAG, executor, environments, reporting
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>│   ├── oxo-flow-ai/     # AI companion — provider abstraction, skill system, agent framework
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│   ├── oxo-flow-web/    # Web REST API (axum-based)
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>├── frontend/            # Web UI (embedded SPA)
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>├── examples/            # Example workflows (.oxoflow files)
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>├── tests/               # Integration tests
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>└── docs/                # Documentation (MkDocs)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow/
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── crates/
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>│   ├── oxo-flow-core/   # Core library: DAG, executor, environments, reporting
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   ├── oxo-flow-ai/     # AI companion — provider abstraction, skill system, agent framework
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>│   ├── oxo-flow-web/    # Web REST API (axum-based)
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>├── frontend/            # Web UI (embedded SPA)
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>├── examples/            # Example workflows (.oxoflow files)
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>├── tests/               # Integration tests
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>└── docs/                # Documentation (MkDocs)
 </span></code></pre></div>
 <hr />
 <h2 id="code-style">Code Style<a class="headerlink" href="#code-style" title="Permanent link">#</a></h2>
@@ -4326,7 +4344,7 @@ spawns the web server):</p>
 <hr />
 <h2 id="making-changes">Making Changes<a class="headerlink" href="#making-changes" title="Permanent link">#</a></h2>
 <h3 id="1-create-a-branch">1. Create a branch<a class="headerlink" href="#1-create-a-branch" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span>feat/my-feature
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span>feat/my-feature
 </span></code></pre></div>
 <h3 id="2-make-your-changes">2. Make your changes<a class="headerlink" href="#2-make-your-changes" title="Permanent link">#</a></h3>
 <ul>
@@ -4335,7 +4353,7 @@ spawns the web server):</p>
 <li>Update documentation if behavior changes</li>
 </ul>
 <h3 id="3-run-ci-checks">3. Run CI checks<a class="headerlink" href="#3-run-ci-checks" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>ci
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>ci
 </span></code></pre></div>
 <p>All eight checks must pass:</p>
 <ul class="task-list">
@@ -4350,12 +4368,12 @@ spawns the web server):</p>
 </ul>
 <h3 id="4-commit-with-conventional-commits">4. Commit with Conventional Commits<a class="headerlink" href="#4-commit-with-conventional-commits" title="Permanent link">#</a></h3>
 <p>We use <a href="https://www.conventionalcommits.org/">Conventional Commits</a> for automated changelog generation:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>feat: add SLURM job array support
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>fix: correct wildcard expansion for nested patterns
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>docs: update CLI reference for new subcommands
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>test: add integration tests for web API
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>refactor: simplify DAG cycle detection
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>chore: update dependencies
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>feat: add SLURM job array support
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>fix: correct wildcard expansion for nested patterns
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>docs: update CLI reference for new subcommands
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>test: add integration tests for web API
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>refactor: simplify DAG cycle detection
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>chore: update dependencies
 </span></code></pre></div>
 <h3 id="5-submit-a-pull-request">5. Submit a Pull Request<a class="headerlink" href="#5-submit-a-pull-request" title="Permanent link">#</a></h3>
 <ul>
@@ -4413,7 +4431,7 @@ spawns the web server):</p>
 </tbody>
 </table>
 <p>Run all tests:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--workspace<span class="w"> </span>--verbose
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--workspace<span class="w"> </span>--verbose
 </span></code></pre></div>
 <h3 id="parity-contract-tests-testspreview_parityrs">Parity contract tests (<code>tests/preview_parity.rs</code>)<a class="headerlink" href="#parity-contract-tests-testspreview_parityrs" title="Permanent link">#</a></h3>
 <p><code>run</code> and <code>dry-run</code> must agree on <strong>what would execute</strong>, not just on
@@ -4498,9 +4516,9 @@ and confirm the matching scenario turns red before reverting.</p>
 <p><strong>Feature Requests</strong>: Missing something? Tell us what would make oxo-flow better for your use case.</p>
 <h3 id="opening-an-issue">Opening an Issue<a class="headerlink" href="#opening-an-issue" title="Permanent link">#</a></h3>
 <p>When reporting real-world testing results, please use the <code>[Real-World Testing]</code> prefix in your issue title:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>[Real-World Testing] Conda environment detection issue with custom channels
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>[Real-World Testing] Success: Completed 500-sample WGS pipeline on PBS cluster
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>[Real-World Testing] Conda environment detection issue with custom channels
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>[Real-World Testing] Success: Completed 500-sample WGS pipeline on PBS cluster
 </span></code></pre></div>
 <p>Include details about:</p>
 <ul>
