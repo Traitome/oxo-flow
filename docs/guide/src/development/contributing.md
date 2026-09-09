@@ -32,7 +32,9 @@ spawns the web server):
 ```bash
 cargo test --test web_role_matrix   # deployment + 3-role simulation matrix (auth, RBAC, persistence, base-path)
 cargo test --test web_integration   # web API integration tests
-```#### Flaky-test policy (issue #249)
+```
+
+#### Flaky-test policy (issue #249)
 
 CI runs the full suite once; if it fails, ONLY the failed tests are
 re-run a single time — passing then classifies the failure as a
