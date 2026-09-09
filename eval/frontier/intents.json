@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "description": "AI generation benchmark intent set. Tiers follow BioAgents L1-L3 complexity levels; success = all three static gates pass (validate/dry-run/lint, deterministic).",
+  "intents": [
+    {
+      "id": "qc-fastp-multiqc",
+      "tier": "easy",
+      "domain": "qc",
+      "intent": "Quality control of paired-end FASTQ reads with fastp, and aggregate reports with MultiQC"
+    },
+    {
+      "id": "qc-fastqc",
+      "tier": "easy",
+      "domain": "qc",
+      "intent": "Run FastQC quality check on raw sequencing reads for a cohort of samples"
+    },
+    {
+      "id": "trim-cutadapt",
+      "tier": "easy",
+      "domain": "qc",
+      "intent": "Adapter and quality trimming of small RNA sequencing reads with cutadapt"
+    },
+    {
+      "id": "rnaseq-star",
+      "tier": "medium",
+      "domain": "rna-seq",
+      "intent": "RNA-seq analysis pipeline: fastp QC and trimming, STAR alignment to a reference genome, featureCounts gene quantification, and MultiQC summary"
+    },
+    {
+      "id": "germline-variant",
+      "tier": "medium",
+      "domain": "variant-calling",
+      "intent": "Germline SNV calling: fastp preprocessing, bwa-mem alignment, samtools sorting and indexing, bcftools variant calling and filtering"
+    },
+    {
+      "id": "chipseq-macs2",
+      "tier": "medium",
+      "domain": "chip-seq",
+      "intent": "ChIP-seq peak calling pipeline: fastp QC, bowtie2 alignment against a reference genome, samtools processing, MACS2 peak calling"
+    },
+    {
+      "id": "atacseq",
+      "tier": "hard",
+      "domain": "atac-seq",
+      "intent": "ATAC-seq analysis: fastp QC, bwa-mem2 alignment, properly paired read filtering, MACS2 peak calling with shift model, and fragment-size QC"
+    },
+    {
+      "id": "metagenomics-kraken2",
+      "tier": "hard",
+      "domain": "metagenomics",
+      "intent": "Metagenomic profiling of shotgun reads: fastp QC, kraken2 taxonomic classification, bracken abundance re-estimation, and a Krona visualization chart"
+    },
+    {
+      "id": "somatic-tumor-normal",
+      "tier": "hard",
+      "domain": "variant-calling",
+      "intent": "Tumor-normal somatic variant calling: fastp QC, bwa-mem alignment of both samples, samtools processing, Strelka2 somatic SNV and indel calling"
+    }
+  ]
+}

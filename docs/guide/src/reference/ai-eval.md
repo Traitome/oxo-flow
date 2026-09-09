@@ -49,3 +49,27 @@ guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —
 no API key required, runs on every push.
 
 Capture manifests record git SHA, gold/knowledge hashes, provider/model identity, sampling settings, timestamps, and per-trial metadata so later analysis can be audited and reproduced.
+
+## Frontier benchmark (cross-path quality/cost, issue #342)
+
+`eval/frontier/` is a complementary, self-contained benchmark that measures
+the **quality/cost frontier across generation paths** rather than
+gold-set coverage on a single path. It runs a tiered intent set (easy /
+medium / hard) through two variants — the full CLI path
+(`template --ai`: rich prompt, knowledge tools, tool loop) and a faithful
+replication of the weakest embedded prompt (no tools, single shot) — and
+judges every artifact with the three deterministic static gates
+(`validate`, `dry-run`, `lint`; exit code only, no LLM judge).
+
+Per-run token usage comes from the AI session archives (CLI variant) or
+the provider response (minimal variant), so each cell of the
+{path × model} matrix reports gate pass@1 alongside tokens, estimated
+cost, and wall time. This is the evidence base for unifying the AI
+generation paths (#342) and for sizing its TeamProfile cost tiers.
+
+```bash
+python3 eval/frontier/run_eval.py --variants minimal,cli
+```
+
+See `eval/frontier/README.md` for the full method, price-table
+configuration, and known limitations.

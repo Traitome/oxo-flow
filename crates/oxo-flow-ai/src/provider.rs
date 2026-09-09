@@ -397,7 +397,7 @@ impl ClaudeBackend {
             "model": self.model,
             "system": system,
             "messages": anthropic_msgs,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens_from_env(),
         });
 
         if let Some(temperature) = self.temperature {
@@ -562,6 +562,24 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
     }
 
     (system, anthropic_msgs)
+}
+
+/// Output-token ceiling for the Anthropic Messages backend.
+///
+/// Defaults to 4096 but is overridable via `OXO_FLOW_AI_MAX_TOKENS`.
+/// Thinking-style backends (e.g. DeepSeek served behind an
+/// Anthropic-compatible endpoint) emit `thinking` blocks whose tokens count
+/// against `max_tokens`; a hard 4096 there truncates the answer before any
+/// text is produced, so pipeline generation silently loses its TOML.
+fn max_tokens_from_env() -> u32 {
+    parse_max_tokens(std::env::var("OXO_FLOW_AI_MAX_TOKENS").ok().as_deref())
+}
+
+fn parse_max_tokens(value: Option<&str>) -> u32 {
+    value
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(4096)
 }
 
 fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
@@ -1494,6 +1512,20 @@ pub struct ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn max_tokens_env_override_parses_strictly() {
+        // Thinking backends burn the hardcoded 4096 on reasoning blocks and
+        // truncate before the answer; the env override must accept only
+        // clean positive integers and otherwise fall back to 4096.
+        assert_eq!(parse_max_tokens(Some("16384")), 16384);
+        assert_eq!(parse_max_tokens(Some(" 8192 ")), 8192);
+        assert_eq!(parse_max_tokens(Some("0")), 4096);
+        assert_eq!(parse_max_tokens(Some("-1")), 4096);
+        assert_eq!(parse_max_tokens(Some("abc")), 4096);
+        assert_eq!(parse_max_tokens(Some("")), 4096);
+        assert_eq!(parse_max_tokens(None), 4096);
+    }
 
     #[test]
     fn claude_response_concatenates_multiple_text_blocks() {

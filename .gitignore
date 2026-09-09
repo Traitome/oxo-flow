@@ -100,3 +100,6 @@ __pycache__/
 # Local benchmark outputs (machine-specific)
 benches/macro/results/*.json
 !benches/macro/results/.gitkeep
+
+# Frontier benchmark outputs (machine-specific, issue #342)
+eval/frontier/results/
