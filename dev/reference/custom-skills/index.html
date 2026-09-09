@@ -3904,9 +3904,12 @@
    declared in the workflow's <code>[ai]</code> section. This is the trust boundary:
    the same explicit-approval model used by MCP clients.</li>
 </ol>
-<p>Activated skills contribute <strong>prompt text only</strong> — there is zero code
-execution, no filesystem access, no tool registration (tool-type skills
-are reserved for the future MCP path).</p>
+<p>Activated <strong>knowledge</strong> skills contribute <strong>prompt text only</strong> — there is
+zero code execution and no filesystem access. Activated <strong>tool</strong> skills do
+register tools: each <code>mcp://</code> requirement in their <code>requires</code> list is
+bridged as an <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> tool via the MCP client (Streamable
+HTTP only — the engine never spawns server processes). See
+<a href="#tool-skills-via-mcp">Tool Skills via MCP</a>.</p>
 <hr />
 <h2 id="skill-format">Skill Format<a class="headerlink" href="#skill-format" title="Permanent link">#</a></h2>
 <p>A skill is a small TOML file named <code>&lt;name&gt;.skill.toml</code>:</p>
@@ -3916,7 +3919,7 @@ are reserved for the future MCP path).</p>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Advises on FASTQ QC thresholds for WGS"</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Your Lab"</span><span class="w">            </span><span class="c1"># optional</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">domains</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc"</span><span class="p">,</span><span class="w"> </span><span class="s2">"wgs"</span><span class="p">]</span><span class="w">        </span><span class="c1"># optional, free-form tags</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">skill_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"knowledge"</span><span class="w">       </span><span class="c1"># "knowledge" (Phase 1); "tool" reserved for MCP</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">skill_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"knowledge"</span><span class="w">       </span><span class="c1"># or "tool" (MCP bridge, see below)</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">prompt_additions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w">           </span><span class="c1"># optional — appended to the system prompt</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="s2">"Prefer fastp with --qualified_quality_phred 20 for human WGS reads."</span><span class="p">,</span>
@@ -3950,7 +3953,7 @@ are reserved for the future MCP path).</p>
 <tr>
 <td><code>skill_type</code></td>
 <td>✅</td>
-<td><code>"knowledge"</code> now; <code>"tool"</code> is reserved for the MCP phase</td>
+<td><code>"knowledge"</code> (prompt text) or <code>"tool"</code> (MCP bridge)</td>
 </tr>
 <tr>
 <td><code>author</code>, <code>domains</code>, <code>prompt_additions</code>, <code>requires</code>, <code>entry</code></td>

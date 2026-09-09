@@ -4848,8 +4848,8 @@ cache.</p>
     EnvironmentBackend &lt;|.. Venv
     EnvironmentBackend &lt;|.. Modules
     EnvironmentBackend &lt;|.. System</code></pre>
-<p>Resolution precedence: rule <code>environment</code> → rule <code>env_group</code> (a named
-<code>[env_groups]</code> entry) → <code>[defaults].environment</code>. Setup is locked per
+<p>Resolution precedence: rule <code>env_group</code> (a named <code>[env_groups]</code> entry) →
+rule <code>environment</code> → <code>[defaults].environment</code>. Setup is locked per
 environment (concurrent first uses do not race the build), env names are
 content-hashed for file-backed specs (edits build a fresh env instead of
 silently reusing a stale one), and setup state is cached and persisted so
@@ -4932,7 +4932,7 @@ layer engine facts as data.</p>
 <li><strong>Skills are explicit.</strong> Prompt-injection bundles activate only when
   declared in <code>[ai]</code> skills — discoverable, auditable, versioned.</li>
 <li><strong>Versioned knowledge.</strong> The embedded corpora regenerate through CI
-  generators on a monthly freshness gate.</li>
+  generators on a twice-monthly freshness gate (1st+16th of each month).</li>
 </ul>
 <hr />
 <h2 id="cross-cutting-design-decisions">Cross-Cutting Design Decisions<a class="headerlink" href="#cross-cutting-design-decisions" title="Permanent link">#</a></h2>

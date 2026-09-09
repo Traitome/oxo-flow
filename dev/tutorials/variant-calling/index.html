@@ -4102,7 +4102,7 @@
 <h2 id="running-the-pipeline">Running the pipeline<a class="headerlink" href="#running-the-pipeline" title="Permanent link">#</a></h2>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow<span class="w"> </span>validate<span class="w"> </span>variant-calling.oxoflow
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># ✓ variant-calling.oxoflow — 7 rules, 15 dependencies</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># ✓ variant-calling.oxoflow — 7 rules, 7 dependencies</span>
 </span></code></pre></div>
 <p>With 2 pairs, all 7 rules expand to 14 concrete rule instances — <code>trim_reads_P001</code>, <code>align_P001</code>, <code>mutect2_P001</code>, and so on. Each pre-processing rule handles both the tumor and the normal sample of one pair, keeping the DAG fully connected at expansion time.</p>
 <h3 id="preview">Preview<a class="headerlink" href="#preview" title="Permanent link">#</a></h3>

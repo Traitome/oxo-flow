@@ -4504,7 +4504,8 @@ variants in <strong>separate files</strong> (or give them distinct names):</p>
 <li>Consider splitting input into smaller chunks</li>
 </ul>
 <h3 id="timeout-killing-child-processes">Timeout Killing Child Processes<a class="headerlink" href="#timeout-killing-child-processes" title="Permanent link">#</a></h3>
-<p>Timeout uses process group SIGKILL on Unix systems (reliable cleanup).</p>
+<p>Timeout kills the rule's whole process tree on Unix systems: SIGTERM first,
+then SIGKILL after a 10-second grace window (deepest descendants first).</p>
 <p>Solution: Use wrapper script that manages its own cleanup:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="ch">#!/bin/bash</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>cleanup<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nb">kill</span><span class="w"> </span><span class="k">$(</span><span class="nb">jobs</span><span class="w"> </span>-p<span class="k">)</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="p">;</span><span class="w"> </span><span class="o">}</span>

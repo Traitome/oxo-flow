@@ -4019,58 +4019,69 @@
 <hr />
 <h2 id="layer-3-secret-credential-scanning">Layer 3 — Secret &amp; Credential Scanning<a class="headerlink" href="#layer-3-secret-credential-scanning" title="Permanent link">#</a></h2>
 <p>Hardcoded credentials in workflow TOML content are detected by the <code>oxo-flow lint</code> command (<code>format::scan_for_secrets</code>), which emits S008 warnings; it does not block execution.</p>
+<p><code>scan_for_secrets</code> detects exactly nine patterns — finding one emits an
+S008 warning naming it. Four token-shaped patterns are anchored regexes
+requiring a credential body (a bare <code>sk-</code> prefix is not a secret —
+<code>task-list</code> must not flag); five word patterns are case-insensitive
+substring tests, so both true positives and some false positives
+survive — review the flagged lines yourself:</p>
 <h3 id="detected-secret-patterns">Detected Secret Patterns<a class="headerlink" href="#detected-secret-patterns" title="Permanent link">#</a></h3>
-<p><code>scan_for_secrets</code> does case-insensitive substring matching against exactly
-nine patterns — finding one emits an S008 warning naming it:</p>
 <table>
 <thead>
 <tr>
 <th>Pattern</th>
+<th>Matching</th>
 <th>Warning message</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>AKIA</code></td>
+<td><code>AKIA…</code></td>
+<td>regex: <code>\bakia[0-9a-z]{12,}</code> (case-insensitive)</td>
 <td>Possible AWS Access Key</td>
 </tr>
 <tr>
-<td><code>sk-</code></td>
+<td><code>sk-…</code></td>
+<td>regex: <code>\bsk-[a-z0-9_-]{8,}</code></td>
 <td>Possible Stripe/OpenAI secret key</td>
 </tr>
 <tr>
-<td><code>ghp_</code></td>
+<td><code>ghp_…</code></td>
+<td>regex: <code>\bghp_[a-z0-9]{8,}</code></td>
 <td>Possible GitHub personal access token</td>
 </tr>
 <tr>
-<td><code>glpat-</code></td>
+<td><code>glpat-…</code></td>
+<td>regex: <code>\bglpat-[a-z0-9_-]{8,}</code></td>
 <td>Possible GitLab personal access token</td>
 </tr>
 <tr>
 <td><code>password</code></td>
+<td>substring</td>
 <td>Possible password in configuration</td>
 </tr>
 <tr>
 <td><code>secret</code></td>
+<td>substring</td>
 <td>Possible secret in configuration</td>
 </tr>
 <tr>
 <td><code>api_key</code></td>
+<td>substring</td>
 <td>Possible API key in configuration</td>
 </tr>
 <tr>
 <td><code>access_token</code></td>
+<td>substring</td>
 <td>Possible access token in configuration</td>
 </tr>
 <tr>
 <td><code>private_key</code></td>
+<td>substring</td>
 <td>Possible private key in configuration</td>
 </tr>
 </tbody>
 </table>
-<p>The scanner matches the raw substrings above (e.g. any <code>sk-</code> prefix, not a
-length-validated key shape), so both true positives and some false positives
-survive — review the flagged lines yourself.</p>
 <p>Additionally, workflow config values declared with <code>sensitive = true</code> in a <code>[config]</code> definition are masked as <code>***</code> in logs, <code>--help</code>, and error output.</p>
 <hr />
 <h2 id="layer-4-rate-limiting">Layer 4 — Rate Limiting<a class="headerlink" href="#layer-4-rate-limiting" title="Permanent link">#</a></h2>

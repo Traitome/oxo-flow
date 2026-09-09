@@ -5382,7 +5382,7 @@ Upload a commercial license file for validation and activation.</p>
 <hr />
 <h2 id="pipeline-lifecycle-v08-apipipelines">Pipeline Lifecycle (v0.8 <code>/api/pipelines/*</code>)<a class="headerlink" href="#pipeline-lifecycle-v08-apipipelines" title="Permanent link">#</a></h2>
 <blockquote>
-<p>The pre-v0.8 <code>/api/workflows/*</code> endpoints exist only as unserved legacy modules (see <a href="../web-system-architecture/">Web System Architecture</a>); the running server exposes only the <code>/api/pipelines/*</code> API below.</p>
+<p>The pre-v0.8 <code>/api/workflows/*</code> endpoints no longer exist in the source — the running server exposes only the <code>/api/pipelines/*</code> API below.</p>
 </blockquote>
 <h3 id="parse">Parse<a class="headerlink" href="#parse" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/pipelines/parse
@@ -5495,7 +5495,7 @@ Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</c
 <li><code>max_jobs</code> defaults to <strong>4</strong> at this endpoint (the CLI flag itself
   defaults to 1): an omitted <code>max_jobs</code> still spawns the CLI with <code>-j 4</code>,
   which is also the value the resource estimate assumes.</li>
-<li><code>keep_going: true</code> maps to <code>-k</code>.</li>
+<li><code>keep_going: true</code> maps to <code>--keep-going</code> (the CLI also accepts <code>-k</code>).</li>
 <li><code>samples</code> (array of strings, optional) maps to <code>--samples</code> (comma-joined).</li>
 <li><code>targets</code> (array of strings, optional) maps to <code>-t</code> per entry.</li>
 <li><code>cluster_id</code> (optional) names a configured SSH cluster connection: the
@@ -5525,7 +5525,7 @@ Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, like
 <h3 id="run-detail">Run Detail<a class="headerlink" href="#run-detail" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs/{id}
 </span></code></pre></div>
-The full run row: <code>{ id, status, workflow_name, workdir, created_at, max_jobs, owner_id, pipeline_id?, cluster_id?, exit_code?, finished_at? }</code> — the identity other run endpoints key off.</p>
+The full run row: <code>{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, workdir, started_at, finished_at, created_at }</code> — the identity other run endpoints key off. (<code>pipeline_id</code>/<code>pipeline_snapshot</code> may be <code>null</code> for legacy rows; no <code>pid</code> — the host process id stays engine-internal.)</p>
 <h3 id="run-preview">Run Preview<a class="headerlink" href="#run-preview" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/preview
 </span></code></pre></div>
@@ -5754,10 +5754,10 @@ immediate.</p>
 memory; over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the violation
 list.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>GET  /api/quota           # current limits and usage
-</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>PUT  /api/quota           # update limits (admin-only outside personal mode)
+</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 </span></code></pre></div>
-<p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code>.
-Usage is visible at <code>GET /api/quota</code>.</p>
+<p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side).
+Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>).</p>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>GET    /api/clusters                  # configured SSH connections
 </span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)

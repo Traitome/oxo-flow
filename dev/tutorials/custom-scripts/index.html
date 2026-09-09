@@ -4148,7 +4148,7 @@
 </tr>
 <tr>
 <td><code>.ipynb</code></td>
-<td><code>jupyter nbconvert --execute</code></td>
+<td><code>jupyter nbconvert --to notebook --execute</code></td>
 </tr>
 <tr>
 <td><code>.smk</code></td>
@@ -4164,9 +4164,6 @@
 </tr>
 </tbody>
 </table>
-<ol>
-<li><strong>Shebang line</strong> (if the file is executable)</li>
-</ol>
 <hr />
 <h2 id="combining-shell-and-script">Combining <code>shell</code> and <code>script</code><a class="headerlink" href="#combining-shell-and-script" title="Permanent link">#</a></h2>
 <p>When both are declared, <code>shell</code> runs first, then <code>script</code>:</p>
@@ -4200,7 +4197,7 @@
 <tr>
 <td>Interpreter</td>
 <td>Shell itself</td>
-<td>Auto-detected from extension, <code>interpreter</code> field, or shebang</td>
+<td>Auto-detected from extension, <code>interpreter</code> field, or <code>[workflow.interpreter_map]</code></td>
 </tr>
 <tr>
 <td>Dependency tracking</td>

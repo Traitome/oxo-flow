@@ -6656,7 +6656,7 @@ operator's <code>combine</code> stage instead (gallery 10).</p>
 </tr>
 <tr>
 <td><code>{input.name}</code></td>
-<td>The input file named <code>name</code> from <code>named_input</code></td>
+<td>The value of the <code>name</code> entry in the rule's <code>input</code> map (<code>input = { name = "..." }</code>)</td>
 </tr>
 <tr>
 <td><code>{output}</code></td>
@@ -6668,7 +6668,7 @@ operator's <code>combine</code> stage instead (gallery 10).</p>
 </tr>
 <tr>
 <td><code>{output.name}</code></td>
-<td>The output file named <code>name</code> from <code>named_output</code></td>
+<td>The value of the <code>name</code> entry in the rule's <code>output</code> map (<code>output = { name = "..." }</code>)</td>
 </tr>
 <tr>
 <td><code>{threads}</code></td>
@@ -6741,19 +6741,18 @@ as a space-joined list in the shell (<code>["a", "b"]</code> → <code>a b</code
 <li>The indexed form communicates <em>intent</em> ("this rule expects exactly this file"), so it remains useful even for single-element arrays in multi-step pipelines</li>
 </ul>
 <h3 id="named-input-output">Named Input &amp; Output<a class="headerlink" href="#named-input-output" title="Permanent link">#</a></h3>
-<p>For complex rules with many files, use <code>named_input</code> and <code>named_output</code> to improve readability:</p>
+<p>For complex rules with many files, give the <code>input</code>/<code>output</code> fields an
+inline map (<code>FilePatterns::Map</code>) and reference the entries with
+<code>{input.&lt;name&gt;}</code> / <code>{output.&lt;name&gt;}</code>:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a>
-</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a><span class="k">[rules.named_input]</span>
-</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a><span class="n">reads1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
-</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6" href="#__codelineno-52-6"></a><span class="n">reads2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span>
-</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7" href="#__codelineno-52-7"></a>
-</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8" href="#__codelineno-52-8"></a><span class="k">[rules.named_output]</span>
-</span><span id="__span-52-9"><a id="__codelineno-52-9" name="__codelineno-52-9" href="#__codelineno-52-9"></a><span class="n">bam</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"aligned/{sample}.bam"</span>
-</span><span id="__span-52-10"><a id="__codelineno-52-10" name="__codelineno-52-10" href="#__codelineno-52-10"></a>
-</span><span id="__span-52-11"><a id="__codelineno-52-11" name="__codelineno-52-11" href="#__codelineno-52-11"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem {input.reads1} {input.reads2} &gt; {output.bam}"</span>
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">reads1</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="n">reads2</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">bam</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"aligned/{sample}.bam"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem {input.reads1} {input.reads2} &gt; {output.bam}"</span>
 </span></code></pre></div>
+<p>There is no <code>[rules.named_input]</code> / <code>[rules.named_output]</code> TOML table —
+the map is the value of <code>input</code>/<code>output</code> itself (a sub-table named
+<code>named_input</code> fails validation with E017).</p>
 <h3 id="custom-wildcards">Custom Wildcards<a class="headerlink" href="#custom-wildcards" title="Permanent link">#</a></h3>
 <p>Any <code>{name}</code> pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:
 1. <strong>File discovery</strong>: Scanning for matching files in the <code>input</code> path.
@@ -7929,7 +7928,7 @@ the transport counterpart of the <code>on_complete</code> / <code>on_error</code
 <td><code>events</code></td>
 <td>Array of String</td>
 <td><code>["workflow_completed"]</code></td>
-<td>Which events fire: <code>workflow_started</code>, <code>workflow_completed</code>, <code>workflow_failed</code>, <code>rule_completed</code>, <code>rule_failed</code></td>
+<td>Which events fire: <code>workflow_started</code>, <code>workflow_completed</code>, <code>workflow_failed</code> (<code>rule_completed</code>/<code>rule_failed</code> are defined but not yet dispatched)</td>
 </tr>
 <tr>
 <td><code>headers</code></td>

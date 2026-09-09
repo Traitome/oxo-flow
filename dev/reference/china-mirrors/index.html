@@ -3895,13 +3895,12 @@ workflow file</strong>:</p>
 </span></code></pre></div>
 <ul>
 <li>Semicolon-separated <code>host=mirror</code> pairs; host matching is
-  case-insensitive and port-agnostic. A registry port is stripped before
-  matching, so <code>localhost:5000/…</code> is treated as the <code>localhost</code> namespace
-  and <strong>is rewritten</strong> when <code>localhost</code> itself is mapped (e.g.
-  <code>localhost=mirror.example.com</code>).</li>
-<li>A first path segment without a dot or colon (<code>uhrigs/arriba</code>) is the
-  docker.io <em>namespace</em> and follows the docker.io mapping, keeping its
-  full path.</li>
+  case-insensitive and port-agnostic — a registry port is stripped
+  before matching. A first path segment without a dot or colon (e.g.
+  <code>localhost:5000/…</code> → <code>localhost</code>, or <code>uhrigs/arriba</code>) is the docker.io
+  <em>namespace</em>: it follows the <strong><code>docker.io</code></strong> mapping while keeping its
+  full path, so map <code>docker.io=mirror.example.com</code> to rewrite such
+  specs — a <code>localhost=…</code> key never matches anything.</li>
 <li>Applies to the singularity/apptainer backend (pull target and <code>exec</code>
   URI) and to registry-qualified docker specs. The Docker backend's bare
   names still resolve through the daemon's own <code>registry-mirrors</code>.</li>
@@ -3914,7 +3913,7 @@ workflow file</strong>:</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># .oxoflow rule fragment — unchanged on mirrored boxes</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p p-Indicator">[[</span><span class="nv">rules</span><span class="p p-Indicator">]]</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="l l-Scalar l-Scalar-Plain">name = "arriba_fusion"</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="l l-Scalar l-Scalar-Plain">singularity = "docker://uhrigs/arriba:2.4.0"</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="l l-Scalar l-Scalar-Plain">environment = { singularity = "docker://uhrigs/arriba:2.4.0" }</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="l l-Scalar l-Scalar-Plain">shell = "arriba ..."</span>
 </span></code></pre></div>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">#</a></h2>

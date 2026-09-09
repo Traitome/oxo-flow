@@ -4073,9 +4073,9 @@
 <p>Use pre-built container images from registries like BioContainers:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/bwa:0.7.19--h577a1d6_1"</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
-<p>oxo-flow runs the rule's shell command inside the container, mounting the working directory automatically:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>:<span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="w"> </span>-w<span class="w"> </span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="w"> </span>biocontainers/bwa:0.7.19--h577a1d6_1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>bwa<span class="w"> </span>mem<span class="w"> </span>ref.fa<span class="w"> </span>reads.fastq.gz
+<p>oxo-flow runs the rule's shell command inside the container, mounting the working directory automatically (read-write, with inputs referenced outside the workdir mounted read-only):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--user<span class="w"> </span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span>:<span class="k">$(</span>id<span class="w"> </span>-g<span class="k">)</span><span class="w"> </span>-v<span class="w"> </span>/abs/workdir:/abs/workdir<span class="w"> </span>-w<span class="w"> </span>/abs/workdir<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>biocontainers/bwa:0.7.19--h577a1d6_1<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'bash -c "bwa mem ref.fa reads.fastq.gz"'</span>
 </span></code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">No daemon required at build time</p>
@@ -4086,23 +4086,23 @@
 <p>For HPC clusters where Docker is not available:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"docker://biocontainers/bwa:0.7.19--h577a1d6_1"</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
-<p>Singularity can pull images directly from Docker registries. The working directory is bound automatically.</p>
+<p>Singularity can pull images directly from Docker registries. The working directory is bound automatically (<code>apptainer exec --bind /abs/workdir:/abs/workdir &lt;image&gt; &lt;command&gt;</code>; oxo-flow prefers <code>apptainer</code> over <code>singularity</code> when both are installed).</p>
 <hr />
 <h2 id="hpc-modules">HPC Modules<a class="headerlink" href="#hpc-modules" title="Permanent link">#</a></h2>
 <p>On clusters using Lmod / Environment Modules, load toolchain modules for the rule:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">modules</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"gcc/11.2.0"</span><span class="p">,</span><span class="w"> </span><span class="s2">"openmpi/4.1.1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"samtools/1.24"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
-<p>The rule's shell command runs after all listed modules are loaded, and the module environment is cleaned up afterward. This is the standard way to use cluster-administered software stacks.</p>
+<p>The rule's shell command runs in a fresh shell after all listed modules are loaded (<code>module load &lt;modules&gt; &amp;&amp; &lt;command&gt;</code>), so the loaded environment never persists beyond the rule. This is the standard way to use cluster-administered software stacks.</p>
 <hr />
 <h2 id="python-venv">Python venv<a class="headerlink" href="#python-venv" title="Permanent link">#</a></h2>
 <p>For rules that only need Python packages:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">venv</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/requirements.txt"</span><span class="w"> </span><span class="p">}</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">venv</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"venv/"</span><span class="p">,</span><span class="w"> </span><span class="n">venv_requirements</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/requirements.txt"</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a># envs/requirements.txt
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>pandas&gt;=2.0
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>matplotlib&gt;=3.8
 </span></code></pre></div>
-<p>oxo-flow creates (or reuses) a virtual environment and installs the listed packages before executing the rule.</p>
+<p>oxo-flow creates (or reuses) a virtual environment at the <code>venv</code> directory and installs the packages listed in <code>venv_requirements</code> before executing the rule. The rule's command runs with the venv activated (<code>source venv/bin/activate &amp;&amp; &lt;command&gt;</code>).</p>
 <hr />
 <h2 id="mixing-environments">Mixing Environments<a class="headerlink" href="#mixing-environments" title="Permanent link">#</a></h2>
 <p>A single workflow can use different environments for different rules:</p>

@@ -4789,8 +4789,8 @@
 <p><strong>Example</strong>: <code>{input[0]}</code> → <code>sample_R1.fastq.gz</code></p>
 <hr />
 <h3 id="inputname"><code>{input.name}</code><a class="headerlink" href="#inputname" title="Permanent link">#</a></h3>
-<p>Named input file from <code>named_input</code> section.</p>
-<p><strong>Example</strong>: <code>{input.reads}</code> → the file named "reads" in <code>named_input</code></p>
+<p>Named input file — <code>input</code> given as an inline map (<code>input = { reads = "..." }</code>).</p>
+<p><strong>Example</strong>: <code>{input.reads}</code> → the value of the <code>reads</code> entry in the rule's <code>input</code> map</p>
 <hr />
 <h3 id="output"><code>{output}</code><a class="headerlink" href="#output" title="Permanent link">#</a></h3>
 <p>Expands to all output files, space-separated.</p>

@@ -4183,7 +4183,7 @@ sequence and quality lines the same length — or FastQC/fastp abort with a
 </span><span id="__span-7-59"><a id="__codelineno-7-59" name="__codelineno-7-59" href="#__codelineno-7-59"></a>
 </span><span id="__span-7-60"><a id="__codelineno-7-60" name="__codelineno-7-60" href="#__codelineno-7-60"></a>To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 </span></code></pre></div>
-<p>The dry-run has expanded the <code>{sample}</code> wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (<code>_auto-discovered_sample1</code>, <code>_auto-discovered_sample2</code>), for 8 tasks in total. Inputs are not checked for existence in dry-run mode.</p>
+<p>The dry-run has expanded the <code>{sample}</code> wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (<code>_auto-discovered_sample1</code>, <code>_auto-discovered_sample2</code>), for 8 tasks in total. (The transcript above is abridged — real output also prints a checkpoint line, per-task <code>input ✓/✗</code> status for concrete paths, and a <code>command:</code> line for every task.) Missing inputs do not fail dry-run — it exits 0; <code>run</code> is what fails.</p>
 <div class="admonition warning">
 <p class="admonition-title"><code>validate</code> warns; it does not gate</p>
 <p>The <code>✓ qc-pipeline.oxoflow — 4 rules, 3 dependencies</code> line only reports

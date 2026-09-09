@@ -3834,7 +3834,7 @@
 <h1 id="webhook-notifications">Webhook Notifications<a class="headerlink" href="#webhook-notifications" title="Permanent link">#</a></h1>
 <p>oxo-flow includes a webhook client (<code>oxo_flow_core::webhook</code>, behind the <code>webhook</code> cargo feature — enabled by default) that can send JSON notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.</p>
 <blockquote>
-<p><strong>Status note:</strong> the webhook module provides the configuration model, the HTTP client (with retries and HMAC signing), and the payload types. It is not yet wired into the executor — the engine does not currently dispatch webhook notifications during workflow execution.</p>
+<p><strong>Status note:</strong> <code>oxo-flow run</code> dispatches the workflow-level events — <code>workflow_started</code> at the beginning and <code>workflow_completed</code>/<code>workflow_failed</code> at the end — whenever a <code>[webhook]</code> table is present. Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. The rule-level events (<code>rule_completed</code>, <code>rule_failed</code>) are defined in the config model but <strong>not yet dispatched</strong> during execution; subscribing to them currently has no effect.</p>
 </blockquote>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
 <p>A webhook is described by the <code>WebhookConfig</code> struct:</p>
@@ -3917,7 +3917,7 @@
 </tr>
 <tr>
 <td><code>workflow_completed</code></td>
-<td>Fired when the workflow finishes (success or failure).</td>
+<td>Fired when the workflow finishes successfully.</td>
 </tr>
 <tr>
 <td><code>workflow_failed</code></td>
@@ -3925,11 +3925,11 @@
 </tr>
 <tr>
 <td><code>rule_completed</code></td>
-<td>Fired when an individual rule completes.</td>
+<td><em>Not yet dispatched</em> — defined for future rule-level notifications.</td>
 </tr>
 <tr>
 <td><code>rule_failed</code></td>
-<td>Fired when an individual rule fails.</td>
+<td><em>Not yet dispatched</em> — defined for future rule-level notifications.</td>
 </tr>
 </tbody>
 </table>

@@ -4018,10 +4018,9 @@ revisions). In the editor's History tab you can load any snapshot into
 the editor or roll back — rollback preserves the current version as a new
 revision, so nothing is ever lost.</p>
 <h2 id="audit-trail">Audit Trail<a class="headerlink" href="#audit-trail" title="Permanent link">#</a></h2>
-<p>Forking a pipeline is recorded in the audit log:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>fork_pipeline → audit_logs
-</span></code></pre></div>
-<p>Share and import actions are not yet logged. View audit logs via
+<p>Every state-changing API call (fork, share, import, run, …) is recorded by
+the audit middleware — any non-GET request lands in <code>audit_logs</code> with the
+acting user, method+path, and result. View audit logs via
 <code>GET /api/audit?days=7</code>.</p>
 
 

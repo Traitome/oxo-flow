@@ -4219,7 +4219,11 @@
 <p>Rate limiting and SSE:</p>
 <ul>
 <li>The rate limiter is a sliding window (default 100 requests / 60 s) keyed
-  by client IP (<code>X-Forwarded-For</code> → <code>X-Real-IP</code> → fallback). Over-limit
+  by client IP: the transport peer address by default (spoofable
+  <code>X-Forwarded-For</code>/<code>X-Real-IP</code> headers are ignored unless
+  <code>OXO_FLOW_TRUSTED_PROXY</code> marks the deployment as behind a controlled
+  reverse proxy, in which case the forwarded headers are honoured).
+  Over-limit
   requests get <code>429</code> with the standard structured error body
   (<code>{"code":"RATE_LIMITED", ...}</code>) and a <code>Retry-After</code> header; keys whose
   timestamps have all expired are evicted opportunistically (every 1024
@@ -4386,8 +4390,7 @@
 </span><span id="__span-1-75"><a id="__codelineno-1-75" name="__codelineno-1-75" href="#__codelineno-1-75"></a>│
 </span><span id="__span-1-76"><a id="__codelineno-1-76" name="__codelineno-1-76" href="#__codelineno-1-76"></a>└── /pipeline/{id}          # DAG edit API: /command, /undo, /redo
 </span></code></pre></div>
-(See <a href="../web-api/">Web API</a> for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at <code>GET /api/openapi.json</code> on any running server.)
-(Old <code>/workflows/*</code> endpoints are marked <code>#[deprecated]</code> in the source and exist only as unserved legacy modules.)</p>
+(See <a href="../web-api/">Web API</a> for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at <code>GET /api/openapi.json</code> on any running server.)</p>
 <hr />
 <h2 id="structured-error-response">Structured Error Response<a class="headerlink" href="#structured-error-response" title="Permanent link">#</a></h2>
 <p>All errors follow this format:</p>
@@ -4408,11 +4411,6 @@
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><code>BAD_REQUEST</code></td>
-<td>400</td>
-<td>Input validation failed</td>
-</tr>
 <tr>
 <td><code>MISSING_FIELD</code></td>
 <td>400</td>
@@ -4465,7 +4463,7 @@
 </tr>
 </tbody>
 </table>
-<p>Domain-specific codes (all 400) include <code>PARSE_ERROR</code>, <code>VALIDATE_ERROR</code>, <code>PREPARE_ERROR</code>, <code>DAG_ERROR</code>, <code>LINT_ERROR</code>, <code>STATS_ERROR</code>, <code>DIFF_ERROR</code>, <code>EXPORT_ERROR</code>, <code>SEARCH_ERROR</code>, <code>RUN_ERROR</code>, <code>RETRY_ERROR</code>, <code>DATA_ERROR</code>, <code>REF_ERROR</code>, <code>PLUGIN_ERROR</code>, <code>AI_TRANSLATE_ERROR</code>, <code>CHAT_ERROR</code>, <code>INVALID_URL</code>.</p>
+<p>Domain-specific codes (all 400) include <code>PARSE_ERROR</code>, <code>VALIDATE_ERROR</code>, <code>PREPARE_ERROR</code>, <code>DAG_ERROR</code>, <code>LINT_ERROR</code>, <code>STATS_ERROR</code>, <code>DIFF_ERROR</code>, <code>EXPORT_ERROR</code>, <code>RUN_ERROR</code>, <code>RETRY_ERROR</code>, <code>DATA_ERROR</code>, <code>REF_ERROR</code>, <code>PLUGIN_ERROR</code>, <code>AI_TRANSLATE_ERROR</code>, <code>CHAT_ERROR</code>, <code>INVALID_URL</code>.</p>
 <hr />
 <h2 id="list-responses">List Responses<a class="headerlink" href="#list-responses" title="Permanent link">#</a></h2>
 <p>List endpoints do not share a single uniform envelope:</p>

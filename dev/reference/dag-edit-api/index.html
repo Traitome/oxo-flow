@@ -4035,10 +4035,9 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">#</a></h2>
 <p>The DAG Edit domain (<code>crates/oxo-flow-web/src/domains/dag/service.rs</code>) provides a <strong>command-queue architecture</strong> with automatic TOML round-tripping and validation on every edit. Each edit is:</p>
 <ol>
-<li><strong>Parsed</strong> — the current TOML content is parsed into a <code>WorkflowConfig</code></li>
-<li><strong>Applied</strong> — the command modifies the in-memory config</li>
-<li><strong>Formatted</strong> — the config is serialized back to canonical TOML</li>
-<li><strong>Validated</strong> — the result is validated through the workflow validation pipeline</li>
+<li><strong>Parsed</strong> — the current TOML content is parsed as a <code>WorkflowConfig</code> (gate: it must parse before any mutation)</li>
+<li><strong>Applied</strong> — the command mutates the <code>toml_edit</code> document in place, preserving comments and formatting</li>
+<li><strong>Validated</strong> — the edited document is re-parsed and validated through the workflow validation pipeline</li>
 </ol>
 <p>Edits that produce invalid workflows are still applied and returned — the
 response reports <code>success: false</code> with the <code>validation_errors</code> populated, so the
@@ -4068,7 +4067,7 @@ replaces top-level sections. <code>update_params</code> remains as a legacy alia
 </span></code></pre></div>
 <p><code>source</code> is one of <code>dag_editor</code> (the interactive editor), <code>chat</code>, or <code>proposal</code>.
 <code>operation</code> is one of <code>add_rule</code>, <code>remove_rule</code>, <code>connect</code>, <code>disconnect</code>,
-<code>update_params</code>, <code>replace_tool</code>, or <code>reorder</code>.</p>
+<code>update_rule</code>/<code>update_params</code>, or <code>update_workflow</code>.</p>
 <h3 id="add_rule"><code>add_rule</code><a class="headerlink" href="#add_rule" title="Permanent link">#</a></h3>
 <p>Add a new rule to the workflow.</p>
 <p><strong>Payload:</strong></p>
@@ -4269,8 +4268,9 @@ validates the field set (unknown fields are rejected with a parse error).</p>
 preserved. <code>update_params</code> (<code>{name, threads, shell}</code>) remains as a legacy
 alias.</p>
 <h3 id="update_workflow"><code>update_workflow</code><a class="headerlink" href="#update_workflow" title="Permanent link">#</a></h3>
-<p>Replace top-level TOML sections (<code>workflow</code>, <code>config</code>, <code>defaults</code>, …). Patch
-keys replace the corresponding section wholesale — send complete sections.</p>
+<p>Patch top-level TOML sections (<code>workflow</code>, <code>config</code>, <code>defaults</code>, …). <code>null</code>
+removes a key; an object patch on a key that is already a table is merged
+into that table (comments preserved); everything else is replaced wholesale.</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
@@ -4336,7 +4336,7 @@ keys replace the corresponding section wholesale — send complete sections.</p>
 <ul>
 <li><strong>File-based edges are immutable via the edit API.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules, which the edit API cannot currently modify.</li>
 <li><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Edits that introduce cycles, duplicate names, or invalid syntax are flagged in <code>validation_errors</code>.</li>
-<li><strong>TOML round-tripping preserves formatting.</strong> The core <code>format::format_workflow</code> function produces canonical TOML, so edited workflows will have consistent formatting regardless of the original style.</li>
+<li><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</li>
 <li><strong>Undo/redo is in-memory.</strong> Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.</li>
 </ul>
 <hr />

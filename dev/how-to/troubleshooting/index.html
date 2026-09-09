@@ -4756,7 +4756,7 @@ and that the specified module names and versions are correct:</p>
 </ol>
 <h3 id="orphan-rules-rules-that-never-connect">Orphan rules (rules that never connect)<a class="headerlink" href="#orphan-rules-rules-that-never-connect" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: A rule exists in the workflow but has no connections to other rules — neither consuming their outputs nor producing inputs for them.</p>
-<p><strong>Detection</strong>: Use <code>oxo-flow graph workflow.oxoflow -f tree</code> and look for rules with no upstream or downstream indicators, or run <code>oxo-flow clean --orphans</code> to find them.</p>
+<p><strong>Detection</strong>: Use <code>oxo-flow graph workflow.oxoflow -f tree</code> and look for rules with no upstream or downstream indicators. (<code>oxo-flow clean --orphans</code> targets a different thing — leftover partial-transfer chunk directories under <code>.oxo-flow/chunks/</code>, not disconnected rules.)</p>
 <p><strong>Solution</strong>: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.</p>
 <h3 id="output-collisions">Output collisions<a class="headerlink" href="#output-collisions" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf'</code></p>
