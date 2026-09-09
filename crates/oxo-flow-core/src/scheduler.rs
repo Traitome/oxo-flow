@@ -111,6 +111,14 @@ impl SchedulerState {
     }
 
     /// Returns all rules that are ready to run (dependencies satisfied, not yet started).
+    ///
+    /// A dependency that is absent from `self.statuses` is outside this run's
+    /// plan (e.g. a when-gated-false producer pruned by the targeted
+    /// execution-order planner, which keeps the consumer via OR-per-output
+    /// propagation as long as a surviving producer exists). Such dependencies
+    /// never appear in the scheduler and must not block readiness; dataflow
+    /// safety is guaranteed by the planner keeping the rule only when all of
+    /// its required outputs have a surviving producer.
     pub fn ready_rules(&self, dag: &WorkflowDag) -> Result<Vec<String>> {
         let mut ready = Vec::new();
 
@@ -121,10 +129,12 @@ impl SchedulerState {
 
             let deps = dag.dependencies(rule)?;
             let all_deps_done = deps.iter().all(|dep| {
-                matches!(
-                    self.statuses.get(dep),
-                    Some(JobStatus::Success | JobStatus::Skipped)
-                )
+                match self.statuses.get(dep) {
+                    // Dependency not scheduled in this run: not our concern.
+                    None => true,
+                    Some(JobStatus::Success | JobStatus::Skipped) => true,
+                    Some(_) => false,
+                }
             });
 
             if all_deps_done {
@@ -874,6 +884,98 @@ mod tests {
 
         let ready = state.ready_rules(&dag).unwrap();
         assert_eq!(ready, vec!["a"]);
+    }
+
+    #[test]
+    fn scheduler_ready_rules_ignores_unscheduled_dep() {
+        // Mirrors a targeted `-t` run: the planner prunes a when-gated-false
+        // producer `p` but keeps its consumer `c` because another producer
+        // survives (OR-per-output propagation). `c` therefore depends on `p`
+        // in the DAG while `p` is absent from the scheduler statuses.
+        let rules = vec![
+            Rule {
+                name: "a".to_string(),
+                input: vec![].into(),
+                output: vec!["a.txt".to_string()].into(),
+                shell: Some("echo a".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 0,
+                target: false,
+                group: None,
+                description: None,
+                ..Default::default()
+            },
+            Rule {
+                name: "p".to_string(),
+                input: vec![].into(),
+                output: vec!["p.txt".to_string()].into(),
+                shell: Some("echo p".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 0,
+                target: false,
+                group: None,
+                description: None,
+                ..Default::default()
+            },
+            Rule {
+                name: "c".to_string(),
+                input: vec!["a.txt".to_string(), "p.txt".to_string()].into(),
+                output: vec!["c.txt".to_string()].into(),
+                shell: Some("echo c".to_string()),
+                script: None,
+                threads: None,
+                memory: None,
+                resources: Resources::default(),
+                environment: EnvironmentSpec::default(),
+                log: None,
+                benchmark: None,
+                params: HashMap::new(),
+                priority: 0,
+                target: false,
+                group: None,
+                description: None,
+                ..Default::default()
+            },
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        // Simulate the plan: `a` and `c` are scheduled; pruned producer `p` is not.
+        let state = SchedulerState::new(&["a", "c"]);
+
+        let ready = state.ready_rules(&dag).unwrap();
+        assert_eq!(ready, vec!["a"]);
+        // And once `a` completes, `c` becomes ready despite the absent `p`.
+        let mut state = state;
+        state.mark_completed(JobRecord {
+            rule: "a".to_string(),
+            status: JobStatus::Success,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: Some(String::new()),
+            stderr: Some(String::new()),
+            command: Some(String::new()),
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: Some(String::new()),
+        });
+        let ready = state.ready_rules(&dag).unwrap();
+        assert_eq!(ready, vec!["c"]);
     }
 
     #[test]
