@@ -183,12 +183,10 @@ The interpreter is detected automatically, in this order:
 | `.pl` | `perl` |
 | `.rb` | `ruby` |
 | `.qmd` / `.Rmd` | `quarto render` |
-| `.ipynb` | `jupyter nbconvert --execute` |
+| `.ipynb` | `jupyter nbconvert --to notebook --execute` |
 | `.smk` | `snakemake` |
 | `.nextflow` | `nextflow run` |
 | `.wdl` | `miniwdl run` |
-
-4. **Shebang line** (if the file is executable)
 
 ---
 
@@ -213,7 +211,7 @@ Outputs are verified **after both** complete.
 |---|---|---|
 | Best for | Short commands, one-liners, pipes | Multi-step logic, complex programs |
 | Language | Any shell (bash, sh) | Any language with an interpreter |
-| Interpreter | Shell itself | Auto-detected from extension, `interpreter` field, or shebang |
+| Interpreter | Shell itself | Auto-detected from extension, `interpreter` field, or `[workflow.interpreter_map]` |
 | Dependency tracking | Same | Same |
 | Output verification | Same — declared outputs must exist after completion | Same |
 

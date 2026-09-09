@@ -451,8 +451,8 @@ classDiagram
     EnvironmentBackend <|.. System
 ```
 
-Resolution precedence: rule `environment` → rule `env_group` (a named
-`[env_groups]` entry) → `[defaults].environment`. Setup is locked per
+Resolution precedence: rule `env_group` (a named `[env_groups]` entry) →
+rule `environment` → `[defaults].environment`. Setup is locked per
 environment (concurrent first uses do not race the build), env names are
 content-hashed for file-backed specs (edits build a fresh env instead of
 silently reusing a stale one), and setup state is cached and persisted so
@@ -548,7 +548,7 @@ Design invariants:
 - **Skills are explicit.** Prompt-injection bundles activate only when
   declared in `[ai]` skills — discoverable, auditable, versioned.
 - **Versioned knowledge.** The embedded corpora regenerate through CI
-  generators on a monthly freshness gate.
+  generators on a twice-monthly freshness gate (1st+16th of each month).
 
 ---
 

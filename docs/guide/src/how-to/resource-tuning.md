@@ -199,7 +199,8 @@ oxo-flow emits warnings when disk requirements exceed available space but cannot
 
 ### Timeout Killing Child Processes
 
-Timeout uses process group SIGKILL on Unix systems (reliable cleanup).
+Timeout kills the rule's whole process tree on Unix systems: SIGTERM first,
+then SIGKILL after a 10-second grace window (deepest descendants first).
 
 Solution: Use wrapper script that manages its own cleanup:
 

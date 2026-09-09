@@ -55,26 +55,26 @@ Interpreter paths are enforced at **run time**, when a script rule's `interprete
 
 Hardcoded credentials in workflow TOML content are detected by the `oxo-flow lint` command (`format::scan_for_secrets`), which emits S008 warnings; it does not block execution.
 
+`scan_for_secrets` detects exactly nine patterns — finding one emits an
+S008 warning naming it. Four token-shaped patterns are anchored regexes
+requiring a credential body (a bare `sk-` prefix is not a secret —
+`task-list` must not flag); five word patterns are case-insensitive
+substring tests, so both true positives and some false positives
+survive — review the flagged lines yourself:
+
 ### Detected Secret Patterns
 
-`scan_for_secrets` does case-insensitive substring matching against exactly
-nine patterns — finding one emits an S008 warning naming it:
-
-| Pattern | Warning message |
-|---------|-----------------|
-| `AKIA` | Possible AWS Access Key |
-| `sk-` | Possible Stripe/OpenAI secret key |
-| `ghp_` | Possible GitHub personal access token |
-| `glpat-` | Possible GitLab personal access token |
-| `password` | Possible password in configuration |
-| `secret` | Possible secret in configuration |
-| `api_key` | Possible API key in configuration |
-| `access_token` | Possible access token in configuration |
-| `private_key` | Possible private key in configuration |
-
-The scanner matches the raw substrings above (e.g. any `sk-` prefix, not a
-length-validated key shape), so both true positives and some false positives
-survive — review the flagged lines yourself.
+| Pattern | Matching | Warning message |
+|---------|----------|-----------------|
+| `AKIA…` | regex: `\bakia[0-9a-z]{12,}` (case-insensitive) | Possible AWS Access Key |
+| `sk-…` | regex: `\bsk-[a-z0-9_-]{8,}` | Possible Stripe/OpenAI secret key |
+| `ghp_…` | regex: `\bghp_[a-z0-9]{8,}` | Possible GitHub personal access token |
+| `glpat-…` | regex: `\bglpat-[a-z0-9_-]{8,}` | Possible GitLab personal access token |
+| `password` | substring | Possible password in configuration |
+| `secret` | substring | Possible secret in configuration |
+| `api_key` | substring | Possible API key in configuration |
+| `access_token` | substring | Possible access token in configuration |
+| `private_key` | substring | Possible private key in configuration |
 
 Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `***` in logs, `--help`, and error output.
 

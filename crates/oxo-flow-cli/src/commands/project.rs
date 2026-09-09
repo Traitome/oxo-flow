@@ -20,6 +20,15 @@ pub fn init_command(name: String, dir: Option<PathBuf>) -> Result<()> {
             name
         );
     }
+    // The name is spliced into the generated workflow TOML as
+    // `name = "{name}"` — a quote or control character would produce an
+    // unparseable file, so reject it up front.
+    if name.contains('"') || name.chars().any(char::is_control) {
+        anyhow::bail!(
+            "project name '{}' must not contain quotes or control characters",
+            name
+        );
+    }
 
     let project_dir = dir.unwrap_or_else(|| PathBuf::from(&name));
 

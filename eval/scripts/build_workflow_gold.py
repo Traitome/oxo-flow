@@ -72,12 +72,13 @@ add("wf-004",
     "single dependency chain; the scatter-gather lives inside the rule's transform operator")
 
 add("wf-005",
-    "Showcase per-rule environment isolation: generate a small FASTA file, quality-check it, run a placeholder alignment step in a docker environment, and summarize everything in a JSON result file.",
-    ["download_data", "quality_check", "align_sequences", "analyze_results"],
-    ["echo", "grep"],
+    "Showcase per-rule environment isolation: generate a small FASTA file, quality-check it, run a placeholder alignment step in a docker environment, summarize everything in a JSON result file, and run a venv-backend sanity check over that JSON.",
+    ["download_data", "quality_check", "align_sequences", "analyze_results", "venv_sanity"],
+    ["echo", "grep", "python"],
     [["download_data", "quality_check"], ["download_data", "align_sequences"],
-     ["quality_check", "analyze_results"], ["align_sequences", "analyze_results"]],
-    ["results/analysis.json"],
+     ["quality_check", "analyze_results"], ["align_sequences", "analyze_results"],
+     ["analyze_results", "venv_sanity"]],
+    ["results/analysis.json", "results/venv_check.txt"],
     "examples/gallery", "05_conda_environments.oxoflow", "easy",
     "placeholder shells; the point is conda/docker/venv environment isolation")
 

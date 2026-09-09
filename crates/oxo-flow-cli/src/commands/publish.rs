@@ -63,9 +63,13 @@ pub fn publish_command(
 
     // ── Generate conda lockfiles (if --with-lockfiles) ────────────────────
 
-    if with_lockfiles {
-        generate_lockfiles(workflow_dir, &mut referenced_files);
-    }
+    // The returned TempDir guard is held by the caller so the generated
+    // lockfiles stay on disk until the staging copy below reads them.
+    let _lock_staging = if with_lockfiles {
+        generate_lockfiles(workflow_dir, &mut referenced_files)
+    } else {
+        None
+    };
 
     // Collect scripts/ and bin/ directories if they exist (Nextflow-style auto-PATH convention)
     for dir_name in &["scripts", "bin"] {
@@ -79,8 +83,16 @@ pub fn publish_command(
 
     let oxo_version = env!("CARGO_PKG_VERSION").to_string();
     let mut manifest_files = Vec::new();
-    let temp_dir = std::env::temp_dir().join(format!("oxo-publish-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir)?;
+    // Staged into a uniquely named temp directory instead of
+    // `temp_dir()/oxo-publish-<pid>` (see the extraction note in
+    // `bundle.rs` for why the predictable pattern is unsafe); the TempDir
+    // guard cleans it up on every exit path, replacing the manual
+    // `remove_dir_all` that error paths previously skipped.
+    let temp_dir = tempfile::Builder::new()
+        .prefix("oxo-publish-")
+        .tempdir()
+        .context("failed to create temporary staging directory")?;
+    let temp_dir = temp_dir.path().to_path_buf();
 
     // Copy the main workflow file
     let wf_filename = workflow_path
@@ -261,8 +273,8 @@ pub fn publish_command(
         }
     }
 
-    // Cleanup temp dir
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    // TempDir guard cleans up the staging dir; the lockfiles it may contain
+    // have already been read by the archive builder above.
 
     // ── Summary ───────────────────────────────────────────────────────────
 
@@ -418,11 +430,17 @@ fn scan_workflow_env_files(
     }
 
     // ── Follow [[include]] references ─────────────────────────────────
-
+    //
+    // Core resolves nested includes relative to the INCLUDING file's
+    // parent (`next_base = inc_path.parent()` in `config/parse.rs`), so the
+    // scan must track each file's own base dir — joining against the
+    // top-level `workflow_dir` would silently skip a sub-workflow's
+    // includes that live in a subdirectory.
     if let Some(includes) = toml_value.get("include").and_then(|v| v.as_array()) {
+        let file_base = wf_path.parent().unwrap_or(workflow_dir).to_path_buf();
         for inc in includes {
             if let Some(inc_path) = inc.get("path").and_then(|v| v.as_str()) {
-                let included_wf = workflow_dir.join(inc_path);
+                let included_wf = file_base.join(inc_path);
                 if included_wf.exists() {
                     scan_workflow_env_files(
                         &included_wf,
@@ -524,7 +542,15 @@ fn compute_sha256(path: &Path) -> Result<String> {
 ///
 /// Tries `conda-lock` first, then falls back to `conda env export`.
 /// Lockfiles are added to `referenced_files` for inclusion in the bundle.
-fn generate_lockfiles(_workflow_dir: &Path, referenced_files: &mut Vec<(String, PathBuf)>) {
+///
+/// Returns the TempDir holding the generated lockfiles — the caller must
+/// keep it alive until the bundle archive has been written, since the
+/// `referenced_files` entries point inside it. Dropping the guard deletes
+/// the directory.
+fn generate_lockfiles(
+    _workflow_dir: &Path,
+    referenced_files: &mut Vec<(String, PathBuf)>,
+) -> Option<tempfile::TempDir> {
     // Find conda-lock or compatible tool
     let lock_tool = if std::process::Command::new("conda-lock")
         .arg("--version")
@@ -547,11 +573,21 @@ fn generate_lockfiles(_workflow_dir: &Path, referenced_files: &mut Vec<(String, 
             "  {} lockfiles not generated; environments may resolve differently over time",
             "⚠".yellow()
         );
-        return;
+        return None;
     }
 
-    let temp_dir = std::env::temp_dir().join(format!("oxo-lock-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let lock_dir = match tempfile::Builder::new().prefix("oxo-lock-").tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "  {} failed to create lockfile staging dir: {} — lockfiles not generated",
+                "⚠".yellow(),
+                e
+            );
+            return None;
+        }
+    };
+    let temp_dir = lock_dir.path().to_path_buf();
 
     // Collect conda/mamba env files to lock
     let env_files: Vec<(String, PathBuf)> = referenced_files
@@ -610,6 +646,7 @@ fn generate_lockfiles(_workflow_dir: &Path, referenced_files: &mut Vec<(String, 
         }
     }
 
-    // Note: lock temp dir intentionally not cleaned — files are referenced
-    // by the archive builder and must persist until tar creation finishes.
+    // Not cleaned here — the caller holds the TempDir guard until the
+    // archive builder has read the lockfiles out of it.
+    Some(lock_dir)
 }

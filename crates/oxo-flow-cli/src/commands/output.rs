@@ -724,24 +724,34 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
             // The renderer writes a file, so stdout is served through a
             // scratch file that is read back and removed.
             let to_stdout = output.as_deref().is_some_and(|p| p.as_os_str() == "-");
-            let pdf_output = if to_stdout {
-                std::env::temp_dir().join(format!("oxo-flow-report-{}.pdf", std::process::id()))
-            } else {
-                output.clone().unwrap_or_else(|| {
-                    PathBuf::from(format!("{}_report.pdf", config.workflow.name))
+            // The stdout scratch file used to be a predictable
+            // `temp_dir()/oxo-flow-report-<pid>.pdf` — pre-creatable by
+            // another user on a shared machine, and PIDs are reused (same
+            // rationale as the bundle/publish temp-dir fixes) — so it is a
+            // NamedTempFile instead: random name, exclusive creation, 0600.
+            // Its guard removes the file on drop, success or error.
+            let scratch_pdf = to_stdout
+                .then(|| {
+                    tempfile::Builder::new()
+                        .prefix("oxo-flow-report-")
+                        .suffix(".pdf")
+                        .tempfile()
                 })
+                .transpose()?;
+            let pdf_output = match &scratch_pdf {
+                Some(file) => file.path().to_path_buf(),
+                None => output.clone().unwrap_or_else(|| {
+                    PathBuf::from(format!("{}_report.pdf", config.workflow.name))
+                }),
             };
             if wkhtmltopdf_available() {
                 let rt = tokio::runtime::Runtime::new()?;
                 let pdf_result = rt.block_on(async { report.to_pdf(&pdf_output).await });
-                if to_stdout && pdf_result.is_err() {
-                    // Never leave the stdout scratch file behind.
-                    let _ = std::fs::remove_file(&pdf_output);
-                }
                 pdf_result?;
-                if to_stdout {
-                    let bytes = std::fs::read(&pdf_output)?;
-                    let _ = std::fs::remove_file(&pdf_output);
+                if let Some(file) = scratch_pdf {
+                    // Read back and stream to stdout; the guard removes the
+                    // scratch file afterwards (success or error).
+                    let bytes = std::fs::read(file.path())?;
                     std::io::Write::write_all(&mut std::io::stdout(), &bytes)?;
                 } else {
                     eprintln!(

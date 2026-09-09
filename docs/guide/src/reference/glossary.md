@@ -193,9 +193,9 @@ The Nth input file (0-indexed).
 
 ### `{input.name}`
 
-Named input file from `named_input` section.
+Named input file — `input` given as an inline map (`input = { reads = "..." }`).
 
-**Example**: `{input.reads}` → the file named "reads" in `named_input`
+**Example**: `{input.reads}` → the value of the `reads` entry in the rule's `input` map
 
 ---
 

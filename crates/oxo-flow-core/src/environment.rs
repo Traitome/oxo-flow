@@ -606,7 +606,8 @@ pub fn is_unqualified_image_spec(spec: &str) -> bool {
 /// can now warn about it; this predicate is that check. Wildcard
 /// placeholders (`{sample}`, `{config.x}`) are engine-expanded to exact
 /// strings and are not globs.
-pub fn dir_glob_input_pattern(pattern: &str) -> bool {
+#[cfg(test)]
+pub(crate) fn dir_glob_input_pattern(pattern: &str) -> bool {
     pattern.ends_with('/') || pattern.contains(['*', '?', '['])
 }
 

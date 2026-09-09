@@ -1455,10 +1455,10 @@ Built-in placeholders use the same syntax but have reserved meanings:
 |---|---|
 | `{input}` | Space-separated list of all input files |
 | `{input[N]}` | The Nth input file (0-indexed) |
-| `{input.name}` | The input file named `name` from `named_input` |
+| `{input.name}` | The value of the `name` entry in the rule's `input` map (`input = { name = "..." }`) |
 | `{output}` | Space-separated list of all output files |
 | `{output[N]}` | The Nth output file (0-indexed) |
-| `{output.name}` | The output file named `name` from `named_output` |
+| `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }`) |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
 | `{effective_threads}` | Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use it for flags like `--threads`/`-t` when the declared value is an HPC-scale label (e.g. a rule declaring `threads = 12` renders `4` on a 4-core box). Unset threads render as `1` |
@@ -1515,21 +1515,21 @@ as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
 
 ### Named Input & Output
 
-For complex rules with many files, use `named_input` and `named_output` to improve readability:
+For complex rules with many files, give the `input`/`output` fields an
+inline map (`FilePatterns::Map`) and reference the entries with
+`{input.<name>}` / `{output.<name>}`:
 
 ```toml
 [[rules]]
 name = "align"
-
-[rules.named_input]
-reads1 = "raw/{sample}_R1.fastq.gz"
-reads2 = "raw/{sample}_R2.fastq.gz"
-
-[rules.named_output]
-bam = "aligned/{sample}.bam"
-
+input = { reads1 = "raw/{sample}_R1.fastq.gz", reads2 = "raw/{sample}_R2.fastq.gz" }
+output = { bam = "aligned/{sample}.bam" }
 shell = "bwa mem {input.reads1} {input.reads2} > {output.bam}"
 ```
+
+There is no `[rules.named_input]` / `[rules.named_output]` TOML table —
+the map is the value of `input`/`output` itself (a sub-table named
+`named_input` fails validation with E017).
 
 ### Custom Wildcards
 
@@ -2660,7 +2660,7 @@ url = "https://hooks.example.com/oxo"
 |---|---|---|---|
 | `url` | String | — (required) | Webhook endpoint URL |
 | `method` | String | `POST` | HTTP method (`POST`/`PUT`/`GET`) |
-| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed`, `rule_completed`, `rule_failed` |
+| `events` | Array of String | `["workflow_completed"]` | Which events fire: `workflow_started`, `workflow_completed`, `workflow_failed` (`rule_completed`/`rule_failed` are defined but not yet dispatched) |
 | `headers` | Table | `{}` | Custom request headers |
 | `secret` | String | — | HMAC key for the `X-OxoFlow-Signature` header |
 | `signature_scheme` | String | `hmac-sha256` | `hmac-sha256` (RFC 2104) or the legacy `sha256-keyed` |

@@ -61,13 +61,12 @@ export OXO_REGISTRY_MIRRORS="docker.io=mirror.example.com;registry-1.docker.io=m
 ```
 
 - Semicolon-separated `host=mirror` pairs; host matching is
-  case-insensitive and port-agnostic. A registry port is stripped before
-  matching, so `localhost:5000/…` is treated as the `localhost` namespace
-  and **is rewritten** when `localhost` itself is mapped (e.g.
-  `localhost=mirror.example.com`).
-- A first path segment without a dot or colon (`uhrigs/arriba`) is the
-  docker.io *namespace* and follows the docker.io mapping, keeping its
-  full path.
+  case-insensitive and port-agnostic — a registry port is stripped
+  before matching. A first path segment without a dot or colon (e.g.
+  `localhost:5000/…` → `localhost`, or `uhrigs/arriba`) is the docker.io
+  *namespace*: it follows the **`docker.io`** mapping while keeping its
+  full path, so map `docker.io=mirror.example.com` to rewrite such
+  specs — a `localhost=…` key never matches anything.
 - Applies to the singularity/apptainer backend (pull target and `exec`
   URI) and to registry-qualified docker specs. The Docker backend's bare
   names still resolve through the daemon's own `registry-mirrors`.
@@ -81,7 +80,7 @@ export OXO_REGISTRY_MIRRORS="docker.io=mirror.example.com;registry-1.docker.io=m
 # .oxoflow rule fragment — unchanged on mirrored boxes
 [[rules]]
 name = "arriba_fusion"
-singularity = "docker://uhrigs/arriba:2.4.0"
+environment = { singularity = "docker://uhrigs/arriba:2.4.0" }
 shell = "arriba ..."
 ```
 

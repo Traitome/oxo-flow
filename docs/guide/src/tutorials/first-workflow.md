@@ -296,7 +296,7 @@ Summary: 8 rules, total 26 threads declared, max 4 threads/rule
 To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
-The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (`_auto-discovered_sample1`, `_auto-discovered_sample2`), for 8 tasks in total. Inputs are not checked for existence in dry-run mode.
+The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (`_auto-discovered_sample1`, `_auto-discovered_sample2`), for 8 tasks in total. (The transcript above is abridged — real output also prints a checkpoint line, per-task `input ✓/✗` status for concrete paths, and a `command:` line for every task.) Missing inputs do not fail dry-run — it exits 0; `run` is what fails.
 
 !!! warning "`validate` warns; it does not gate"
 

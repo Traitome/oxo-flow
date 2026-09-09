@@ -199,7 +199,7 @@ gatk FilterMutectCalls -R {config.reference} -V {config.results}/variants/{pair_
 
 ```bash
 oxo-flow validate variant-calling.oxoflow
-# ✓ variant-calling.oxoflow — 7 rules, 15 dependencies
+# ✓ variant-calling.oxoflow — 7 rules, 7 dependencies
 ```
 
 With 2 pairs, all 7 rules expand to 14 concrete rule instances — `trim_reads_P001`, `align_P001`, `mutect2_P001`, and so on. Each pre-processing rule handles both the tumor and the normal sample of one pair, keeping the DAG fully connected at expansion time.

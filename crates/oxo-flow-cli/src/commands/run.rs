@@ -5188,7 +5188,6 @@ logical errors. Output format per rule:
 /// Default checkpoint location used when `status` is invoked without an argument.
 const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
 
-/// Checkpoint rules ordered by wall-clock time (slowest first), plus total time.
 /// Process a checkpoint rule's re-entry manifest after it completes
 /// (issue #78 P3): merge new samples, re-expand from templates, extend the
 /// plan, and record the re-entry in the checkpoint. Errors fail the rule.

@@ -153,7 +153,7 @@ DELETE /api/users/{id}     # Delete user
 
 ## Pipeline Lifecycle (v0.8 `/api/pipelines/*`)
 
-> The pre-v0.8 `/api/workflows/*` endpoints exist only as unserved legacy modules (see [Web System Architecture](web-system-architecture.md)); the running server exposes only the `/api/pipelines/*` API below.
+> The pre-v0.8 `/api/workflows/*` endpoints no longer exist in the source — the running server exposes only the `/api/pipelines/*` API below.
 
 ### Parse
 ```
@@ -292,7 +292,7 @@ Execution flags are forwarded to the CLI executor:
 - `max_jobs` defaults to **4** at this endpoint (the CLI flag itself
   defaults to 1): an omitted `max_jobs` still spawns the CLI with `-j 4`,
   which is also the value the resource estimate assumes.
-- `keep_going: true` maps to `-k`.
+- `keep_going: true` maps to `--keep-going` (the CLI also accepts `-k`).
 - `samples` (array of strings, optional) maps to `--samples` (comma-joined).
 - `targets` (array of strings, optional) maps to `-t` per entry.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
@@ -333,7 +333,7 @@ Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_ca
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, status, workflow_name, workdir, created_at, max_jobs, owner_id, pipeline_id?, cluster_id?, exit_code?, finished_at? }` — the identity other run endpoints key off.
+The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.)
 
 ### Run Preview
 ```
@@ -644,11 +644,11 @@ list.
 
 ```
 GET  /api/quota           # current limits and usage
-PUT  /api/quota           # update limits (admin-only outside personal mode)
+PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 ```
 
-`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }`.
-Usage is visible at `GET /api/quota`.
+`PUT /api/quota` accepts `{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }` — all four fields are required (no defaults applied server-side).
+Usage is visible at `GET /api/quota` (`{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }`).
 
 ## Cluster Connections & Remote Execution
 

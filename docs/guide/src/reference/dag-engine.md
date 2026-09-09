@@ -28,6 +28,7 @@ pub struct WorkflowDag {
     graph: DiGraph<DagNode, ()>,
     name_to_node: HashMap<String, NodeIndex>,
     output_to_node: HashMap<String, Vec<NodeIndex>>,
+    input_producers: HashMap<String, HashMap<String, HashSet<String>>>,
 }
 
 pub struct DagNode {
@@ -39,6 +40,7 @@ pub struct DagNode {
 - `graph` — a directed graph where nodes are `DagNode` (rule name + index) and edges are dependencies
 - `name_to_node` — maps rule names to their graph node indices for O(1) lookup
 - `output_to_node` — maps output file patterns to **all** nodes producing that output (a `Vec`, since several rules may declare the same output pattern)
+- `input_producers` — maps consumer rule names to their expanded inputs and the producers satisfying each, enabling OR-per-output dead-node propagation
 
 ---
 
@@ -301,7 +303,7 @@ Use these to understand workflow structure: root rules are your entry points (ty
 
 ### Orphan Rules
 
-The `WorkflowDag` API has no orphan query. `oxo-flow validate` does flag orphan rules — rules whose inputs match no other rule's outputs and that look like wiring mistakes (misspelled paths) — as lint warnings; they still execute but may indicate configuration errors.
+The `WorkflowDag` API has no orphan query, and no dedicated orphan lint exists. The closest check is `oxo-flow validate`'s W020 warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.
 
 ### Output Collision Detection
 

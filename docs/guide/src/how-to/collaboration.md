@@ -135,11 +135,7 @@ revision, so nothing is ever lost.
 
 ## Audit Trail
 
-Forking a pipeline is recorded in the audit log:
-
-```
-fork_pipeline → audit_logs
-```
-
-Share and import actions are not yet logged. View audit logs via
+Every state-changing API call (fork, share, import, run, …) is recorded by
+the audit middleware — any non-GET request lands in `audit_logs` with the
+acting user, method+path, and result. View audit logs via
 `GET /api/audit?days=7`.

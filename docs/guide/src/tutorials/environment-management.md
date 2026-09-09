@@ -106,11 +106,11 @@ Use pre-built container images from registries like BioContainers:
 environment = { docker = "biocontainers/bwa:0.7.19--h577a1d6_1" }
 ```
 
-oxo-flow runs the rule's shell command inside the container, mounting the working directory automatically:
+oxo-flow runs the rule's shell command inside the container, mounting the working directory automatically (read-write, with inputs referenced outside the workdir mounted read-only):
 
 ```bash
-docker run --rm -v $(pwd):$(pwd) -w $(pwd) biocontainers/bwa:0.7.19--h577a1d6_1 \
-  bwa mem ref.fa reads.fastq.gz
+docker run --rm --user $(id -u):$(id -g) -v /abs/workdir:/abs/workdir -w /abs/workdir \
+  biocontainers/bwa:0.7.19--h577a1d6_1 sh -c 'bash -c "bwa mem ref.fa reads.fastq.gz"'
 ```
 
 !!! tip "No daemon required at build time"
@@ -126,7 +126,7 @@ For HPC clusters where Docker is not available:
 environment = { singularity = "docker://biocontainers/bwa:0.7.19--h577a1d6_1" }
 ```
 
-Singularity can pull images directly from Docker registries. The working directory is bound automatically.
+Singularity can pull images directly from Docker registries. The working directory is bound automatically (`apptainer exec --bind /abs/workdir:/abs/workdir <image> <command>`; oxo-flow prefers `apptainer` over `singularity` when both are installed).
 
 ---
 
@@ -138,7 +138,7 @@ On clusters using Lmod / Environment Modules, load toolchain modules for the rul
 environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1", "samtools/1.24"] }
 ```
 
-The rule's shell command runs after all listed modules are loaded, and the module environment is cleaned up afterward. This is the standard way to use cluster-administered software stacks.
+The rule's shell command runs in a fresh shell after all listed modules are loaded (`module load <modules> && <command>`), so the loaded environment never persists beyond the rule. This is the standard way to use cluster-administered software stacks.
 
 ---
 
@@ -147,7 +147,7 @@ The rule's shell command runs after all listed modules are loaded, and the modul
 For rules that only need Python packages:
 
 ```toml
-environment = { venv = "envs/requirements.txt" }
+environment = { venv = "venv/", venv_requirements = "envs/requirements.txt" }
 ```
 
 ```text
@@ -156,7 +156,7 @@ pandas>=2.0
 matplotlib>=3.8
 ```
 
-oxo-flow creates (or reuses) a virtual environment and installs the listed packages before executing the rule.
+oxo-flow creates (or reuses) a virtual environment at the `venv` directory and installs the packages listed in `venv_requirements` before executing the rule. The rule's command runs with the venv activated (`source venv/bin/activate && <command>`).
 
 ---
 

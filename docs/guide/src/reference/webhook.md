@@ -2,7 +2,7 @@
 
 oxo-flow includes a webhook client (`oxo_flow_core::webhook`, behind the `webhook` cargo feature — enabled by default) that can send JSON notifications about workflow and rule execution events to external services like Slack, Microsoft Teams, Discord, or any custom HTTP endpoint.
 
-> **Status note:** the webhook module provides the configuration model, the HTTP client (with retries and HMAC signing), and the payload types. It is not yet wired into the executor — the engine does not currently dispatch webhook notifications during workflow execution.
+> **Status note:** `oxo-flow run` dispatches the workflow-level events — `workflow_started` at the beginning and `workflow_completed`/`workflow_failed` at the end — whenever a `[webhook]` table is present. Dispatch is best-effort: a failing endpoint logs a warning and never changes the run status. The rule-level events (`rule_completed`, `rule_failed`) are defined in the config model but **not yet dispatched** during execution; subscribing to them currently has no effect.
 
 ## Configuration
 
@@ -37,10 +37,10 @@ Events are serialized in snake_case. You can subscribe by listing them in the `e
 | Event Name | Description |
 | --- | --- |
 | `workflow_started` | Fired when the workflow execution begins. |
-| `workflow_completed` | Fired when the workflow finishes (success or failure). |
+| `workflow_completed` | Fired when the workflow finishes successfully. |
 | `workflow_failed` | Fired when the workflow fails. |
-| `rule_completed` | Fired when an individual rule completes. |
-| `rule_failed` | Fired when an individual rule fails. |
+| `rule_completed` | *Not yet dispatched* — defined for future rule-level notifications. |
+| `rule_failed` | *Not yet dispatched* — defined for future rule-level notifications. |
 
 There is no `RuleStarted` or `RuleSkipped` event in the webhook module. (The
 `ExecutionEvent` log stream in the core executor likewise has no

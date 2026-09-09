@@ -32,9 +32,7 @@ spawns the web server):
 ```bash
 cargo test --test web_role_matrix   # deployment + 3-role simulation matrix (auth, RBAC, persistence, base-path)
 cargo test --test web_integration   # web API integration tests
-```
-
-#### Flaky-test policy (issue #249)
+```#### Flaky-test policy (issue #249)
 
 CI runs the full suite once; if it fails, ONLY the failed tests are
 re-run a single time — passing then classifies the failure as a
@@ -169,6 +167,7 @@ chore: update dependencies
 | Integration tests | `tests/` directory at workspace root |
 | Web API tests | `crates/oxo-flow-web/tests/` (plus unit tests in `src/`) |
 | CLI tests | `crates/oxo-flow-cli/tests/` (plus unit tests in `src/`) |
+| Preview parity contract | `tests/preview_parity.rs` |
 
 Run all tests:
 
@@ -222,6 +221,7 @@ and confirm the matching scenario turns red before reverting.
 | oxo-flow-core | Apache 2.0 |
 | oxo-flow-ai | Apache 2.0 |
 | oxo-flow-cli | Apache 2.0 |
+| oxo-flow-desktop | Apache 2.0 |
 | oxo-flow-web | Dual (Academic free / Commercial paid) |
 
 By contributing, you agree that your contributions will be licensed under the same terms as the project.

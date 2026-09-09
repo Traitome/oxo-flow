@@ -239,8 +239,20 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     let pixi_toml = std::fs::read_to_string(&spec)
                         .with_context(|| format!("cannot read pixi spec: {}", spec.display()))?;
 
-                    let project_dir = std::env::temp_dir().join(format!("oxo-flow-{}", name_str));
-                    std::fs::create_dir_all(&project_dir)?;
+                    // Staged in a uniquely named temp directory instead of
+                    // `temp_dir()/oxo-flow-<name>` — the same shared-machine
+                    // hazard as the bundle extraction in `bundle.rs` (a
+                    // predictable, user-controlled name another user can
+                    // pre-create). The project must outlive this process —
+                    // the user is told to `cd` into it and `pixi shell` — so
+                    // it is kept only after a successful install; failures
+                    // clean up automatically via the TempDir guard.
+                    let temp_project =
+                        tempfile::Builder::new()
+                            .prefix("oxo-flow-env-")
+                            .tempdir()
+                            .context("failed to create temporary pixi project directory")?;
+                    let project_dir = temp_project.path().to_path_buf();
                     std::fs::write(project_dir.join("pixi.toml"), &pixi_toml)
                         .with_context(|| "failed to write pixi.toml")?;
 
@@ -253,6 +265,10 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                     if !status.success() {
                         anyhow::bail!("pixi install failed");
                     }
+
+                    // Success: hand the directory over to the user (the
+                    // guard would otherwise delete it on drop).
+                    let _ = temp_project.keep();
 
                     eprintln!(
                         "  {} Pixi project created at: {}",

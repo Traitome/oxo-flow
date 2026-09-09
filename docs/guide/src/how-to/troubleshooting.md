@@ -218,7 +218,7 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 **Symptom**: A rule exists in the workflow but has no connections to other rules — neither consuming their outputs nor producing inputs for them.
 
-**Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators, or run `oxo-flow clean --orphans` to find them.
+**Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators. (`oxo-flow clean --orphans` targets a different thing — leftover partial-transfer chunk directories under `.oxo-flow/chunks/`, not disconnected rules.)
 
 **Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.
 

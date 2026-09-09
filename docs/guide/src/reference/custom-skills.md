@@ -24,9 +24,12 @@ The security model has two strictly separated steps:
    declared in the workflow's `[ai]` section. This is the trust boundary:
    the same explicit-approval model used by MCP clients.
 
-Activated skills contribute **prompt text only** — there is zero code
-execution, no filesystem access, no tool registration (tool-type skills
-are reserved for the future MCP path).
+Activated **knowledge** skills contribute **prompt text only** — there is
+zero code execution and no filesystem access. Activated **tool** skills do
+register tools: each `mcp://` requirement in their `requires` list is
+bridged as an `mcp_<server>_<tool>` tool via the MCP client (Streamable
+HTTP only — the engine never spawns server processes). See
+[Tool Skills via MCP](#tool-skills-via-mcp).
 
 ---
 
@@ -41,7 +44,7 @@ version = "1.0.0"
 description = "Advises on FASTQ QC thresholds for WGS"
 author = "Your Lab"            # optional
 domains = ["qc", "wgs"]        # optional, free-form tags
-skill_type = "knowledge"       # "knowledge" (Phase 1); "tool" reserved for MCP
+skill_type = "knowledge"       # or "tool" (MCP bridge, see below)
 
 prompt_additions = [           # optional — appended to the system prompt
   "Prefer fastp with --qualified_quality_phred 20 for human WGS reads.",
@@ -54,7 +57,7 @@ prompt_additions = [           # optional — appended to the system prompt
 | `name` | ✅ | Unique; must match the activation entry |
 | `version` | ✅ | Semantic version |
 | `description` | ✅ | Shown in `oxo-flow ai` (status output) |
-| `skill_type` | ✅ | `"knowledge"` now; `"tool"` is reserved for the MCP phase |
+| `skill_type` | ✅ | `"knowledge"` (prompt text) or `"tool"` (MCP bridge) |
 | `author`, `domains`, `prompt_additions`, `requires`, `entry` | — | Optional |
 
 Invalid manifests (missing required fields) are skipped during discovery,

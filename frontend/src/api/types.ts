@@ -313,7 +313,7 @@ export interface DataPerceptionReport {
 // DAG Edit
 export interface DagEditCommand {
   source: 'dag_editor' | 'chat' | 'proposal';
-  operation: 'add_rule' | 'remove_rule' | 'connect' | 'disconnect' | 'update_params' | 'replace_tool' | 'reorder';
+  operation: 'add_rule' | 'remove_rule' | 'connect' | 'disconnect' | 'update_rule' | 'update_params' | 'update_workflow';
   payload: Record<string, unknown>;
 }
 

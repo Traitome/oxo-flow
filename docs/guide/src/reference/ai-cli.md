@@ -78,7 +78,7 @@ oxo-flow dry-run workflow.oxoflow --ai
 # (just don't pass --ai — AI is only auto-detected, never forced)
 ```
 
-### 3. Review and Run
+### 5. Review and Run
 
 ```bash
 # Review the generated workflow

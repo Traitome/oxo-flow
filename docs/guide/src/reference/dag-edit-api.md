@@ -8,10 +8,9 @@ The DAG Edit API enables programmatic manipulation of workflow DAGs — adding a
 
 The DAG Edit domain (`crates/oxo-flow-web/src/domains/dag/service.rs`) provides a **command-queue architecture** with automatic TOML round-tripping and validation on every edit. Each edit is:
 
-1. **Parsed** — the current TOML content is parsed into a `WorkflowConfig`
-2. **Applied** — the command modifies the in-memory config
-3. **Formatted** — the config is serialized back to canonical TOML
-4. **Validated** — the result is validated through the workflow validation pipeline
+1. **Parsed** — the current TOML content is parsed as a `WorkflowConfig` (gate: it must parse before any mutation)
+2. **Applied** — the command mutates the `toml_edit` document in place, preserving comments and formatting
+3. **Validated** — the edited document is re-parsed and validated through the workflow validation pipeline
 
 Edits that produce invalid workflows are still applied and returned — the
 response reports `success: false` with the `validation_errors` populated, so the
@@ -50,7 +49,7 @@ current TOML content (`toml_content`) plus the command.
 
 `source` is one of `dag_editor` (the interactive editor), `chat`, or `proposal`.
 `operation` is one of `add_rule`, `remove_rule`, `connect`, `disconnect`,
-`update_params`, `replace_tool`, or `reorder`.
+`update_rule`/`update_params`, or `update_workflow`.
 
 ### `add_rule`
 
@@ -202,8 +201,9 @@ alias.
 
 ### `update_workflow`
 
-Replace top-level TOML sections (`workflow`, `config`, `defaults`, …). Patch
-keys replace the corresponding section wholesale — send complete sections.
+Patch top-level TOML sections (`workflow`, `config`, `defaults`, …). `null`
+removes a key; an object patch on a key that is already a table is merged
+into that table (comments preserved); everything else is replaced wholesale.
 
 ```json
 {
@@ -274,7 +274,7 @@ Malformed commands (unknown operation, missing required payload fields such as t
 
 - **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules, which the edit API cannot currently modify.
 - **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Edits that introduce cycles, duplicate names, or invalid syntax are flagged in `validation_errors`.
-- **TOML round-tripping preserves formatting.** The core `format::format_workflow` function produces canonical TOML, so edited workflows will have consistent formatting regardless of the original style.
+- **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.
 - **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.
 
 ---

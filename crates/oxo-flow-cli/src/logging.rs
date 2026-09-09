@@ -225,61 +225,67 @@ fn write_plain(out: &mut File, buf: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
 
     /// `activate_run_log` arms a PROCESS-GLOBAL slot; tests that arm it
     /// must not interleave with each other (a parallel sibling deactivating
     /// the slot mid-assertion was a recurring full-suite flake).
     static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("oxo-runlog-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Unique scratch directory (0700, exclusive creation). The old
+    /// `temp_dir()/oxo-runlog-{tag}-{pid}` layout could be pre-created by a
+    /// foreign user (`create_dir_all` succeeds against it) and PIDs are
+    /// reused (same rationale as the bundle temp-dir standard). The returned
+    /// guard deletes the tree on drop.
+    fn scratch(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("oxo-runlog-{tag}-"))
+            .tempdir()
+            .unwrap()
     }
 
     #[test]
     fn rotate_shifts_numbered_backups_and_caps() {
         let dir = scratch("rotate");
-        let base = dir.join("oxo-flow.log");
+        let base = dir.path().join("oxo-flow.log");
         fs::write(&base, "latest").unwrap();
         for i in 1..=(RUN_LOG_BACKUPS + 3) {
-            fs::write(dir.join(format!("oxo-flow.log.{i}")), format!("backup{i}")).unwrap();
+            fs::write(
+                dir.path().join(format!("oxo-flow.log.{i}")),
+                format!("backup{i}"),
+            )
+            .unwrap();
         }
         rotate_run_log(&base).unwrap();
         // The old current log becomes .1; every .i shifts one slot up.
         assert_eq!(
-            fs::read_to_string(dir.join("oxo-flow.log.1")).unwrap(),
+            fs::read_to_string(dir.path().join("oxo-flow.log.1")).unwrap(),
             "latest"
         );
         for i in 2..=RUN_LOG_BACKUPS {
             assert_eq!(
-                fs::read_to_string(dir.join(format!("oxo-flow.log.{i}"))).unwrap(),
+                fs::read_to_string(dir.path().join(format!("oxo-flow.log.{i}"))).unwrap(),
                 format!("backup{}", i - 1)
             );
         }
         // Oldest backups beyond the cap are deleted, never shifted further.
         for i in (RUN_LOG_BACKUPS + 1)..=(RUN_LOG_BACKUPS + 3) {
-            assert!(!dir.join(format!("oxo-flow.log.{i}")).exists());
+            assert!(!dir.path().join(format!("oxo-flow.log.{i}")).exists());
         }
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn rotate_without_existing_logs_is_a_noop() {
         let dir = scratch("rotate-noop");
-        let base = dir.join("oxo-flow.log");
+        let base = dir.path().join("oxo-flow.log");
         rotate_run_log(&base).unwrap();
         assert!(!base.exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn activate_creates_parent_dirs_and_writes_header() {
         let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("activate");
-        let log = dir.join("nested/.oxo-flow/logs/oxo-flow.log");
+        let log = dir.path().join("nested/.oxo-flow/logs/oxo-flow.log");
         let mut guard = activate_run_log(&log, "run header\nsecond line\n").unwrap();
         let content = fs::read_to_string(&log).unwrap();
         assert!(content.starts_with("run header\n"));
@@ -293,14 +299,13 @@ mod tests {
         drop(guard);
         // Deactivation on drop: no run log stays armed.
         assert!(!is_run_log_active());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn tee_strips_ansi_codes_from_file_writes() {
         let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("ansi");
-        let log = dir.join("run.log");
+        let log = dir.path().join("run.log");
         let _guard = activate_run_log(&log, "").unwrap();
         let mut tee = Tee {
             stderr: io::stderr(),
@@ -315,14 +320,13 @@ mod tests {
             !content.contains("\x1b["),
             "run-log files must be plain text"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn activate_replaces_previous_run_log_after_rotation() {
         let _guard = GLOBAL_STATE_LOCK.lock().unwrap();
         let dir = scratch("replace");
-        let base = dir.join("oxo-flow.log");
+        let base = dir.path().join("oxo-flow.log");
         fs::write(&base, "old run").unwrap();
         let _guard = activate_run_log(&base, "new header\n").unwrap();
         let content = fs::read_to_string(&base).unwrap();
@@ -330,9 +334,8 @@ mod tests {
         assert!(!content.contains("old run"));
         // The previous log was rotated into .1 before truncation.
         assert_eq!(
-            fs::read_to_string(dir.join("oxo-flow.log.1")).unwrap(),
+            fs::read_to_string(dir.path().join("oxo-flow.log.1")).unwrap(),
             "old run"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 }

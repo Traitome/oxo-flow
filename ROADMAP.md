@@ -380,7 +380,7 @@ framework extensibility, code quality, and documentation.
 - [x] cargo-audit integration verified working (no security vulnerabilities found)
 - [x] Performance optimizations: LazyLock for interpreter map, serde_json for event logging
 - [x] Webhook support for external notifications (Slack, custom endpoints, HMAC signatures)
-- [x] PDF export via wkhtmltopdf — archived in the issue #83 report redesign; reports are HTML/JSON
+- [x] PDF export via wkhtmltopdf — dropped from the issue #83 report redesign, then re-introduced in 0.16 as `-f pdf`/`-f pdf-command` (shells out to wkhtmltopdf)
 - [x] Code coverage reporting in Makefile (cargo-tarpaulin target)
 - [x] Benchmark regression tracking in Makefile (cargo bench target)
 - [ ] Kubernetes operator / CRD for cloud-native deployment (Expert 14.2)

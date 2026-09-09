@@ -119,7 +119,11 @@ Async-runtime hygiene:
 Rate limiting and SSE:
 
 - The rate limiter is a sliding window (default 100 requests / 60 s) keyed
-  by client IP (`X-Forwarded-For` → `X-Real-IP` → fallback). Over-limit
+  by client IP: the transport peer address by default (spoofable
+  `X-Forwarded-For`/`X-Real-IP` headers are ignored unless
+  `OXO_FLOW_TRUSTED_PROXY` marks the deployment as behind a controlled
+  reverse proxy, in which case the forwarded headers are honoured).
+  Over-limit
   requests get `429` with the standard structured error body
   (`{"code":"RATE_LIMITED", ...}`) and a `Retry-After` header; keys whose
   timestamps have all expired are evicted opportunistically (every 1024
@@ -232,7 +236,6 @@ Rate limiting and SSE:
 └── /pipeline/{id}          # DAG edit API: /command, /undo, /redo
 ```
 (See [Web API](./web-api.md) for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at `GET /api/openapi.json` on any running server.)
-(Old `/workflows/*` endpoints are marked `#[deprecated]` in the source and exist only as unserved legacy modules.)
 
 ---
 
@@ -253,7 +256,6 @@ All errors follow this format:
 
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
-| `BAD_REQUEST` | 400 | Input validation failed |
 | `MISSING_FIELD` | 400 | Required request field missing (e.g. `toml_content`) |
 | `DAG_EDIT_ERROR` | 400 | DAG edit command rejected (unknown operation, missing fields) |
 | `AUTH_REQUIRED` | 401 | Authentication required |
@@ -265,7 +267,7 @@ All errors follow this format:
 | `RATE_LIMITED` | 429 | Request rate exceeded |
 | `DB_ERROR` | 500 | Internal database error |
 
-Domain-specific codes (all 400) include `PARSE_ERROR`, `VALIDATE_ERROR`, `PREPARE_ERROR`, `DAG_ERROR`, `LINT_ERROR`, `STATS_ERROR`, `DIFF_ERROR`, `EXPORT_ERROR`, `SEARCH_ERROR`, `RUN_ERROR`, `RETRY_ERROR`, `DATA_ERROR`, `REF_ERROR`, `PLUGIN_ERROR`, `AI_TRANSLATE_ERROR`, `CHAT_ERROR`, `INVALID_URL`.
+Domain-specific codes (all 400) include `PARSE_ERROR`, `VALIDATE_ERROR`, `PREPARE_ERROR`, `DAG_ERROR`, `LINT_ERROR`, `STATS_ERROR`, `DIFF_ERROR`, `EXPORT_ERROR`, `RUN_ERROR`, `RETRY_ERROR`, `DATA_ERROR`, `REF_ERROR`, `PLUGIN_ERROR`, `AI_TRANSLATE_ERROR`, `CHAT_ERROR`, `INVALID_URL`.
 
 ---
 
