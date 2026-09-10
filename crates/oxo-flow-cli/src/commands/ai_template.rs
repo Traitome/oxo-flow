@@ -515,9 +515,16 @@ Your TOML MUST include:
         }
     };
 
-    // Extract TOML
-    let toml_content =
-        extract_toml(&response_text).context("AI response did not contain valid .oxoflow TOML")?;
+    // Extract TOML. A miss must still archive the session: the provider
+    // calls already happened and were paid for — losing the usage record
+    // here made every generation failure invisible to token accounting.
+    let toml_content = match extract_toml(&response_text) {
+        Some(toml) => toml,
+        None => {
+            cmd_session.fail("AI response did not contain valid .oxoflow TOML");
+            anyhow::bail!("AI response did not contain valid .oxoflow TOML");
+        }
+    };
 
     // Validate basic structure
     validate_basic_structure(&toml_content)?;
