@@ -307,7 +307,7 @@ The agent:
 7. Validates against the engine schema; on failure the errors feed back
    into the correction loop (bounded by `--ai-max-retries`), so
    wrong-dialect output is repaired instead of written with a warning
-   (issue #342: one shared generation persona across CLI and web)
+   (one shared generation persona across CLI and web)
 
 ### Custom Skills
 

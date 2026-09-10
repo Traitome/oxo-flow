@@ -96,7 +96,7 @@ always additive prose or proposals, never silent engine decisions.
 
 `template --ai` runs the same generation agent as the web translate and
 chat surfaces — one shared persona in `oxo-flow-ai`, one orchestrator
-loop (issue #342). The steps:
+loop. The steps:
 
 1. **Resolve the destination** — `-o` is parsed before anything is sent
    to the provider, so a bad output path fails cheaply.
@@ -126,7 +126,9 @@ loop (issue #342). The steps:
 ### Correction budget and failure behavior
 
 - `--ai-max-retries N` sizes the orchestrator's combined tool +
-  correction-round budget (default from `[ai]` config, 3 when unset).
+  correction-round budget (default from `[ai]` config, 6 when unset —
+  knowledge lookups and the correction pass share the budget, and the
+  loop stops as soon as a draft validates).
 - If the budget runs out after a pipeline was drafted, the command
   **degrades instead of discarding**: the generated TOML is extracted
   from the transcript and written with a prominent review warning —

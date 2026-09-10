@@ -550,7 +550,7 @@ Design invariants:
 - **Versioned knowledge.** The embedded corpora regenerate through CI
   generators on a twice-monthly freshness gate (1st+16th of each month).
 
-### Unified generation harness (issue #342)
+### Unified generation harness
 
 Every surface that turns a natural-language intent into an `.oxoflow`
 pipeline — CLI `template --ai`, `POST /api/ai/translate` (JSON and SSE),
@@ -589,9 +589,9 @@ The surfaces differ only in adapter concerns:
 | Provider resolution | env / `ai_config.json` | per-user → server → env, with Claude/OpenAI/Ollama fallback chain | per-user → server → env |
 | Tools | full registry + MCP; non-read-only needs interactive approval | read-only knowledge registry only | knowledge registry + run-diagnosis tools |
 | Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
-| Correction budget | `--ai-max-retries` (default 3) | 6 rounds | 6 rounds |
-| Session destination | `~/.oxo-flow/ai_sessions/` archive | in-process (usage logged) | chat messages in DB |
-| Failure behavior | degrade: deliver the transcript's TOML with a warning | structured error + template-keyword fallback | degraded delivery over SSE |
+| Correction budget | `--ai-max-retries` (default 6) | 6 rounds | 6 rounds |
+| Session destination | `~/.oxo-flow/ai_sessions/` archive | in-process; token usage logged | chat messages in DB; token usage logged |
+| Failure behavior | degrade: deliver the transcript's TOML with a warning | `AI_NOT_CONFIGURED` when no provider is usable; template-keyword fallback when providers fail | `AI_NOT_CONFIGURED` when no provider is usable; degraded delivery over SSE |
 
 Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):
