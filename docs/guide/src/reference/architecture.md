@@ -550,6 +550,64 @@ Design invariants:
 - **Versioned knowledge.** The embedded corpora regenerate through CI
   generators on a twice-monthly freshness gate (1st+16th of each month).
 
+### Unified generation harness (issue #342)
+
+Every surface that turns a natural-language intent into an `.oxoflow`
+pipeline — CLI `template --ai`, `POST /api/ai/translate` (JSON and SSE),
+and web chat (`/api/chat/send`, `/api/chat/send/json`) — runs **one**
+agent through **one** loop. Before the unification, each surface carried
+its own prompt and validation copy with divergent quality; the weakest
+taught a schema the engine rejects (Snakemake-style tables → `E017`).
+
+```mermaid
+flowchart TB
+    subgraph surfaces["Surfaces (thin adapters)"]
+        cli["CLI template --ai"]
+        tr["POST /api/ai/translate"]
+        chat["/api/chat (SSE · JSON)"]
+    end
+
+    subgraph harness["Shared harness (oxo-flow-ai)"]
+        agent["PipelineGenAgent<br/>engine-accurate prompt ·<br/>canonical TOML extraction ·<br/>injected validator"]
+        loop["Orchestrator loop<br/>plan → tools → extract →<br/>validate → feedback → deliver"]
+        kt["knowledge_tool_registry<br/>(read-only: bioconda · skills ·<br/>pipeline graph · screened fetch)"]
+    end
+
+    gates["Engine validation<br/>(CLI: WorkflowConfig parse ·<br/>web: workflow service)"]
+
+    surfaces --> agent
+    agent --> loop
+    loop --> kt
+    loop -- "validation feedback<br/>(bounded rounds)" --> gates
+    loop -- "errors feed back" --> agent
+```
+
+The surfaces differ only in adapter concerns:
+
+| Concern | CLI | Web translate | Web chat |
+|---|---|---|---|
+| Provider resolution | env / `ai_config.json` | per-user → server → env, with Claude/OpenAI/Ollama fallback chain | per-user → server → env |
+| Tools | full registry + MCP; non-read-only needs interactive approval | read-only knowledge registry only | knowledge registry + run-diagnosis tools |
+| Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
+| Correction budget | `--ai-max-retries` (default 3) | 6 rounds | 6 rounds |
+| Session destination | `~/.oxo-flow/ai_sessions/` archive | in-process (usage logged) | chat messages in DB |
+| Failure behavior | degrade: deliver the transcript's TOML with a warning | structured error + template-keyword fallback | degraded delivery over SSE |
+
+Two provider-level ceilings matter for thinking-style backends (models
+that emit reasoning blocks counting against the output budget):
+`OXO_FLOW_AI_MAX_TOKENS` (default 4096 — calibrated for the
+non-thinking tier with ≥3× headroom; raise for thinking backends) and
+`OXO_FLOW_AI_TIMEOUT_SECS` (default 120 — non-thinking generations run
+12–20 s; thinking backends exceed it). Quality/cost evidence for these
+calibrations and the unification itself lives in `eval/frontier/`
+(gate-scored benchmark: deterministic `validate`/`dry-run`/`lint`
+verdicts, no LLM judge).
+
+Security boundary is unchanged by the harness: `oxo-flow-ai` holds no
+database or filesystem writes; web surfaces register read-only tools
+with no approver, so non-read-only calls are refused by construction
+(`tests/ai_security.rs` enforces this at source level).
+
 ---
 
 ## Cross-Cutting Design Decisions
