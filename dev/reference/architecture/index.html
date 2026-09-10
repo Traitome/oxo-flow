@@ -2912,6 +2912,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="AI Subsystem">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-generation-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unified generation harness
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4139,6 +4156,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="AI Subsystem">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-generation-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unified generation harness
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4934,6 +4968,95 @@ layer engine facts as data.</p>
 <li><strong>Versioned knowledge.</strong> The embedded corpora regenerate through CI
   generators on a twice-monthly freshness gate (1st+16th of each month).</li>
 </ul>
+<h3 id="unified-generation-harness">Unified generation harness<a class="headerlink" href="#unified-generation-harness" title="Permanent link">#</a></h3>
+<p>Every surface that turns a natural-language intent into an <code>.oxoflow</code>
+pipeline — CLI <code>template --ai</code>, <code>POST /api/ai/translate</code> (JSON and SSE),
+and web chat (<code>/api/chat/send</code>, <code>/api/chat/send/json</code>) — runs <strong>one</strong>
+agent through <strong>one</strong> loop. Before the unification, each surface carried
+its own prompt and validation copy with divergent quality; the weakest
+taught a schema the engine rejects (Snakemake-style tables → <code>E017</code>).</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph surfaces["Surfaces (thin adapters)"]
+        cli["CLI template --ai"]
+        tr["POST /api/ai/translate"]
+        chat["/api/chat (SSE · JSON)"]
+    end
+
+    subgraph harness["Shared harness (oxo-flow-ai)"]
+        agent["PipelineGenAgent&lt;br/&gt;engine-accurate prompt ·&lt;br/&gt;canonical TOML extraction ·&lt;br/&gt;injected validator"]
+        loop["Orchestrator loop&lt;br/&gt;plan → tools → extract →&lt;br/&gt;validate → feedback → deliver"]
+        kt["knowledge_tool_registry&lt;br/&gt;(read-only: bioconda · skills ·&lt;br/&gt;pipeline graph · screened fetch)"]
+    end
+
+    gates["Engine validation&lt;br/&gt;(CLI: WorkflowConfig parse ·&lt;br/&gt;web: workflow service)"]
+
+    surfaces --&gt; agent
+    agent --&gt; loop
+    loop --&gt; kt
+    loop -- "validation feedback&lt;br/&gt;(bounded rounds)" --&gt; gates
+    loop -- "errors feed back" --&gt; agent</code></pre>
+<p>The surfaces differ only in adapter concerns:</p>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>CLI</th>
+<th>Web translate</th>
+<th>Web chat</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Provider resolution</td>
+<td>env / <code>ai_config.json</code></td>
+<td>per-user → server → env, with Claude/OpenAI/Ollama fallback chain</td>
+<td>per-user → server → env</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td>full registry + MCP; non-read-only needs interactive approval</td>
+<td>read-only knowledge registry only</td>
+<td>knowledge registry + run-diagnosis tools</td>
+</tr>
+<tr>
+<td>Validator</td>
+<td>core <code>WorkflowConfig</code> parse</td>
+<td>workflow service <code>validate_pipeline</code></td>
+<td>same as translate</td>
+</tr>
+<tr>
+<td>Correction budget</td>
+<td><code>--ai-max-retries</code> (default 6)</td>
+<td>6 rounds</td>
+<td>6 rounds</td>
+</tr>
+<tr>
+<td>Session destination</td>
+<td><code>~/.oxo-flow/ai_sessions/</code> archive</td>
+<td>failure sessions archived by the shared orchestrator; every run's token usage in the operation log</td>
+<td>chat messages in DB; token usage in the operation log</td>
+</tr>
+<tr>
+<td>Failure behavior</td>
+<td>degrade: deliver the transcript's TOML with a warning</td>
+<td><code>AI_NOT_CONFIGURED</code> when no provider is usable; template-keyword fallback when providers fail</td>
+<td><code>AI_NOT_CONFIGURED</code> when no provider is usable; degraded delivery over SSE</td>
+</tr>
+</tbody>
+</table>
+<p>Two provider-level ceilings matter for thinking-style backends (models
+that emit reasoning blocks counting against the output budget):
+<code>OXO_FLOW_AI_MAX_TOKENS</code> (default 4096 — calibrated for the
+non-thinking tier with ≥3× headroom; raise for thinking backends) and
+<code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 120 — non-thinking generations run
+12–20 s; thinking backends exceed it). Quality/cost evidence for these
+calibrations and the unification itself lives in <code>eval/frontier/</code>
+(gate-scored benchmark: deterministic <code>validate</code>/<code>dry-run</code>/<code>lint</code>
+verdicts, no LLM judge).</p>
+<p>Security boundary is unchanged by the harness: <code>oxo-flow-ai</code> holds no
+database or filesystem writes; web surfaces register read-only tools
+with no approver, so non-read-only calls are refused by construction
+(<code>tests/ai_security.rs</code> enforces this at source level).</p>
 <hr />
 <h2 id="cross-cutting-design-decisions">Cross-Cutting Design Decisions<a class="headerlink" href="#cross-cutting-design-decisions" title="Permanent link">#</a></h2>
 <h3 id="dag-first-execution">DAG-first execution<a class="headerlink" href="#dag-first-execution" title="Permanent link">#</a></h3>

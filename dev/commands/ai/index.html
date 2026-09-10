@@ -2459,6 +2459,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#how-template-ai-generates-a-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How template --ai generates a workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How template --ai generates a workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#correction-budget-and-failure-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correction budget and failure behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generation-tuning-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generation tuning knobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3760,6 +3799,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#how-template-ai-generates-a-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How template --ai generates a workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How template --ai generates a workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#correction-budget-and-failure-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correction budget and failure behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generation-tuning-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generation tuning knobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3918,6 +3996,78 @@ itself:</p>
 <p>All AI features go through the configured provider (see <code>oxo-flow ai
 status</code>); deterministic behavior never depends on the model — AI output is
 always additive prose or proposals, never silent engine decisions.</p>
+<h2 id="how-template-ai-generates-a-workflow">How <code>template --ai</code> generates a workflow<a class="headerlink" href="#how-template-ai-generates-a-workflow" title="Permanent link">#</a></h2>
+<p><code>template --ai</code> runs the same generation agent as the web translate and
+chat surfaces — one shared persona in <code>oxo-flow-ai</code>, one orchestrator
+loop. The steps:</p>
+<ol>
+<li><strong>Resolve the destination</strong> — <code>-o</code> is parsed before anything is sent
+   to the provider, so a bad output path fails cheaply.</li>
+<li><strong>Gather context</strong> — <code>--from-url</code> references are fetched through the
+   SSRF-screened fetcher; <code>--from-file</code> files are read with bounded
+   previews. Both enter the prompt as external reference material.</li>
+<li><strong>Plan</strong> — the shared persona's system prompt encodes the <code>.oxoflow</code>
+   schema (single-brace templates, <code>[[rules]]</code> arrays, <code>depends_on</code>,
+   version-pinned conda packages) and explicitly bans the wrong dialects
+   models tend to drift into (<code>foreach</code>, <code>inputs = {...}</code> maps,
+   <code>[resources]</code> sections). Domain-matched bioSkills and any activated
+   <code>[ai] skills</code> are injected as prompt sections.</li>
+<li><strong>Ground with tools</strong> — the model queries the embedded knowledge
+   bases on demand: <code>lookup_tool</code> for exact Bioconda names/versions,
+   <code>lookup_skill</code>/<code>lookup_pipeline</code> for domain procedures and topologies.
+   Non-read-only tools (e.g. MCP tools from activated tool skills) ask
+   for interactive approval on stderr before running; non-interactive
+   sessions refuse them.</li>
+<li><strong>Validate against the engine</strong> — every draft is parsed by the core
+   engine (<code>WorkflowConfig</code>). On failure the errors feed back to the
+   model for correction; this loop is bounded by <code>--ai-max-retries</code>.</li>
+<li><strong>Deliver</strong> — the validated TOML is written, the three static gates
+   (<code>validate</code> / <code>dry-run</code> / <code>lint</code>) can then confirm it, and the AI
+   session (token usage, tool calls) is archived to
+   <code>~/.oxo-flow/ai_sessions/</code>.</li>
+</ol>
+<h3 id="correction-budget-and-failure-behavior">Correction budget and failure behavior<a class="headerlink" href="#correction-budget-and-failure-behavior" title="Permanent link">#</a></h3>
+<ul>
+<li><code>--ai-max-retries N</code> sizes the orchestrator's combined tool +
+  correction-round budget (default from <code>[ai]</code> config, 6 when unset —
+  knowledge lookups and the correction pass share the budget, and the
+  loop stops as soon as a draft validates).</li>
+<li>If the budget runs out after a pipeline was drafted, the command
+  <strong>degrades instead of discarding</strong>: the generated TOML is extracted
+  from the transcript and written with a prominent review warning —
+  a paid-for artifact is never silently lost.</li>
+<li>Provider failures (auth, quota, network) fail fast with the error.</li>
+</ul>
+<h3 id="generation-tuning-knobs">Generation tuning knobs<a class="headerlink" href="#generation-tuning-knobs" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>When to change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
+<td><code>4096</code></td>
+<td>Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible endpoint) spend reasoning tokens against this ceiling and truncate before producing TOML — raise to 16384+ there. For non-thinking models the default holds with ≥3× headroom (measured: 1.9k–4.4k output tokens per generation)</td>
+</tr>
+<tr>
+<td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
+<td><code>120</code></td>
+<td>Non-thinking generations complete in 12–20 s; thinking backends can exceed two minutes per call — raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code>, or long completions die mid-body</td>
+</tr>
+</tbody>
+</table>
+<p>Both are consumed by the Anthropic Messages backend; the DeepSeek-native,
+OpenAI-compatible, and Ollama backends have their own budgets.</p>
+<p>Quality evidence for these calibrations (gate-scored benchmark,
+before/after the generation unification) lives in <code>eval/frontier/</code> in
+the repository. The architecture view of the shared harness — how the
+CLI, translate, and chat surfaces differ only in provider resolution,
+tool policy, and presentation — is in
+<a href="https://traitome.github.io/oxo-flow/latest/reference/architecture/#ai-subsystem">Architecture → AI Subsystem</a>.</p>
 
 
 

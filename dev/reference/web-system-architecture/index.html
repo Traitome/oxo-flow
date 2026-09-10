@@ -4257,7 +4257,7 @@
 <tr>
 <td><strong>ai</strong></td>
 <td><code>domains/ai/</code></td>
-<td>AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama)</td>
+<td>AI translate, explain, interpret, optimize; generation runs the shared agent + orchestrator harness (see <a href="../architecture/">Architecture → AI Subsystem</a>) over the provider fallback chain</td>
 </tr>
 <tr>
 <td><strong>auth</strong></td>
@@ -4267,7 +4267,7 @@
 <tr>
 <td><strong>chat</strong></td>
 <td><code>domains/chat/</code></td>
-<td>Real-time AI copilot chat and streaming</td>
+<td>Real-time AI copilot chat and streaming; generation uses the same harness as translate, plus read-only run-diagnosis tools</td>
 </tr>
 <tr>
 <td><strong>clusters</strong></td>
