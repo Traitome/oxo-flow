@@ -184,7 +184,10 @@ pub async fn translate_intent(
             workflow_path: None,
             workflow_content: None,
             external_sources: vec![],
-            max_rounds: 4,
+            // 6 rounds, matching the chat route: knowledge lookups spend
+            // ~2 rounds before text, and the validation-feedback fix needs
+            // 1-2 more — 4 starved tool-heavy intents (E2E finding).
+            max_rounds: 6,
             tool_registry: oxo_flow_ai::tools::builtin::knowledge_tool_registry(),
             tool_approver: None,
             session: oxo_flow_ai::session::AiSession::new(
@@ -194,7 +197,7 @@ pub async fn translate_intent(
                 &candidate.model().unwrap_or_else(|| "default".into()),
             ),
         };
-        let orchestrator = Orchestrator::new(candidate.clone(), 4);
+        let orchestrator = Orchestrator::new(candidate.clone(), 6);
         match orchestrator.execute(&agent, &ctx).await {
             Ok(outcome) if outcome.success && outcome.content.is_some() => {
                 generated = Some((outcome.content.unwrap(), label));
