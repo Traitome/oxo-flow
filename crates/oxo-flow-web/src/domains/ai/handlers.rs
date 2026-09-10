@@ -9,25 +9,10 @@ use axum::{Extension, Json, http::StatusCode};
 use crate::domains::ai::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
-use crate::domains::workflow::handlers::{ApiError, err};
+use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-/// 503 the translate endpoints return when neither the acting user nor the
-/// server has a usable AI provider — the same structured signal the chat
-/// endpoints emit, so clients can branch on one code.
-fn ai_not_configured() -> (StatusCode, Json<ApiError>) {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiError {
-            code: "AI_NOT_CONFIGURED".into(),
-            message: "AI assistant is not configured".into(),
-            detail: Some("no usable AI provider for this user".into()),
-            suggestion: Some("Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into()),
-        }),
-    )
-}
 
 fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
@@ -68,12 +53,8 @@ pub async fn translate(
     Json(req): Json<TranslateRequest>,
 ) -> ApiResult<TranslateResponse> {
     let user = resolve(authenticated.as_ref());
-    let provider = crate::ai_provider::provider_for(&user.id).await;
-    if matches!(provider, crate::ai_provider::AiProvider::Noop) {
-        return Err(ai_not_configured());
-    }
-    // Boundary check before anything is sent to a paid provider: an empty
-    // intent would otherwise come back as a fully hallucinated pipeline.
+    // Boundary checks before any I/O: an empty intent would otherwise come
+    // back as a fully hallucinated pipeline.
     if req.intent.trim().is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -82,6 +63,7 @@ pub async fn translate(
         ));
     }
 
+    let provider = crate::ai_provider::provider_for(&user.id).await;
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -99,7 +81,15 @@ pub async fn translate(
     super::service::translate_intent(&provider, &user.id, &req.intent, None, &templates)
         .await
         .map(Json)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", e))
+        .map_err(|e| match e {
+            super::service::TranslateError::Unavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ai_not_configured_error()),
+            ),
+            super::service::TranslateError::Failed(message) => {
+                err(StatusCode::BAD_REQUEST, "AI_TRANSLATE_ERROR", message)
+            }
+        })
 }
 
 #[utoipa::path(
@@ -123,9 +113,19 @@ pub async fn translate_sse(
     use std::convert::Infallible;
 
     let user = resolve(authenticated.as_ref());
-    let provider = crate::ai_provider::provider_for(&user.id).await;
+    // Boundary check before any I/O: an empty intent must fail cheaply
+    // instead of paying for a hallucinated pipeline.
+    let invalid_intent = req.intent.trim().is_empty();
 
-    let templates: Vec<String> = if let Ok(pool) = get_pool() {
+    let provider = if invalid_intent {
+        None
+    } else {
+        Some(crate::ai_provider::provider_for(&user.id).await)
+    };
+
+    let templates: Vec<String> = if invalid_intent {
+        vec![]
+    } else if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
         )
@@ -141,31 +141,15 @@ pub async fn translate_sse(
 
     let intent = req.intent.clone();
     let stream = async_stream::stream! {
-        // A disabled/unconfigured instance reports the same structured
-        // signal as the chat SSE route instead of a generic stream error.
-        if matches!(provider, crate::ai_provider::AiProvider::Noop) {
-            yield Ok::<_, Infallible>(Event::default()
-                .event("error")
-                .data(serde_json::json!({
-                    "code": "AI_NOT_CONFIGURED",
-                    "message": "AI assistant is not configured",
-                    "detail": "no usable AI provider for this user",
-                    "suggestion": "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin."
-                }).to_string()));
+        if invalid_intent {
+            yield Ok::<_, Infallible>(error_event(&err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_INTENT",
+                "Intent must not be empty".into(),
+            ).1));
             return;
         }
-
-        // An empty intent must fail cheaply instead of paying for a
-        // hallucinated pipeline.
-        if intent.trim().is_empty() {
-            yield Ok::<_, Infallible>(Event::default()
-                .event("error")
-                .data(serde_json::json!({
-                    "code": "INVALID_INTENT",
-                    "message": "Intent must not be empty"
-                }).to_string()));
-            return;
-        }
+        let provider = provider.expect("provider resolved for non-empty intent");
 
         // Step 1: intent received
         yield Ok::<_, Infallible>(Event::default()
@@ -185,7 +169,9 @@ pub async fn translate_sse(
         let result =
             super::service::translate_intent(&provider, &user.id, &intent, None, &templates).await;
 
-        // Step 4: validate + done
+        // Step 4: validate + done. Errors share the JSON routes' shape and
+        // always terminate with `done`, so an SSE client can branch on
+        // `code` and never hangs waiting for a terminal event.
         match result {
             Ok(response) => {
                 let json = serde_json::to_string(&response).unwrap_or_default();
@@ -197,9 +183,17 @@ pub async fn translate_sse(
                     .data(json));
             }
             Err(e) => {
-                yield Ok::<_, Infallible>(Event::default()
-                    .event("error")
-                    .data(serde_json::json!({"error": e}).to_string()));
+                let error = match e {
+                    super::service::TranslateError::Unavailable => ai_not_configured_error(),
+                    super::service::TranslateError::Failed(message) => ApiError {
+                        code: "AI_TRANSLATE_ERROR".into(),
+                        message,
+                        detail: None,
+                        suggestion: None,
+                    },
+                };
+                yield Ok::<_, Infallible>(error_event(&error));
+                yield Ok::<_, Infallible>(Event::default().event("done").data("{}"));
             }
         }
     };

@@ -88,8 +88,9 @@ The shipped default `[ai] max_retries` moved 3 → 6 after the spot-check
 below showed the thinking tier starving at the old default: with 2–3
 rounds the model spends its whole budget on knowledge-tool lookups
 before writing any TOML, and the run dies at the round cap with the
-session archived (paid, invisible in artifacts). `run_eval.py` now
-defaults `--max-retries` to 6 so bare runs measure the shipped config.
+session archived (paid, invisible in artifacts). `run_eval.py` no longer
+passes `--ai-max-retries` unless overridden, so bare runs measure
+whatever the binary actually ships.
 
 Spot-check, same model and ceilings (16384 / 300s), `cli` variant:
 

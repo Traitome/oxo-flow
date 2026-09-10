@@ -96,23 +96,6 @@ pub async fn provider_for(user_id: &str) -> AiProvider {
     AiProviderRegistry::global().get_provider()
 }
 
-/// Emit the paid-for token spend of a finished generation to the operation
-/// log. Web sessions are not archived to disk (the AI service keeps its
-/// zero-write guarantee), so this line is the only durable record of the
-/// spend on the web surfaces.
-pub fn log_generation_usage(surface: &str, session: &oxo_flow_ai::session::AiSession) {
-    let usage = &session.total_usage;
-    if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {
-        tracing::info!(
-            surface,
-            session = %session.id,
-            prompt_tokens = usage.prompt_tokens,
-            completion_tokens = usage.completion_tokens,
-            "AI generation usage"
-        );
-    }
-}
-
 /// Compatibility wrapper — delegates to `oxo_flow_ai::AiRegistry`.
 ///
 /// All original methods are preserved with the same signatures.
@@ -183,7 +166,7 @@ impl AiProviderRegistry {
             model,
             api_key,
             api_url,
-            max_retries: 3,
+            max_retries: oxo_flow_ai::config::default_max_retries(),
             auto_fix: AutoFixMode::Ask,
             temperature: None,
             skills: Vec::new(),

@@ -11,7 +11,7 @@ use std::convert::Infallible;
 use super::service;
 use super::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err};
+use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -137,42 +137,43 @@ pub async fn chat_send(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    // Boundary check before any I/O: an empty message must fail cheaply
+    // instead of writing junk history rows and paying for a hallucinated
+    // pipeline.
+    let empty_message = message.trim().is_empty();
+
     // Server-side persistence (issue #81): the session + user message are
     // recorded up front; the assistant's answer is appended on completion.
     let pool = crate::infra::db::sqlite::try_pool().ok();
-    persist_user_message(pool, &user, &session_id, &message).await;
+    if !empty_message {
+        persist_user_message(pool, &user, &session_id, &message).await;
+    }
 
     // Chat runs on the acting user's own AI provider (isolation fix). The
     // usability check is on the RESOLVED provider — the caller's own key
     // counts even when the shared runtime is unconfigured, and a disabled
     // instance still reports AI_NOT_CONFIGURED.
-    let provider = crate::ai_provider::provider_for(&user.id).await;
+    let provider = if empty_message {
+        crate::ai_provider::AiProvider::Noop
+    } else {
+        crate::ai_provider::provider_for(&user.id).await
+    };
 
     let stream = async_stream::stream! {
-        // An empty message must fail cheaply instead of paying for a
-        // hallucinated pipeline.
-        if message.trim().is_empty() {
-            yield Ok::<_, Infallible>(Event::default()
-                .event("error")
-                .data(serde_json::json!({
-                    "code": "EMPTY_MESSAGE",
-                    "message": "Message must not be empty"
-                }).to_string()));
+        if empty_message {
+            yield Ok::<_, Infallible>(error_event(&err(
+                axum::http::StatusCode::BAD_REQUEST,
+                "EMPTY_MESSAGE",
+                "Message must not be empty".into(),
+            ).1));
             yield Ok::<_, Infallible>(Event::default()
                 .event("done")
                 .data(serde_json::json!({"session_id": session_id}).to_string()));
             return;
         }
 
-        if matches!(provider, crate::ai_provider::AiProvider::Noop) {
-            yield Ok::<_, Infallible>(Event::default()
-                .event("error")
-                .data(serde_json::json!({
-                    "code": "AI_NOT_CONFIGURED",
-                    "message": "AI assistant is not configured",
-                    "detail": "no usable AI provider for this user",
-                    "suggestion": "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin."
-                }).to_string()));
+        if !provider.is_usable() {
+            yield Ok::<_, Infallible>(error_event(&crate::domains::workflow::handlers::ai_not_configured_error()));
             yield Ok::<_, Infallible>(Event::default()
                 .event("done")
                 .data(serde_json::json!({"session_id": session_id}).to_string()));
@@ -285,6 +286,17 @@ pub async fn chat_send_json(
     Json(req): Json<ChatRequest>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
+    // Boundary check before any I/O: an empty message must fail cheaply
+    // instead of writing junk history rows and paying for a hallucinated
+    // pipeline.
+    if req.message.trim().is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "EMPTY_MESSAGE",
+            "Message must not be empty".into(),
+        ));
+    }
+
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
             "SELECT * FROM templates ORDER BY usage_count DESC LIMIT 20",
@@ -306,44 +318,29 @@ pub async fn chat_send_json(
     let pool = crate::infra::db::sqlite::try_pool().ok();
     persist_user_message(pool, &user, &session_id, &req.message).await;
 
-    let provider = crate::ai_provider::provider_for(&user.id).await;
-
-    // An empty message must fail cheaply instead of paying for a
-    // hallucinated pipeline.
-    if req.message.trim().is_empty() {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "EMPTY_MESSAGE",
-            "Message must not be empty".into(),
-        ));
-    }
-
+    // Chat runs on the acting user's own AI provider (isolation fix).
     // Usability is judged on the RESOLVED provider: the caller's own key
     // counts even when the shared runtime is unconfigured, and a disabled
     // instance still reports AI_NOT_CONFIGURED.
-    if matches!(provider, crate::ai_provider::AiProvider::Noop) {
+    let provider = crate::ai_provider::provider_for(&user.id).await;
+    if !provider.is_usable() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                code: "AI_NOT_CONFIGURED".into(),
-                message: "AI assistant is not configured".into(),
-                detail: Some("no usable AI provider for this user".into()),
-                suggestion: Some(
-                    "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into(),
-                ),
-            }),
+            Json(ai_not_configured_error()),
         ));
     }
 
+    let invocation = service::ChatInvocation {
+        run_id: req.run_id.as_deref(),
+        user_id: &user.id,
+        is_admin: user.is_admin(),
+    };
     match service::process_chat(
         &req.message,
-        Some(&session_id),
         req.context.as_ref(),
         &templates,
         &provider,
-        req.run_id.as_deref(),
-        &user.id,
-        user.is_admin(),
+        &invocation,
     )
     .await
     {

@@ -85,6 +85,27 @@ pub fn err(status: StatusCode, code: &str, msg: String) -> (StatusCode, Json<Api
     )
 }
 
+/// The one `AI_NOT_CONFIGURED` contract shared by every AI surface: JSON
+/// routes wrap it in `Json`, streaming routes serialize the same struct
+/// into their `error` event, so clients can branch on `code` everywhere.
+pub fn ai_not_configured_error() -> ApiError {
+    ApiError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "AI assistant is not configured".into(),
+        detail: Some("no usable AI provider for this user".into()),
+        suggestion: Some("Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into()),
+    }
+}
+
+/// Serialize a structured error into the payload of an SSE `error` event,
+/// mirroring the JSON routes' `ApiError` shape.
+pub fn error_event(error: &ApiError) -> axum::response::sse::Event {
+    let data = serde_json::to_string(error).unwrap_or_else(|_| error.code.clone());
+    axum::response::sse::Event::default()
+        .event("error")
+        .data(data)
+}
+
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }

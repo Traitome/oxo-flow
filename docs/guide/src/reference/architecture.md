@@ -590,7 +590,7 @@ The surfaces differ only in adapter concerns:
 | Tools | full registry + MCP; non-read-only needs interactive approval | read-only knowledge registry only | knowledge registry + run-diagnosis tools |
 | Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
 | Correction budget | `--ai-max-retries` (default 6) | 6 rounds | 6 rounds |
-| Session destination | `~/.oxo-flow/ai_sessions/` archive | in-process; token usage logged | chat messages in DB; token usage logged |
+| Session destination | `~/.oxo-flow/ai_sessions/` archive | failure sessions archived by the shared orchestrator; every run's token usage in the operation log | chat messages in DB; token usage in the operation log |
 | Failure behavior | degrade: deliver the transcript's TOML with a warning | `AI_NOT_CONFIGURED` when no provider is usable; template-keyword fallback when providers fail | `AI_NOT_CONFIGURED` when no provider is usable; degraded delivery over SSE |
 
 Two provider-level ceilings matter for thinking-style backends (models

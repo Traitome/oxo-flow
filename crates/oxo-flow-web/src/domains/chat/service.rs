@@ -7,6 +7,57 @@ use super::types::*;
 use crate::ai_provider::AiProvider;
 use crate::domains::workflow::service as workflow_svc;
 
+/// Correction-round budget shared by both chat routes — the shipped
+/// `[ai] max_retries` default, whose economics (knowledge lookups + a
+/// correction pass in one budget) apply identically here.
+fn chat_max_rounds() -> u32 {
+    oxo_flow_ai::config::default_max_retries()
+}
+
+/// Who is asking, and what the request is scoped to. `run_id` admits the
+/// read-only run-diagnosis tools, scoped to the acting user.
+pub struct ChatInvocation<'a> {
+    pub run_id: Option<&'a str>,
+    pub user_id: &'a str,
+    pub is_admin: bool,
+}
+
+/// Run the shared generation harness for a chat request. This is the ONE
+/// place the web chat harness is assembled — context, tool registry,
+/// session labels, round budget, orchestrator, usage logging — so the
+/// streaming and JSON routes cannot drift.
+async fn run_chat_generation(
+    agent: super::agent::ChatAgent,
+    message: &str,
+    intent: String,
+    invocation: &ChatInvocation<'_>,
+    provider: &AiProvider,
+    sink: Option<&mut AgentEventSink>,
+) -> Result<AgentOutcome, String> {
+    let ctx = oxo_flow_ai::agent::AgentContext {
+        intent,
+        command: message.to_string(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources: vec![],
+        max_rounds: chat_max_rounds(),
+        tool_registry: super::tools::build_chat_tool_registry(
+            invocation.run_id,
+            invocation.user_id,
+            invocation.is_admin,
+        ),
+        tool_approver: None,
+        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
+    };
+
+    let orchestrator = Orchestrator::new(provider.clone(), chat_max_rounds());
+    let outcome = orchestrator
+        .execute_with_sink(&agent, &ctx, sink, None)
+        .await;
+    // Token spend is logged by the orchestrator itself (all surfaces).
+    outcome.map_err(|e| e.to_string())
+}
+
 /// Process a chat message and return the validated pipeline. This is the
 /// JSON variant of the conversational AI pipeline.
 ///
@@ -16,18 +67,13 @@ use crate::domains::workflow::service as workflow_svc;
 /// This endpoint previously ran its own one-shot prompt with no tools and
 /// no correction loop — the weakest of the four generation paths. It now
 /// runs the same shared persona + orchestrator harness as the SSE chat
-/// route and the CLI, differing only in presentation; `run_id` scopes the
-/// read-only run-diagnosis tools exactly as the SSE route does.
-#[allow(clippy::too_many_arguments)]
+/// route and the CLI, differing only in presentation.
 pub async fn process_chat(
     message: &str,
-    _session_id: Option<&str>,
     context: Option<&ChatContext>,
     templates: &[String],
     provider: &AiProvider,
-    run_id: Option<&str>,
-    user_id: &str,
-    is_admin: bool,
+    invocation: &ChatInvocation<'_>,
 ) -> Result<(String, serde_json::Value), String> {
     // Phase 1: Orchestrator — understand intent
     let intent = if let Some(ctx) = context {
@@ -74,30 +120,22 @@ pub async fn process_chat(
         ));
     }
 
-    let ctx = oxo_flow_ai::agent::AgentContext {
-        intent: intent.clone(),
-        command: message.to_string(),
-        workflow_path: None,
-        workflow_content: None,
-        external_sources: vec![],
-        max_rounds: 6,
-        tool_registry: super::tools::build_chat_tool_registry(run_id, user_id, is_admin),
-        tool_approver: None,
-        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
-    };
-
-    let orchestrator = Orchestrator::new(provider.clone(), 6);
-    let outcome = orchestrator
-        .execute(&agent, &ctx)
-        .await
-        .map_err(|e| {
-            tracing::warn!("AI provider {} request failed: {e}", provider.name());
-            format!(
-                "AI provider request failed for {}: please check the provider configuration and network connectivity",
-                provider.name()
-            )
-        })?;
-    crate::ai_provider::log_generation_usage("chat", &outcome.session);
+    let outcome = run_chat_generation(
+        agent,
+        message,
+        intent.clone(),
+        invocation,
+        provider,
+        None,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!("AI provider {} request failed: {e}", provider.name());
+        format!(
+            "AI provider request failed for {}: please check the provider configuration and network connectivity",
+            provider.name()
+        )
+    })?;
     let toml_content = outcome
         .content
         .ok_or_else(|| "AI generation did not produce a valid pipeline".to_string())?;
@@ -294,35 +332,29 @@ pub async fn run_chat_agent(
     sink: Option<&mut AgentEventSink>,
     provider: &AiProvider,
 ) -> Result<AgentOutcome, String> {
-    let agent = super::agent::ChatAgent::new(infer_intent(message), message.to_string());
-    let ctx = oxo_flow_ai::agent::AgentContext {
-        intent: infer_intent(message),
-        command: message.to_string(),
-        workflow_path: None,
-        workflow_content: None,
-        external_sources: vec![],
-        max_rounds: 6,
-        tool_registry: super::tools::build_chat_tool_registry(run_id, user_id, is_admin),
-        tool_approver: None,
-        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
-    };
-    // Context-supplied data paths feed the user prompt (deterministic
-    // data perception stays out of the model loop).
-    if let Some(ctx) = context
-        && let Some(paths) = &ctx.data_paths
-        && !paths.is_empty()
+    // The streaming route builds the SAME agent as the JSON route: an
+    // explicit context intent wins over keyword inference, and analyzed data
+    // paths feed the prompt as a data report.
+    let intent = context
+        .and_then(|c| c.intent.clone())
+        .unwrap_or_else(|| infer_intent(message));
+    let data_report = context
+        .and_then(|c| c.data_paths.as_ref())
+        .filter(|p| !p.is_empty())
+        .and_then(|paths| analyze_data_paths(paths));
+    let mut agent = super::agent::ChatAgent::new(intent.clone(), message.to_string());
+    if let Some(report) = &data_report
+        && let Some(summary) = report.get("summary")
     {
-        let _ = crate::domains::workflow::data::analyze_files(paths, Some(2));
+        agent = agent.with_user_addition(format!("## Data Report\n{summary}"));
     }
 
-    let orchestrator = Orchestrator::new(provider.clone(), 6);
-    let outcome = orchestrator
-        .execute_with_sink(&agent, &ctx, sink, None)
-        .await;
-    if let Ok(outcome) = &outcome {
-        crate::ai_provider::log_generation_usage("chat", &outcome.session);
-    }
-    outcome.map_err(|e| e.to_string())
+    let invocation = ChatInvocation {
+        run_id,
+        user_id,
+        is_admin,
+    };
+    run_chat_generation(agent, message, intent, &invocation, provider, sink).await
 }
 
 #[cfg(test)]

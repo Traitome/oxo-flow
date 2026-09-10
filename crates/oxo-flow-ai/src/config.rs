@@ -57,7 +57,11 @@ pub struct AiConfig {
     pub skills: Vec<String>,
 }
 
-fn default_max_retries() -> u32 {
+/// The shipped round-budget default. Single source for every consumer that
+/// sizes an agent loop without explicit user configuration — the CLI config
+/// chain, the web surfaces' chat budget, and config writes (a reconfigure
+/// that persisted the old starved default would quietly reintroduce it).
+pub fn default_max_retries() -> u32 {
     // Rounds are shared between knowledge-tool lookups and validation-feedback
     // corrections: tool-heavy intents routinely spend 2-3 rounds querying the
     // embedded databases before writing any TOML, and a correction pass needs
