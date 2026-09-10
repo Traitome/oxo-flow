@@ -280,8 +280,9 @@ def main() -> None:
     ap.add_argument("--variants", default="minimal,cli")
     ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
-    ap.add_argument("--max-retries", type=int, default=2,
-                    help="CLI tool-loop budget (--ai-max-retries)")
+    ap.add_argument("--max-retries", type=int, default=6,
+                    help="CLI tool-loop budget (--ai-max-retries); default matches "
+                         "the shipped [ai] max_retries")
     ap.add_argument("--timeout", type=float, default=900, help="per-generation timeout (s)")
     ap.add_argument("--sleep", type=float, default=1.0, help="pause between runs (s)")
     args = ap.parse_args()
