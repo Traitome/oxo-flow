@@ -926,7 +926,12 @@ mod knowledge_registry_tests {
     fn registry_is_read_only_and_complete() {
         let registry = knowledge_tool_registry();
         assert_eq!(registry.len(), 4);
-        for name in ["lookup_tool", "lookup_skill", "lookup_pipeline", "fetch_url"] {
+        for name in [
+            "lookup_tool",
+            "lookup_skill",
+            "lookup_pipeline",
+            "fetch_url",
+        ] {
             assert!(registry.get(name).is_some(), "missing {name}");
             assert!(registry.is_read_only(name), "{name} must be read-only");
         }

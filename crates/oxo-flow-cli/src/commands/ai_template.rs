@@ -355,7 +355,10 @@ pub async fn generate_workflow(
         }
         Ok(o) => {
             archive_session(&o.session);
-            anyhow::bail!("pipeline generation did not produce a valid workflow: {}", o.summary);
+            anyhow::bail!(
+                "pipeline generation did not produce a valid workflow: {}",
+                o.summary
+            );
         }
         Err(e) => {
             // Round-cap or provider failure: the orchestrator archived the

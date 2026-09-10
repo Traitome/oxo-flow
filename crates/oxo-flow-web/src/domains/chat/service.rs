@@ -78,12 +78,7 @@ pub async fn process_chat(
         max_rounds: 6,
         tool_registry: super::tools::build_chat_tool_registry(None, "", false),
         tool_approver: None,
-        session: oxo_flow_ai::session::AiSession::new(
-            "web-chat",
-            "chat",
-            "web",
-            provider.name(),
-        ),
+        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
     };
 
     let orchestrator = Orchestrator::new(provider.clone(), 6);
@@ -97,9 +92,9 @@ pub async fn process_chat(
                 provider.name()
             )
         })?;
-    let toml_content = outcome.content.ok_or_else(|| {
-        "AI generation did not produce a valid pipeline".to_string()
-    })?;
+    let toml_content = outcome
+        .content
+        .ok_or_else(|| "AI generation did not produce a valid pipeline".to_string())?;
 
     // Phase 4: validation is guaranteed by the agent's validator; it is
     // re-run here only to populate the response payload.
@@ -342,7 +337,6 @@ mod tests {
         let intent = infer_intent("run fastqc quality check");
         assert_eq!(intent, "Quality control");
     }
-
 }
 
 #[cfg(test)]

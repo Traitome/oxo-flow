@@ -139,27 +139,26 @@ pub async fn translate_intent(
     // Step 2: Shared agent + orchestrator over the provider fallback chain.
     // Read-only knowledge tools only, no approver: non-read-only calls are
     // refused by construction (the module's zero-write guarantee).
-    let validator: oxo_flow_ai::agent::pipeline_gen::OutputValidator =
-        std::sync::Arc::new(|toml: &str| {
-            match workflow_svc::validate_pipeline(toml, None) {
-                Ok(v) if v.valid => oxo_flow_ai::agent::ValidationResult::passed(),
-                Ok(v) => oxo_flow_ai::agent::ValidationResult {
-                    passed: false,
-                    errors: v.errors.iter().map(|e| e.message.clone()).collect(),
-                    warnings: vec![],
-                    summary: format!("{} validation error(s)", v.errors.len()),
-                },
-                Err(e) => oxo_flow_ai::agent::ValidationResult {
-                    passed: false,
-                    errors: vec![e],
-                    warnings: vec![],
-                    summary: "validation failed".into(),
-                },
-            }
-        });
+    let validator: oxo_flow_ai::agent::pipeline_gen::OutputValidator = std::sync::Arc::new(
+        |toml: &str| match workflow_svc::validate_pipeline(toml, None) {
+            Ok(v) if v.valid => oxo_flow_ai::agent::ValidationResult::passed(),
+            Ok(v) => oxo_flow_ai::agent::ValidationResult {
+                passed: false,
+                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
+                warnings: vec![],
+                summary: format!("{} validation error(s)", v.errors.len()),
+            },
+            Err(e) => oxo_flow_ai::agent::ValidationResult {
+                passed: false,
+                errors: vec![e],
+                warnings: vec![],
+                summary: "validation failed".into(),
+            },
+        },
+    );
 
-    let mut agent = oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent)
-        .with_validator(validator);
+    let mut agent =
+        oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent).with_validator(validator);
     if let Some(summary) = data_summary {
         agent = agent.with_user_addition(format!("## Data Context\n{summary}"));
     }

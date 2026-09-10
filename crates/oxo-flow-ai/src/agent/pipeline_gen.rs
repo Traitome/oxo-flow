@@ -356,13 +356,18 @@ mod tests {
     fn extract_toml_raw_requires_rules_table() {
         // Anti-prose guard: [workflow] without any rules table is prose.
         assert_eq!(extract_toml("blah [workflow]\nname = \"x\" and talk"), None);
-        let ok = extract_toml("blah\n[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"r\"\nshell = \"echo\"");
+        let ok = extract_toml(
+            "blah\n[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"r\"\nshell = \"echo\"",
+        );
         assert!(ok.is_some_and(|c| c.starts_with("[workflow]")));
     }
 
     #[test]
     fn extract_toml_rejects_plain_prose() {
-        assert_eq!(extract_toml("I cannot generate a pipeline right now."), None);
+        assert_eq!(
+            extract_toml("I cannot generate a pipeline right now."),
+            None
+        );
     }
 
     #[test]

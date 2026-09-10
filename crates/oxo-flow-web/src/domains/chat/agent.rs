@@ -41,21 +41,23 @@ impl ChatAgent {
 /// The web engine binding: extracted TOML must pass the workflow service's
 /// validation — errors feed the orchestrator's correction loop. Read-only.
 pub fn web_validator() -> OutputValidator {
-    Arc::new(|toml: &str| match workflow_svc::validate_pipeline(toml, None) {
-        Ok(v) if v.valid => ValidationResult::passed(),
-        Ok(v) => ValidationResult {
-            passed: false,
-            errors: v.errors.iter().map(|e| e.message.clone()).collect(),
-            warnings: vec![],
-            summary: format!("{} validation error(s)", v.errors.len()),
+    Arc::new(
+        |toml: &str| match workflow_svc::validate_pipeline(toml, None) {
+            Ok(v) if v.valid => ValidationResult::passed(),
+            Ok(v) => ValidationResult {
+                passed: false,
+                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
+                warnings: vec![],
+                summary: format!("{} validation error(s)", v.errors.len()),
+            },
+            Err(e) => ValidationResult {
+                passed: false,
+                errors: vec![e],
+                warnings: vec![],
+                summary: "validation failed".into(),
+            },
         },
-        Err(e) => ValidationResult {
-            passed: false,
-            errors: vec![e],
-            warnings: vec![],
-            summary: "validation failed".into(),
-        },
-    })
+    )
 }
 
 impl Agent for ChatAgent {
