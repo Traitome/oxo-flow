@@ -1,24 +1,61 @@
-//! The web chat agent — a thin `Agent` implementation over oxo-flow-ai's
-//! orchestrator, grounded in the embedded knowledge bases (assembled via
-//! `knowledge::assembler::for_generate`) and validated by the core engine.
+//! The web chat agent — a thin facade over the SHARED
+//! [`PipelineGenAgent`] persona (issue #342), grounded in the embedded
+//! knowledge bases and validated by the web workflow service.
+//!
+//! Before the unification this type carried its own 7-rule prompt that
+//! described a schema the engine does not have (`inputs`/`outputs` maps,
+//! `depends`, a `[resources]` section) — every artifact failed the static
+//! gates with E017. The prompt, extraction, and validation contract now
+//! come from one place; only the validator binding is web-specific.
 
+use std::sync::Arc;
+
+use oxo_flow_ai::agent::pipeline_gen::{OutputValidator, PipelineGenAgent};
 use oxo_flow_ai::agent::{Agent, AgentContext, ValidationResult};
 use oxo_flow_ai::types::Message;
 
 use crate::domains::workflow::service as workflow_svc;
 
 pub struct ChatAgent {
-    pub intent: String,
-    pub user_message: String,
+    inner: PipelineGenAgent,
 }
 
 impl ChatAgent {
     pub fn new(intent: String, user_message: String) -> Self {
         Self {
-            intent,
-            user_message,
+            inner: PipelineGenAgent::new(intent)
+                .with_validator(web_validator())
+                // The raw user message (free-form chat turn) supplements the
+                // intent-derived request line the shared persona builds.
+                .with_user_addition(format!("## User Message\n{user_message}")),
         }
     }
+
+    /// Additional user-prompt sections (data report, template hints).
+    pub fn with_user_addition(mut self, section: impl Into<String>) -> Self {
+        self.inner = self.inner.with_user_addition(section);
+        self
+    }
+}
+
+/// The web engine binding: extracted TOML must pass the workflow service's
+/// validation — errors feed the orchestrator's correction loop. Read-only.
+pub fn web_validator() -> OutputValidator {
+    Arc::new(|toml: &str| match workflow_svc::validate_pipeline(toml, None) {
+        Ok(v) if v.valid => ValidationResult::passed(),
+        Ok(v) => ValidationResult {
+            passed: false,
+            errors: v.errors.iter().map(|e| e.message.clone()).collect(),
+            warnings: vec![],
+            summary: format!("{} validation error(s)", v.errors.len()),
+        },
+        Err(e) => ValidationResult {
+            passed: false,
+            errors: vec![e],
+            warnings: vec![],
+            summary: "validation failed".into(),
+        },
+    })
 }
 
 impl Agent for ChatAgent {
@@ -27,67 +64,19 @@ impl Agent for ChatAgent {
     }
 
     fn plan(&self, ctx: &AgentContext) -> Message {
-        let assembled = oxo_flow_ai::knowledge::assembler::for_generate(ctx);
-        let mut prompt = format!(
-            "You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.\n\n\
-             Intent: {}\n\n\
-             Rules:\n\
-             1. Output the TOML in ```toml code fences\n\
-             2. Use well-known bioinformatics tools with correct command-line syntax\n\
-             3. Include the [workflow] section with name, version, description\n\
-             4. Define rules with name, input, output, shell\n\
-             5. Use {{sample}} wildcard for sample-varying paths\n\
-             6. input and output MUST be TOML arrays, e.g. input = [\"reads/{{sample}}.fastq.gz\"]\n\
-             7. When validation errors are reported back, fix the TOML directly\n\
-                from the error text — do not call more tools\n",
-            self.intent
-        );
-        for addition in &assembled.system_additions {
-            prompt.push_str("\n\n");
-            prompt.push_str(addition);
-        }
-        Message::system(&prompt)
+        self.inner.plan(ctx)
     }
 
-    fn user_message(&self, _ctx: &AgentContext) -> Message {
-        Message::user(&format!(
-            "Generate a .oxoflow pipeline for: {}",
-            self.user_message
-        ))
+    fn user_message(&self, ctx: &AgentContext) -> Message {
+        self.inner.user_message(ctx)
     }
 
-    /// Strip TOML code fences; keep raw TOML as-is.
-    fn extract_content(&self, content: &str) -> Option<String> {
-        if let Some(start) = content.find("```toml") {
-            let start = start + 7;
-            if let Some(end) = content[start..].find("```") {
-                return Some(content[start..start + end].trim().to_string());
-            }
-        }
-        if content.contains("[workflow]") {
-            return Some(content.to_string());
-        }
-        Some(content.trim().to_string())
+    fn extract_content(&self, response_content: &str) -> Option<String> {
+        self.inner.extract_content(response_content)
     }
 
-    /// Grounded validation: the extracted TOML must pass the core engine's
-    /// own validation — errors feed back into the loop for correction.
-    fn validate(&self, content: &str, _ctx: &AgentContext) -> ValidationResult {
-        match workflow_svc::validate_pipeline(content, None) {
-            Ok(v) if v.valid => ValidationResult::passed(),
-            Ok(v) => ValidationResult {
-                passed: false,
-                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
-                warnings: vec![],
-                summary: format!("{} validation error(s)", v.errors.len()),
-            },
-            Err(e) => ValidationResult {
-                passed: false,
-                errors: vec![e],
-                warnings: vec![],
-                summary: "validation failed".into(),
-            },
-        }
+    fn validate(&self, content: &str, ctx: &AgentContext) -> ValidationResult {
+        self.inner.validate(content, ctx)
     }
 }
 
@@ -121,5 +110,25 @@ mod tests {
         );
         assert!(!result.passed);
         assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn plan_teaches_the_engine_schema() {
+        // The regression the unification fixes: the persona must describe
+        // [[rules]] arrays, not the dialect the engine rejects.
+        let agent = ChatAgent::new("qc".into(), "run qc".into());
+        let msg = agent.plan(&AgentContext {
+            intent: "x".into(),
+            command: "x".into(),
+            workflow_path: None,
+            workflow_content: None,
+            external_sources: vec![],
+            max_rounds: 1,
+            tool_registry: oxo_flow_ai::tools::ToolRegistry::new(),
+            tool_approver: None,
+            session: oxo_flow_ai::session::AiSession::new("t", "t", "noop", "none"),
+        });
+        assert!(msg.content.contains("[[rules]]"));
+        assert!(msg.content.contains("depends_on"));
     }
 }

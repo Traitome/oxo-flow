@@ -168,12 +168,14 @@ pub fn activated_skill_context(project_dir: Option<&Path>, config: &AiConfig) ->
     registry.prompt_context().to_string()
 }
 
-/// Interactive human approval for a non-read-only tool call. Prompts on
-/// stderr and reads stdin; non-interactive sessions are denied (the safe
+/// Interactive human approval for a non-read-only tool call, in the sync
+/// form the shared [`ToolApprover`] closure requires. Prompts on stderr
+/// and reads stdin; non-interactive sessions are denied (the safe
 /// default — matching the trust boundary: AI never executes autonomously).
-pub async fn prompt_tool_approval(tool_name: &str, arguments: &str) -> bool {
-    let can_prompt = std::io::IsTerminal::is_terminal(&std::io::stderr())
-        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+pub fn prompt_tool_approval_blocking(tool_name: &str, arguments: &str) -> bool {
+    use std::io::{IsTerminal, Write as _};
+
+    let can_prompt = std::io::stderr().is_terminal() && std::io::stdin().is_terminal();
     if !can_prompt {
         return false;
     }
@@ -181,18 +183,13 @@ pub async fn prompt_tool_approval(tool_name: &str, arguments: &str) -> bool {
     eprintln!("  {} tool '{}' is not read-only:", "⚠".yellow(), tool_name);
     eprintln!("  Arguments: {arguments}");
     eprint!("  Allow execution? [y/N] ");
-    use std::io::Write as _;
     std::io::stderr().flush().ok();
 
-    tokio::task::spawn_blocking(|| {
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_ok() {
-            let trimmed = input.trim();
-            trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
-        } else {
-            false
-        }
-    })
-    .await
-    .unwrap_or(false)
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_ok() {
+        let trimmed = input.trim();
+        trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
+    } else {
+        false
+    }
 }

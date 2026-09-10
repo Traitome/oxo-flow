@@ -7,11 +7,16 @@ use super::types::*;
 use crate::ai_provider::AiProvider;
 use crate::domains::workflow::service as workflow_svc;
 
-/// Process a chat message and return SSE events via a channel.
-/// This is the main entry point for the conversational AI pipeline.
+/// Process a chat message and return the validated pipeline. This is the
+/// JSON variant of the conversational AI pipeline.
 ///
 /// `provider` is the ACTING USER's provider (issue #82 follow-up: chat
 /// runs on the caller's own AI credentials, never the shared runtime).
+///
+/// Issue #342: this endpoint previously ran its own one-shot prompt with
+/// no tools and no correction loop — the weakest of the four generation
+/// paths. It now runs the same shared persona + orchestrator harness as
+/// the SSE chat route and the CLI, differing only in presentation.
 pub async fn process_chat(
     message: &str,
     _session_id: Option<&str>,
@@ -45,12 +50,45 @@ pub async fn process_chat(
         None
     };
 
-    // Phase 3: AI generation via the acting user's provider
-    let system_prompt = build_system_prompt(&intent, data_report.as_ref(), templates);
-    let user_prompt = format!("Generate a .oxoflow pipeline for: {message}");
+    // Phase 3: AI generation via the shared agent + orchestrator
+    let mut agent = super::agent::ChatAgent::new(intent.clone(), message.to_string());
+    if let Some(report) = &data_report
+        && let Some(summary) = report.get("summary")
+    {
+        agent = agent.with_user_addition(format!("## Data Report\n{summary}"));
+    }
+    if !templates.is_empty() {
+        agent = agent.with_user_addition(format!(
+            "## Available Templates\n{}",
+            templates
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n- ")
+        ));
+    }
 
-    let ai_response = provider
-        .chat(&system_prompt, &user_prompt)
+    let ctx = oxo_flow_ai::agent::AgentContext {
+        intent: intent.clone(),
+        command: message.to_string(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources: vec![],
+        max_rounds: 6,
+        tool_registry: super::tools::build_chat_tool_registry(None, "", false),
+        tool_approver: None,
+        session: oxo_flow_ai::session::AiSession::new(
+            "web-chat",
+            "chat",
+            "web",
+            provider.name(),
+        ),
+    };
+
+    let orchestrator = Orchestrator::new(provider.clone(), 6);
+    let outcome = orchestrator
+        .execute(&agent, &ctx)
         .await
         .map_err(|e| {
             tracing::warn!("AI provider {} request failed: {e}", provider.name());
@@ -59,11 +97,12 @@ pub async fn process_chat(
                 provider.name()
             )
         })?;
+    let toml_content = outcome.content.ok_or_else(|| {
+        "AI generation did not produce a valid pipeline".to_string()
+    })?;
 
-    // Phase 4: Extract TOML and validate
-    let toml_content =
-        extract_toml_from_response(&ai_response).unwrap_or_else(|| ai_response.clone());
-
+    // Phase 4: validation is guaranteed by the agent's validator; it is
+    // re-run here only to populate the response payload.
     let validation = workflow_svc::validate_pipeline(&toml_content, None)?;
 
     // Phase 5: Build response
@@ -99,7 +138,7 @@ pub async fn process_chat(
         }))
     });
 
-    Ok((ai_response, response))
+    Ok((toml_content.clone(), response))
 }
 
 /// Infer the user's intent from their message.
@@ -142,80 +181,6 @@ pub fn analyze_data_paths(paths: &[String]) -> Option<serde_json::Value> {
         })),
         Err(_) => None,
     }
-}
-
-/// Build the system prompt for the AI with all available context.
-fn build_system_prompt(
-    intent: &str,
-    data_report: Option<&serde_json::Value>,
-    templates: &[String],
-) -> String {
-    let mut prompt = format!(
-        "You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.\n\n\
-         Intent: {intent}\n\n\
-         Rules:\n\
-         1. Output TOML in ```toml code fences\n\
-         2. Use well-known bioinformatics tools with correct command-line syntax\n\
-         3. Include [workflow] section with name, version, description\n\
-         4. Define rules with name, shell, inputs, outputs, depends\n\
-         5. Use {{sample}} wildcard for sample-varying paths\n\
-         6. Specify conda environment for each rule when possible\n\
-         7. Include resource hints (threads, memory) in [resources] section\n"
-    );
-
-    if let Some(report) = data_report {
-        if let Some(summary) = report.get("summary") {
-            prompt.push_str(&format!(
-                "\nData summary: Formats={}, Paired-end={}\n",
-                summary
-                    .get("formats_detected")
-                    .and_then(|f| f.as_array())
-                    .map(|a| a
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "))
-                    .unwrap_or_default(),
-                summary
-                    .get("paired_end_detected")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            ));
-        }
-        if let Some(sw) = report.get("suggested_workflow")
-            && let Some(template) = sw.get("template").and_then(|v| v.as_str())
-        {
-            prompt.push_str(&format!("Suggested template: {template}\n"));
-        }
-    }
-
-    if !templates.is_empty() {
-        prompt.push_str(&format!(
-            "\nAvailable templates for reference: {}\n",
-            templates
-                .iter()
-                .take(5)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-
-    prompt
-}
-
-/// Extract TOML content from an AI response (code fences or raw).
-fn extract_toml_from_response(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```toml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            return Some(response[start..start + end].trim().to_string());
-        }
-    }
-    if response.contains("[workflow]") {
-        return Some(response.to_string());
-    }
-    None
 }
 
 // ── Grounded agent loop (real Orchestrator + knowledge tools) ──────────────
@@ -312,38 +277,11 @@ pub fn spawn_chat_agent(
 }
 
 /// Best-effort extraction of a pipeline TOML from accumulated model text —
-/// the degradation path for a round-cap failure (issue #79 P1-10). Prefers
-/// a fenced ```toml block; falls back to everything from the first
-/// `[workflow]` line to the end. Both forms must contain at least one rules
-/// table so prose is never mistaken for a pipeline.
+/// the degradation path for a round-cap failure (issue #79 P1-10).
+/// Delegates to the canonical extractor (issue #342: one implementation,
+/// with the same fenced-then-raw order and the prose guard).
 pub fn extract_generated_toml(text: &str) -> Option<String> {
-    fn looks_like_pipeline(candidate: &str) -> bool {
-        candidate.contains("[workflow]")
-            && candidate.lines().any(|l| {
-                l.trim_start().starts_with("[[rules]]") || l.trim_start().starts_with("[rules]")
-            })
-    }
-
-    for fence in ["```toml", "```TOML", "```"] {
-        if let Some(start) = text.find(fence) {
-            let after = &text[start + fence.len()..];
-            let end = after.find("```");
-            let block = match end {
-                Some(e) => after[..e].trim().to_string(),
-                None => after.trim().to_string(),
-            };
-            if looks_like_pipeline(&block) {
-                return Some(block);
-            }
-        }
-    }
-    let idx = text.find("[workflow]")?;
-    let candidate = text[idx..].trim().to_string();
-    if looks_like_pipeline(&candidate) {
-        Some(candidate)
-    } else {
-        None
-    }
+    oxo_flow_ai::agent::pipeline_gen::extract_toml(text)
 }
 
 pub async fn run_chat_agent(
@@ -405,20 +343,6 @@ mod tests {
         assert_eq!(intent, "Quality control");
     }
 
-    #[test]
-    fn test_extract_toml_fenced() {
-        let response = "Here:\n```toml\n[workflow]\nname = \"test\"\n```\nDone";
-        let toml = extract_toml_from_response(response);
-        assert_eq!(toml, Some("[workflow]\nname = \"test\"".into()));
-    }
-
-    #[test]
-    fn test_build_system_prompt() {
-        let prompt = build_system_prompt("RNA-seq", None, &["rnaseq".into()]);
-        assert!(prompt.contains("RNA-seq"));
-        assert!(prompt.contains("rnaseq"));
-        assert!(prompt.contains("[workflow]"));
-    }
 }
 
 #[cfg(test)]

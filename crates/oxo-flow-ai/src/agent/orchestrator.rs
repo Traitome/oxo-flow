@@ -76,11 +76,21 @@ impl Orchestrator {
         loop {
             rounds += 1;
             if rounds > self.max_rounds {
+                // Archive what the round budget bought before giving up —
+                // the provider calls already happened and were paid for;
+                // dropping the session here made the spend invisible.
+                let failed = session.fail(&format!(
+                    "exceeded max rounds ({}) without valid output",
+                    self.max_rounds
+                ));
+                let _ = crate::session::save_session(&failed);
                 return Err(AiError::MaxRoundsExceeded {
                     max: self.max_rounds,
                 });
             }
             if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                let failed = session.fail("cancelled by caller");
+                let _ = crate::session::save_session(&failed);
                 return Err(AiError::ToolError {
                     tool: "cancelled".into(),
                     message: "cancelled by caller".to_string(),
