@@ -1,18 +1,14 @@
 //! AI service orchestration layer.
 //!
-//! Coordinates the AI translation pipeline:
-//! deterministic API calls -> prompt assembly -> AI provider call -> response parsing.
+//! Issue #342: generation runs the SHARED `PipelineGenAgent` through the
+//! orchestrator (knowledge tools + engine validation feedback loop); this
+//! module owns the surface concerns only — request dedup cache, provider
+//! fallback chain, deterministic template-keyword fallback, explanation
+//! assembly.
 //!
 //! **Zero write access guarantee**: this module has NO import of DB write
 //! functions, filesystem write, or process spawn. All side effects are
-//! constrained to read-only AI chat calls.
-//!
-//! ## Fallback chain
-//! Claude → OpenAI → Ollama → template keyword match
-//!
-//! ## Correction loop
-//! After AI generates TOML, validate it. If invalid, feed errors back to
-//! the AI for correction (max 3 rounds).
+//! constrained to read-only AI calls through read-only tools.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -66,6 +66,8 @@ tokens, cost, latency).
 
 - Intent set is small (9); scale `intents.json` before quoting absolute
   numbers. Relative gaps between variants stabilize faster than absolutes.
-- The `cli` variant's correction budget is a tool-loop budget (`--ai-max-retries`);
-  the CLI path has no validation-feedback loop yet (that is proposal P1–P3).
+- Since the #342 unification, `--ai-max-retries` sizes the orchestrator's
+  combined tool + correction-round budget, and engine validation feeds the
+  loop; numbers above the unification marker in PILOT_FINDINGS.md were
+  produced by the pre-unification paths.
 - Single seed per cell (no repetition); rerun for variance estimates.
