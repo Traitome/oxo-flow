@@ -1609,10 +1609,16 @@ mod tests {
     #[test]
     fn driver_errors_when_submit_binary_is_missing() {
         let fx = setup();
-        let executor = Arc::new(ClusterExecutor::new(
-            ClusterBackend::Slurm,
-            cluster_config(),
-        ));
+        // Resolve scheduler commands from an empty directory so the test is
+        // environment-independent: on hosts with a real SLURM install,
+        // `sbatch` in PATH would submit successfully and fail the unwrap
+        // below. The empty dir makes `run_cmd` resolve `<dir>/sbatch`,
+        // which never exists.
+        let empty_bin_dir = tempfile::tempdir().unwrap();
+        let executor = Arc::new(
+            ClusterExecutor::new(ClusterBackend::Slurm, cluster_config())
+                .with_scheduler_dir(empty_bin_dir.path().to_path_buf()),
+        );
         let d = BackendDriver::new(
             executor,
             DriverConfig {
