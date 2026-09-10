@@ -12,6 +12,7 @@
 
 pub mod events;
 pub mod orchestrator;
+pub mod pipeline_gen;
 
 use async_trait::async_trait;
 use std::path::PathBuf;

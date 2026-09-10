@@ -1,18 +1,14 @@
 //! AI service orchestration layer.
 //!
-//! Coordinates the AI translation pipeline:
-//! deterministic API calls -> prompt assembly -> AI provider call -> response parsing.
+//! Issue #342: generation runs the SHARED `PipelineGenAgent` through the
+//! orchestrator (knowledge tools + engine validation feedback loop); this
+//! module owns the surface concerns only — request dedup cache, provider
+//! fallback chain, deterministic template-keyword fallback, explanation
+//! assembly.
 //!
 //! **Zero write access guarantee**: this module has NO import of DB write
 //! functions, filesystem write, or process spawn. All side effects are
-//! constrained to read-only AI chat calls.
-//!
-//! ## Fallback chain
-//! Claude → OpenAI → Ollama → template keyword match
-//!
-//! ## Correction loop
-//! After AI generates TOML, validate it. If invalid, feed errors back to
-//! the AI for correction (max 3 rounds).
+//! constrained to read-only AI calls through read-only tools.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -21,6 +17,7 @@ use super::copilot;
 use super::types::*;
 use crate::ai_provider::{AiProvider, AiProviderRegistry};
 use crate::domains::workflow::service as workflow_svc;
+use oxo_flow_ai::agent::orchestrator::Orchestrator;
 
 /// In-memory request cache for deduplication.
 /// Key: hash of (intent, data_summary). Value: (pipeline_id, toml_content).
@@ -29,9 +26,6 @@ static REQUEST_CACHE: std::sync::LazyLock<Mutex<HashMap<String, (String, String)
 
 /// Maximum entries in the request cache before eviction.
 const MAX_CACHE_ENTRIES: usize = 128;
-
-/// Maximum correction rounds when AI generates invalid TOML.
-const MAX_CORRECTION_ROUNDS: u32 = 3;
 
 /// Extract TOML content from an AI response string.
 /// Looks for ```toml code fences first, then raw `[workflow]` content.
@@ -56,69 +50,45 @@ fn cache_key(user_id: &str, intent: &str, data_summary: Option<&str>) -> String 
     format!("{user_id}|{intent}|{}", data_summary.unwrap_or("no-data"))
 }
 
-/// Try each available provider in fallback order.
-/// Returns the provider's chat response or an error if all fail.
-async fn try_providers(system: &str, user: &str) -> (Result<String, String>, String) {
+/// Provider candidates for translate, in fallback order: the configured
+/// runtime provider first, then env-discovered Claude/OpenAI/Ollama.
+/// (Issue #342: the fallback chain is a provider-selection concern and
+/// stays here; generation itself is the shared agent + orchestrator.)
+fn provider_candidates() -> Vec<AiProvider> {
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
-
-    // Primary provider from config
+    let mut candidates = Vec::new();
     if config.is_configured {
-        let provider = registry.get_provider();
-        match provider.chat(system, user).await {
-            Ok(response) => return (Ok(response), provider.name().to_string()),
-            Err(e) => {
-                tracing::warn!("Primary provider {} failed: {e}", provider.name());
-            }
-        }
+        candidates.push(registry.get_provider());
     }
-
-    // Fallback 1: Claude (if not already primary)
     if config.provider != "claude"
         && let Ok(claude) = AiProviderRegistry::create_claude_from_env()
     {
-        match claude.chat(system, user).await {
-            Ok(response) => return (Ok(response), "claude (fallback)".to_string()),
-            Err(e) => tracing::warn!("Claude fallback failed: {e}"),
-        }
+        candidates.push(claude);
     }
-
-    // Fallback 2: OpenAI (if not already primary)
     if config.provider != "openai"
         && let Ok(openai) = AiProviderRegistry::create_openai_from_env()
     {
-        match openai.chat(system, user).await {
-            Ok(response) => return (Ok(response), "openai (fallback)".to_string()),
-            Err(e) => tracing::warn!("OpenAI fallback failed: {e}"),
-        }
+        candidates.push(openai);
     }
-
-    // Fallback 3: Ollama (if not already primary)
     if config.provider != "ollama"
         && let Ok(ollama) = AiProviderRegistry::create_ollama_from_env()
     {
-        match ollama.chat(system, user).await {
-            Ok(response) => return (Ok(response), "ollama (fallback)".to_string()),
-            Err(e) => tracing::warn!("Ollama fallback failed: {e}"),
-        }
+        candidates.push(ollama);
     }
-
-    (
-        Err("All AI providers unavailable".to_string()),
-        "none".to_string(),
-    )
+    candidates
 }
 
 /// Translate natural language intent into a validated .oxoflow pipeline.
 ///
-/// Pipeline:
+/// Pipeline (issue #342 — one harness across all generation surfaces):
 /// 1. Check request cache (dedup)
 /// 2. Match templates (deterministic, zero AI cost)
-/// 3. Assemble prompt with copilot
-/// 4. AI generates TOML (with fallback chain)
-/// 5. Validate → if invalid, correction loop (max 3 rounds)
-/// 6. Prepare pipeline (expand wildcards)
-/// 7. Parse for explanation and return
+/// 3. Run the SHARED `PipelineGenAgent` through the orchestrator —
+///    knowledge tools + engine-accurate prompt + validation-feedback
+///    correction loop — over the provider fallback chain
+/// 4. Prepare pipeline (expand wildcards)
+/// 5. Parse for explanation and return
 pub async fn translate_intent(
     _provider: &AiProvider,
     user_id: &str,
@@ -162,80 +132,98 @@ pub async fn translate_intent(
             .contains(&t.to_lowercase().replace('-', " "))
     });
 
-    let (system, user) = copilot::assemble_translate_prompt(intent, data_summary, templates);
+    // Step 2: Shared agent + orchestrator over the provider fallback chain.
+    // Read-only knowledge tools only, no approver: non-read-only calls are
+    // refused by construction (the module's zero-write guarantee).
+    let validator: oxo_flow_ai::agent::pipeline_gen::OutputValidator = std::sync::Arc::new(
+        |toml: &str| match workflow_svc::validate_pipeline(toml, None) {
+            Ok(v) if v.valid => oxo_flow_ai::agent::ValidationResult::passed(),
+            Ok(v) => oxo_flow_ai::agent::ValidationResult {
+                passed: false,
+                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
+                warnings: vec![],
+                summary: format!("{} validation error(s)", v.errors.len()),
+            },
+            Err(e) => oxo_flow_ai::agent::ValidationResult {
+                passed: false,
+                errors: vec![e],
+                warnings: vec![],
+                summary: "validation failed".into(),
+            },
+        },
+    );
 
-    // Step 2: AI generation with fallback chain
-    let (result, provider_used) = try_providers(&system, &user).await;
-    let raw_response = match result {
-        Ok(response) => response,
-        Err(e) => {
-            if let Some(name) = template_match {
-                return Err(format!(
-                    "AI unavailable (tried all providers). Try the '{name}' template: {e}"
-                ));
-            }
-            return Err(format!(
-                "AI generation failed after trying all providers: {e}"
-            ));
-        }
-    };
-
-    // Step 3: Extract TOML + correction loop (max 3 rounds)
-    let mut toml_content =
-        extract_toml(&raw_response).ok_or("AI response did not contain valid .oxoflow TOML")?;
-    let mut correction_round = 0;
-
-    loop {
-        let validation = workflow_svc::validate_pipeline(&toml_content, None)?;
-        if validation.valid {
-            break;
-        }
-        correction_round += 1;
-        if correction_round > MAX_CORRECTION_ROUNDS {
-            let error_msgs: Vec<String> = validation
-                .errors
+    let mut agent =
+        oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent).with_validator(validator);
+    if let Some(summary) = data_summary {
+        agent = agent.with_user_addition(format!("## Data Context\n{summary}"));
+    }
+    if !templates.is_empty() {
+        agent = agent.with_user_addition(format!(
+            "## Available Templates\n{}",
+            templates
                 .iter()
-                .map(|e| format!("{}: {}", e.code, e.message))
-                .collect();
-            return Err(format!(
-                "Generated pipeline failed validation after {MAX_CORRECTION_ROUNDS} corrections: {}",
-                error_msgs.join("; ")
-            ));
-        }
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n- ")
+        ));
+    }
 
-        // Feed validation errors back to AI for correction
-        let error_feedback: String = validation
-            .errors
-            .iter()
-            .map(|e| {
-                format!(
-                    "- {}: {} (rule: {})",
-                    e.code,
-                    e.message,
-                    e.rule.as_deref().unwrap_or("unknown")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let correction_prompt = format!(
-            "Your previous pipeline TOML failed validation with these errors:\n{error_feedback}\n\n\
-             Please fix the TOML and output the corrected version:\n```toml\n{toml_content}\n```"
-        );
-
-        let (fix_result, _) = try_providers(&system, &correction_prompt).await;
-        match fix_result {
-            Ok(fixed_response) => {
-                if let Some(fixed) = extract_toml(&fixed_response) {
-                    toml_content = fixed;
-                } else {
-                    // If no TOML found in fix, keep current and try again
-                }
+    let candidates = provider_candidates();
+    let mut generated: Option<(String, String)> = None;
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let label = if idx == 0 {
+            candidate.name().to_string()
+        } else {
+            format!("{} (fallback)", candidate.name())
+        };
+        let ctx = oxo_flow_ai::agent::AgentContext {
+            intent: intent.to_string(),
+            command: "translate".into(),
+            workflow_path: None,
+            workflow_content: None,
+            external_sources: vec![],
+            // 6 rounds, matching the chat route: knowledge lookups spend
+            // ~2 rounds before text, and the validation-feedback fix needs
+            // 1-2 more — 4 starved tool-heavy intents (E2E finding).
+            max_rounds: 6,
+            tool_registry: oxo_flow_ai::tools::builtin::knowledge_tool_registry(),
+            tool_approver: None,
+            session: oxo_flow_ai::session::AiSession::new(
+                "web-translate",
+                "translate",
+                candidate.name(),
+                &candidate.model().unwrap_or_else(|| "default".into()),
+            ),
+        };
+        let orchestrator = Orchestrator::new(candidate.clone(), 6);
+        match orchestrator.execute(&agent, &ctx).await {
+            Ok(outcome) if outcome.success && outcome.content.is_some() => {
+                generated = Some((outcome.content.unwrap(), label));
+                break;
             }
-            Err(_) => {
-                // If fix attempt fails, retry with original
+            Ok(outcome) => {
+                tracing::warn!(
+                    "translate provider {} produced no valid pipeline: {}",
+                    candidate.name(),
+                    outcome.summary
+                );
+            }
+            Err(e) => {
+                tracing::warn!("translate provider {} failed: {e}", candidate.name());
             }
         }
     }
+
+    let Some((toml_content, provider_used)) = generated else {
+        return match template_match {
+            Some(name) => Err(format!(
+                "AI unavailable (tried all providers). Try the '{name}' template."
+            )),
+            None => Err("AI generation failed after trying all providers".to_string()),
+        };
+    };
 
     // Step 4: Prepare (expand wildcards, resolve environments)
     let _prepared = workflow_svc::prepare_pipeline(&toml_content, true, true)?;

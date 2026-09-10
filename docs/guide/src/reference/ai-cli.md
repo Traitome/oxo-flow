@@ -304,7 +304,10 @@ The agent:
 4. Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)
 5. Sets resource allocations based on tool requirements
 6. Generates valid `.oxoflow` TOML
-7. Validates against the schema and reports any issues
+7. Validates against the engine schema; on failure the errors feed back
+   into the correction loop (bounded by `--ai-max-retries`), so
+   wrong-dialect output is repaired instead of written with a warning
+   (issue #342: one shared generation persona across CLI and web)
 
 ### Custom Skills
 

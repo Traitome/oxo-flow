@@ -903,6 +903,41 @@ async fn lookup_pipeline_bad_action() {
     assert!(result.contains("Unknown action"));
 }
 
+/// Read-only registry of the embedded knowledge tools (bioconda lookup,
+/// bioSkills, pipeline graph, SSRF-screened fetch). This is the tool
+/// surface every embedded generation/check agent runs with; surfaces add
+/// their own extras on top (CLI: file access + MCP, web chat: run
+/// diagnostics). Read-only by construction, so it is safe to hand to an
+/// agent without an approver.
+pub fn knowledge_tool_registry() -> crate::tools::ToolRegistry {
+    let mut registry = crate::tools::ToolRegistry::new();
+    registry.register(Box::new(LookupTool::new()));
+    registry.register(Box::new(LookupSkillTool::new()));
+    registry.register(Box::new(LookupPipelineTool::new()));
+    registry.register(Box::new(FetchUrlTool::new()));
+    registry
+}
+
+#[cfg(test)]
+mod knowledge_registry_tests {
+    use super::*;
+
+    #[test]
+    fn registry_is_read_only_and_complete() {
+        let registry = knowledge_tool_registry();
+        assert_eq!(registry.len(), 4);
+        for name in [
+            "lookup_tool",
+            "lookup_skill",
+            "lookup_pipeline",
+            "fetch_url",
+        ] {
+            assert!(registry.get(name).is_some(), "missing {name}");
+            assert!(registry.is_read_only(name), "{name} must be read-only");
+        }
+    }
+}
+
 #[cfg(test)]
 mod fetch_url_ssrf_tests {
     use super::*;

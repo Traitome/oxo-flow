@@ -215,9 +215,15 @@ fn test_ai_service_write_boundary_database() {
     // AI service should not import or use DB write operations
     let db_write_patterns = ["INSERT INTO", "UPDATE ", "DELETE FROM", "execute("];
 
+    // Issue #342: generation runs through the oxo-flow-ai orchestrator.
+    // `orchestrator.execute(` is the read-only agent loop (LLM calls +
+    // knowledge tools), not a sqlx write — allow-list that exact call
+    // shape so the tripwire keeps catching real `sqlx` `.execute(` uses.
+    let stripped = strip_comments(&source)
+        .replace("orchestrator\n    .execute(", "")
+        .replace("orchestrator.execute(", "");
+
     for pattern in &db_write_patterns {
-        // Check that it appears only in comments (stripped) or not at all
-        let stripped = strip_comments(&source);
         assert!(
             !stripped.contains(pattern),
             "AI service should not contain DB write: '{pattern}'"

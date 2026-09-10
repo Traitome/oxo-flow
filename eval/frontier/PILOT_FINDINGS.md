@@ -57,3 +57,27 @@ in the same PR: `OXO_FLOW_AI_MAX_TOKENS` (thinking blocks count against
 
 Method and caveats: see README ("Known limitations" — small intent set,
 single seed, tool-loop budget is not yet a correction loop).
+
+## Post-unification re-measurement (PR: unified generation harness)
+
+After wiring every surface onto `PipelineGenAgent` + orchestrator (the
+#342 unification), the same 9 intents, same model, same ceilings
+(16384 / 300s), `cli` variant:
+
+| model | all-gates before → after | artifacts | tokens in/out (after) |
+|---|---|---|---|
+| `deepseek-chat` (non-thinking) | 6/9 → **8/9** | 9/9 | 32k / 23k (was 41k / 24k) |
+| `deepseek-v4-flash-vision-exp` (thinking) | 3/9 → **6/9** | 8/9 (was 4/9) | 42k / 67k |
+
+What the correction loop visibly repaired: the `qc-fastqc` Nextflow-ism
+(`foreach` → E017) that the old path wrote out with a warning is now
+caught and fixed in-loop; round-cap failures degrade to the transcript
+artifact instead of vanishing with the session. Model guidance is
+unchanged: for generation, the non-thinking tier is faster and cheaper
+at higher gate-pass quality — the evidence base for #342's TeamProfile
+cost tiers.
+
+Residual misses (3/18 cells) are the remaining harness frontier:
+correction-budget exhaustion on hard intents and one final-round TOML
+miss — bounded-retry and evaluator roles are the next lever, not the
+prompt.
