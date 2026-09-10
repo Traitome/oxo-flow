@@ -9,9 +9,9 @@
 //!    taught a Snakemake-style dialect that the engine rejects with E017);
 //! 2. `extract_toml` — one extraction routine with the anti-prose guard;
 //! 3. output validation — the caller injects its engine binding as a
-//!     closure (CLI: core `WorkflowConfig` parse; web: workflow service),
-//!     so this crate stays engine-agnostic and validation failures feed
-//!     the orchestrator's correction loop.
+//!    closure (CLI: core `WorkflowConfig` parse; web: workflow service),
+//!    so this crate stays engine-agnostic and validation failures feed
+//!    the orchestrator's correction loop.
 
 use std::sync::Arc;
 
@@ -187,10 +187,10 @@ Your TOML MUST include:
 /// mistaken for a pipeline.
 pub fn extract_toml(response: &str) -> Option<String> {
     for fence in ["```toml", "```TOML"] {
-        if let Some(content) = fenced_block(response, fence) {
-            if !content.is_empty() {
-                return Some(content);
-            }
+        if let Some(content) = fenced_block(response, fence)
+            && !content.is_empty()
+        {
+            return Some(content);
         }
     }
     if let Some(content) = fenced_block(response, "```")
