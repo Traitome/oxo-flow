@@ -142,19 +142,35 @@ pub async fn chat_send(
     let pool = crate::infra::db::sqlite::try_pool().ok();
     persist_user_message(pool, &user, &session_id, &message).await;
 
-    // Chat runs on the acting user's own AI provider (isolation fix).
+    // Chat runs on the acting user's own AI provider (isolation fix). The
+    // usability check is on the RESOLVED provider — the caller's own key
+    // counts even when the shared runtime is unconfigured, and a disabled
+    // instance still reports AI_NOT_CONFIGURED.
     let provider = crate::ai_provider::provider_for(&user.id).await;
-    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
-    let is_configured = config.is_configured;
 
     let stream = async_stream::stream! {
-        if !is_configured {
+        // An empty message must fail cheaply instead of paying for a
+        // hallucinated pipeline.
+        if message.trim().is_empty() {
+            yield Ok::<_, Infallible>(Event::default()
+                .event("error")
+                .data(serde_json::json!({
+                    "code": "EMPTY_MESSAGE",
+                    "message": "Message must not be empty"
+                }).to_string()));
+            yield Ok::<_, Infallible>(Event::default()
+                .event("done")
+                .data(serde_json::json!({"session_id": session_id}).to_string()));
+            return;
+        }
+
+        if matches!(provider, crate::ai_provider::AiProvider::Noop) {
             yield Ok::<_, Infallible>(Event::default()
                 .event("error")
                 .data(serde_json::json!({
                     "code": "AI_NOT_CONFIGURED",
                     "message": "AI assistant is not configured",
-                    "detail": format!("provider={}", config.provider),
+                    "detail": "no usable AI provider for this user",
                     "suggestion": "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin."
                 }).to_string()));
             yield Ok::<_, Infallible>(Event::default()
@@ -292,14 +308,26 @@ pub async fn chat_send_json(
 
     let provider = crate::ai_provider::provider_for(&user.id).await;
 
-    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
-    if !config.is_configured {
+    // An empty message must fail cheaply instead of paying for a
+    // hallucinated pipeline.
+    if req.message.trim().is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "EMPTY_MESSAGE",
+            "Message must not be empty".into(),
+        ));
+    }
+
+    // Usability is judged on the RESOLVED provider: the caller's own key
+    // counts even when the shared runtime is unconfigured, and a disabled
+    // instance still reports AI_NOT_CONFIGURED.
+    if matches!(provider, crate::ai_provider::AiProvider::Noop) {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
                 code: "AI_NOT_CONFIGURED".into(),
                 message: "AI assistant is not configured".into(),
-                detail: Some(format!("provider={}", config.provider)),
+                detail: Some("no usable AI provider for this user".into()),
                 suggestion: Some(
                     "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into(),
                 ),
@@ -313,6 +341,9 @@ pub async fn chat_send_json(
         req.context.as_ref(),
         &templates,
         &provider,
+        req.run_id.as_deref(),
+        &user.id,
+        user.is_admin(),
     )
     .await
     {

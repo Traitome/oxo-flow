@@ -13,16 +13,21 @@ use crate::domains::workflow::service as workflow_svc;
 /// `provider` is the ACTING USER's provider (issue #82 follow-up: chat
 /// runs on the caller's own AI credentials, never the shared runtime).
 ///
-/// Issue #342: this endpoint previously ran its own one-shot prompt with
-/// no tools and no correction loop — the weakest of the four generation
-/// paths. It now runs the same shared persona + orchestrator harness as
-/// the SSE chat route and the CLI, differing only in presentation.
+/// This endpoint previously ran its own one-shot prompt with no tools and
+/// no correction loop — the weakest of the four generation paths. It now
+/// runs the same shared persona + orchestrator harness as the SSE chat
+/// route and the CLI, differing only in presentation; `run_id` scopes the
+/// read-only run-diagnosis tools exactly as the SSE route does.
+#[allow(clippy::too_many_arguments)]
 pub async fn process_chat(
     message: &str,
     _session_id: Option<&str>,
     context: Option<&ChatContext>,
     templates: &[String],
     provider: &AiProvider,
+    run_id: Option<&str>,
+    user_id: &str,
+    is_admin: bool,
 ) -> Result<(String, serde_json::Value), String> {
     // Phase 1: Orchestrator — understand intent
     let intent = if let Some(ctx) = context {
@@ -76,7 +81,7 @@ pub async fn process_chat(
         workflow_content: None,
         external_sources: vec![],
         max_rounds: 6,
-        tool_registry: super::tools::build_chat_tool_registry(None, "", false),
+        tool_registry: super::tools::build_chat_tool_registry(run_id, user_id, is_admin),
         tool_approver: None,
         session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
     };
@@ -92,6 +97,7 @@ pub async fn process_chat(
                 provider.name()
             )
         })?;
+    crate::ai_provider::log_generation_usage("chat", &outcome.session);
     let toml_content = outcome
         .content
         .ok_or_else(|| "AI generation did not produce a valid pipeline".to_string())?;
@@ -298,7 +304,7 @@ pub async fn run_chat_agent(
         max_rounds: 6,
         tool_registry: super::tools::build_chat_tool_registry(run_id, user_id, is_admin),
         tool_approver: None,
-        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", "web-provider"),
+        session: oxo_flow_ai::session::AiSession::new("web-chat", "chat", "web", provider.name()),
     };
     // Context-supplied data paths feed the user prompt (deterministic
     // data perception stays out of the model loop).
@@ -310,10 +316,13 @@ pub async fn run_chat_agent(
     }
 
     let orchestrator = Orchestrator::new(provider.clone(), 6);
-    orchestrator
+    let outcome = orchestrator
         .execute_with_sink(&agent, &ctx, sink, None)
-        .await
-        .map_err(|e| e.to_string())
+        .await;
+    if let Ok(outcome) = &outcome {
+        crate::ai_provider::log_generation_usage("chat", &outcome.session);
+    }
+    outcome.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

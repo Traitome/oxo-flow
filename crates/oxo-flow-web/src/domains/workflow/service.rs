@@ -241,6 +241,29 @@ pub fn validate_pipeline(
     })
 }
 
+/// The web engine binding for the shared generation agent: extracted TOML
+/// must pass [`validate_pipeline`], and validation errors feed the
+/// orchestrator's correction loop. Read-only. Both AI surfaces (translate
+/// and chat) share this one closure so their validation contracts cannot
+/// drift.
+pub fn pipeline_output_validator() -> oxo_flow_ai::agent::pipeline_gen::OutputValidator {
+    std::sync::Arc::new(|toml: &str| match validate_pipeline(toml, None) {
+        Ok(v) if v.valid => oxo_flow_ai::agent::ValidationResult::passed(),
+        Ok(v) => oxo_flow_ai::agent::ValidationResult {
+            passed: false,
+            errors: v.errors.iter().map(|e| e.message.clone()).collect(),
+            warnings: vec![],
+            summary: format!("{} validation error(s)", v.errors.len()),
+        },
+        Err(e) => oxo_flow_ai::agent::ValidationResult {
+            passed: false,
+            errors: vec![e],
+            warnings: vec![],
+            summary: "validation failed".into(),
+        },
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Prepare
 // ---------------------------------------------------------------------------

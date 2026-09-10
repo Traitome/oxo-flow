@@ -14,6 +14,21 @@ use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
+/// 503 the translate endpoints return when neither the acting user nor the
+/// server has a usable AI provider — the same structured signal the chat
+/// endpoints emit, so clients can branch on one code.
+fn ai_not_configured() -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiError {
+            code: "AI_NOT_CONFIGURED".into(),
+            message: "AI assistant is not configured".into(),
+            detail: Some("no usable AI provider for this user".into()),
+            suggestion: Some("Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin.".into()),
+        }),
+    )
+}
+
 fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -54,6 +69,18 @@ pub async fn translate(
 ) -> ApiResult<TranslateResponse> {
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
+    if matches!(provider, crate::ai_provider::AiProvider::Noop) {
+        return Err(ai_not_configured());
+    }
+    // Boundary check before anything is sent to a paid provider: an empty
+    // intent would otherwise come back as a fully hallucinated pipeline.
+    if req.intent.trim().is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_INTENT",
+            "Intent must not be empty".into(),
+        ));
+    }
 
     let templates: Vec<String> = if let Ok(pool) = get_pool() {
         sqlx::query_as::<_, models::TemplateRow>(
@@ -114,6 +141,32 @@ pub async fn translate_sse(
 
     let intent = req.intent.clone();
     let stream = async_stream::stream! {
+        // A disabled/unconfigured instance reports the same structured
+        // signal as the chat SSE route instead of a generic stream error.
+        if matches!(provider, crate::ai_provider::AiProvider::Noop) {
+            yield Ok::<_, Infallible>(Event::default()
+                .event("error")
+                .data(serde_json::json!({
+                    "code": "AI_NOT_CONFIGURED",
+                    "message": "AI assistant is not configured",
+                    "detail": "no usable AI provider for this user",
+                    "suggestion": "Set OXO_FLOW_AI_PROVIDER and its API key, or ask your admin."
+                }).to_string()));
+            return;
+        }
+
+        // An empty intent must fail cheaply instead of paying for a
+        // hallucinated pipeline.
+        if intent.trim().is_empty() {
+            yield Ok::<_, Infallible>(Event::default()
+                .event("error")
+                .data(serde_json::json!({
+                    "code": "INVALID_INTENT",
+                    "message": "Intent must not be empty"
+                }).to_string()));
+            return;
+        }
+
         // Step 1: intent received
         yield Ok::<_, Infallible>(Event::default()
             .event("progress")
