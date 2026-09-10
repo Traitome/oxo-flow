@@ -4886,7 +4886,10 @@ explicit disable:</p>
 4. Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)
 5. Sets resource allocations based on tool requirements
 6. Generates valid <code>.oxoflow</code> TOML
-7. Validates against the schema and reports any issues</p>
+7. Validates against the engine schema; on failure the errors feed back
+   into the correction loop (bounded by <code>--ai-max-retries</code>), so
+   wrong-dialect output is repaired instead of written with a warning
+   (issue #342: one shared generation persona across CLI and web)</p>
 <h3 id="custom-skills">Custom Skills<a class="headerlink" href="#custom-skills" title="Permanent link">#</a></h3>
 <p>User-defined <code>.skill.toml</code> files (discovered from <code>~/.oxo-flow/skills</code> and
 <code>&lt;project&gt;/.oxo-flow/skills</code>) can be activated per workflow via
