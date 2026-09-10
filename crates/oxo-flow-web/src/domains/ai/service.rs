@@ -27,21 +27,6 @@ static REQUEST_CACHE: std::sync::LazyLock<Mutex<HashMap<String, (String, String)
 /// Maximum entries in the request cache before eviction.
 const MAX_CACHE_ENTRIES: usize = 128;
 
-/// Extract TOML content from an AI response string.
-/// Looks for ```toml code fences first, then raw `[workflow]` content.
-fn extract_toml(response: &str) -> Option<String> {
-    if let Some(start) = response.find("```toml") {
-        let start = start + 7;
-        if let Some(end) = response[start..].find("```") {
-            return Some(response[start..start + end].trim().to_string());
-        }
-    }
-    if response.contains("[workflow]") {
-        return Some(response.to_string());
-    }
-    None
-}
-
 /// Compute a cache key from the acting user, intent, and optional data
 /// summary. The user id is part of the key: a cached translation embeds the
 /// requester's own data (paths, sample names), so sharing it across users
@@ -50,39 +35,80 @@ fn cache_key(user_id: &str, intent: &str, data_summary: Option<&str>) -> String 
     format!("{user_id}|{intent}|{}", data_summary.unwrap_or("no-data"))
 }
 
-/// Provider candidates for translate, in fallback order: the configured
-/// runtime provider first, then env-discovered Claude/OpenAI/Ollama.
-/// (Issue #342: the fallback chain is a provider-selection concern and
-/// stays here; generation itself is the shared agent + orchestrator.)
-fn provider_candidates() -> Vec<AiProvider> {
+/// Append `provider` unless the same configuration (name, model, endpoint,
+/// credential) is already listed — a user provider that resolves to the
+/// runtime's own configuration must not be retried after failing, while two
+/// rows differing only by API key are distinct candidates.
+fn push_unique(candidates: &mut Vec<AiProvider>, provider: AiProvider) {
+    if candidates.iter().any(|c| c.same_configuration(&provider)) {
+        return;
+    }
+    candidates.push(provider);
+}
+
+/// Provider candidates for translate, in fallback order: the acting user's
+/// own provider first (their key, their cost — the same isolation rule the
+/// chat route follows), then the configured runtime provider, then
+/// env-discovered Claude/OpenAI/Ollama. (The fallback chain is a
+/// provider-selection concern and stays here; generation itself is the
+/// shared agent + orchestrator.)
+fn provider_candidates(user_provider: &AiProvider) -> Vec<AiProvider> {
     let registry = AiProviderRegistry::global();
     let config = registry.get_config();
     let mut candidates = Vec::new();
+    if user_provider.is_usable() {
+        push_unique(&mut candidates, user_provider.clone());
+    }
     if config.is_configured {
-        candidates.push(registry.get_provider());
+        push_unique(&mut candidates, registry.get_provider());
     }
     if config.provider != "claude"
         && let Ok(claude) = AiProviderRegistry::create_claude_from_env()
     {
-        candidates.push(claude);
+        push_unique(&mut candidates, claude);
     }
     if config.provider != "openai"
         && let Ok(openai) = AiProviderRegistry::create_openai_from_env()
     {
-        candidates.push(openai);
+        push_unique(&mut candidates, openai);
     }
+    // Ollama is the only credential-free backend, so its constructor always
+    // succeeds — admitting it unconditionally would put a phantom
+    // localhost:11434 candidate in every chain and turn "nothing
+    // configured" into a doomed connection attempt. Enter the chain only
+    // when the operator opted in (OLLAMA_HOST), matching the CLI, where a
+    // fully unconfigured environment resolves to Noop.
     if config.provider != "ollama"
+        && std::env::var("OLLAMA_HOST").is_ok()
         && let Ok(ollama) = AiProviderRegistry::create_ollama_from_env()
     {
-        candidates.push(ollama);
+        push_unique(&mut candidates, ollama);
     }
     candidates
 }
 
+/// Whether a translate request could possibly run: the acting user's
+/// provider, the runtime, or an env-discovered backend must be usable.
+/// Handlers gate their structured AI_NOT_CONFIGURED response on this
+/// instead of an ad-hoc provider check, so an env-key-only deployment
+/// (no runtime config, but a key in the environment) still translates.
+pub fn generation_available(user_provider: &AiProvider) -> bool {
+    !provider_candidates(user_provider).is_empty()
+}
+
+/// Why a translate request produced no pipeline. `Unavailable` is the
+/// structured AI_NOT_CONFIGURED case (503); `Failed` is a generation or
+/// validation failure (400).
+#[derive(Debug)]
+pub enum TranslateError {
+    Unavailable,
+    Failed(String),
+}
+
 /// Translate natural language intent into a validated .oxoflow pipeline.
 ///
-/// Pipeline (issue #342 — one harness across all generation surfaces):
-/// 1. Check request cache (dedup)
+/// Pipeline (one harness across all generation surfaces):
+/// 1. Check request cache (dedup) — serves without any AI involvement
 /// 2. Match templates (deterministic, zero AI cost)
 /// 3. Run the SHARED `PipelineGenAgent` through the orchestrator —
 ///    knowledge tools + engine-accurate prompt + validation-feedback
@@ -90,16 +116,18 @@ fn provider_candidates() -> Vec<AiProvider> {
 /// 4. Prepare pipeline (expand wildcards)
 /// 5. Parse for explanation and return
 pub async fn translate_intent(
-    _provider: &AiProvider,
+    provider: &AiProvider,
     user_id: &str,
     intent: &str,
     data_summary: Option<&str>,
     templates: &[String],
-) -> Result<TranslateResponse, String> {
+) -> Result<TranslateResponse, TranslateError> {
     // Step 0: Dedup — check cache
     let key = cache_key(user_id, intent, data_summary);
     {
-        let cache = REQUEST_CACHE.lock().map_err(|_| "Cache lock poisoned")?;
+        let cache = REQUEST_CACHE
+            .lock()
+            .map_err(|_| TranslateError::Failed("translate cache is unavailable".into()))?;
         if let Some((pipeline_id, toml_content)) = cache.get(&key) {
             // Re-parse to build explanation
             if let Ok(parsed) = workflow_svc::parse_pipeline(toml_content, None) {
@@ -132,29 +160,18 @@ pub async fn translate_intent(
             .contains(&t.to_lowercase().replace('-', " "))
     });
 
+    // Only reached on a cache miss: without a usable provider anywhere the
+    // request fails as structured Unavailable rather than looping over an
+    // empty candidate list. A cached pipeline keeps serving regardless.
+    if !generation_available(provider) {
+        return Err(TranslateError::Unavailable);
+    }
+
     // Step 2: Shared agent + orchestrator over the provider fallback chain.
     // Read-only knowledge tools only, no approver: non-read-only calls are
     // refused by construction (the module's zero-write guarantee).
-    let validator: oxo_flow_ai::agent::pipeline_gen::OutputValidator = std::sync::Arc::new(
-        |toml: &str| match workflow_svc::validate_pipeline(toml, None) {
-            Ok(v) if v.valid => oxo_flow_ai::agent::ValidationResult::passed(),
-            Ok(v) => oxo_flow_ai::agent::ValidationResult {
-                passed: false,
-                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
-                warnings: vec![],
-                summary: format!("{} validation error(s)", v.errors.len()),
-            },
-            Err(e) => oxo_flow_ai::agent::ValidationResult {
-                passed: false,
-                errors: vec![e],
-                warnings: vec![],
-                summary: "validation failed".into(),
-            },
-        },
-    );
-
-    let mut agent =
-        oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent).with_validator(validator);
+    let mut agent = oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent)
+        .with_validator(workflow_svc::pipeline_output_validator());
     if let Some(summary) = data_summary {
         agent = agent.with_user_addition(format!("## Data Context\n{summary}"));
     }
@@ -170,8 +187,9 @@ pub async fn translate_intent(
         ));
     }
 
-    let candidates = provider_candidates();
+    let candidates = provider_candidates(provider);
     let mut generated: Option<(String, String)> = None;
+    let mut last_failure = "no provider was attempted".to_string();
     for (idx, candidate) in candidates.iter().enumerate() {
         let label = if idx == 0 {
             candidate.name().to_string()
@@ -184,10 +202,9 @@ pub async fn translate_intent(
             workflow_path: None,
             workflow_content: None,
             external_sources: vec![],
-            // 6 rounds, matching the chat route: knowledge lookups spend
-            // ~2 rounds before text, and the validation-feedback fix needs
-            // 1-2 more — 4 starved tool-heavy intents (E2E finding).
-            max_rounds: 6,
+            // Shared shipped budget: knowledge lookups spend 2-3 rounds
+            // before text and the validation-feedback fix needs 1-2 more.
+            max_rounds: oxo_flow_ai::config::default_max_retries(),
             tool_registry: oxo_flow_ai::tools::builtin::knowledge_tool_registry(),
             tool_approver: None,
             session: oxo_flow_ai::session::AiSession::new(
@@ -197,39 +214,55 @@ pub async fn translate_intent(
                 &candidate.model().unwrap_or_else(|| "default".into()),
             ),
         };
-        let orchestrator = Orchestrator::new(candidate.clone(), 6);
+        let orchestrator = Orchestrator::new(
+            candidate.clone(),
+            oxo_flow_ai::config::default_max_retries(),
+        );
         match orchestrator.execute(&agent, &ctx).await {
             Ok(outcome) if outcome.success && outcome.content.is_some() => {
                 generated = Some((outcome.content.unwrap(), label));
                 break;
             }
             Ok(outcome) => {
+                last_failure = outcome.summary.clone();
                 tracing::warn!(
                     "translate provider {} produced no valid pipeline: {}",
                     candidate.name(),
                     outcome.summary
                 );
+                // The provider responded and billed tokens — its output was
+                // simply unusable. Falling through to the next candidate
+                // would pay for a second full generation on one request, so
+                // the chain only continues when the attempt provably
+                // produced nothing (auth/quota/transport failures, which
+                // land in the Err arm below, or zero completions).
+                if outcome.session.total_usage.completion_tokens > 0 {
+                    break;
+                }
             }
             Err(e) => {
+                last_failure = e.to_string();
                 tracing::warn!("translate provider {} failed: {e}", candidate.name());
             }
         }
     }
 
     let Some((toml_content, provider_used)) = generated else {
-        return match template_match {
-            Some(name) => Err(format!(
-                "AI unavailable (tried all providers). Try the '{name}' template."
+        return Err(match template_match {
+            Some(name) => TranslateError::Failed(format!(
+                "AI generation failed: {last_failure}. Try the '{name}' template."
             )),
-            None => Err("AI generation failed after trying all providers".to_string()),
-        };
+            None => TranslateError::Failed(format!("AI generation failed: {last_failure}")),
+        });
     };
 
     // Step 4: Prepare (expand wildcards, resolve environments)
-    let _prepared = workflow_svc::prepare_pipeline(&toml_content, true, true)?;
+    let _prepared = workflow_svc::prepare_pipeline(&toml_content, true, true)
+        .map_err(TranslateError::Failed)?;
 
     // Step 5: Parse for explanation
-    let parsed = workflow_svc::parse_pipeline(&toml_content, None)?;
+    let parsed =
+        workflow_svc::parse_pipeline(&toml_content, None).map_err(TranslateError::Failed)?;
 
     // Step 6: Build explanation
     let steps: Vec<TranslationStep> = parsed
@@ -408,7 +441,8 @@ pub async fn optimize_pipeline(
         .await
         .map_err(|e| format!("AI optimize failed: {e}"))?;
 
-    let toml = extract_toml(&raw_response).unwrap_or(raw_response.clone());
+    let toml = oxo_flow_ai::agent::pipeline_gen::extract_toml(&raw_response)
+        .unwrap_or(raw_response.clone());
 
     // Validate the optimized TOML
     let _validation = workflow_svc::validate_pipeline(&toml, None)?;
@@ -481,19 +515,21 @@ fn parse_optimization_changes(text: &str) -> Vec<OptimizationChange> {
 mod tests {
     use super::*;
 
-    // ── TOML extraction tests ──
+    // ── TOML extraction tests (pin the canonical extractor's contract on
+    // the web side: fenced content is taken, prose is never mistaken for a
+    // pipeline) ──
 
     #[test]
     fn test_extract_toml_from_code_fence() {
         let response = "Here is the pipeline:\n```toml\n[workflow]\nname = \"test\"\n```\nDone.";
-        let result = extract_toml(response);
+        let result = oxo_flow_ai::agent::pipeline_gen::extract_toml(response);
         assert_eq!(result, Some("[workflow]\nname = \"test\"".to_string()));
     }
 
     #[test]
     fn test_extract_toml_raw_workflow() {
         let response = "[workflow]\nname = \"test\"\n[[rules]]\nname = \"step1\"";
-        let result = extract_toml(response);
+        let result = oxo_flow_ai::agent::pipeline_gen::extract_toml(response);
         assert!(result.is_some());
         assert!(result.unwrap().contains("[workflow]"));
     }
@@ -501,8 +537,36 @@ mod tests {
     #[test]
     fn test_extract_toml_no_toml() {
         let response = "I cannot generate a pipeline right now.";
-        let result = extract_toml(response);
+        let result = oxo_flow_ai::agent::pipeline_gen::extract_toml(response);
         assert_eq!(result, None);
+    }
+
+    // ── Provider fallback chain tests ──
+
+    #[test]
+    fn test_push_unique_dedups_same_configuration_keeps_different_key() {
+        // Arrange — a user row and the runtime row can point at the same
+        // provider/model/endpoint; only the credential differs. The identical
+        // pair must dedup (no pointless retry), the distinct key must stay.
+        let user = AiProvider::OpenAi(oxo_flow_ai::provider::OpenAiBackend::new(
+            "user-key".into(),
+            Some("m".into()),
+            Some("https://gw.example.com/v1".into()),
+        ));
+        let runtime = AiProvider::OpenAi(oxo_flow_ai::provider::OpenAiBackend::new(
+            "server-key".into(),
+            Some("m".into()),
+            Some("https://gw.example.com/v1".into()),
+        ));
+        let mut candidates = vec![user.clone()];
+
+        // Act + Assert — same endpoint and model, different key: kept.
+        push_unique(&mut candidates, runtime);
+        assert_eq!(candidates.len(), 2);
+
+        // The exact same configuration again: dropped.
+        push_unique(&mut candidates, user);
+        assert_eq!(candidates.len(), 2);
     }
 
     // ── Section extraction tests ──

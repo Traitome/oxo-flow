@@ -195,7 +195,9 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
         before = {p.name: p.stat().st_mtime for p in sessions.glob("*-template-*.json")} \
             if sessions.exists() else {}
         cmd = [binary, "template", "--ai", intent, "-o", f"{run_dir}/",
-               "--ai-max-retries", str(args.max_retries), "--no-color"]
+               "--no-color"]
+        if args.max_retries is not None:
+            cmd += ["--ai-max-retries", str(args.max_retries)]
         try:
             proc = subprocess.run(cmd, cwd=run_dir, env=env, timeout=args.timeout,
                                   capture_output=True, text=True)
@@ -280,8 +282,9 @@ def main() -> None:
     ap.add_argument("--variants", default="minimal,cli")
     ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
-    ap.add_argument("--max-retries", type=int, default=2,
-                    help="CLI tool-loop budget (--ai-max-retries)")
+    ap.add_argument("--max-retries", type=int, default=None,
+                    help="override the CLI tool-loop budget (--ai-max-retries); "
+                         "default: whatever the binary's shipped [ai] max_retries is")
     ap.add_argument("--timeout", type=float, default=900, help="per-generation timeout (s)")
     ap.add_argument("--sleep", type=float, default=1.0, help="pause between runs (s)")
     args = ap.parse_args()

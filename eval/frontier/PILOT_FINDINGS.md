@@ -81,3 +81,28 @@ Residual misses (3/18 cells) are the remaining harness frontier:
 correction-budget exhaustion on hard intents and one final-round TOML
 miss — bounded-retry and evaluator roles are the next lever, not the
 prompt.
+
+## Post-default re-measurement (round-budget starvation fix)
+
+The shipped default `[ai] max_retries` moved 3 → 6 after the spot-check
+below showed the thinking tier starving at the old default: with 2–3
+rounds the model spends its whole budget on knowledge-tool lookups
+before writing any TOML, and the run dies at the round cap with the
+session archived (paid, invisible in artifacts). `run_eval.py` no longer
+passes `--ai-max-retries` unless overridden, so bare runs measure
+whatever the binary actually ships.
+
+Spot-check, same model and ceilings (16384 / 300s), `cli` variant:
+
+| intent | budget | all-gates | wall | note |
+|---|---|---|---|---|
+| `qc-fastqc` (easy) | 6 | ✅ | 10.2s | |
+| `rnaseq-star` (medium) | 2 | ❌ | 2.8s | round cap before any TOML |
+| `rnaseq-star` (medium) | 6 | ✅ | 24.6s | 2 knowledge rounds + corrections fit |
+| CJK two-intent fastp+multiqc | 3 | ❌ | — | round cap, session archived |
+| CJK two-intent fastp+multiqc | 6 | ✅ | ~12s | gates re-run locally, exit 0 |
+
+Non-thinking tiers are unaffected (deepseek-chat finished within 3
+rounds on all 9 pilot intents); the change only widens the viable
+config space for thinking backends, at zero cost when a draft
+validates early.

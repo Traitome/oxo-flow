@@ -123,6 +123,36 @@ impl AiProvider {
         }
     }
 
+    /// Whether calls on this provider can possibly succeed. `Noop` is the
+    /// resolved nothing-configured state; every other variant carries the
+    /// backend it needs. Surfaces gate their AI_NOT_CONFIGURED responses on
+    /// this instead of pattern-matching the variant by hand.
+    pub fn is_usable(&self) -> bool {
+        !matches!(self, Self::Noop)
+    }
+
+    /// Whether `other` is the very same provider configuration — name,
+    /// model, endpoint, AND credential. Fallback chains use this to skip a
+    /// candidate that duplicates an already-attempted one; two rows that
+    /// differ only by API key are NOT the same (a gateway deployment may
+    /// serve the same URL/model to a user key and a server key).
+    pub fn same_configuration(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Claude(a), Self::Claude(b)) => {
+                a.model == b.model && a.api_url == b.api_url && a.api_key == b.api_key
+            }
+            (Self::OpenAi(a), Self::OpenAi(b))
+            | (Self::DeepSeek(a), Self::DeepSeek(b))
+            | (Self::OpenAi(a), Self::DeepSeek(b))
+            | (Self::DeepSeek(a), Self::OpenAi(b)) => {
+                a.model == b.model && a.api_url == b.api_url && a.api_key == b.api_key
+            }
+            (Self::Ollama(a), Self::Ollama(b)) => a.model == b.model && a.api_url == b.api_url,
+            // Scripted backends are per-test instances — never dedup them.
+            _ => false,
+        }
+    }
+
     /// Apply a configured sampling temperature to the underlying backend
     /// (no-op for backends that do not take one: scripted/noop).
     pub fn with_temperature(self, temperature: Option<f64>) -> Self {

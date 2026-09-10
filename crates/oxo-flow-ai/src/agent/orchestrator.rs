@@ -83,6 +83,7 @@ impl Orchestrator {
                     "exceeded max rounds ({}) without valid output",
                     self.max_rounds
                 ));
+                log_session_usage(&failed);
                 let _ = crate::session::save_session(&failed);
                 return Err(AiError::MaxRoundsExceeded {
                     max: self.max_rounds,
@@ -90,6 +91,7 @@ impl Orchestrator {
             }
             if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 let failed = session.fail("cancelled by caller");
+                log_session_usage(&failed);
                 let _ = crate::session::save_session(&failed);
                 return Err(AiError::ToolError {
                     tool: "cancelled".into(),
@@ -289,6 +291,7 @@ impl Orchestrator {
         } else {
             session.fail("No valid content produced")
         };
+        log_session_usage(&completed);
 
         Ok(AgentOutcome {
             success,
@@ -326,6 +329,25 @@ pub fn tool_call_approved(
     match (registry.get(name), approver) {
         (Some(tool), Some(approve)) => approve(&tool.def(), arguments),
         _ => false,
+    }
+}
+
+/// Emit the paid-for token spend of a finished run to the operation log.
+/// Every surface that runs an agent goes through here, so a generation's
+/// cost is visible even when the session itself is dropped by the caller
+/// (web surfaces intentionally do not archive sessions to disk).
+fn log_session_usage(session: &crate::session::AiSession) {
+    let usage = &session.total_usage;
+    if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {
+        tracing::info!(
+            command = %session.command,
+            provider = %session.provider,
+            model = %session.model,
+            session = %session.id,
+            prompt_tokens = usage.prompt_tokens,
+            completion_tokens = usage.completion_tokens,
+            "AI generation usage"
+        );
     }
 }
 

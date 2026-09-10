@@ -141,9 +141,9 @@ Rate limiting and SSE:
 |--------|------|---------------|
 | **workflow** | `domains/workflow/` | Pipeline parse, validate, prepare, DAG, format, lint, stats, diff, export, search, data discovery, plugin validation |
 | **execution** | `domains/execution/` | Run create/status/cancel/retry, diagnostics engine (30+ error patterns), sandbox workspace; runs delegate to the `oxo-flow` CLI subprocess, which owns checkpointing and invalidation |
-| **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; provider dispatch (DeepSeek/Claude/OpenAI/Ollama) |
+| **ai** | `domains/ai/` | AI translate, explain, interpret, optimize; generation runs the shared agent + orchestrator harness (see [Architecture → AI Subsystem](architecture.md)) over the provider fallback chain |
 | **auth** | `domains/auth/` | Login, session management, ORCID/GitHub OAuth2, RBAC |
-| **chat** | `domains/chat/` | Real-time AI copilot chat and streaming |
+| **chat** | `domains/chat/` | Real-time AI copilot chat and streaming; generation uses the same harness as translate, plus read-only run-diagnosis tools |
 | **clusters** | `domains/clusters/` | Remote cluster submission over SSH, job polling, result pull-back |
 | **collaboration** | `domains/collaboration/` | Fork, diff, share, import pipelines |
 | **dag** | `domains/dag/` | DAG-specific types and operations |

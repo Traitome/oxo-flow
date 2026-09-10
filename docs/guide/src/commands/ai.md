@@ -91,3 +91,63 @@ itself:
 All AI features go through the configured provider (see `oxo-flow ai
 status`); deterministic behavior never depends on the model — AI output is
 always additive prose or proposals, never silent engine decisions.
+
+## How `template --ai` generates a workflow
+
+`template --ai` runs the same generation agent as the web translate and
+chat surfaces — one shared persona in `oxo-flow-ai`, one orchestrator
+loop. The steps:
+
+1. **Resolve the destination** — `-o` is parsed before anything is sent
+   to the provider, so a bad output path fails cheaply.
+2. **Gather context** — `--from-url` references are fetched through the
+   SSRF-screened fetcher; `--from-file` files are read with bounded
+   previews. Both enter the prompt as external reference material.
+3. **Plan** — the shared persona's system prompt encodes the `.oxoflow`
+   schema (single-brace templates, `[[rules]]` arrays, `depends_on`,
+   version-pinned conda packages) and explicitly bans the wrong dialects
+   models tend to drift into (`foreach`, `inputs = {...}` maps,
+   `[resources]` sections). Domain-matched bioSkills and any activated
+   `[ai] skills` are injected as prompt sections.
+4. **Ground with tools** — the model queries the embedded knowledge
+   bases on demand: `lookup_tool` for exact Bioconda names/versions,
+   `lookup_skill`/`lookup_pipeline` for domain procedures and topologies.
+   Non-read-only tools (e.g. MCP tools from activated tool skills) ask
+   for interactive approval on stderr before running; non-interactive
+   sessions refuse them.
+5. **Validate against the engine** — every draft is parsed by the core
+   engine (`WorkflowConfig`). On failure the errors feed back to the
+   model for correction; this loop is bounded by `--ai-max-retries`.
+6. **Deliver** — the validated TOML is written, the three static gates
+   (`validate` / `dry-run` / `lint`) can then confirm it, and the AI
+   session (token usage, tool calls) is archived to
+   `~/.oxo-flow/ai_sessions/`.
+
+### Correction budget and failure behavior
+
+- `--ai-max-retries N` sizes the orchestrator's combined tool +
+  correction-round budget (default from `[ai]` config, 6 when unset —
+  knowledge lookups and the correction pass share the budget, and the
+  loop stops as soon as a draft validates).
+- If the budget runs out after a pipeline was drafted, the command
+  **degrades instead of discarding**: the generated TOML is extracted
+  from the transcript and written with a prominent review warning —
+  a paid-for artifact is never silently lost.
+- Provider failures (auth, quota, network) fail fast with the error.
+
+### Generation tuning knobs
+
+| Variable | Default | When to change |
+|---|---|---|
+| `OXO_FLOW_AI_MAX_TOKENS` | `4096` | Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible endpoint) spend reasoning tokens against this ceiling and truncate before producing TOML — raise to 16384+ there. For non-thinking models the default holds with ≥3× headroom (measured: 1.9k–4.4k output tokens per generation) |
+| `OXO_FLOW_AI_TIMEOUT_SECS` | `120` | Non-thinking generations complete in 12–20 s; thinking backends can exceed two minutes per call — raise together with `OXO_FLOW_AI_MAX_TOKENS`, or long completions die mid-body |
+
+Both are consumed by the Anthropic Messages backend; the DeepSeek-native,
+OpenAI-compatible, and Ollama backends have their own budgets.
+
+Quality evidence for these calibrations (gate-scored benchmark,
+before/after the generation unification) lives in `eval/frontier/` in
+the repository. The architecture view of the shared harness — how the
+CLI, translate, and chat surfaces differ only in provider resolution,
+tool policy, and presentation — is in
+[Architecture → AI Subsystem](https://traitome.github.io/oxo-flow/latest/reference/architecture/#ai-subsystem).

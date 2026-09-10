@@ -24,11 +24,14 @@ Convert natural language intent to a validated `.oxoflow` pipeline.
 
 ```
 Input:  { intent: "RNA-seq, PE, hg38, STAR + featureCounts, strand-specific" }
-Process (issue #342 — one harness across all generation surfaces):
+Process (one harness across all generation surfaces):
   1. The shared `PipelineGenAgent` (oxo-flow-ai) runs through the agent
      orchestrator: engine-accurate prompt, read-only knowledge tools
      (Bioconda lookup, bioSkills, pipeline graph), and the provider
-     fallback chain (configured provider → Claude → OpenAI → Ollama)
+     fallback chain (the caller's own provider → configured provider →
+     env-discovered Claude → OpenAI → Ollama)
+  2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
+     no provider is usable
   2. Template names enter the prompt as hints; keyword matching remains a
      deterministic fallback when all providers fail
   3. Every draft is validated by the engine via the web workflow service;

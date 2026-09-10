@@ -166,7 +166,7 @@ impl AiProviderRegistry {
             model,
             api_key,
             api_url,
-            max_retries: 3,
+            max_retries: oxo_flow_ai::config::default_max_retries(),
             auto_fix: AutoFixMode::Ask,
             temperature: None,
             skills: Vec::new(),

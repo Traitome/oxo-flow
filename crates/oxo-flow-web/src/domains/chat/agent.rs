@@ -8,9 +8,7 @@
 //! gates with E017. The prompt, extraction, and validation contract now
 //! come from one place; only the validator binding is web-specific.
 
-use std::sync::Arc;
-
-use oxo_flow_ai::agent::pipeline_gen::{OutputValidator, PipelineGenAgent};
+use oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent;
 use oxo_flow_ai::agent::{Agent, AgentContext, ValidationResult};
 use oxo_flow_ai::types::Message;
 
@@ -24,7 +22,7 @@ impl ChatAgent {
     pub fn new(intent: String, user_message: String) -> Self {
         Self {
             inner: PipelineGenAgent::new(intent)
-                .with_validator(web_validator())
+                .with_validator(workflow_svc::pipeline_output_validator())
                 // The raw user message (free-form chat turn) supplements the
                 // intent-derived request line the shared persona builds.
                 .with_user_addition(format!("## User Message\n{user_message}")),
@@ -36,28 +34,6 @@ impl ChatAgent {
         self.inner = self.inner.with_user_addition(section);
         self
     }
-}
-
-/// The web engine binding: extracted TOML must pass the workflow service's
-/// validation — errors feed the orchestrator's correction loop. Read-only.
-pub fn web_validator() -> OutputValidator {
-    Arc::new(
-        |toml: &str| match workflow_svc::validate_pipeline(toml, None) {
-            Ok(v) if v.valid => ValidationResult::passed(),
-            Ok(v) => ValidationResult {
-                passed: false,
-                errors: v.errors.iter().map(|e| e.message.clone()).collect(),
-                warnings: vec![],
-                summary: format!("{} validation error(s)", v.errors.len()),
-            },
-            Err(e) => ValidationResult {
-                passed: false,
-                errors: vec![e],
-                warnings: vec![],
-                summary: "validation failed".into(),
-            },
-        },
-    )
 }
 
 impl Agent for ChatAgent {
