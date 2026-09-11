@@ -55,6 +55,12 @@ pub struct AiConfig {
     /// alone never activates — each name here is an explicit opt-in.
     #[serde(default)]
     pub skills: Vec<String>,
+
+    /// Generation team profile: `compact` (one agent + gates, default) or
+    /// `full` (adds the task contract, the deterministic Curator brief, and
+    /// an independent review pass). `None` = compact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_profile: Option<crate::agent::team::TeamProfile>,
 }
 
 /// The shipped round-budget default. Single source for every consumer that
@@ -83,6 +89,7 @@ impl Default for AiConfig {
             max_retries: default_max_retries(),
             auto_fix: AutoFixMode::default(),
             temperature: None,
+            team_profile: None,
             skills: Vec::new(),
         }
     }
@@ -125,6 +132,9 @@ impl AiConfig {
         if !other.skills.is_empty() {
             self.skills = other.skills.clone();
         }
+        if other.team_profile.is_some() {
+            self.team_profile = other.team_profile;
+        }
     }
 
     /// Create a config from environment variables.
@@ -154,6 +164,7 @@ impl AiConfig {
             auto_fix: AutoFixMode::default(),
             temperature: None,
             skills: Vec::new(),
+            team_profile: None,
         }
     }
 
@@ -197,6 +208,11 @@ impl AiConfig {
             })
             .unwrap_or_default();
 
+        let team_profile = ai_table
+            .get("team_profile")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok());
+
         Some(Self {
             enabled,
             provider,
@@ -207,6 +223,7 @@ impl AiConfig {
             auto_fix,
             temperature,
             skills,
+            team_profile,
         })
     }
 
@@ -337,6 +354,58 @@ mod tests {
     fn default_config_is_disabled() {
         let config = AiConfig::default();
         assert!(!config.enabled);
+        assert_eq!(config.team_profile, None, "compact is the shipped default");
+    }
+
+    #[test]
+    fn team_profile_parses_from_workflow_toml_and_merges() {
+        // Arrange — a workflow opting into the full Scientist Team profile.
+        let workflow = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nenabled = true\nteam_profile = \"full\"\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            workflow.team_profile,
+            Some(crate::agent::team::TeamProfile::Full)
+        );
+
+        // Act — merging a compact workflow over the full one must take.
+        let mut resolved = workflow.clone();
+        let compact = AiConfig::from_workflow_toml(
+            &toml::from_str::<toml::Table>("[ai]\nenabled = true\nteam_profile = \"compact\"\n")
+                .unwrap(),
+        )
+        .unwrap();
+        resolved.merge(&compact);
+
+        // Assert
+        assert_eq!(
+            resolved.team_profile,
+            Some(crate::agent::team::TeamProfile::Compact)
+        );
+
+        // A workflow with no team_profile key never overrides.
+        let mut resolved = workflow;
+        resolved.merge(
+            &AiConfig::from_workflow_toml(
+                &toml::from_str::<toml::Table>("[ai]\nenabled = true\n").unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            resolved.team_profile,
+            Some(crate::agent::team::TeamProfile::Full)
+        );
+    }
+
+    #[test]
+    fn team_profile_rejects_unknown_values() {
+        assert!(
+            "\"turbo\""
+                .parse::<crate::agent::team::TeamProfile>()
+                .is_err()
+        );
     }
 
     #[test]

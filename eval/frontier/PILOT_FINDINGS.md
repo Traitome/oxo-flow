@@ -106,3 +106,50 @@ Non-thinking tiers are unaffected (deepseek-chat finished within 3
 rounds on all 9 pilot intents); the change only widens the viable
 config space for thinking backends, at zero cost when a draft
 validates early.
+
+## Scientist Team ablation (compact vs full profile)
+
+The full profile adds three roles around the generation agent: a bounded
+task contract, a deterministic Curator brief (embedded-knowledge retrieval),
+and an independent review whose request_changes triggers exactly one
+regeneration. Ablated on the expanded intent set — 29 intents (26 specified
++ 3 deliberately vague), 2 seeds, `deepseek-chat`, ceilings 8192 / 180–300s,
+58 runs per arm:
+
+| arm | all-gates (specified) | easy | medium | hard | vague | tokens | est. cost |
+|---|---|---|---|---|---|---|---|
+| compact (baseline) | **43/52 (83%)** | 8/8 | 18/20 | 17/24 | 5/6 | 346k | $0.229 |
+| full, v1 (review replaced unconditionally) | 29/52 (56%) | 5/8 | 10/20 | 14/24 | 5/6 | 369k | $0.271 |
+| full, v2 (review invariant + calibration + exact-name curator) | 39/52 (75%) | 7/8 | 15/20 | 17/24 | 5/6 | 389k | $0.242 |
+
+Wall time: compact mean 14 s/run; full v1 mean 112 s/run (review demanded
+changes on 56/58 runs — a 97% trigger rate — so nearly every run paid a
+third generation); full v2 mean 17 s/run (trigger rate 7%, all four
+regenerations validated and were adopted).
+
+### What the iterations established
+
+1. **Review must be unable to regress the outcome.** v1 replaced the
+   artifact whenever the reviewer demanded changes; because regeneration is
+   a fresh draw, gate-passing drafts were swapped for unvalidated ones
+   (83% → 56%). v2 adopts a regenerated artifact only when it ALSO passes
+   the engine validator — review can now only help or waste its own tokens,
+   never degrade the result. This invariant is load-bearing.
+2. **The reviewer must approve by default.** An "adversarial" framing made
+   `deepseek-chat` demand changes on 97% of artifacts. Recalibrated to a
+   closed list of blocking classes with an explicit approve-by-default rule,
+   the trigger rate fell to 7%.
+3. **The Curator brief must not guess.** Injecting fuzzy Bioconda matches
+   anchored the generator on wrong tools (a never-reviewed run still lost
+   pass@1). Exact-name hits only.
+4. **On this model tier the roles do not pay for themselves in aggregate.**
+   v2 rescues hard-tier cells (metag-assembly 0/2→2/2, cnv-cnvkit,
+   chipseq-broad, somatic-mutect2 each +1) but destabilizes an equal number
+   of previously-solid easy/medium cells; the net −4 cells is within 2-seed
+   noise, at +1% cost / +12% tokens.
+
+Conclusion: **compact stays the shipped default**; full remains available
+(`--ai-team-profile full`) as the substrate for the next levers — review
+scoped to FAILED generations (rescue-only, where it has upside without
+destabilizing passes), a larger intent set, and more seeds before any
+tier-conditional recommendation.

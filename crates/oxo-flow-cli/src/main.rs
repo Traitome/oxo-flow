@@ -388,6 +388,12 @@ pub enum Commands {
         /// Maximum AI correction rounds (overrides config).
         #[arg(long = "ai-max-retries", value_name = "N")]
         ai_max_retries: Option<u32>,
+        /// Generation team profile: `compact` (one agent + engine gates,
+        /// default) or `full` (adds the task contract, the deterministic
+        /// Curator brief, and an independent review pass with a bounded
+        /// fix). Overrides `[ai] team_profile` in the config.
+        #[arg(long = "ai-team-profile", value_name = "PROFILE")]
+        ai_team_profile: Option<String>,
     },
     /// AI status, test, setup, and workflow explanation.
     ///
@@ -1515,7 +1521,19 @@ async fn main() -> Result<()> {
             from_url,
             from_file,
             ai_max_retries,
-        } => template_command(template, output, ai, from_url, from_file, ai_max_retries).await?,
+            ai_team_profile,
+        } => {
+            template_command(
+                template,
+                output,
+                ai,
+                from_url,
+                from_file,
+                ai_max_retries,
+                ai_team_profile,
+            )
+            .await?
+        }
         Commands::Ai {
             action,
             workflow,

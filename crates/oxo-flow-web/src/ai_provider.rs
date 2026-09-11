@@ -170,6 +170,7 @@ impl AiProviderRegistry {
             auto_fix: AutoFixMode::Ask,
             temperature: None,
             skills: Vec::new(),
+            team_profile: None,
         };
 
         oxo_flow_ai::AI.reconfigure(cfg).map_err(|e| e.to_string())

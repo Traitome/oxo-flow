@@ -135,6 +135,18 @@ loop. The steps:
   a paid-for artifact is never silently lost.
 - Provider failures (auth, quota, network) fail fast with the error.
 
+### Scientist Team profile (opt-in)
+
+`--ai-team-profile full` (or `[ai] team_profile = "full"`) wraps the same
+generation agent in three extra roles: a **task contract** that
+standardizes under-specified requests before generation, a deterministic
+**Curator** brief that injects Bioconda candidates, domain procedures and
+pipeline-graph transitions up front, and an **independent review** pass
+whose blocking findings trigger exactly one regeneration. Compact remains
+the default; the measured quality/cost trade-off lives in `eval/frontier/`
+in the repository (see also
+[AI CLI reference → Generation team profiles](https://traitome.github.io/oxo-flow/latest/reference/ai-cli/)).
+
 ### Generation tuning knobs
 
 | Variable | Default | When to change |
