@@ -2483,6 +2483,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#scientist-team-profile-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scientist Team profile (opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#generation-tuning-knobs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3823,6 +3834,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#scientist-team-profile-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scientist Team profile (opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#generation-tuning-knobs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4038,6 +4060,16 @@ loop. The steps:</p>
   a paid-for artifact is never silently lost.</li>
 <li>Provider failures (auth, quota, network) fail fast with the error.</li>
 </ul>
+<h3 id="scientist-team-profile-opt-in">Scientist Team profile (opt-in)<a class="headerlink" href="#scientist-team-profile-opt-in" title="Permanent link">#</a></h3>
+<p><code>--ai-team-profile full</code> (or <code>[ai] team_profile = "full"</code>) wraps the same
+generation agent in three extra roles: a <strong>task contract</strong> that
+standardizes under-specified requests before generation, a deterministic
+<strong>Curator</strong> brief that injects Bioconda candidates, domain procedures and
+pipeline-graph transitions up front, and an <strong>independent review</strong> pass
+whose blocking findings trigger exactly one regeneration. Compact remains
+the default; the measured quality/cost trade-off lives in <code>eval/frontier/</code>
+in the repository (see also
+<a href="https://traitome.github.io/oxo-flow/latest/reference/ai-cli/">AI CLI reference → Generation team profiles</a>).</p>
 <h3 id="generation-tuning-knobs">Generation tuning knobs<a class="headerlink" href="#generation-tuning-knobs" title="Permanent link">#</a></h3>
 <table>
 <thead>

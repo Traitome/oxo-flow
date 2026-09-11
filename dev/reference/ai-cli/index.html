@@ -3359,6 +3359,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#generation-team-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generation team profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4306,6 +4317,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#generation-team-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generation team profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4776,7 +4798,50 @@ explicit disable:</p>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">max_retries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
 </span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">auto_fix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ask"</span><span class="w">    </span><span class="c1"># "ask" | "always" | "never"</span>
 </span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"deepseek-v4-flash"</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">team_profile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"compact"</span><span class="w">    </span><span class="c1"># "compact" | "full"</span>
 </span></code></pre></div>
+<h3 id="generation-team-profiles">Generation team profiles<a class="headerlink" href="#generation-team-profiles" title="Permanent link">#</a></h3>
+<p><code>template --ai</code> runs one generation agent with the engine-gate correction
+loop (the <strong>compact</strong> profile, default). The <strong>full</strong> profile adds three
+Scientist Team roles around it:</p>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Stage</th>
+<th>Cost</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Task contract</td>
+<td>before generation</td>
+<td>one small low-temperature call</td>
+<td>standardizes an under-specified intent into an explicit contract (goal, inputs, outputs, decisions)</td>
+</tr>
+<tr>
+<td>Curator</td>
+<td>before generation</td>
+<td>zero — deterministic retrieval</td>
+<td>assembles Bioconda tool candidates, domain procedures, and pipeline-graph transitions from the embedded knowledge bases, so generation spends no paid rounds on knowledge lookups</td>
+</tr>
+<tr>
+<td>Independent review</td>
+<td>after generation</td>
+<td>one small low-temperature call</td>
+<td>a fresh evaluator instance judges the artifact against the contract; a <code>request_changes</code> verdict triggers exactly one regeneration pass with the findings</td>
+</tr>
+</tbody>
+</table>
+<p>Enable it per call with <code>template --ai --ai-team-profile full</code>, or per
+project with <code>[ai] team_profile = "full"</code>. The review pass is engineered to
+be unable to regress the outcome (a regeneration replaces the draft only if
+it also validates) and approves by default — on the measured ablation it
+triggers on ~7% of runs. Full stays slightly below compact on aggregate
+gate pass while rescuing scattered hard-tier cells; compact remains the
+default and the full measurement record lives in <code>eval/frontier/</code> in the
+repository.</p>
 <h3 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">#</a></h3>
 <table>
 <thead>
