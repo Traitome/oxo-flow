@@ -149,7 +149,7 @@ async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
     let url = reqwest::Url::parse(raw).map_err(|e| format!("unparseable URL: {e}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
-            "scheme {:?} not allowed (http/https only)",
+            "scheme {:?} not allowed (http/https only) — embedded knowledge lives behind lookup_skill, not fetch_url",
             url.scheme()
         ));
     }
@@ -306,7 +306,7 @@ impl Tool for FetchUrlTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "fetch_url".into(),
-            description: "Fetch content from a URL. Use this to retrieve protocol documentation, tool references, or other web resources. Returns the text content of the page.".into(),
+            description: "Fetch content from a public http or https URL. Use this to retrieve protocol documentation, tool references, or other web resources; returns the text content of the page. Only http/https URLs are allowed — never invent other schemes. For embedded knowledge (skills, tool docs) use lookup_skill instead of this tool.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -506,6 +506,16 @@ mod tests {
     fn fetch_url_tool_has_correct_def() {
         let tool = FetchUrlTool::new();
         assert_eq!(tool.name(), "fetch_url");
+        // Models invent schemes when the constraint is unstated: a run
+        // burned two rounds calling this tool with `skill://...` because
+        // the description never said http/https-only and never said that
+        // embedded knowledge comes from lookup_skill instead.
+        let desc = tool.def().description;
+        assert!(desc.contains("http"), "description must name the scheme constraint: {desc}");
+        assert!(
+            desc.to_lowercase().contains("lookup_skill"),
+            "description must point at lookup_skill for embedded knowledge: {desc}"
+        );
     }
 
     #[test]

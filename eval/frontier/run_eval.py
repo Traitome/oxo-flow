@@ -51,7 +51,10 @@ REPO = Path(__file__).resolve().parents[2]
 # USD per 1M tokens. Defaults mirror the repo's own cost constant
 # (crates/oxo-flow-ai/src/types.rs: deepseek-v4-pro 0.28 in / 1.10 out,
 # pricing as of 2026-08). Add per-model overrides here as needed.
+# GLM/Qwen: official z.ai / Alibaba DashScope list prices (2026-09).
 PRICE_PER_MTOK = {
+    "GLM": (0.60, 2.20),
+    "Qwen": (0.50, 2.00),
     "*": (0.28, 1.10),
 }
 
