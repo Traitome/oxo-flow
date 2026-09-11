@@ -3802,6 +3802,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#diagnostic-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic Codes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Diagnostic Codes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validation-errors-validate-dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation errors (validate / dry-run)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lint-warnings-lint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lint warnings (lint)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmark-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark terms
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4614,6 +4664,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#diagnostic-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic Codes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Diagnostic Codes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#validation-errors-validate-dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation errors (validate / dry-run)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lint-warnings-lint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lint warnings (lint)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#benchmark-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark terms
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4877,6 +4977,199 @@ changes do (<a href="../cloud-storage/#content-addressed-invalidation">Cloud Sto
 <li><a href="../workflow-format/">Workflow Format Reference</a> — complete TOML specification</li>
 <li><a href="../dag-engine/">DAG Engine</a> — how dependencies are resolved</li>
 <li><a href="../wildcards/">Wildcards Reference</a> — pattern expansion details</li>
+</ul>
+<hr />
+<h2 id="diagnostic-codes">Diagnostic Codes<a class="headerlink" href="#diagnostic-codes" title="Permanent link">#</a></h2>
+<p>Every static check in oxo-flow tags its findings with a stable code so
+tools (and you) can branch on them programmatically:</p>
+<ul>
+<li><strong><code>Exx</code></strong> — an <strong>error</strong>: the workflow is rejected (<code>validate</code> fails) or
+  flagged as not runnable. Example: <code>E017</code> — an unknown key in a rule, the
+  engine's way of saying "this TOML uses a dialect the schema does not
+  have".</li>
+<li><strong><code>Wxx</code></strong> — a <strong>warning</strong>: the workflow runs, but the check found a
+  likely mistake worth fixing (see <code>oxo-flow lint</code>).</li>
+</ul>
+<p>Codes are three characters: the letter, then a zero-padded number. The
+authoritative, machine-readable source is the <code>--json</code> output of each
+command (<code>validate --json</code>, <code>dry-run --json</code>, <code>lint --json</code>); the tables
+below cover the codes referenced across this documentation.</p>
+<h3 id="validation-errors-validate-dry-run">Validation errors (<code>validate</code> / <code>dry-run</code>)<a class="headerlink" href="#validation-errors-validate-dry-run" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>E001</code></td>
+<td>Workflow name is empty</td>
+</tr>
+<tr>
+<td><code>E003</code></td>
+<td>A wildcard appears in a rule's output but not in its input — the engine cannot key instances</td>
+</tr>
+<tr>
+<td><code>E005</code></td>
+<td>A <code>{config.key}</code> reference points at a key absent from <code>[config]</code></td>
+</tr>
+<tr>
+<td><code>E006</code></td>
+<td>DAG construction error (e.g. a cycle)</td>
+</tr>
+<tr>
+<td><code>E007</code></td>
+<td><code>depends_on</code> names a rule that does not exist</td>
+</tr>
+<tr>
+<td><code>E008</code></td>
+<td><code>extends</code> names a rule that does not exist</td>
+</tr>
+<tr>
+<td><code>E009</code></td>
+<td>An input path contains <code>..</code> and may escape the working directory</td>
+</tr>
+<tr>
+<td><code>E010</code></td>
+<td>A rule references an undefined <code>env_group</code></td>
+</tr>
+<tr>
+<td><code>E011</code></td>
+<td>A rule command matches a dangerous shell pattern (destructive command class)</td>
+</tr>
+<tr>
+<td><code>E013</code></td>
+<td>A <code>checkpoint = true</code> rule lacks <code>checkpoint_manifest</code></td>
+</tr>
+<tr>
+<td><code>E014</code></td>
+<td>A checkpoint rule is parameterized by <code>{sample}</code>/<code>{group}</code>/<code>{pair_id}</code> (not allowed)</td>
+</tr>
+<tr>
+<td><code>E015</code></td>
+<td>Re-entry declares a <code>pair_id</code> with conflicting content</td>
+</tr>
+<tr>
+<td><code>E016</code></td>
+<td>An environment field contains a shell-unsafe character — the spec would not render as safe argv</td>
+</tr>
+<tr>
+<td><code>E017</code></td>
+<td>Unknown key in a rule — usually a foreign workflow dialect (e.g. <code>foreach</code>, <code>inputs = {...}</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="lint-warnings-lint">Lint warnings (<code>lint</code>)<a class="headerlink" href="#lint-warnings-lint" title="Permanent link">#</a></h3>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>W001</code>/<code>W002</code></td>
+<td>Workflow missing <code>description</code> / <code>author</code></td>
+</tr>
+<tr>
+<td><code>W003</code></td>
+<td>Rule missing a description</td>
+</tr>
+<tr>
+<td><code>W004</code></td>
+<td>Rule has a shell command but no <code>log</code> file specified</td>
+</tr>
+<tr>
+<td><code>W005</code></td>
+<td>Rule uses &gt;8 threads with no <code>memory</code></td>
+</tr>
+<tr>
+<td><code>W007</code></td>
+<td>Rule declares no environment — runs in the bare system shell</td>
+</tr>
+<tr>
+<td><code>W011</code></td>
+<td>Rule has <code>retries</code> but no <code>retry_delay</code></td>
+</tr>
+<tr>
+<td><code>W014</code></td>
+<td><code>depends_on</code> references an unknown rule</td>
+</tr>
+<tr>
+<td><code>W016</code></td>
+<td>Conda/pixi spec is not a lockfile — builds may not be reproducible</td>
+</tr>
+<tr>
+<td><code>W017</code></td>
+<td>Input path is absolute</td>
+</tr>
+<tr>
+<td><code>W018</code></td>
+<td>Input path references a home directory</td>
+</tr>
+<tr>
+<td><code>W019</code></td>
+<td>Rule executes a command but declares no outputs</td>
+</tr>
+<tr>
+<td><code>W020</code>/<code>W021</code>/<code>W022</code></td>
+<td><code>pre_exec</code>/<code>on_success</code>/<code>on_failure</code> contain a risky pattern</td>
+</tr>
+<tr>
+<td><code>W024</code></td>
+<td>A wildcard has no declared source — it will stay literal at run time</td>
+</tr>
+<tr>
+<td><code>W025</code></td>
+<td>Legacy <code>threads =</code>/<code>memory =</code> keys under the rule body (use <code>resources.</code>)</td>
+</tr>
+<tr>
+<td><code>W027</code></td>
+<td>A <code>when</code> condition references a wildcard nothing can bind — evaluates false</td>
+</tr>
+<tr>
+<td><code>W028</code></td>
+<td>Docker image is not fully qualified (resolves against docker.io)</td>
+</tr>
+<tr>
+<td><code>W029</code></td>
+<td><code>len(config.x)</code> compared against a non-numeric value</td>
+</tr>
+<tr>
+<td><code>W030</code></td>
+<td>Malformed <code>regex_extract</code> in a <code>when</code> condition</td>
+</tr>
+<tr>
+<td><code>W031</code></td>
+<td>Producer is when-gated but its consumer expands the output unconditionally</td>
+</tr>
+<tr>
+<td><code>W032</code></td>
+<td>A config key looks like a secret but is not declared <code>sensitive</code></td>
+</tr>
+</tbody>
+</table>
+<p>The full, current list with suggestions is best read from the commands:
+<code>oxo-flow lint --json</code> prints every code with its message and suggestion
+(see <a href="../../commands/lint/">lint</a>). AI-generated drafts that fail a gate
+have their errors fed back to the model for correction
+(<a href="../../commands/ai/">AI CLI</a>); deterministic repairs for purely mechanical
+classes run first, before any model round is spent.</p>
+<h3 id="benchmark-terms">Benchmark terms<a class="headerlink" href="#benchmark-terms" title="Permanent link">#</a></h3>
+<ul>
+<li><strong>pass@1 / pass@k</strong> — the probability that a single generation (or at
+  least one of k attempts) passes all gates. Used in
+  <a href="../ai-eval/">AI evaluation</a> and <code>eval/frontier/</code>.</li>
+<li><strong>fidelity</strong> — a deterministic check that the tools an intent names
+  actually appear in the generated pipeline. Gates alone cannot see a
+  "wrong but valid" pipeline; the frontier benchmark reports
+  <strong>success = gates ∧ fidelity</strong>.</li>
+<li><strong>seed</strong> — one repeat of the same intent under identical settings;
+  multiple seeds measure sampling variance instead of quoting a single
+  lucky/unlucky run.</li>
 </ul>
 
 

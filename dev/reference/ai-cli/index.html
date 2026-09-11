@@ -4696,6 +4696,13 @@ Set the provider and your API key via environment variables:</p>
 <h3 id="control-ai-behavior">Control AI Behavior<a class="headerlink" href="#control-ai-behavior" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Limit correction rounds</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>template<span class="w"> </span><span class="s2">"RNA-seq"</span><span class="w"> </span>--ai<span class="w"> </span>--ai-max-retries<span class="w"> </span><span class="m">5</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Fresh-draw attempts (pass@k with early exit): attempt 2..N is only paid</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># when earlier attempts fail — the deterministic gates decide</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>oxo-flow<span class="w"> </span>template<span class="w"> </span><span class="s2">"RNA-seq"</span><span class="w"> </span>--ai<span class="w"> </span>--ai-attempts<span class="w"> </span><span class="m">2</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># Opt into the Scientist Team roles (contract + Curator + review)</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>oxo-flow<span class="w"> </span>template<span class="w"> </span><span class="s2">"RNA-seq"</span><span class="w"> </span>--ai<span class="w"> </span>--ai-team-profile<span class="w"> </span>full
 </span></code></pre></div>
 <hr />
 <h2 id="workflow-explanation-ai-explain">Workflow Explanation (<code>ai explain</code>)<a class="headerlink" href="#workflow-explanation-ai-explain" title="Permanent link">#</a></h2>
