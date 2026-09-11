@@ -325,12 +325,16 @@ impl EnvironmentBackend for CondaBackend {
         // Inline package lists install directly — the same form container
         // export has always rendered (`conda create -n <name> <packages>`).
         // Each token was allowlist-validated by `inline_conda_packages`, so
-        // interpolation is argv-safe.
+        // interpolation is argv-safe. `-c conda-forge` stands in for the
+        // channels block a YAML spec would declare: bioconda packages'
+        // transitive dependencies (libdeflate, htspop, ...) live on
+        // conda-forge, and without it the solver fails with "missing
+        // channel" (live evidence: fastp=1.3.6 lifecycle run).
         if let Some(packages) = crate::rule::EnvironmentSpec::inline_conda_packages(spec) {
             let env_name = conda_env_name_from_spec("conda", spec)?;
             let joined = packages.join(" ");
             return Ok(format!(
-                "conda create -n {env_name} -y {joined} || conda install -n {env_name} -y {joined}"
+                "conda create -n {env_name} -y -c conda-forge {joined} || conda install -n {env_name} -y -c conda-forge {joined}"
             ));
         }
         // `-n <name>` keeps setup consistent with `wrap_command` (which runs

@@ -220,3 +220,34 @@ benchmark with the fidelity criterion verifies the fixes generalize
 rather than overfit. The residual is confined to the vague tier, where
 the honest lever is the task contract / clarification design, not more
 retries.
+
+## Full user-lifecycle validation (post-fix)
+
+A simulated user ran the complete operational lifecycle against an
+AI-generated multi-package workflow (fastqc + fastp + samtools + multiqc,
+fastp rule declaring `conda = "bioconda::fastp=1.3.6 bioconda::samtools=1.24"`):
+
+1. generate (`template --ai`) → validate/lint pass
+2. real `run` → conda bootstrap executed — and FAILED in the solver:
+   `libdeflate ... does not exist (perhaps a missing channel)`. The inline
+   form carries only `bioconda::` per-package qualifiers, but bioconda's
+   transitive dependencies live on **conda-forge**; a YAML spec would have
+   declared that in its channels block, and the inline form had no
+   equivalent. Fix: the direct-create command now renders
+   `-c conda-forge` (runtime + container export), standing in for the
+   channels block.
+3. re-run → env solved and created, tools executed; the rule then failed
+   on missing input data (the AI used placeholder sample names) — surfaced
+   cleanly with the tool's own error, checkpoint recording the failure.
+4. user adds valid data, re-runs → **4/4 rules succeed** (fastqc, fastp,
+   fastqc_trimmed, multiqc, all inside their conda envs).
+5. re-run → 4 skipped (checkpoint); append a read to one input → the
+   invalidation set re-runs exactly the affected chain (4/4 again).
+6. `status` (Completed: 4 / Failed: 0), `clean --dry-run` (13 outputs),
+   `clean --force` (13 deleted).
+7. Web regression on the same build: translate + chat produce gate-valid
+   artifacts; AI_NOT_CONFIGURED and boundary guards unchanged.
+
+The lifecycle found and fixed one more engine gap (missing dependency
+channel) that no gate could see — gates check the recipe, only a real run
+exercises the kitchen.

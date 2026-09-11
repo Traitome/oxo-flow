@@ -136,9 +136,11 @@ fn write_env_setup(
                 dockerfile.push_str(&format!("# Conda environment for rule: {}\n", rule.name));
                 if is_package_specifier(conda_env) {
                     // Package specifier like "bioconda::fastp=0.23.4" —
-                    // install directly, no YAML file needed.
+                    // install directly, no YAML file needed. -c conda-forge
+                    // stands in for the channels block a YAML would declare
+                    // (bioconda transitive deps live on conda-forge).
                     dockerfile.push_str(&format!(
-                        "RUN conda create -n {} {} -y\n\n",
+                        "RUN conda create -n {} -y -c conda-forge {}\n\n",
                         rule.name, conda_env
                     ));
                 } else {
@@ -587,7 +589,7 @@ pub fn generate_singularity_def(
                 if is_package_specifier(conda_env) {
                     // Package specifier — install directly.
                     def.push_str(&format!(
-                        "    /opt/conda/bin/conda create -n {} {} -y\n",
+                        "    /opt/conda/bin/conda create -n {} -y -c conda-forge {}\n",
                         rule.name, conda_env
                     ));
                 } else {
@@ -827,6 +829,36 @@ mod tests {
             )),
             "{def}"
         );
+    }
+
+    #[test]
+    fn generate_dockerfile_package_specifier_uses_forge_channel() {
+        // The inline package form has no channels block of its own — the
+        // rendered create must add conda-forge so bioconda transitive
+        // dependencies (libdeflate, ...) resolve.
+        let dir = tempfile::tempdir().unwrap();
+        let workflow: WorkflowConfig = toml::from_str(
+            r#"
+            [workflow]
+            name = "pkg"
+
+            [[rules]]
+            name = "qc"
+            output = ["out.txt"]
+            shell = "echo hello"
+
+            [rules.environment]
+            conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24"
+        "#,
+        )
+        .unwrap();
+
+        let dockerfile = generate_dockerfile(&workflow, &default_non_rootless()).unwrap();
+        assert!(
+            dockerfile.contains("conda create -n qc -y -c conda-forge bioconda::fastp=0.23.4 bioconda::samtools=1.24"),
+            "{dockerfile}"
+        );
+        let _ = dir.keep();
     }
 
     #[test]
