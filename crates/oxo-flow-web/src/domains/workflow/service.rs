@@ -264,6 +264,13 @@ pub fn pipeline_output_validator() -> oxo_flow_ai::agent::pipeline_gen::OutputVa
     })
 }
 
+/// The same deterministic E005 repair the CLI injects: mechanical class,
+/// no model round spent. Pure string transform — keeps the web surfaces'
+/// zero-write guarantee intact.
+pub fn pipeline_output_fixer() -> oxo_flow_ai::agent::pipeline_gen::TextFixer {
+    std::sync::Arc::new(oxo_flow_core::format::fix_undefined_config_keys)
+}
+
 // ---------------------------------------------------------------------------
 // Prepare
 // ---------------------------------------------------------------------------

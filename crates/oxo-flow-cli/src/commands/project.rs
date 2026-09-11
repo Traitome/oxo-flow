@@ -551,14 +551,21 @@ fn apply_template(template_name: &str, output: Option<PathBuf>) -> Result<()> {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// AI-generation knobs for `template --ai`, resolved from CLI flags over
+/// the `[ai]` config (see [`crate::commands::ai_template::generate_workflow`]).
+pub struct TemplateAiOptions {
+    pub max_retries: Option<u32>,
+    pub team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
+    pub attempts: u32,
+}
+
 pub async fn template_command(
     name: Option<String>,
     output: Option<PathBuf>,
     ai: bool,
     from_url: Vec<String>,
     from_file: Vec<PathBuf>,
-    ai_max_retries: Option<u32>,
-    ai_team_profile: Option<String>,
+    options: TemplateAiOptions,
 ) -> Result<()> {
     print_banner();
 
@@ -581,12 +588,10 @@ pub async fn template_command(
             );
         }
 
-        // CLI flag wins over `[ai] team_profile` in the resolved config.
-        let team_profile = match ai_team_profile.as_deref() {
-            Some(flag) => Some(
-                flag.parse::<oxo_flow_ai::agent::team::TeamProfile>()
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            ),
+        // `options.team_profile` (CLI flag) wins over `[ai] team_profile`
+        // in the resolved config.
+        let team_profile = match options.team_profile {
+            Some(flag) => Some(flag),
             None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
         };
 
@@ -595,8 +600,9 @@ pub async fn template_command(
             &from_url,
             &from_file,
             output,
-            ai_max_retries,
+            options.max_retries,
             team_profile,
+            options.attempts,
         )
         .await?;
         return Ok(());

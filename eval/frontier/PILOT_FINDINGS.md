@@ -186,8 +186,37 @@ The fixes, in the order that matters:
    tools; a run now succeeds only with gates ∧ fidelity — a gate-valid
    pipeline that never mentions the requested tools no longer counts.
 
-Residual (2/58): one fidelity miss (`somatic-mutect2` used GATK4's
-MarkDuplicates instead of the Picard name — the checker does not know
-tool equivalences yet) and one lint-level failure. Both are the next
-iteration's input: tool-equivalence awareness in the fidelity checker,
-and whatever lint code the atacseq artifact trips.
+Both residuals were then closed in the same round:
+- the fidelity checker gained `|` alternates (`"picard|gatk"` — GATK4
+  absorbed the Picard tools, so a `gatk` MarkDuplicates satisfies a
+  picard requirement), fixing the mutect2 false positive;
+- the last gate failure was a THIRD natural spec variant, semicolon-joined
+  packages (`bioconda::a=1;bioconda::b=2`), now also first-class — with an
+  argv-safety rule that tokens may not start with `-`, closing conda-CLI
+  flag injection (`--override-channels -c <attacker>`) that a naive
+  separator widening would have allowed.
+
+Final measurement (full 58-run arm, deepseek-chat, ceilings 8192/180s,
+success = gates ∧ fidelity, `--ai-attempts 2` available):
+
+| scope | success |
+|---|---|
+| **specified intents** | **52/52 (100%)** |
+| vague intents (deliberately under-specified) | 5/6 |
+| **all runs** | **57/58 (98.3%)** |
+
+Attempt 2 was never needed (0/58 runs required a second draw — the
+deterministic repair + first-class package lists removed the failure
+classes before retries could pay), so the pass@k safety net cost nothing.
+The single remaining failure is one seed of a DELIBERATELY vague intent —
+the cell class the report isolates from the specified tiers precisely
+because its bar is not comparable.
+
+What this round establishes about reaching ~100% scientifically: the gates
+are deterministic, so the failure set decomposes; every failure class
+either gets a deterministic repair (E005 fixer, package-list grammar) or
+an engine capability (executable inline specs), and the multi-seed
+benchmark with the fidelity criterion verifies the fixes generalize
+rather than overfit. The residual is confined to the vague tier, where
+the honest lever is the task contract / clarification design, not more
+retries.

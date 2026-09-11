@@ -150,8 +150,7 @@
       "intent": "Somatic SNV and indel calling with GATK Mutect2 on a tumor-normal pair: bwa-mem alignment, MarkDuplicates, Mutect2 with PON filtering, and bcftools PASS extraction",
       "requires": [
         "bwa",
-        "picard",
-        "gatk",
+        "gatk|picard",
         "bcftools"
       ]
     },

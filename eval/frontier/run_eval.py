@@ -200,6 +200,8 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
             cmd += ["--ai-max-retries", str(args.max_retries)]
         if args.profile != "compact":
             cmd += ["--ai-team-profile", args.profile]
+        if args.attempts != 1:
+            cmd += ["--ai-attempts", str(args.attempts)]
         try:
             proc = subprocess.run(cmd, cwd=run_dir, env=env, timeout=args.timeout,
                                   capture_output=True, text=True)
@@ -209,7 +211,9 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
         except subprocess.TimeoutExpired:
             meta["error"] = "generation timed out"
             return meta
-        # Token accounting: newest template session created by this run.
+        # Token accounting: ALL template sessions created by this run
+        # (multi-attempt runs archive one session per attempt — the spend
+        # is the sum, and quoting only the newest would undercount).
         if sessions.exists():
             new = [p for p in sessions.glob("*-template-*.json")
                    if p.stat().st_mtime > started
@@ -217,15 +221,21 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
             if new:
                 snap = max(new, key=lambda p: p.stat().st_mtime)
                 (run_dir / "session.json").write_text(snap.read_text())
-                try:
-                    s = json.loads(snap.read_text())
-                    u = s.get("total_usage", {})
-                    meta["input_tokens"] = u.get("prompt_tokens", 0)
-                    meta["output_tokens"] = u.get("completion_tokens", 0)
-                    meta["tool_calls"] = len(s.get("tool_calls", []))
-                    meta["rounds"] = s.get("rounds")
-                except json.JSONDecodeError:
-                    pass
+                tin = tout = 0
+                tools = 0
+                for p in new:
+                    try:
+                        s = json.loads(p.read_text())
+                        u = s.get("total_usage", {})
+                        tin += u.get("prompt_tokens", 0)
+                        tout += u.get("completion_tokens", 0)
+                        tools += len(s.get("tool_calls", []))
+                    except json.JSONDecodeError:
+                        pass
+                meta["input_tokens"] = tin
+                meta["output_tokens"] = tout
+                meta["tool_calls"] = tools
+                meta["sessions"] = len(new)
         # rglob: a relative -o target resolved inside a relative run_dir can
         # nest the artifact one level deeper — find it wherever it landed.
         wf = sorted(run_dir.rglob("*.oxoflow"))
@@ -293,6 +303,9 @@ def main() -> None:
     ap.add_argument("--binary", default=None,
                     help="pin the CLI binary for the whole campaign (default: "
                          "find_binary()); use when code may be rebuilt mid-run")
+    ap.add_argument("--attempts", type=int, default=1,
+                    help="fresh-draw attempts per run (--ai-attempts); pass@k "
+                         "with early exit — attempt 2..N is only paid on failures")
     ap.add_argument("--profile", default="compact", choices=["compact", "full"],
                     help="team profile to benchmark (compact = single agent + "
                          "gates; full = Scientist Team roles; full needs a binary "
@@ -349,10 +362,18 @@ def main() -> None:
                     # that never mentions them passes the gates but does not
                     # do what was asked. Deterministic substring check on the
                     # lowercased artifact (tool names, not flags/paths).
+                    # A requires entry may carry '|' alternates for tool
+                    # equivalences (e.g. "picard|gatk": GATK4 absorbed the
+                    # Picard tools, so MarkDuplicates under gatk4 satisfies a
+                    # picard requirement).
                     artifact_text = wf.read_text().lower() if wf else ""
                     missing_tools = [
-                        t for t in spec.get("requires", [])
-                        if t.lower() not in artifact_text
+                        group
+                        for group in spec.get("requires", [])
+                        if not any(
+                            alt.strip().lower() in artifact_text
+                            for alt in group.split("|")
+                        )
                     ]
                     result = {
                         "intent_id": spec["id"], "tier": spec["tier"],
@@ -387,6 +408,7 @@ def main() -> None:
         "default_model": default_model,
         "max_retries": args.max_retries,
         "seeds": args.seeds,
+        "attempts": args.attempts,
         "profile": args.profile,
         "runs": runs,
     }, indent=2))

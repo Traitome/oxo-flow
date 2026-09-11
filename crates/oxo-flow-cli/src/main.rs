@@ -394,6 +394,11 @@ pub enum Commands {
         /// fix). Overrides `[ai] team_profile` in the config.
         #[arg(long = "ai-team-profile", value_name = "PROFILE")]
         ai_team_profile: Option<String>,
+        /// Fresh-draw attempts for the whole generation (pass@k with early
+        /// exit: the deterministic gates decide, so later attempts are only
+        /// paid when earlier ones fail).
+        #[arg(long = "ai-attempts", value_name = "N", default_value_t = 1)]
+        ai_attempts: u32,
     },
     /// AI status, test, setup, and workflow explanation.
     ///
@@ -1522,15 +1527,27 @@ async fn main() -> Result<()> {
             from_file,
             ai_max_retries,
             ai_team_profile,
+            ai_attempts,
         } => {
+            // CLI flag wins over `[ai] team_profile` in the resolved config.
+            let team_profile = match ai_team_profile.as_deref() {
+                Some(flag) => Some(
+                    flag.parse::<oxo_flow_ai::agent::team::TeamProfile>()
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                ),
+                None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
+            };
             template_command(
                 template,
                 output,
                 ai,
                 from_url,
                 from_file,
-                ai_max_retries,
-                ai_team_profile,
+                crate::commands::project::TemplateAiOptions {
+                    max_retries: ai_max_retries,
+                    team_profile,
+                    attempts: ai_attempts,
+                },
             )
             .await?
         }
