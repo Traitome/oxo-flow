@@ -261,7 +261,29 @@ enabled = true
 max_retries = 5
 auto_fix = "ask"    # "ask" | "always" | "never"
 model = "deepseek-v4-flash"
+team_profile = "compact"    # "compact" | "full"
 ```
+
+### Generation team profiles
+
+`template --ai` runs one generation agent with the engine-gate correction
+loop (the **compact** profile, default). The **full** profile adds three
+Scientist Team roles around it:
+
+| Role | Stage | Cost | What it does |
+|---|---|---|---|
+| Task contract | before generation | one small low-temperature call | standardizes an under-specified intent into an explicit contract (goal, inputs, outputs, decisions) |
+| Curator | before generation | zero — deterministic retrieval | assembles Bioconda tool candidates, domain procedures, and pipeline-graph transitions from the embedded knowledge bases, so generation spends no paid rounds on knowledge lookups |
+| Independent review | after generation | one small low-temperature call | a fresh evaluator instance judges the artifact against the contract; a `request_changes` verdict triggers exactly one regeneration pass with the findings |
+
+Enable it per call with `template --ai --ai-team-profile full`, or per
+project with `[ai] team_profile = "full"`. The review pass is engineered to
+be unable to regress the outcome (a regeneration replaces the draft only if
+it also validates) and approves by default — on the measured ablation it
+triggers on ~7% of runs. Full stays slightly below compact on aggregate
+gate pass while rescuing scattered hard-tier cells; compact remains the
+default and the full measurement record lives in `eval/frontier/` in the
+repository.
 
 ### Environment Variables
 

@@ -558,6 +558,7 @@ pub async fn template_command(
     from_url: Vec<String>,
     from_file: Vec<PathBuf>,
     ai_max_retries: Option<u32>,
+    ai_team_profile: Option<String>,
 ) -> Result<()> {
     print_banner();
 
@@ -580,12 +581,22 @@ pub async fn template_command(
             );
         }
 
+        // CLI flag wins over `[ai] team_profile` in the resolved config.
+        let team_profile = match ai_team_profile.as_deref() {
+            Some(flag) => Some(
+                flag.parse::<oxo_flow_ai::agent::team::TeamProfile>()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            ),
+            None => oxo_flow_ai::AI.config().ok().and_then(|c| c.team_profile),
+        };
+
         crate::commands::ai_template::generate_workflow(
             &intent,
             &from_url,
             &from_file,
             output,
             ai_max_retries,
+            team_profile,
         )
         .await?;
         return Ok(());

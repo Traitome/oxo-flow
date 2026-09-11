@@ -198,6 +198,8 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
                "--no-color"]
         if args.max_retries is not None:
             cmd += ["--ai-max-retries", str(args.max_retries)]
+        if args.profile != "compact":
+            cmd += ["--ai-team-profile", args.profile]
         try:
             proc = subprocess.run(cmd, cwd=run_dir, env=env, timeout=args.timeout,
                                   capture_output=True, text=True)
@@ -285,12 +287,24 @@ def main() -> None:
     ap.add_argument("--max-retries", type=int, default=None,
                     help="override the CLI tool-loop budget (--ai-max-retries); "
                          "default: whatever the binary's shipped [ai] max_retries is")
+    ap.add_argument("--seeds", type=int, default=1,
+                    help="repeat every cell N times (sampling variance; report is "
+                         "per-intent pass-rate across seeds)")
+    ap.add_argument("--binary", default=None,
+                    help="pin the CLI binary for the whole campaign (default: "
+                         "find_binary()); use when code may be rebuilt mid-run")
+    ap.add_argument("--profile", default="compact", choices=["compact", "full"],
+                    help="team profile to benchmark (compact = single agent + "
+                         "gates; full = Scientist Team roles; full needs a binary "
+                         "that supports --ai-team-profile)")
     ap.add_argument("--timeout", type=float, default=900, help="per-generation timeout (s)")
     ap.add_argument("--sleep", type=float, default=1.0, help="pause between runs (s)")
     args = ap.parse_args()
 
     creds = load_credentials()
-    binary = find_binary()
+    binary = args.binary or find_binary()
+    if not (Path(binary).is_file() or which(binary)):
+        sys.exit(f"--binary {binary} does not exist")
     default_model = creds["ANTHROPIC_MODEL"]
     models = [m for m in args.models.split(",") if m] or [default_model]
     variants = [v for v in args.variants.split(",") if v]
@@ -306,44 +320,50 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     runs = []
-    total = len(intents) * len(models) * len(variants)
+    total = len(intents) * len(models) * len(variants) * args.seeds
     done = 0
     print(f"benchmark: {len(intents)} intents x {len(models)} model(s) x "
-          f"{len(variants)} variant(s) = {total} runs -> {out_dir}")
+          f"{len(variants)} variant(s) x {args.seeds} seed(s) = {total} runs "
+          f"-> {out_dir}")
     for model in models:
         for variant in variants:
             for spec in intents:
-                done += 1
-                run_dir = out_dir / f"{model}__{variant}__{spec['id']}"
-                run_dir.mkdir(parents=True, exist_ok=True)
-                print(f"[{done}/{total}] {model} / {variant} / {spec['id']} ...", flush=True)
-                gen = run_generation(variant, spec["intent"], model, run_dir,
-                                     creds, binary, args)
-                wf = run_dir / "workflow.oxoflow"
-                if not wf.exists():
-                    alt = sorted(run_dir.rglob("*.oxoflow"))
-                    if alt:
-                        wf.write_text(alt[0].read_text())
-                    else:
-                        wf = None
-                gates = run_gates(binary, wf, run_dir) if wf else {}
-                result = {
-                    "intent_id": spec["id"], "tier": spec["tier"],
-                    "domain": spec["domain"], "model": model, "variant": variant,
-                    **gen,
-                    "gates": gates,
-                    "all_gates_pass": bool(gates) and all(g["pass"] for g in gates.values()),
-                    "workflow_file": str(wf) if wf else None,
-                    "est_cost_usd": round(cost_usd(model, gen["input_tokens"],
-                                                   gen["output_tokens"]), 5),
-                }
-                (run_dir / "result.json").write_text(json.dumps(result, indent=2))
-                runs.append(result)
-                print(f"    generated={result['generated']} "
-                      f"gates={'PASS' if result['all_gates_pass'] else 'FAIL'} "
-                      f"tok(in/out)={result['input_tokens']}/{result['output_tokens']} "
-                      f"wall={result.get('wall_s')}s", flush=True)
-                time.sleep(args.sleep)
+                for seed in range(1, args.seeds + 1):
+                    done += 1
+                    seed_tag = "" if args.seeds == 1 else f"__s{seed}"
+                    run_dir = out_dir / f"{model}__{variant}__{spec['id']}{seed_tag}"
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    print(f"[{done}/{total}] {model} / {variant} / {spec['id']}"
+                          f"{seed_tag} ...", flush=True)
+                    gen = run_generation(variant, spec["intent"], model, run_dir,
+                                         creds, binary, args)
+                    wf = run_dir / "workflow.oxoflow"
+                    if not wf.exists():
+                        alt = sorted(run_dir.rglob("*.oxoflow"))
+                        if alt:
+                            wf.write_text(alt[0].read_text())
+                        else:
+                            wf = None
+                    gates = run_gates(binary, wf, run_dir) if wf else {}
+                    result = {
+                        "intent_id": spec["id"], "tier": spec["tier"],
+                        "domain": spec["domain"], "model": model, "variant": variant,
+                        "seed": seed, "vague": spec.get("vague", False),
+                        "profile": args.profile,
+                        **gen,
+                        "gates": gates,
+                        "all_gates_pass": bool(gates) and all(g["pass"] for g in gates.values()),
+                        "workflow_file": str(wf) if wf else None,
+                        "est_cost_usd": round(cost_usd(model, gen["input_tokens"],
+                                                       gen["output_tokens"]), 5),
+                    }
+                    (run_dir / "result.json").write_text(json.dumps(result, indent=2))
+                    runs.append(result)
+                    print(f"    generated={result['generated']} "
+                          f"gates={'PASS' if result['all_gates_pass'] else 'FAIL'} "
+                          f"tok(in/out)={result['input_tokens']}/{result['output_tokens']} "
+                          f"wall={result.get('wall_s')}s", flush=True)
+                    time.sleep(args.sleep)
 
     (out_dir / "results.json").write_text(json.dumps({
         "stamp": stamp,
@@ -351,6 +371,8 @@ def main() -> None:
         "binary": binary,
         "default_model": default_model,
         "max_retries": args.max_retries,
+        "seeds": args.seeds,
+        "profile": args.profile,
         "runs": runs,
     }, indent=2))
 
@@ -372,7 +394,7 @@ def main() -> None:
         wall = [r.get("wall_s", 0) for r in rs]
         cost = sum(r["est_cost_usd"] for r in rs)
         lines += [
-            f"## {model} / {variant}", "",
+            f"## {model} / {variant} / profile={args.profile}", "",
             f"- runs: {n}, generated: {gen_n}",
             f"- gate pass@1: validate {v}/{n}, dry-run {d}/{n}, lint {l}/{n}, "
             f"**all-gates {allp}/{n}** ({allp / n:.0%})",
@@ -380,6 +402,20 @@ def main() -> None:
             f"(mean {tok_in // max(n, 1):,}/{tok_out // max(n, 1):,} per run)",
             f"- est. cost: ${cost:.4f} (price table {PRICE_PER_MTOK.get(model, PRICE_PER_MTOK['*'])}/Mtok)",
             f"- wall: mean {sum(wall) / max(n, 1):.0f}s, max {max(wall or [0]):.0f}s",
+            "",
+            "| tier | all-gates | runs |",
+            "|---|---|---|",
+        ]
+        for tier in ("easy", "medium", "hard"):
+            trs = [r for r in rs if r["tier"] == tier]
+            if trs:
+                tp = sum(r["all_gates_pass"] for r in trs)
+                lines.append(f"| {tier} | {tp}/{len(trs)} | {len(trs)} |")
+        vague = [r for r in rs if r.get("vague")]
+        if vague:
+            vp = sum(r["all_gates_pass"] for r in vague)
+            lines.append(f"| vague | {vp}/{len(vague)} | {len(vague)} |")
+        lines += [
             "",
             "| intent | tier | all-gates | tok in | tok out | wall s | note |",
             "|---|---|---|---|---|---|---|",

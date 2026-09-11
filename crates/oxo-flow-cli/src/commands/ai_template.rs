@@ -6,7 +6,9 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_ai::agent::events::AgentEvent;
+use oxo_flow_ai::agent::orchestrator::Orchestrator;
 use oxo_flow_ai::agent::pipeline_gen::{self, OutputValidator, PipelineGenAgent};
+use oxo_flow_ai::agent::team::{self, TeamProfile};
 use oxo_flow_ai::agent::{AgentContext, ValidationResult};
 use oxo_flow_ai::provider::AiProvider;
 use oxo_flow_ai::session::AiSession;
@@ -171,6 +173,7 @@ pub async fn generate_workflow(
     from_files: &[PathBuf],
     output: Option<PathBuf>,
     ai_max_retries: Option<u32>,
+    team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
 ) -> Result<()> {
     // Resolve and prepare the destination BEFORE anything is sent to the
     // provider: a bad `-o` must fail cheaply, not after a paid generation.
@@ -275,10 +278,33 @@ pub async fn generate_workflow(
 
     println!("{}", "  Generating workflow...".bold().cyan());
 
-    // L4 → L3: run the SHARED pipeline-generation agent through the
-    // orchestrator (issue #342). The persona's prompt lives in oxo-flow-ai;
-    // engine validation feeds the orchestrator's correction loop, so wrong
-    // -dialect keys (E017 class) are repaired instead of written out.
+    // Scientist Team profile. Compact (default) runs the generation agent
+    // alone; Full adds the deterministic Curator brief, a bounded task
+    // contract, and an independent review pass with one bounded fix.
+    let full = matches!(team_profile, Some(TeamProfile::Full));
+
+    let curator_brief = if full {
+        match oxo_flow_ai::agent::team::curate(intent) {
+            Some(brief) => {
+                println!(
+                    "{} Curator: embedded-knowledge brief assembled (deterministic)",
+                    "  •".dimmed()
+                );
+                Some(brief)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let contract = if full {
+        println!("{} PI: drafting the task contract...", "  •".dimmed());
+        draft_task_contract(provider, intent).await
+    } else {
+        None
+    };
+
     let validator: OutputValidator = Arc::new(|toml: &str| {
         if let Err(e) = validate_basic_structure(toml) {
             return ValidationResult::failed(vec![e.to_string()]);
@@ -289,37 +315,44 @@ pub async fn generate_workflow(
         }
     });
 
-    let mut agent = PipelineGenAgent::new(intent).with_validator(validator);
-    if !runtime.skill_context.is_empty() {
-        agent = agent.with_system_addition(format!(
-            "## Activated Custom Skills\n{}",
-            runtime.skill_context
-        ));
-    }
-    if !skill_context.is_empty() {
-        agent = agent.with_user_addition(format!(
-            "## Domain Expertise (bioSkills)\n{skill_context}\n\n\
-             Follow these domain procedures for tool choice, parameters, and caveats where applicable."
-        ));
-    }
-
-    let ctx = AgentContext {
-        intent: intent.to_string(),
-        command: "template".into(),
-        workflow_path: None,
-        workflow_content: None,
-        external_sources,
-        max_rounds: runtime.config.max_retries.max(1),
-        tool_registry: runtime.tool_registry,
-        tool_approver: Some(Arc::new(|def, args| {
-            crate::commands::ai_runtime::prompt_tool_approval_blocking(&def.name, args)
-        })),
-        session: AiSession::new(
-            "template",
-            intent,
-            provider.name(),
-            &provider.model().unwrap_or_else(|| "default".into()),
-        ),
+    // Build the generation agent. Rebuilt for the bounded review-fix pass
+    // with the reviewer's findings attached.
+    let build_agent = {
+        let validator = validator.clone();
+        let curator_brief = curator_brief.clone();
+        let contract = contract.clone();
+        move |findings: Option<&str>| -> PipelineGenAgent {
+            let mut agent = PipelineGenAgent::new(intent).with_validator(validator.clone());
+            if !runtime.skill_context.is_empty() {
+                agent = agent.with_system_addition(format!(
+                    "## Activated Custom Skills\n{}",
+                    runtime.skill_context
+                ));
+            }
+            if !skill_context.is_empty() {
+                agent = agent.with_user_addition(format!(
+                "## Domain Expertise (bioSkills)\n{skill_context}\n\n\
+                 Follow these domain procedures for tool choice, parameters, and caveats where applicable."
+            ));
+            }
+            if let Some(brief) = &curator_brief {
+                agent = agent.with_user_addition(brief.clone());
+            }
+            if let Some(contract) = &contract {
+                agent = agent.with_user_addition(format!(
+                    "## Task Contract\nThe requester's intent, standardized by the PI. \
+                 Follow these decisions unless the data contradicts them.\n\n{contract}"
+                ));
+            }
+            if let Some(findings) = findings {
+                agent = agent.with_user_addition(format!(
+                    "## Independent Review Findings\nThe previous draft was returned by an \
+                 independent reviewer. Address every blocking finding; keep everything \
+                 else as-is.\n\n{findings}"
+                ));
+            }
+            agent
+        }
     };
 
     // Terminal progress from the shared agent-event stream. Text is also
@@ -343,17 +376,112 @@ pub async fn generate_workflow(
         }
     };
 
+    let sessions: Arc<std::sync::Mutex<Vec<AiSession>>> = Arc::default();
+    let approver: Arc<oxo_flow_ai::agent::ToolApprover> = Arc::new(|def, args| {
+        crate::commands::ai_runtime::prompt_tool_approval_blocking(&def.name, args)
+    });
+
+    let agent = build_agent(None);
+    let mut ctx = AgentContext {
+        intent: intent.to_string(),
+        command: "template".into(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources,
+        max_rounds: runtime.config.max_retries.max(1),
+        tool_registry: runtime.tool_registry,
+        tool_approver: Some(approver),
+        session: AiSession::new(
+            "template",
+            intent,
+            provider.name(),
+            &provider.model().unwrap_or_else(|| "default".into()),
+        ),
+    };
+
     let outcome = runtime
         .orchestrator
         .execute_with_sink(&agent, &ctx, Some(&mut sink), None)
         .await;
 
+    // Independent review (Full profile): a fresh instance sees the contract
+    // and the artifact — never the generation transcript. A request_changes
+    // verdict triggers ONE regeneration, which replaces the artifact only if
+    // IT ALSO VALIDATES: review can only improve the outcome, never trade a
+    // validated draft for an unvalidated one (the first ablation showed a
+    // replace-unconditionally review regressing pass@1 83% → 56%).
+    let outcome = if full {
+        match outcome {
+            Ok(first) if first.success && first.content.is_some() => {
+                let artifact = first.content.clone().expect("checked above");
+                match run_review(provider, contract.as_deref(), &artifact).await {
+                    Some(team::Verdict::RequestChanges(findings)) => {
+                        println!(
+                            "{} Review: request_changes — one bounded regeneration",
+                            "  ⚠".yellow()
+                        );
+                        if let Ok(mut s) = sessions.lock() {
+                            s.push(first.session.clone());
+                        }
+                        let fix_agent = build_agent(Some(&findings));
+                        ctx.session = AiSession::new(
+                            "template",
+                            intent,
+                            provider.name(),
+                            &provider.model().unwrap_or_else(|| "default".into()),
+                        );
+                        match runtime
+                            .orchestrator
+                            .execute_with_sink(&fix_agent, &ctx, Some(&mut sink), None)
+                            .await
+                        {
+                            Ok(o) if o.success && o.content.is_some() => {
+                                println!("{} Review fix validated — adopting it", "  ✓".green());
+                                Ok(o)
+                            }
+                            other => {
+                                println!(
+                                    "{} Review fix did not validate — keeping the original artifact",
+                                    "  ⚠".yellow()
+                                );
+                                if let Ok(mut s) = sessions.lock()
+                                    && let Ok(o) = &other
+                                {
+                                    s.push(o.session.clone());
+                                }
+                                Ok(first)
+                            }
+                        }
+                    }
+                    Some(team::Verdict::Approve) => {
+                        println!("{} Review: approved", "  ✓".green());
+                        Ok(first)
+                    }
+                    None => Ok(first),
+                }
+            }
+            other => other,
+        }
+    } else {
+        outcome
+    };
+
+    // Archive every session the team produced (contract/review calls are
+    // archived inside their helpers; generation + review-fix here).
     let (toml_content, degraded) = match outcome {
         Ok(o) if o.success && o.content.is_some() => {
-            archive_session(&o.session);
+            if let Ok(mut s) = sessions.lock() {
+                s.push(o.session.clone());
+            }
+            for session in sessions.lock().unwrap().iter() {
+                archive_session(session);
+            }
             (o.content.unwrap(), false)
         }
         Ok(o) => {
+            for session in sessions.lock().unwrap().iter() {
+                archive_session(session);
+            }
             archive_session(&o.session);
             anyhow::bail!(
                 "pipeline generation did not produce a valid workflow: {}",
@@ -364,6 +492,9 @@ pub async fn generate_workflow(
             // Round-cap or provider failure: the orchestrator archived the
             // failed session (with usage). Deliver the generated TOML from
             // the transcript rather than losing the paid-for artifact.
+            for session in sessions.lock().unwrap().iter() {
+                archive_session(session);
+            }
             let text = text_buf.lock().map(|b| b.clone()).unwrap_or_default();
             let toml = pipeline_gen::extract_toml(&text)
                 .ok_or_else(|| anyhow::anyhow!("AI generation failed: {e}"))?;
@@ -426,6 +557,99 @@ pub async fn generate_workflow(
     );
 
     Ok(())
+}
+
+/// Stage 0 (Full profile): draft the task contract with a bounded,
+/// low-temperature call. Returns `None` when the contract call fails or
+/// produces an unparsable contract — generation then proceeds from the raw
+/// intent, exactly as the compact profile would.
+async fn draft_task_contract(
+    provider: &oxo_flow_ai::provider::AiProvider,
+    intent: &str,
+) -> Option<String> {
+    let agent = team::ContractAgent::new(intent, None);
+    let ctx = AgentContext {
+        intent: intent.to_string(),
+        command: "template-contract".into(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources: Vec::new(),
+        max_rounds: 2,
+        tool_registry: oxo_flow_ai::tools::ToolRegistry::new(),
+        tool_approver: None,
+        session: AiSession::new(
+            "template-contract",
+            intent,
+            provider.name(),
+            &provider.model().unwrap_or_else(|| "default".into()),
+        ),
+    };
+    // Low temperature: the contract states decisions, not creative prose.
+    let orchestrator = Orchestrator::new(provider.clone().with_temperature(Some(0.2)), 2);
+    match orchestrator.execute(&agent, &ctx).await {
+        Ok(o) if o.success && o.content.is_some() => {
+            archive_session(&o.session);
+            o.content
+        }
+        Ok(o) => {
+            archive_session(&o.session);
+            tracing::warn!("task contract unavailable: {}", o.summary);
+            None
+        }
+        Err(e) => {
+            tracing::warn!("task contract failed: {e}");
+            None
+        }
+    }
+}
+
+/// Stage 5 (Full profile): independent adversarial review of the final
+/// artifact against the contract. Fresh instance, no generation transcript.
+/// Returns `None` when the review itself fails — a broken reviewer never
+/// blocks delivery.
+async fn run_review(
+    provider: &oxo_flow_ai::provider::AiProvider,
+    contract: Option<&str>,
+    artifact: &str,
+) -> Option<team::Verdict> {
+    let agent = team::ReviewAgent::new(contract.map(String::from), artifact);
+    let ctx = AgentContext {
+        intent: "review".into(),
+        command: "template-review".into(),
+        workflow_path: None,
+        workflow_content: None,
+        external_sources: Vec::new(),
+        max_rounds: 2,
+        tool_registry: oxo_flow_ai::tools::ToolRegistry::new(),
+        tool_approver: None,
+        session: AiSession::new(
+            "template-review",
+            "review",
+            provider.name(),
+            &provider.model().unwrap_or_else(|| "default".into()),
+        ),
+    };
+    let orchestrator = Orchestrator::new(provider.clone().with_temperature(Some(0.2)), 2);
+    match orchestrator.execute(&agent, &ctx).await {
+        Ok(o) if o.success && o.content.is_some() => {
+            archive_session(&o.session);
+            let review = o.content.unwrap();
+            let verdict = team::parse_verdict(&review);
+            if verdict.is_none() {
+                tracing::warn!("review verdict unparsable — discarding the review");
+            }
+            verdict
+        }
+        Ok(o) => {
+            archive_session(&o.session);
+            tracing::warn!("review unavailable: {}", o.summary);
+            None
+        }
+        Err(e) => {
+            tracing::warn!("review failed: {e}");
+            None
+        }
+    }
 }
 
 /// Persist the orchestrator-owned session and print the token summary.

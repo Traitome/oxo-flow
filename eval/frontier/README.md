@@ -36,11 +36,19 @@ response usage. Cost is derived from the price table in `run_eval.py`
 # credentials: ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL
 # from env, or parsed silently from ~/.zshrc (never printed)
 
-python3 run_eval.py                          # pilot: 9 intents x minimal,cli
+python3 run_eval.py                          # 29 intents x minimal,cli
 python3 run_eval.py --filter rnaseq-star     # subset
 python3 run_eval.py --models deepseek-chat   # model axis (quality/cost frontier)
 python3 run_eval.py --variants minimal       # cheapest full sweep
+python3 run_eval.py --seeds 2                # 2 seeds per cell (variance)
+python3 run_eval.py --profile full           # Scientist Team roles (compact is default)
+python3 run_eval.py --binary /path/oxo-flow  # pin the binary for a whole campaign
 ```
+
+The intent set spans 10 domains across three complexity tiers, plus three
+deliberately under-specified intents (`"vague": true`) used to measure how
+well a profile standardizes ambiguous requests. Vague cells are reported
+on their own row and are never compared against the specified tiers.
 
 Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible
 endpoint) need a raised output budget: export
@@ -64,10 +72,12 @@ tokens, cost, latency).
 
 ## Known limitations
 
-- Intent set is small (9); scale `intents.json` before quoting absolute
-  numbers. Relative gaps between variants stabilize faster than absolutes.
+- Intent set is 29 (3 of them deliberately vague); still small enough that
+  single-seed absolute numbers wobble — quote the multi-seed aggregates.
 - Since the #342 unification, `--ai-max-retries` sizes the orchestrator's
   combined tool + correction-round budget, and engine validation feeds the
   loop; numbers above the unification marker in PILOT_FINDINGS.md were
   produced by the pre-unification paths.
-- Single seed per cell (no repetition); rerun for variance estimates.
+- `--profile full` measures the Scientist Team roles (contract, curator,
+  review); each role's marginal value is only interpretable against the
+  compact profile on the SAME model, seeds, and ceilings.
