@@ -153,3 +153,70 @@ Conclusion: **compact stays the shipped default**; full remains available
 scoped to FAILED generations (rescue-only, where it has upside without
 destabilizing passes), a larger intent set, and more seeds before any
 tier-conditional recommendation.
+
+## Gate-reliability round: deterministic repair + first-class package lists
+
+Dissecting the compact baseline's 9 failures (58-run arm above) showed they
+are NOT random: two mechanical classes dominate — `E016` (multi-package
+inline conda specs joined by spaces/commas, which the schema rejected) and
+`E005` (`{config.x}` references without a `[config]` declaration). Worse,
+the inline package form was accepted by `validate` but **failed at run
+time** ("refusing to run the tool from PATH") — gate-valid was not
+runnable. Three fixes landed and the identical arm re-measured:
+
+| arm | all-gates | success (gates ∧ fidelity) | easy | medium | hard | vague | cost |
+|---|---|---|---|---|---|---|---|
+| compact, pre-fix | 48/58 (83%) | n/a | 10/10 | 21/24 | 17/24 | 5/6 | $0.25 |
+| compact, post-fix | **57/58 (98%)** | **56/58 (97%)** | 10/10 | 24/24 | 22/24 | 6/6 | $0.26 |
+
+The fixes, in the order that matters:
+
+1. **Engine: inline conda package lists are first-class** —
+   `conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24"` parses as an
+   allowlist-validated package list, derives a content-addressed env name
+   (`fastp-<hash8>`), and installs via direct `conda create`. This is the
+   exact form the generation prompt mandates; making it executable is an
+   engine improvement for every user, not a benchmark patch. Injection
+   attempts still fail the charset allowlist and the hard-error path.
+2. **Deterministic E005 fixer** (injected as the generation agent's text
+   fixer): missing config keys are declared under `[config]` in code, so
+   the mechanical class never reaches a paid model round. The
+   orchestrator validates and adopts the fixed text.
+3. **Fidelity criterion** (benchmark): each intent names its required
+   tools; a run now succeeds only with gates ∧ fidelity — a gate-valid
+   pipeline that never mentions the requested tools no longer counts.
+
+Both residuals were then closed in the same round:
+- the fidelity checker gained `|` alternates (`"picard|gatk"` — GATK4
+  absorbed the Picard tools, so a `gatk` MarkDuplicates satisfies a
+  picard requirement), fixing the mutect2 false positive;
+- the last gate failure was a THIRD natural spec variant, semicolon-joined
+  packages (`bioconda::a=1;bioconda::b=2`), now also first-class — with an
+  argv-safety rule that tokens may not start with `-`, closing conda-CLI
+  flag injection (`--override-channels -c <attacker>`) that a naive
+  separator widening would have allowed.
+
+Final measurement (full 58-run arm, deepseek-chat, ceilings 8192/180s,
+success = gates ∧ fidelity, `--ai-attempts 2` available):
+
+| scope | success |
+|---|---|
+| **specified intents** | **52/52 (100%)** |
+| vague intents (deliberately under-specified) | 5/6 |
+| **all runs** | **57/58 (98.3%)** |
+
+Attempt 2 was never needed (0/58 runs required a second draw — the
+deterministic repair + first-class package lists removed the failure
+classes before retries could pay), so the pass@k safety net cost nothing.
+The single remaining failure is one seed of a DELIBERATELY vague intent —
+the cell class the report isolates from the specified tiers precisely
+because its bar is not comparable.
+
+What this round establishes about reaching ~100% scientifically: the gates
+are deterministic, so the failure set decomposes; every failure class
+either gets a deterministic repair (E005 fixer, package-list grammar) or
+an engine capability (executable inline specs), and the multi-seed
+benchmark with the fidelity criterion verifies the fixes generalize
+rather than overfit. The residual is confined to the vague tier, where
+the honest lever is the task contract / clarification design, not more
+retries.

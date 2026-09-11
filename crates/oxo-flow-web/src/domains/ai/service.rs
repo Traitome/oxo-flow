@@ -171,7 +171,8 @@ pub async fn translate_intent(
     // Read-only knowledge tools only, no approver: non-read-only calls are
     // refused by construction (the module's zero-write guarantee).
     let mut agent = oxo_flow_ai::agent::pipeline_gen::PipelineGenAgent::new(intent)
-        .with_validator(workflow_svc::pipeline_output_validator());
+        .with_validator(workflow_svc::pipeline_output_validator())
+        .with_text_fixer(workflow_svc::pipeline_output_fixer());
     if let Some(summary) = data_summary {
         agent = agent.with_user_addition(format!("## Data Context\n{summary}"));
     }

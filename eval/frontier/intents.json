@@ -6,178 +6,311 @@
       "id": "qc-fastp-multiqc",
       "tier": "easy",
       "domain": "qc",
-      "intent": "Quality control of paired-end FASTQ reads with fastp, and aggregate reports with MultiQC"
+      "intent": "Quality control of paired-end FASTQ reads with fastp, and aggregate reports with MultiQC",
+      "requires": [
+        "fastp",
+        "multiqc"
+      ]
     },
     {
       "id": "qc-fastqc",
       "tier": "easy",
       "domain": "qc",
-      "intent": "Run FastQC quality check on raw sequencing reads for a cohort of samples"
+      "intent": "Run FastQC quality check on raw sequencing reads for a cohort of samples",
+      "requires": [
+        "fastqc"
+      ]
     },
     {
       "id": "trim-cutadapt",
       "tier": "easy",
       "domain": "qc",
-      "intent": "Adapter and quality trimming of small RNA sequencing reads with cutadapt"
+      "intent": "Adapter and quality trimming of small RNA sequencing reads with cutadapt",
+      "requires": [
+        "cutadapt"
+      ]
     },
     {
       "id": "qc-fastq-screen",
       "tier": "medium",
       "domain": "qc",
-      "intent": "Screen raw reads for contaminant organisms with FastQ Screen after fastp trimming, and summarize with MultiQC"
+      "intent": "Screen raw reads for contaminant organisms with FastQ Screen after fastp trimming, and summarize with MultiQC",
+      "requires": [
+        "fastp",
+        "fastq-screen",
+        "multiqc"
+      ]
     },
     {
       "id": "qc-nanoq",
       "tier": "easy",
       "domain": "qc",
-      "intent": "Quality control of Oxford Nanopore long reads with NanoPlot and filtering with filtlong"
+      "intent": "Quality control of Oxford Nanopore long reads with NanoPlot and filtering with filtlong",
+      "requires": [
+        "nanoplot",
+        "filtlong"
+      ]
     },
     {
       "id": "rnaseq-star",
       "tier": "medium",
       "domain": "rna-seq",
-      "intent": "RNA-seq analysis pipeline: fastp QC and trimming, STAR alignment to a reference genome, featureCounts gene quantification, and MultiQC summary"
+      "intent": "RNA-seq analysis pipeline: fastp QC and trimming, STAR alignment to a reference genome, featureCounts gene quantification, and MultiQC summary",
+      "requires": [
+        "fastp",
+        "star",
+        "featurecounts",
+        "multiqc"
+      ]
     },
     {
       "id": "rnaseq-hisat2",
       "tier": "medium",
       "domain": "rna-seq",
-      "intent": "Bulk RNA-seq: fastp trimming, HISAT2 alignment to a reference genome, samtools sorting and indexing, StringTie transcript assembly"
+      "intent": "Bulk RNA-seq: fastp trimming, HISAT2 alignment to a reference genome, samtools sorting and indexing, StringTie transcript assembly",
+      "requires": [
+        "fastp",
+        "hisat2",
+        "samtools",
+        "stringtie"
+      ]
     },
     {
       "id": "rnaseq-salmon",
       "tier": "medium",
       "domain": "rna-seq",
-      "intent": "Transcript-level quantification: fastp QC, Salmon quant on a decoy-aware transcriptome index for a cohort of samples"
+      "intent": "Transcript-level quantification: fastp QC, Salmon quant on a decoy-aware transcriptome index for a cohort of samples",
+      "requires": [
+        "fastp",
+        "salmon"
+      ]
     },
     {
       "id": "rnaseq-de-deseq2",
       "tier": "hard",
       "domain": "rna-seq",
-      "intent": "RNA-seq differential expression: fastp QC, HISAT2 alignment, featureCounts counting, DESeq2 differential expression with an R script, and MultiQC"
+      "intent": "RNA-seq differential expression: fastp QC, HISAT2 alignment, featureCounts counting, DESeq2 differential expression with an R script, and MultiQC",
+      "requires": [
+        "fastp",
+        "hisat2",
+        "featurecounts",
+        "deseq2"
+      ]
     },
     {
       "id": "scrna-starsolo",
       "tier": "hard",
       "domain": "single-cell",
-      "intent": "Single-cell RNA-seq preprocessing: fastp QC on FASTQs, STARsolo alignment and cell barcode counting, then cell-level QC metrics with fastqc-style reports via MultiQC"
+      "intent": "Single-cell RNA-seq preprocessing: fastp QC on FASTQs, STARsolo alignment and cell barcode counting, then cell-level QC metrics with fastqc-style reports via MultiQC",
+      "requires": [
+        "fastp",
+        "star",
+        "multiqc"
+      ]
     },
     {
       "id": "germline-variant",
       "tier": "medium",
       "domain": "variant-calling",
-      "intent": "Germline SNV calling: fastp preprocessing, bwa-mem alignment, samtools sorting and indexing, bcftools variant calling and filtering"
+      "intent": "Germline SNV calling: fastp preprocessing, bwa-mem alignment, samtools sorting and indexing, bcftools variant calling and filtering",
+      "requires": [
+        "fastp",
+        "bwa",
+        "samtools",
+        "bcftools"
+      ]
     },
     {
       "id": "germline-gatk",
       "tier": "hard",
       "domain": "variant-calling",
-      "intent": "GATK germline best practice: bwa-mem alignment, picard MarkDuplicates, GATK HaplotypeCaller in gVCF mode, joint genotyping with GenotypeGVCFs"
+      "intent": "GATK germline best practice: bwa-mem alignment, picard MarkDuplicates, GATK HaplotypeCaller in gVCF mode, joint genotyping with GenotypeGVCFs",
+      "requires": [
+        "bwa",
+        "picard",
+        "gatk"
+      ]
     },
     {
       "id": "somatic-tumor-normal",
       "tier": "hard",
       "domain": "variant-calling",
-      "intent": "Tumor-normal somatic variant calling: fastp QC, bwa-mem alignment of both samples, samtools processing, Strelka2 somatic SNV and indel calling"
+      "intent": "Tumor-normal somatic variant calling: fastp QC, bwa-mem alignment of both samples, samtools processing, Strelka2 somatic SNV and indel calling",
+      "requires": [
+        "fastp",
+        "bwa",
+        "samtools",
+        "strelka2"
+      ]
     },
     {
       "id": "somatic-mutect2",
       "tier": "hard",
       "domain": "variant-calling",
-      "intent": "Somatic SNV and indel calling with GATK Mutect2 on a tumor-normal pair: bwa-mem alignment, MarkDuplicates, Mutect2 with PON filtering, and bcftools PASS extraction"
+      "intent": "Somatic SNV and indel calling with GATK Mutect2 on a tumor-normal pair: bwa-mem alignment, MarkDuplicates, Mutect2 with PON filtering, and bcftools PASS extraction",
+      "requires": [
+        "bwa",
+        "gatk|picard",
+        "bcftools"
+      ]
     },
     {
       "id": "cnv-cnvkit",
       "tier": "hard",
       "domain": "variant-calling",
-      "intent": "Copy-number aberration detection with CNVkit: bwa-mem alignment of tumor and normal, MarkDuplicates, CNVkit batch with an access panel, and segment PDF reports"
+      "intent": "Copy-number aberration detection with CNVkit: bwa-mem alignment of tumor and normal, MarkDuplicates, CNVkit batch with an access panel, and segment PDF reports",
+      "requires": [
+        "bwa",
+        "cnvkit"
+      ]
     },
     {
       "id": "variant-annotate",
       "tier": "medium",
       "domain": "variant-calling",
-      "intent": "Annotate a cohort VCF with SnpEff functional consequences, hard-filter with bcftools, and produce a summary statistics table"
+      "intent": "Annotate a cohort VCF with SnpEff functional consequences, hard-filter with bcftools, and produce a summary statistics table",
+      "requires": [
+        "snpeff",
+        "bcftools"
+      ]
     },
     {
       "id": "chipseq-macs2",
       "tier": "medium",
       "domain": "chip-seq",
-      "intent": "ChIP-seq peak calling pipeline: fastp QC, bowtie2 alignment against a reference genome, samtools processing, MACS2 peak calling"
+      "intent": "ChIP-seq peak calling pipeline: fastp QC, bowtie2 alignment against a reference genome, samtools processing, MACS2 peak calling",
+      "requires": [
+        "fastp",
+        "bowtie2",
+        "samtools",
+        "macs2"
+      ]
     },
     {
       "id": "chipseq-broad",
       "tier": "medium",
       "domain": "chip-seq",
-      "intent": "Broad-domain ChIP-seq (H3K27me3 style): fastp QC, bowtie2 alignment, samtools processing, MACS2 broad peak calling with a control sample"
+      "intent": "Broad-domain ChIP-seq (H3K27me3 style): fastp QC, bowtie2 alignment, samtools processing, MACS2 broad peak calling with a control sample",
+      "requires": [
+        "fastp",
+        "bowtie2",
+        "samtools",
+        "macs2"
+      ]
     },
     {
       "id": "atacseq",
       "tier": "hard",
       "domain": "atac-seq",
-      "intent": "ATAC-seq analysis: fastp QC, bwa-mem2 alignment, properly paired read filtering, MACS2 peak calling with shift model, and fragment-size QC"
+      "intent": "ATAC-seq analysis: fastp QC, bwa-mem2 alignment, properly paired read filtering, MACS2 peak calling with shift model, and fragment-size QC",
+      "requires": [
+        "fastp",
+        "bwa-mem2",
+        "macs2"
+      ]
     },
     {
       "id": "wgbs-bismark",
       "tier": "hard",
       "domain": "methylation",
-      "intent": "Whole-genome bisulfite sequencing: fastp QC, bwa-mem alignment under a bismark genome, bismark methylation extractor, and a coverage-scaled bigWig per sample"
+      "intent": "Whole-genome bisulfite sequencing: fastp QC, bwa-mem alignment under a bismark genome, bismark methylation extractor, and a coverage-scaled bigWig per sample",
+      "requires": [
+        "fastp",
+        "bismark"
+      ]
     },
     {
       "id": "amplicon-dada2",
       "tier": "medium",
       "domain": "metagenomics",
-      "intent": "16S amplicon pipeline: cutadapt primer trimming, DADA2 ASV inference and chimera removal, and a taxa barplot summary"
+      "intent": "16S amplicon pipeline: cutadapt primer trimming, DADA2 ASV inference and chimera removal, and a taxa barplot summary",
+      "requires": [
+        "cutadapt",
+        "dada2"
+      ]
     },
     {
       "id": "metagenomics-kraken2",
       "tier": "hard",
       "domain": "metagenomics",
-      "intent": "Metagenomic profiling of shotgun reads: fastp QC, kraken2 taxonomic classification, bracken abundance re-estimation, and a Krona visualization chart"
+      "intent": "Metagenomic profiling of shotgun reads: fastp QC, kraken2 taxonomic classification, bracken abundance re-estimation, and a Krona visualization chart",
+      "requires": [
+        "fastp",
+        "kraken2",
+        "bracken",
+        "krona"
+      ]
     },
     {
       "id": "metag-assembly",
       "tier": "hard",
       "domain": "metagenomics",
-      "intent": "Metagenome assembly: fastp QC with host removal via bowtie2, MEGAHIT assembly, QUAST assembly metrics, and prodigal gene prediction"
+      "intent": "Metagenome assembly: fastp QC with host removal via bowtie2, MEGAHIT assembly, QUAST assembly metrics, and prodigal gene prediction",
+      "requires": [
+        "fastp",
+        "bowtie2",
+        "megahit",
+        "quast",
+        "prodigal"
+      ]
     },
     {
       "id": "assembly-spades",
       "tier": "medium",
       "domain": "assembly",
-      "intent": "Bacterial isolate assembly: fastp QC, SPAdes de novo assembly, QUAST quality metrics"
+      "intent": "Bacterial isolate assembly: fastp QC, SPAdes de novo assembly, QUAST quality metrics",
+      "requires": [
+        "fastp",
+        "spades",
+        "quast"
+      ]
     },
     {
       "id": "assembly-flye-polish",
       "tier": "hard",
       "domain": "assembly",
-      "intent": "Long-read genome assembly: NanoPlot QC, Flye assembly, medaka polishing, and QUAST metrics against a reference"
+      "intent": "Long-read genome assembly: NanoPlot QC, Flye assembly, medaka polishing, and QUAST metrics against a reference",
+      "requires": [
+        "nanoplot",
+        "flye",
+        "medaka",
+        "quast"
+      ]
     },
     {
       "id": "hic-cooler",
       "tier": "hard",
       "domain": "epigenomics",
-      "intent": "Hi-C contact maps: fastp QC, bwa-mem alignment with read-pair parsing, pairix indexing, and cooler cload plus balance to produce balanced contact matrices"
+      "intent": "Hi-C contact maps: fastp QC, bwa-mem alignment with read-pair parsing, pairix indexing, and cooler cload plus balance to produce balanced contact matrices",
+      "requires": [
+        "fastp",
+        "bwa",
+        "cooler"
+      ]
     },
     {
       "id": "qc-vague",
       "tier": "easy",
       "domain": "qc",
       "vague": true,
-      "intent": "Do basic quality control on my sequencing data"
+      "intent": "Do basic quality control on my sequencing data",
+      "requires": []
     },
     {
       "id": "rnaseq-vague",
       "tier": "medium",
       "domain": "rna-seq",
       "vague": true,
-      "intent": "I need differential expression analysis for my RNA-seq samples"
+      "intent": "I need differential expression analysis for my RNA-seq samples",
+      "requires": []
     },
     {
       "id": "variant-vague",
       "tier": "medium",
       "domain": "variant-calling",
       "vague": true,
-      "intent": "Call variants on my exome data"
+      "intent": "Call variants on my exome data",
+      "requires": []
     }
   ]
 }

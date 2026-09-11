@@ -129,6 +129,13 @@ loop. The steps:
   correction-round budget (default from `[ai]` config, 6 when unset —
   knowledge lookups and the correction pass share the budget, and the
   loop stops as soon as a draft validates).
+- `--ai-attempts N` is the fresh-draw budget **across** generations
+  (pass@k with early exit): every attempt starts from a new draw, the
+  deterministic gates decide, and later attempts are only paid when
+  earlier ones fail. Default 1.
+- Before any model round is spent on a failed draft, mechanical error
+  classes are repaired in code (e.g. a missing `[config]` declaration —
+  E005); only what the fixer cannot repair reaches the model.
 - If the budget runs out after a pipeline was drafted, the command
   **degrades instead of discarding**: the generated TOML is extracted
   from the transcript and written with a prominent review warning —

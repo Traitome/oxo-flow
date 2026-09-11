@@ -174,6 +174,7 @@ pub async fn generate_workflow(
     output: Option<PathBuf>,
     ai_max_retries: Option<u32>,
     team_profile: Option<oxo_flow_ai::agent::team::TeamProfile>,
+    ai_attempts: u32,
 ) -> Result<()> {
     // Resolve and prepare the destination BEFORE anything is sent to the
     // provider: a bad `-o` must fail cheaply, not after a paid generation.
@@ -322,7 +323,9 @@ pub async fn generate_workflow(
         let curator_brief = curator_brief.clone();
         let contract = contract.clone();
         move |findings: Option<&str>| -> PipelineGenAgent {
-            let mut agent = PipelineGenAgent::new(intent).with_validator(validator.clone());
+            let mut agent = PipelineGenAgent::new(intent)
+                .with_validator(validator.clone())
+                .with_text_fixer(Arc::new(oxo_flow_core::format::fix_undefined_config_keys));
             if !runtime.skill_context.is_empty() {
                 agent = agent.with_system_addition(format!(
                     "## Activated Custom Skills\n{}",
@@ -381,7 +384,6 @@ pub async fn generate_workflow(
         crate::commands::ai_runtime::prompt_tool_approval_blocking(&def.name, args)
     });
 
-    let agent = build_agent(None);
     let mut ctx = AgentContext {
         intent: intent.to_string(),
         command: "template".into(),
@@ -399,72 +401,114 @@ pub async fn generate_workflow(
         ),
     };
 
-    let outcome = runtime
-        .orchestrator
-        .execute_with_sink(&agent, &ctx, Some(&mut sink), None)
-        .await;
-
-    // Independent review (Full profile): a fresh instance sees the contract
-    // and the artifact — never the generation transcript. A request_changes
-    // verdict triggers ONE regeneration, which replaces the artifact only if
-    // IT ALSO VALIDATES: review can only improve the outcome, never trade a
-    // validated draft for an unvalidated one (the first ablation showed a
-    // replace-unconditionally review regressing pass@1 83% → 56%).
-    let outcome = if full {
-        match outcome {
-            Ok(first) if first.success && first.content.is_some() => {
-                let artifact = first.content.clone().expect("checked above");
-                match run_review(provider, contract.as_deref(), &artifact).await {
-                    Some(team::Verdict::RequestChanges(findings)) => {
-                        println!(
-                            "{} Review: request_changes — one bounded regeneration",
-                            "  ⚠".yellow()
-                        );
-                        if let Ok(mut s) = sessions.lock() {
-                            s.push(first.session.clone());
-                        }
-                        let fix_agent = build_agent(Some(&findings));
-                        ctx.session = AiSession::new(
-                            "template",
-                            intent,
-                            provider.name(),
-                            &provider.model().unwrap_or_else(|| "default".into()),
-                        );
-                        match runtime
-                            .orchestrator
-                            .execute_with_sink(&fix_agent, &ctx, Some(&mut sink), None)
-                            .await
-                        {
-                            Ok(o) if o.success && o.content.is_some() => {
-                                println!("{} Review fix validated — adopting it", "  ✓".green());
-                                Ok(o)
-                            }
-                            other => {
-                                println!(
-                                    "{} Review fix did not validate — keeping the original artifact",
-                                    "  ⚠".yellow()
-                                );
-                                if let Ok(mut s) = sessions.lock()
-                                    && let Ok(o) = &other
-                                {
-                                    s.push(o.session.clone());
-                                }
-                                Ok(first)
-                            }
-                        }
-                    }
-                    Some(team::Verdict::Approve) => {
-                        println!("{} Review: approved", "  ✓".green());
-                        Ok(first)
-                    }
-                    None => Ok(first),
-                }
-            }
-            other => other,
+    // pass@k with early exit: every attempt is a fresh draw with its own
+    // session; the gates are deterministic, so the first validating draw
+    // wins and later attempts are never paid. Only failing runs pay for
+    // attempt 2..N.
+    let attempts = ai_attempts.max(1);
+    let mut outcome = None;
+    for attempt in 1..=attempts {
+        if attempt > 1 {
+            println!(
+                "{} Generation attempt {attempt}/{attempts} (fresh draw)...",
+                "  •".dimmed()
+            );
         }
-    } else {
-        outcome
-    };
+        let agent = build_agent(None);
+        ctx.session = AiSession::new(
+            "template",
+            intent,
+            provider.name(),
+            &provider.model().unwrap_or_else(|| "default".into()),
+        );
+
+        let attempt_outcome = runtime
+            .orchestrator
+            .execute_with_sink(&agent, &ctx, Some(&mut sink), None)
+            .await;
+
+        // Independent review (Full profile): a fresh instance sees the contract
+        // and the artifact — never the generation transcript. A request_changes
+        // verdict triggers ONE regeneration, which replaces the artifact only if
+        // IT ALSO VALIDATES: review can only improve the outcome, never trade a
+        // validated draft for an unvalidated one (the first ablation showed a
+        // replace-unconditionally review regressing pass@1 83% → 56%).
+        let attempt_outcome = if full {
+            match attempt_outcome {
+                Ok(first) if first.success && first.content.is_some() => {
+                    let artifact = first.content.clone().expect("checked above");
+                    match run_review(provider, contract.as_deref(), &artifact).await {
+                        Some(team::Verdict::RequestChanges(findings)) => {
+                            println!(
+                                "{} Review: request_changes — one bounded regeneration",
+                                "  ⚠".yellow()
+                            );
+                            if let Ok(mut s) = sessions.lock() {
+                                s.push(first.session.clone());
+                            }
+                            let fix_agent = build_agent(Some(&findings));
+                            ctx.session = AiSession::new(
+                                "template",
+                                intent,
+                                provider.name(),
+                                &provider.model().unwrap_or_else(|| "default".into()),
+                            );
+                            match runtime
+                                .orchestrator
+                                .execute_with_sink(&fix_agent, &ctx, Some(&mut sink), None)
+                                .await
+                            {
+                                Ok(o) if o.success && o.content.is_some() => {
+                                    println!(
+                                        "{} Review fix validated — adopting it",
+                                        "  ✓".green()
+                                    );
+                                    Ok(o)
+                                }
+                                other => {
+                                    println!(
+                                        "{} Review fix did not validate — keeping the original artifact",
+                                        "  ⚠".yellow()
+                                    );
+                                    if let Ok(mut s) = sessions.lock()
+                                        && let Ok(o) = &other
+                                    {
+                                        s.push(o.session.clone());
+                                    }
+                                    Ok(first)
+                                }
+                            }
+                        }
+                        Some(team::Verdict::Approve) => {
+                            println!("{} Review: approved", "  ✓".green());
+                            Ok(first)
+                        }
+                        None => Ok(first),
+                    }
+                }
+                other => other,
+            }
+        } else {
+            attempt_outcome
+        };
+
+        let produced = matches!(&attempt_outcome, Ok(o) if o.success && o.content.is_some());
+        if produced {
+            outcome = Some(attempt_outcome);
+            break;
+        }
+        // A failed attempt's spend must stay visible: archive its session
+        // now (the tail archives the final outcome's session itself).
+        if attempt < attempts
+            && let Ok(mut s) = sessions.lock()
+            && let Ok(o) = &attempt_outcome
+        {
+            s.push(o.session.clone());
+        }
+        outcome = Some(attempt_outcome);
+    }
+
+    let outcome = outcome.expect("attempts >= 1");
 
     // Archive every session the team produced (contract/review calls are
     // archived inside their helpers; generation + review-fix here).
@@ -691,6 +735,37 @@ fn validate_basic_structure(toml: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixer_declares_missing_config_keys() {
+        // The measured failure class: the draft references {config.prefix}
+        // without declaring it — a paid model round used to be the fix.
+        let draft = "[workflow]\nname = \"x\"\n\n[config]\nsample = \"S1\"\n\n[[rules]]\nname = \"r\"\noutput = [\"{{config.prefix}}_qc.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) = oxo_flow_core::format::fix_undefined_config_keys(draft.to_string());
+        assert_eq!(notes.len(), 1, "notes: {notes:?}");
+        assert!(notes[0].contains("prefix"));
+        assert!(fixed.contains("prefix = \"prefix\""), "fixed: {fixed}");
+        // The fix must satisfy the engine check it targets.
+        let config: oxo_flow_core::config::WorkflowConfig = toml::from_str(&fixed).unwrap();
+        for rule in &config.rules {
+            assert!(oxo_flow_core::format::undefined_config_refs(rule, &config).is_empty());
+        }
+    }
+
+    #[test]
+    fn fixer_creates_config_section_when_absent_and_leaves_clean_toml_alone() {
+        let no_config = "[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"r\"\noutput = [\"{{config.root}}/a.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) =
+            oxo_flow_core::format::fix_undefined_config_keys(no_config.to_string());
+        assert_eq!(notes.len(), 1);
+        assert!(fixed.contains("[config]"));
+
+        // Clean TOML passes through byte-identical.
+        let clean = "[workflow]\nname = \"x\"\n\n[config]\nsample = \"S1\"\n\n[[rules]]\nname = \"r\"\noutput = [\"a.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) = oxo_flow_core::format::fix_undefined_config_keys(clean.to_string());
+        assert_eq!(fixed, clean);
+        assert!(notes.is_empty());
+    }
 
     #[test]
     fn truncate_utf8_cuts_at_char_boundary() {

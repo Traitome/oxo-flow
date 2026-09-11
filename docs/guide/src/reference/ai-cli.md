@@ -140,6 +140,13 @@ oxo-flow template "RNA-seq" --ai -o my-pipeline.oxoflow
 ```bash
 # Limit correction rounds
 oxo-flow template "RNA-seq" --ai --ai-max-retries 5
+
+# Fresh-draw attempts (pass@k with early exit): attempt 2..N is only paid
+# when earlier attempts fail — the deterministic gates decide
+oxo-flow template "RNA-seq" --ai --ai-attempts 2
+
+# Opt into the Scientist Team roles (contract + Curator + review)
+oxo-flow template "RNA-seq" --ai --ai-team-profile full
 ```
 
 ---

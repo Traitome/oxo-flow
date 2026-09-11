@@ -23,6 +23,7 @@ impl ChatAgent {
         Self {
             inner: PipelineGenAgent::new(intent)
                 .with_validator(workflow_svc::pipeline_output_validator())
+                .with_text_fixer(workflow_svc::pipeline_output_fixer())
                 // The raw user message (free-form chat turn) supplements the
                 // intent-derived request line the shared persona builds.
                 .with_user_addition(format!("## User Message\n{user_message}")),

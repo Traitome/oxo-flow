@@ -303,6 +303,65 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
     diagnostics
 }
 
+/// Deterministic repair for the mechanical E005 class: the draft references
+/// `{config.X}` without declaring X. The model feedback loop CAN fix these,
+/// but a paid generation round is a wasteful way to add a line — this pass
+/// declares the missing keys (value = the key name, self-describing in
+/// paths) directly under `[config]`. String-level insertion keeps the rest
+/// of the artifact (formatting, comments) byte-identical. Returns the
+/// (possibly unchanged) TOML plus human-readable fix notes.
+///
+/// Pure (no I/O, no model): surfaces inject this as the generation agent's
+/// text fixer, before validation and before any model feedback round.
+#[must_use]
+pub fn fix_undefined_config_keys(toml: String) -> (String, Vec<String>) {
+    let config: WorkflowConfig = match toml::from_str(&toml) {
+        Ok(c) => c,
+        Err(_) => return (toml, Vec::new()),
+    };
+    let mut missing: Vec<String> = Vec::new();
+    for rule in &config.rules {
+        for d in undefined_config_refs(rule, &config) {
+            if d.code != "E005" {
+                continue;
+            }
+            if let Some(start) = d.message.find('\'')
+                && let Some(end) = d.message[start + 1..].find('\'')
+            {
+                let key = &d.message[start + 1..start + 1 + end];
+                if !missing.iter().any(|k| k == key) {
+                    missing.push(key.to_string());
+                }
+            }
+        }
+    }
+    if missing.is_empty() {
+        return (toml, Vec::new());
+    }
+
+    let mut fixed = toml;
+    let insert_block: String = missing
+        .iter()
+        .map(|k| format!("{k} = \"{k}\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(pos) = fixed.find("[config]") {
+        // Insert directly after the [config] header line.
+        let after = pos + "[config]".len();
+        fixed.insert_str(after, &format!("\n{insert_block}"));
+    } else if let Some(pos) = fixed.find("[[rules]]") {
+        // No [config] section at all: open one right before the first rule.
+        fixed.insert_str(pos, &format!("[config]\n{insert_block}\n\n"));
+    } else {
+        return (fixed, Vec::new());
+    }
+    let notes = missing
+        .iter()
+        .map(|k| format!("declared missing config key '{k}' (value defaults to the key name)"))
+        .collect();
+    (fixed, notes)
+}
+
 pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     let mut diagnostics = Vec::new();
 

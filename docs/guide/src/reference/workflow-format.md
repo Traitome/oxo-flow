@@ -679,6 +679,24 @@ nf-core-derived images ship bash, and their scripts rely on bash features
 (`set -o pipefail`, `[[ ]]`) that the container default `sh` (often dash)
 rejects — the re-exec shim keeps these scripts working unmodified.
 
+**Inline conda package lists:** besides a YAML path, a conda/mamba spec may
+be a channel-qualified **package list** — the concise form for rules whose
+environment is a handful of pinned tools:
+
+```toml
+[[rules]]
+name = "qc"
+environment = { conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24" }
+```
+
+Whitespace- or comma-joined packages are the same list. Every package must
+be channel-qualified (`channel::name=version`) and match the strict package
+charset — the tokens are rendered as separate `conda create` arguments, so
+shell metacharacters are still rejected (E016). The env name is derived
+from the first package plus a content hash of the whole list: identical
+package sets share one environment, a changed set builds a fresh one.
+Specs without `::` (paths, lockfiles) keep the YAML-path semantics.
+
 **Singularity spec shapes:** a `singularity` spec is either a **pull URI**
 (`docker://`, `library://`, `oras://`, `https://`) — the engine pulls and
 converts it to a SIF in the workdir on first use, reusing the SIF when it

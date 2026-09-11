@@ -488,6 +488,56 @@ impl EnvironmentSpec {
         }
     }
 
+    /// Parse a `conda`/`mamba` spec as an inline package list.
+    ///
+    /// The AI-facing form — `conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24"`
+    /// (whitespace-, comma-, or semicolon-joined, channel-qualified) — is
+    /// what the generation prompt mandates and what models naturally write.
+    /// Each token must match a strict package charset; anything else (a YAML
+    /// path, a lockfile, a typo) yields `None` and the spec keeps its
+    /// path-tier handling.
+    ///
+    /// Two argv-safety rules beyond the charset, because the backend renders
+    /// the tokens as separate `conda create` arguments:
+    /// - a token may not start with `-` (no conda-CLI flag injection such as
+    ///   `--override-channels -c <attacker>`);
+    /// - `;` is a JOINER here, not a shell metacharacter — it is split on
+    ///   before validation, so shell chaining can never survive the parse.
+    ///
+    /// Returns `Some(tokens)` only when at least one token is
+    /// channel-qualified (`contains "::"`), so ordinary filesystem paths
+    /// never misparse as package lists.
+    #[must_use]
+    pub fn inline_conda_packages(spec: &str) -> Option<Vec<String>> {
+        const PKG_CHARS: &str =
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:+/=-";
+        let tokens: Vec<String> = spec
+            .split([' ', ',', ';', '\t'])
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .collect();
+        if tokens.is_empty() || !tokens.iter().any(|t| t.contains("::")) {
+            return None;
+        }
+        if tokens
+            .iter()
+            .all(|t| !t.starts_with('-') && t.chars().all(|c| PKG_CHARS.contains(c)))
+        {
+            Some(tokens)
+        } else {
+            None
+        }
+    }
+
+    /// Convenience wrapper: the inline package list for THIS spec's `conda`
+    /// field, used by the conda backend's direct-create path and by the
+    /// validator's package-list-aware shell-risk scan.
+    #[must_use]
+    pub fn conda_packages(&self) -> Option<Vec<String>> {
+        self.conda.as_deref().and_then(Self::inline_conda_packages)
+    }
+
     /// Returns the first shell-unsafe character in this environment spec,
     /// tagged with the offending field name.
     ///
@@ -543,9 +593,23 @@ impl EnvironmentSpec {
         .find_map(|(field, value)| scan(field, value, true));
         refs.or_else(|| self.modules.iter().find_map(|m| scan("modules", m, true)))
             .or_else(|| {
+                // A validated inline package list skips the path-tier scan
+                // entirely: every token already passed the strict package
+                // charset (an ALLOWLIST — strictly tighter than the
+                // metacharacter blacklist), and the conda backend renders
+                // the tokens as separate argv items. Anything that fails
+                // the parse keeps the plain path-tier rules.
+                let conda_scan = match self.conda_packages() {
+                    Some(_) => None,
+                    None => self.conda.as_deref().map(|v| ("conda", v)),
+                };
+                let mamba_scan = match self.mamba.as_deref().and_then(Self::inline_conda_packages) {
+                    Some(_) => None,
+                    None => self.mamba.as_deref().map(|v| ("mamba", v)),
+                };
                 [
-                    self.conda.as_deref().map(|v| ("conda", v)),
-                    self.mamba.as_deref().map(|v| ("mamba", v)),
+                    conda_scan,
+                    mamba_scan,
                     self.pixi.as_deref().map(|v| ("pixi", v)),
                     self.venv.as_deref().map(|v| ("venv", v)),
                     self.conda_prefix.as_deref().map(|v| ("conda_prefix", v)),
@@ -1918,6 +1982,121 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(env.shell_risk(), Some(("docker", ' ')));
+    }
+
+    #[test]
+    fn inline_conda_packages_parses_the_ai_form() {
+        // The exact form the generation prompt mandates: space- or
+        // comma-joined, channel-qualified, version-pinned.
+        let spec = "bioconda::fastp=0.23.4 bioconda::samtools=1.24";
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages(spec),
+            Some(vec![
+                "bioconda::fastp=0.23.4".to_string(),
+                "bioconda::samtools=1.24".to_string()
+            ])
+        );
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages(
+                "bioconda::fastp=0.23.4,bioconda::samtools=1.24"
+            )
+            .as_deref(),
+            Some(
+                [
+                    "bioconda::fastp=0.23.4".to_string(),
+                    "bioconda::samtools=1.24".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        // Single channel-qualified package is a one-element list.
+        assert!(EnvironmentSpec::inline_conda_packages("bioconda::bwa=0.7.17").is_some());
+    }
+
+    #[test]
+    fn inline_conda_packages_rejects_paths_injection_and_unqualified() {
+        // YAML paths / lockfiles are never package lists.
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("envs/tools.yaml"),
+            None
+        );
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("envs/tools.lock"),
+            None
+        );
+        // Unqualified bare names ("fastp samtools") are not channel
+        // references — keep them on the strict path-tier rules.
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("fastp samtools"),
+            None
+        );
+        // Shell metacharacters fail the charset allowlist even with "::".
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("bioconda::fastp && touch /tmp/pwn"),
+            None
+        );
+        assert_eq!(EnvironmentSpec::inline_conda_packages(""), None);
+    }
+
+    #[test]
+    fn inline_conda_packages_accepts_semicolon_join_and_blocks_flag_injection() {
+        // Live-measured variant: semicolon-joined packages (atacseq seed 2
+        // generated exactly this form and tripped E016 pre-fix).
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages(
+                "bioconda::bwa-mem2=2.3;bioconda::samtools=1.24"
+            ),
+            Some(vec![
+                "bioconda::bwa-mem2=2.3".to_string(),
+                "bioconda::samtools=1.24".to_string()
+            ])
+        );
+        // The tokens become separate argv items, so a leading '-' (conda-CLI
+        // flag injection: `--override-channels -c <attacker>`) is rejected.
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages(
+                "bioconda::bwa --override-channels -c https://evil.example"
+            ),
+            None
+        );
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("bioconda::bwa -y"),
+            None
+        );
+        // A '; '-injection pattern parses as harmless package tokens — safe
+        // because the backend renders them as ONE conda command's argv (no
+        // shell), and conda then fails on the bogus package names. The
+        // charset still blocks any token carrying a shell metacharacter.
+        assert_eq!(
+            EnvironmentSpec::inline_conda_packages("bioconda::fastp; touch /tmp/pwn"),
+            Some(vec![
+                "bioconda::fastp".to_string(),
+                "touch".to_string(),
+                "/tmp/pwn".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn shell_risk_accepts_valid_package_lists_but_flags_injection() {
+        // A validated package list carries no shell risk: every token
+        // passed the charset allowlist.
+        let env = EnvironmentSpec {
+            conda: Some("bioconda::fastp=0.23.4 bioconda::samtools=1.24".into()),
+            ..Default::default()
+        };
+        assert_eq!(env.shell_risk(), None, "valid package list must wrap");
+        // ';'-joined injection attempts now parse as harmless package
+        // tokens (safe: rendered as ONE conda command's argv, no shell —
+        // conda itself rejects the bogus package names). What still trips
+        // the path-tier scan is a PATH-shaped spec carrying a shell-active
+        // character: no channel-qualified token, so the package parse
+        // declines and the strict scan takes over.
+        let evil = EnvironmentSpec {
+            conda: Some("envs/a;rm.yaml".into()),
+            ..Default::default()
+        };
+        assert_eq!(evil.shell_risk(), Some(("conda", ';')));
     }
 
     #[test]
