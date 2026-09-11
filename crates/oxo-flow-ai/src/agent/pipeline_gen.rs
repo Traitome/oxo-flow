@@ -26,6 +26,13 @@ use crate::types::Message;
 /// correction by the orchestrator.
 pub type OutputValidator = Arc<dyn Fn(&str) -> ValidationResult + Send + Sync>;
 
+/// Caller-injected deterministic text repair, applied to the extracted TOML
+/// BEFORE validation. Mechanical error classes (missing config declarations,
+/// joined-dialect keys) are cheaper and more reliable to fix in code than to
+/// spend a paid model round on — the orchestrator validates and adopts the
+/// FIXED text, so a successful fix never reaches the model at all.
+pub type TextFixer = Arc<dyn Fn(String) -> (String, Vec<String>) + Send + Sync>;
+
 // ── System prompt ──────────────────────────────────────────────────────────
 
 /// The generation persona's system prompt: oxo-flow TOML syntax reference,
@@ -243,12 +250,14 @@ pub fn basic_structure_errors(toml: &str) -> Vec<String> {
 // ── Agent ──────────────────────────────────────────────────────────────────
 
 /// The shared generation agent. Surfaces customize it with prompt
-/// additions (skills, data reports) and an engine-bound validator.
+/// additions (skills, data reports), an engine-bound validator, and an
+/// optional deterministic text fixer.
 pub struct PipelineGenAgent {
     intent: String,
     system_additions: Vec<String>,
     user_additions: Vec<String>,
     validator: Option<OutputValidator>,
+    fixer: Option<TextFixer>,
 }
 
 impl PipelineGenAgent {
@@ -258,6 +267,7 @@ impl PipelineGenAgent {
             system_additions: Vec::new(),
             user_additions: Vec::new(),
             validator: None,
+            fixer: None,
         }
     }
 
@@ -265,6 +275,12 @@ impl PipelineGenAgent {
     /// one, only the structural floor (`basic_structure_errors`) applies.
     pub fn with_validator(mut self, validator: OutputValidator) -> Self {
         self.validator = Some(validator);
+        self
+    }
+
+    /// Inject a deterministic repair pass (see [`TextFixer`]).
+    pub fn with_text_fixer(mut self, fixer: TextFixer) -> Self {
+        self.fixer = Some(fixer);
         self
     }
 
@@ -330,7 +346,23 @@ impl Agent for PipelineGenAgent {
     }
 
     fn extract_content(&self, response_content: &str) -> Option<String> {
-        extract_toml(response_content)
+        let toml = extract_toml(response_content)?;
+        match &self.fixer {
+            None => Some(toml),
+            // A fixer failure must never lose the artifact — fall back to
+            // the unfixed text and let validation report the problem.
+            Some(fix) => {
+                let (fixed, notes) = fix(toml.clone());
+                if fixed.trim().is_empty() {
+                    Some(toml)
+                } else {
+                    if !notes.is_empty() {
+                        tracing::info!(notes = ?notes, "deterministic fixes applied to the draft");
+                    }
+                    Some(fixed)
+                }
+            }
+        }
     }
 }
 

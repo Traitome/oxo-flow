@@ -345,6 +345,15 @@ def main() -> None:
                         else:
                             wf = None
                     gates = run_gates(binary, wf, run_dir) if wf else {}
+                    # Fidelity: the intent names tools; a gate-valid artifact
+                    # that never mentions them passes the gates but does not
+                    # do what was asked. Deterministic substring check on the
+                    # lowercased artifact (tool names, not flags/paths).
+                    artifact_text = wf.read_text().lower() if wf else ""
+                    missing_tools = [
+                        t for t in spec.get("requires", [])
+                        if t.lower() not in artifact_text
+                    ]
                     result = {
                         "intent_id": spec["id"], "tier": spec["tier"],
                         "domain": spec["domain"], "model": model, "variant": variant,
@@ -353,6 +362,11 @@ def main() -> None:
                         **gen,
                         "gates": gates,
                         "all_gates_pass": bool(gates) and all(g["pass"] for g in gates.values()),
+                        "missing_required_tools": missing_tools,
+                        "fidelity_pass": not missing_tools,
+                        "success": bool(gates)
+                        and all(g["pass"] for g in gates.values())
+                        and not missing_tools,
                         "workflow_file": str(wf) if wf else None,
                         "est_cost_usd": round(cost_usd(model, gen["input_tokens"],
                                                        gen["output_tokens"]), 5),
@@ -361,6 +375,7 @@ def main() -> None:
                     runs.append(result)
                     print(f"    generated={result['generated']} "
                           f"gates={'PASS' if result['all_gates_pass'] else 'FAIL'} "
+                          f"fidelity={'OK' if result['fidelity_pass'] else 'MISSING:' + ','.join(missing_tools)} "
                           f"tok(in/out)={result['input_tokens']}/{result['output_tokens']} "
                           f"wall={result.get('wall_s')}s", flush=True)
                     time.sleep(args.sleep)
@@ -389,6 +404,8 @@ def main() -> None:
         d = sum(r["gates"].get("dry-run", {}).get("pass", False) for r in rs)
         l = sum(r["gates"].get("lint", {}).get("pass", False) for r in rs)
         allp = sum(r["all_gates_pass"] for r in rs)
+        fid = sum(r["fidelity_pass"] for r in rs)
+        ok = sum(r["success"] for r in rs)
         tok_in = sum(r["input_tokens"] for r in rs)
         tok_out = sum(r["output_tokens"] for r in rs)
         wall = [r.get("wall_s", 0) for r in rs]
@@ -398,33 +415,38 @@ def main() -> None:
             f"- runs: {n}, generated: {gen_n}",
             f"- gate pass@1: validate {v}/{n}, dry-run {d}/{n}, lint {l}/{n}, "
             f"**all-gates {allp}/{n}** ({allp / n:.0%})",
+            f"- fidelity (named tools present): {fid}/{n} — "
+            f"**success (gates ∧ fidelity) {ok}/{n}** ({ok / n:.0%})",
             f"- tokens: in {tok_in:,} / out {tok_out:,} "
             f"(mean {tok_in // max(n, 1):,}/{tok_out // max(n, 1):,} per run)",
             f"- est. cost: ${cost:.4f} (price table {PRICE_PER_MTOK.get(model, PRICE_PER_MTOK['*'])}/Mtok)",
             f"- wall: mean {sum(wall) / max(n, 1):.0f}s, max {max(wall or [0]):.0f}s",
             "",
-            "| tier | all-gates | runs |",
+            "| tier | success (gates ∧ fidelity) | runs |",
             "|---|---|---|",
         ]
         for tier in ("easy", "medium", "hard"):
             trs = [r for r in rs if r["tier"] == tier]
             if trs:
-                tp = sum(r["all_gates_pass"] for r in trs)
+                tp = sum(r["success"] for r in trs)
                 lines.append(f"| {tier} | {tp}/{len(trs)} | {len(trs)} |")
         vague = [r for r in rs if r.get("vague")]
         if vague:
-            vp = sum(r["all_gates_pass"] for r in vague)
+            vp = sum(r["success"] for r in vague)
             lines.append(f"| vague | {vp}/{len(vague)} | {len(vague)} |")
         lines += [
             "",
-            "| intent | tier | all-gates | tok in | tok out | wall s | note |",
-            "|---|---|---|---|---|---|---|",
+            "| intent | tier | gates | fidelity | tok in | tok out | wall s | note |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for r in rs:
             note = r.get("error") or ""
+            if r["missing_required_tools"]:
+                note = (note + " missing:" + ",".join(r["missing_required_tools"])).strip()
             lines.append(
                 f"| {r['intent_id']} | {r['tier']} | "
                 f"{'✅' if r['all_gates_pass'] else '❌'} | "
+                f"{'✅' if r['fidelity_pass'] else '❌'} | "
                 f"{r['input_tokens']:,} | {r['output_tokens']:,} | "
                 f"{r.get('wall_s', '')} | {note[:60]} |")
         lines.append("")

@@ -322,7 +322,9 @@ pub async fn generate_workflow(
         let curator_brief = curator_brief.clone();
         let contract = contract.clone();
         move |findings: Option<&str>| -> PipelineGenAgent {
-            let mut agent = PipelineGenAgent::new(intent).with_validator(validator.clone());
+            let mut agent = PipelineGenAgent::new(intent)
+                .with_validator(validator.clone())
+                .with_text_fixer(Arc::new(fix_undefined_config_keys));
             if !runtime.skill_context.is_empty() {
                 agent = agent.with_system_addition(format!(
                     "## Activated Custom Skills\n{}",
@@ -671,6 +673,60 @@ fn archive_session(session: &AiSession) {
     }
 }
 
+/// Deterministic repair for the mechanical E005 class: the draft references
+/// `{config.X}` without declaring X. The model feedback loop CAN fix these,
+/// but a paid round is a wasteful way to add a line — the fixer declares the
+/// missing keys (value = the key name, self-describing in paths) directly
+/// under `[config]` and lets validation re-check the result. Returns the
+/// (possibly unchanged) TOML plus human-readable fix notes.
+fn fix_undefined_config_keys(toml: String) -> (String, Vec<String>) {
+    let config: oxo_flow_core::config::WorkflowConfig = match toml::from_str(&toml) {
+        Ok(c) => c,
+        Err(_) => return (toml, Vec::new()),
+    };
+    let mut missing: Vec<String> = Vec::new();
+    for rule in &config.rules {
+        for d in oxo_flow_core::format::undefined_config_refs(rule, &config) {
+            if d.code != "E005" {
+                continue;
+            }
+            if let Some(start) = d.message.find('\'')
+                && let Some(end) = d.message[start + 1..].find('\'')
+            {
+                let key = &d.message[start + 1..start + 1 + end];
+                if !missing.iter().any(|k| k == key) {
+                    missing.push(key.to_string());
+                }
+            }
+        }
+    }
+    if missing.is_empty() {
+        return (toml, Vec::new());
+    }
+
+    let mut fixed = toml;
+    let insert_block: String = missing
+        .iter()
+        .map(|k| format!("{k} = \"{k}\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(pos) = fixed.find("[config]") {
+        // Insert directly after the [config] header line.
+        let after = pos + "[config]".len();
+        fixed.insert_str(after, &format!("\n{insert_block}"));
+    } else if let Some(pos) = fixed.find("[[rules]]") {
+        // No [config] section at all: open one right before the first rule.
+        fixed.insert_str(pos, &format!("[config]\n{insert_block}\n\n"));
+    } else {
+        return (fixed, Vec::new());
+    }
+    let notes = missing
+        .iter()
+        .map(|k| format!("declared missing config key '{k}' (value defaults to the key name)"))
+        .collect();
+    (fixed, notes)
+}
+
 /// Basic structural validation before passing to core engine.
 fn validate_basic_structure(toml: &str) -> Result<()> {
     if !toml.contains("[workflow]") {
@@ -691,6 +747,36 @@ fn validate_basic_structure(toml: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixer_declares_missing_config_keys() {
+        // The measured failure class: the draft references {config.prefix}
+        // without declaring it — a paid model round used to be the fix.
+        let draft = "[workflow]\nname = \"x\"\n\n[config]\nsample = \"S1\"\n\n[[rules]]\nname = \"r\"\noutput = [\"{{config.prefix}}_qc.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) = fix_undefined_config_keys(draft.to_string());
+        assert_eq!(notes.len(), 1, "notes: {notes:?}");
+        assert!(notes[0].contains("prefix"));
+        assert!(fixed.contains("prefix = \"prefix\""), "fixed: {fixed}");
+        // The fix must satisfy the engine check it targets.
+        let config: oxo_flow_core::config::WorkflowConfig = toml::from_str(&fixed).unwrap();
+        for rule in &config.rules {
+            assert!(oxo_flow_core::format::undefined_config_refs(rule, &config).is_empty());
+        }
+    }
+
+    #[test]
+    fn fixer_creates_config_section_when_absent_and_leaves_clean_toml_alone() {
+        let no_config = "[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"r\"\noutput = [\"{{config.root}}/a.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) = fix_undefined_config_keys(no_config.to_string());
+        assert_eq!(notes.len(), 1);
+        assert!(fixed.contains("[config]"));
+
+        // Clean TOML passes through byte-identical.
+        let clean = "[workflow]\nname = \"x\"\n\n[config]\nsample = \"S1\"\n\n[[rules]]\nname = \"r\"\noutput = [\"a.txt\"]\nshell = \"echo hi\"";
+        let (fixed, notes) = fix_undefined_config_keys(clean.to_string());
+        assert_eq!(fixed, clean);
+        assert!(notes.is_empty());
+    }
 
     #[test]
     fn truncate_utf8_cuts_at_char_boundary() {

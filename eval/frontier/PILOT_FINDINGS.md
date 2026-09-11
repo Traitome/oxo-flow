@@ -153,3 +153,41 @@ Conclusion: **compact stays the shipped default**; full remains available
 scoped to FAILED generations (rescue-only, where it has upside without
 destabilizing passes), a larger intent set, and more seeds before any
 tier-conditional recommendation.
+
+## Gate-reliability round: deterministic repair + first-class package lists
+
+Dissecting the compact baseline's 9 failures (58-run arm above) showed they
+are NOT random: two mechanical classes dominate — `E016` (multi-package
+inline conda specs joined by spaces/commas, which the schema rejected) and
+`E005` (`{config.x}` references without a `[config]` declaration). Worse,
+the inline package form was accepted by `validate` but **failed at run
+time** ("refusing to run the tool from PATH") — gate-valid was not
+runnable. Three fixes landed and the identical arm re-measured:
+
+| arm | all-gates | success (gates ∧ fidelity) | easy | medium | hard | vague | cost |
+|---|---|---|---|---|---|---|---|
+| compact, pre-fix | 48/58 (83%) | n/a | 10/10 | 21/24 | 17/24 | 5/6 | $0.25 |
+| compact, post-fix | **57/58 (98%)** | **56/58 (97%)** | 10/10 | 24/24 | 22/24 | 6/6 | $0.26 |
+
+The fixes, in the order that matters:
+
+1. **Engine: inline conda package lists are first-class** —
+   `conda = "bioconda::fastp=0.23.4 bioconda::samtools=1.24"` parses as an
+   allowlist-validated package list, derives a content-addressed env name
+   (`fastp-<hash8>`), and installs via direct `conda create`. This is the
+   exact form the generation prompt mandates; making it executable is an
+   engine improvement for every user, not a benchmark patch. Injection
+   attempts still fail the charset allowlist and the hard-error path.
+2. **Deterministic E005 fixer** (injected as the generation agent's text
+   fixer): missing config keys are declared under `[config]` in code, so
+   the mechanical class never reaches a paid model round. The
+   orchestrator validates and adopts the fixed text.
+3. **Fidelity criterion** (benchmark): each intent names its required
+   tools; a run now succeeds only with gates ∧ fidelity — a gate-valid
+   pipeline that never mentions the requested tools no longer counts.
+
+Residual (2/58): one fidelity miss (`somatic-mutect2` used GATK4's
+MarkDuplicates instead of the Picard name — the checker does not know
+tool equivalences yet) and one lint-level failure. Both are the next
+iteration's input: tool-equivalence awareness in the fidelity checker,
+and whatever lint code the atacseq artifact trips.

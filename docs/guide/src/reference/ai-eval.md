@@ -8,6 +8,11 @@ oxo-flow's own fresh knowledge base plus its own validators
 provide (see [issue #167](https://github.com/Traitome/oxo-flow/issues/167)
 for the design rationale).
 
+> Terminology: **pass@1 / pass@k**, **fidelity**, and **seed** are defined
+> in the [Glossary](glossary.md#benchmark-terms); diagnostic codes in
+> gate verdicts are listed under
+> [Diagnostic Codes](glossary.md#diagnostic-codes).
+
 ## Three layers
 
 | Layer | What is evaluated | Example metric |

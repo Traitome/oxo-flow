@@ -4724,15 +4724,37 @@ mod tests {
     }
 
     #[test]
-    fn resolve_command_fails_hard_when_declared_environment_cannot_wrap() {
-        // A conda spec that cannot derive an env name (the `bioconda::bwa=`
-        // form) used to log a warning and run the bare command — silently
-        // using whatever the tool is on PATH instead of the declared env.
+    fn resolve_command_wraps_inline_package_specs_and_still_fails_on_garbage() {
+        // The audit finding behind this test stands: a declared environment
+        // that cannot be wrapped must fail the rule rather than silently run
+        // the tool from PATH. The `bioconda::bwa=` form USED to be the
+        // cannot-wrap example — inline package lists are now first-class
+        // (content-addressed env name + direct `conda create`), so the
+        // wrap succeeds under the derived name, while a genuinely
+        // unrenderable spec still fails hard.
         let ex = executor_with(4, 2048);
         let rule = Rule {
             name: "bwa_align".to_string(),
             environment: EnvironmentSpec {
                 conda: Some("bioconda::bwa=0.7.17".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let wrapped = ex
+            .resolve_command("bwa mem ref.fa", &rule, None)
+            .expect("inline package specs are wrappable now");
+        assert!(
+            wrapped.contains("conda run --no-capture-output -n bwa-"),
+            "expected a derived content-addressed env name, got: {wrapped}"
+        );
+
+        // A spec outside the package grammar and not a readable file still
+        // cannot wrap — and must fail loudly, never fall back to PATH.
+        let rule = Rule {
+            name: "bwa_align".to_string(),
+            environment: EnvironmentSpec {
+                conda: Some("bioconda::fastp=0.23.4; rm -rf /".to_string()),
                 ..Default::default()
             },
             ..Default::default()
@@ -4744,7 +4766,6 @@ mod tests {
             matches!(err, OxoFlowError::Environment { .. }),
             "expected an Environment error, got {err:?}"
         );
-        assert!(err.to_string().contains("bioconda::bwa=0.7.17"), "{err}");
 
         // No environment declared: there is nothing to wrap, so the plain
         // command is still correct.

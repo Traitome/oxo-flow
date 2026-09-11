@@ -81,6 +81,33 @@ pub(crate) fn conda_env_name_from_spec(kind: &str, spec: &str) -> Result<String>
 /// missing-env diagnosis (issue #300) can name both the derivation and the
 /// plain name an older env may have been created under.
 fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
+    // Inline package lists (`bioconda::fastp=0.23.4 bioconda::samtools=1.24`)
+    // get a content-addressed name derived from their first package, so two
+    // rules sharing the exact package set share one env while a changed set
+    // builds a fresh one — the same property file-backed specs get from
+    // their hash suffix (issue #159).
+    if let Some(packages) = crate::rule::EnvironmentSpec::inline_conda_packages(spec) {
+        let first = packages[0].rsplit("::").next().unwrap_or(&packages[0]);
+        let stem: String = first
+            .split('=')
+            .next()
+            .unwrap_or(first)
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(spec.as_bytes());
+        let hash8: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+        let name = format!("{stem}-{hash8}");
+        return Ok((name.clone(), name));
+    }
+
     // Try reading the YAML file to extract `name:` field
     let file_content = std::fs::read(spec).ok();
     let from_yaml = file_content
@@ -295,6 +322,17 @@ impl EnvironmentBackend for CondaBackend {
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
+        // Inline package lists install directly — the same form container
+        // export has always rendered (`conda create -n <name> <packages>`).
+        // Each token was allowlist-validated by `inline_conda_packages`, so
+        // interpolation is argv-safe.
+        if let Some(packages) = crate::rule::EnvironmentSpec::inline_conda_packages(spec) {
+            let env_name = conda_env_name_from_spec("conda", spec)?;
+            let joined = packages.join(" ");
+            return Ok(format!(
+                "conda create -n {env_name} -y {joined} || conda install -n {env_name} -y {joined}"
+            ));
+        }
         // `-n <name>` keeps setup consistent with `wrap_command` (which runs
         // `conda run -n <name>`): the name comes from the YAML's `name:` field
         // or the file stem. Without `-n`, conda 25+ fails with "Unable to

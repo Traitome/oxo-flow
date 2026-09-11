@@ -306,3 +306,85 @@ changes do ([Cloud Storage](./cloud-storage.md#content-addressed-invalidation)).
 - [Workflow Format Reference](./workflow-format.md) — complete TOML specification
 - [DAG Engine](./dag-engine.md) — how dependencies are resolved
 - [Wildcards Reference](./wildcards.md) — pattern expansion details
+---
+
+## Diagnostic Codes
+
+Every static check in oxo-flow tags its findings with a stable code so
+tools (and you) can branch on them programmatically:
+
+- **`Exx`** — an **error**: the workflow is rejected (`validate` fails) or
+  flagged as not runnable. Example: `E017` — an unknown key in a rule, the
+  engine's way of saying "this TOML uses a dialect the schema does not
+  have".
+- **`Wxx`** — a **warning**: the workflow runs, but the check found a
+  likely mistake worth fixing (see `oxo-flow lint`).
+
+Codes are three characters: the letter, then a zero-padded number. The
+authoritative, machine-readable source is the `--json` output of each
+command (`validate --json`, `dry-run --json`, `lint --json`); the tables
+below cover the codes referenced across this documentation.
+
+### Validation errors (`validate` / `dry-run`)
+
+| Code | Meaning |
+|---|---|
+| `E001` | Workflow name is empty |
+| `E003` | A wildcard appears in a rule's output but not in its input — the engine cannot key instances |
+| `E005` | A `{config.key}` reference points at a key absent from `[config]` |
+| `E006` | DAG construction error (e.g. a cycle) |
+| `E007` | `depends_on` names a rule that does not exist |
+| `E008` | `extends` names a rule that does not exist |
+| `E009` | An input path contains `..` and may escape the working directory |
+| `E010` | A rule references an undefined `env_group` |
+| `E011` | A rule command matches a dangerous shell pattern (destructive command class) |
+| `E013` | A `checkpoint = true` rule lacks `checkpoint_manifest` |
+| `E014` | A checkpoint rule is parameterized by `{sample}`/`{group}`/`{pair_id}` (not allowed) |
+| `E015` | Re-entry declares a `pair_id` with conflicting content |
+| `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv |
+| `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`) |
+
+### Lint warnings (`lint`)
+
+| Code | Meaning |
+|---|---|
+| `W001`/`W002` | Workflow missing `description` / `author` |
+| `W003` | Rule missing a description |
+| `W004` | Rule has a shell command but no `log` file specified |
+| `W005` | Rule uses >8 threads with no `memory` |
+| `W007` | Rule declares no environment — runs in the bare system shell |
+| `W011` | Rule has `retries` but no `retry_delay` |
+| `W014` | `depends_on` references an unknown rule |
+| `W016` | Conda/pixi spec is not a lockfile — builds may not be reproducible |
+| `W017` | Input path is absolute |
+| `W018` | Input path references a home directory |
+| `W019` | Rule executes a command but declares no outputs |
+| `W020`/`W021`/`W022` | `pre_exec`/`on_success`/`on_failure` contain a risky pattern |
+| `W024` | A wildcard has no declared source — it will stay literal at run time |
+| `W025` | Legacy `threads =`/`memory =` keys under the rule body (use `resources.`) |
+| `W027` | A `when` condition references a wildcard nothing can bind — evaluates false |
+| `W028` | Docker image is not fully qualified (resolves against docker.io) |
+| `W029` | `len(config.x)` compared against a non-numeric value |
+| `W030` | Malformed `regex_extract` in a `when` condition |
+| `W031` | Producer is when-gated but its consumer expands the output unconditionally |
+| `W032` | A config key looks like a secret but is not declared `sensitive` |
+
+The full, current list with suggestions is best read from the commands:
+`oxo-flow lint --json` prints every code with its message and suggestion
+(see [lint](../commands/lint.md)). AI-generated drafts that fail a gate
+have their errors fed back to the model for correction
+([AI CLI](../commands/ai.md)); deterministic repairs for purely mechanical
+classes run first, before any model round is spent.
+
+### Benchmark terms
+
+- **pass@1 / pass@k** — the probability that a single generation (or at
+  least one of k attempts) passes all gates. Used in
+  [AI evaluation](./ai-eval.md) and `eval/frontier/`.
+- **fidelity** — a deterministic check that the tools an intent names
+  actually appear in the generated pipeline. Gates alone cannot see a
+  "wrong but valid" pipeline; the frontier benchmark reports
+  **success = gates ∧ fidelity**.
+- **seed** — one repeat of the same intent under identical settings;
+  multiple seeds measure sampling variance instead of quoting a single
+  lucky/unlucky run.

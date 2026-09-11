@@ -114,3 +114,7 @@ never flags them — see
 - Linting checks for common mistakes, missing metadata, and potential performance issues
 - Rules are checked for valid input/output patterns and environment declarations
 - Use `--strict` to ensure high-quality workflow definitions in production environments
+
+Every finding carries a stable code (`E0xx` = validation error, `W0xx` =
+lint warning). The full code index with one-line meanings lives in the
+[Glossary → Diagnostic Codes](../reference/glossary.md#diagnostic-codes).
