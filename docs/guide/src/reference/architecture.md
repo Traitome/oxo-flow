@@ -598,9 +598,19 @@ that emit reasoning blocks counting against the output budget):
 `OXO_FLOW_AI_MAX_TOKENS` (default 16384 — the old 4096 was consumed by
 reasoning blocks before any TOML; 16384 clears thinking with room for the
 draft) and
-`OXO_FLOW_AI_TIMEOUT_SECS` (default 120 — non-thinking generations run
-12–20 s; thinking backends exceed it). Quality/cost evidence for these
-calibrations and the unification itself lives in `eval/frontier/`
+`OXO_FLOW_AI_TIMEOUT_SECS` (default 300 — non-thinking generations run
+12–20 s, but a single thinking round routinely passes two minutes; a
+measured GLM round took 145 s, which the old 120 s default killed
+mid-round). Below the orchestrator, the
+provider backends retry transient transport failures (dropped or
+reset connections) twice with a short backoff before surfacing an
+error — timeouts are excluded, since a retry would deterministically
+re-timeout and the knob above is the remedy. When a provider error does
+abort a generation, the orchestrator archives the transcript and logged
+token spend into the saved session instead of dropping them — the
+rounds before the failure were real paid work, and the CLI's
+degraded-delivery path reads the generated TOML from that transcript. Quality/cost evidence for
+these calibrations and the unification itself lives in `eval/frontier/`
 (gate-scored benchmark: deterministic `validate`/`dry-run`/`lint`
 verdicts, no LLM judge).
 
