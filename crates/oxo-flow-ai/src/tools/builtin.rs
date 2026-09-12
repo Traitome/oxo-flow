@@ -198,6 +198,20 @@ async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
     })
 }
 
+/// Classify a final response status. Non-success statuses become a steering
+/// error: the model would otherwise stream 404 or bot-block HTML back to
+/// itself as "documentation" and burn rounds chasing it, while the knowledge
+/// it was hunting (tool/skill docs) is embedded behind lookup_tool/lookup_skill.
+/// `None` means the body is real content and should stream.
+fn status_failure(status: reqwest::StatusCode) -> Option<String> {
+    if status.is_success() {
+        return None;
+    }
+    Some(format!(
+        "HTTP {status} — the page returned no content; for embedded knowledge (tool docs, skills) use lookup_tool or lookup_skill instead of fetch_url"
+    ))
+}
+
 /// GET with manual redirects (max 5 hops), re-running the SSRF screen on
 /// every Location target. DNS-resolved hops are sent through a pinned
 /// client, so each request reaches the address that was just screened.
@@ -343,6 +357,12 @@ impl Tool for FetchUrlTool {
                     tool: "fetch_url".into(),
                     message: format!("blocked: {reason}"),
                 })?;
+        if let Some(reason) = status_failure(response.status()) {
+            return Err(AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("blocked: {reason}"),
+            });
+        }
 
         let mut body = CappedBody::new();
         let mut stream = response.bytes_stream();
@@ -1040,5 +1060,60 @@ mod fetch_url_ssrf_tests {
             .err()
             .unwrap();
         assert!(err.contains("scheme"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod fetch_url_status_tests {
+    use super::*;
+
+    #[test]
+    fn client_and_server_errors_are_steering_errors_not_content() {
+        // Live agents burned ~7 fetch_url rounds feeding 404 and
+        // Cloudflare-block HTML back to themselves as if it were real
+        // documentation; every non-success status must surface as a tool
+        // error that steers back to embedded knowledge instead.
+        for code in [400, 401, 403, 404, 410, 429, 500, 502, 503] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            let reason = status_failure(status)
+                .unwrap_or_else(|| panic!("HTTP {code} must be a tool error"));
+            assert!(
+                reason.contains(&code.to_string()),
+                "must name the status: {reason}"
+            );
+            assert!(
+                reason.contains("no content"),
+                "must say nothing was returned: {reason}"
+            );
+            assert!(
+                reason.contains("lookup_skill"),
+                "must steer to embedded knowledge: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn success_statuses_stream_their_body() {
+        for code in [200, 201, 204, 206] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            assert!(
+                status_failure(status).is_none(),
+                "HTTP {code} bodies are content and must stream"
+            );
+        }
+    }
+
+    #[test]
+    fn knowledge_chasing_statuses_name_both_lookup_tools() {
+        // The live dead-end pattern: hunting tool/skill docs that only exist
+        // in the embedded libraries — name both lookup tools in the steer.
+        for code in [403, 404, 429] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            let reason = status_failure(status).unwrap();
+            assert!(
+                reason.contains("lookup_tool"),
+                "must mention lookup_tool as well: {reason}"
+            );
+        }
     }
 }
