@@ -230,7 +230,18 @@ impl Orchestrator {
                 // found made GLM regenerate blind. One-shot per generation,
                 // and never during the final round: an injection the loop
                 // never surfaces (the head check fails first) is dead text.
-                tool_only_rounds = tool_only_rounds.saturating_add(1);
+                // A round that streamed prose alongside the tool calls is
+                // not silent exploration — the model is narrating its work,
+                // so it breaks the streak instead of feeding it.
+                if response
+                    .content
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    tool_only_rounds = 0;
+                } else {
+                    tool_only_rounds = tool_only_rounds.saturating_add(1);
+                }
                 if !exploration_nudged
                     && tool_only_rounds >= exploration_nudge_threshold
                     && rounds < self.max_rounds
@@ -340,7 +351,13 @@ impl Orchestrator {
             // nothing to echo — fabricating assistant text would put words
             // in the model's mouth (audit finding).
             let final_round = rounds + 1 == self.max_rounds;
-            if let Some(content) = &response.content {
+            // An empty or whitespace-only text block is not prose: echoing
+            // it would put an empty assistant text block on the wire, which
+            // Anthropic-compatible endpoints reject with 400. It takes the
+            // bare-nudge branch below instead.
+            if let Some(content) = &response.content
+                && !content.trim().is_empty()
+            {
                 let rc = response.reasoning_content.as_deref().unwrap_or("");
                 push_retry_feedback(
                     &mut messages,
@@ -355,7 +372,19 @@ impl Orchestrator {
                 if final_round {
                     nudge.push_str(FINAL_ROUND_NOTICE);
                 }
-                messages.push(Message::user(&nudge));
+                // A nudge directly after an echo round's user directive
+                // would land consecutive user turns on the wire — fold it
+                // into the standing directive instead.
+                if messages
+                    .last()
+                    .is_some_and(|m| m.role == crate::types::MessageRole::User)
+                {
+                    let directive = messages.last_mut().expect("length checked above");
+                    directive.content.push_str("\n\n");
+                    directive.content.push_str(&nudge);
+                } else {
+                    messages.push(Message::user(&nudge));
+                }
             }
         }
 
@@ -965,6 +994,95 @@ mod tests {
                 .flatten()
                 .any(|m| m.content.contains("Exploration budget warning")),
             "the prose round must reset the streak: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrated_tool_rounds_do_not_feed_the_exploration_streak() {
+        // A model that narrates a sentence before every lookup is writing
+        // output, not silently exploring — such rounds reset the streak,
+        // so the nudge (whose text claims "no written output") must never
+        // fire for them.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+        use crate::types::ToolCall;
+
+        let narrated_turn = |id: &str| ScriptedTurn {
+            content: Some("Checking the knowledge base for exact tool pins.".into()),
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                name: "read_only_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        };
+        let backend = ScriptedBackend::new(vec![
+            narrated_turn("tc-1"),
+            narrated_turn("tc-2"),
+            narrated_turn("tc-3"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 4, "one provider call per round");
+        assert!(
+            !calls
+                .iter()
+                .flatten()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "narrated tool rounds are not silent exploration: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_text_response_folds_into_the_standing_directive() {
+        // Round 1's unextractable prose leaves an assistant echo plus a
+        // user directive; round 2 returning an EMPTY text block must not
+        // echo that block (an empty assistant text block gets 400'd by
+        // Anthropic-compatible endpoints) nor push a second user turn
+        // after the directive — the nudge folds into the standing
+        // directive instead.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("Here is my plan: trim the reads, then align."),
+            ScriptedTurn::content(""),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 4);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3, "one provider call per round");
+        let final_call = &calls[2];
+        for pair in final_call.windows(2) {
+            assert!(
+                !(matches!(pair[0].role, crate::types::MessageRole::User)
+                    && matches!(pair[1].role, crate::types::MessageRole::User)),
+                "no consecutive user turns may reach the wire: {final_call:?}"
+            );
+        }
+        assert!(
+            !final_call
+                .iter()
+                .any(|m| m.role == crate::types::MessageRole::Assistant && m.content.is_empty()),
+            "an empty assistant text block must not be echoed: {final_call:?}"
+        );
+        let folded = final_call.iter().any(|m| {
+            m.role == crate::types::MessageRole::User
+                && m.content.contains("could not be processed")
+                && m.content
+                    .contains("did not contain any content or tool calls")
+        });
+        assert!(
+            folded,
+            "the empty-response nudge must ride the standing directive: {final_call:?}"
         );
     }
 
