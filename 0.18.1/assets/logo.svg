@@ -1,0 +1,45 @@
+<svg width="180" height="200" viewBox="0 0 173.2 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hexagon Background -->
+  <polygon points="86.6,0 173.2,50 173.2,150 86.6,200 0,150 0,50"
+           fill="#1a1a2e" stroke="#3b82f6" stroke-width="3"/>
+
+  <!-- Metro Pipeline: Simple linear + branch style -->
+
+  <!-- Line 1 (Blue): Main horizontal -->
+  <line x1="30" y1="70" x2="143" y2="70" stroke="#3b82f6" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Line 2 (Green): Parallel branch below -->
+  <line x1="58" y1="100" x2="115" y2="100" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Connection: Line 1 to Line 2 -->
+  <line x1="58" y1="70" x2="58" y2="100" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
+  <line x1="115" y1="70" x2="115" y2="100" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Stations -->
+  <!-- A: Start -->
+  <circle cx="30" cy="70" r="8" fill="#1a1a2e" stroke="#ffffff" stroke-width="3"/>
+
+  <!-- B: Transfer (connects both lines) -->
+  <circle cx="58" cy="70" r="9" fill="#1a1a2e" stroke="#ffffff" stroke-width="3"/>
+  <circle cx="58" cy="100" r="7" fill="#1a1a2e" stroke="#10b981" stroke-width="2.5"/>
+
+  <!-- C: On Line 2 -->
+  <circle cx="86.6" cy="100" r="7" fill="#1a1a2e" stroke="#10b981" stroke-width="2.5"/>
+
+  <!-- D: Transfer back -->
+  <circle cx="115" cy="100" r="7" fill="#1a1a2e" stroke="#10b981" stroke-width="2.5"/>
+  <circle cx="115" cy="70" r="9" fill="#1a1a2e" stroke="#ffffff" stroke-width="3"/>
+
+  <!-- E: End -->
+  <circle cx="143" cy="70" r="8" fill="#1a1a2e" stroke="#ffffff" stroke-width="3"/>
+
+  <!-- oxo-flow text -->
+  <text x="86.6" y="138" text-anchor="middle"
+        font-family="'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="16" font-weight="600" fill="#ffffff">
+    <tspan>oxo</tspan><tspan fill="#10b981">-flow</tspan>
+  </text>
+
+  <!-- Underline -->
+  <line x1="55" y1="145" x2="118" y2="145" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+</svg>
