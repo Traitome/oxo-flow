@@ -77,14 +77,14 @@ pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
     // matching); terms that appear nowhere are agent hallucinations and are
     // dropped rather than killing the query (strict AND would return empty).
     // Each skill's haystack is needed twice — the document-frequency pass
-    // and the scoring loop below — so build them once.
-    let haystacks: Vec<String> = SKILL_DB.iter().map(haystack).collect();
+    // and the scoring loop below; [`HAYSTACKS`] builds them once per
+    // process.
     let dfs: Vec<usize> = terms
         .iter()
         .map(|t| {
             SKILL_DB
                 .iter()
-                .zip(&haystacks)
+                .zip(HAYSTACKS.iter())
                 .filter(|(_, h)| term_matches(t, h))
                 .count()
         })
@@ -105,7 +105,7 @@ pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
     let n = SKILL_DB.len() as f64;
     let mut full: Vec<Candidate> = Vec::new();
     let mut partial: Vec<Candidate> = Vec::new();
-    for (skill, hay) in SKILL_DB.iter().zip(&haystacks) {
+    for (skill, hay) in SKILL_DB.iter().zip(HAYSTACKS.iter()) {
         let matched: Vec<(&str, usize)> = present
             .iter()
             .copied()
@@ -163,6 +163,13 @@ struct Candidate {
 /// scan; pathological multi-term queries (model lookup loops) truncate to
 /// their lexicographically first 32.
 const MAX_QUERY_TERMS: usize = 32;
+
+/// Per-skill haystacks: SKILL_DB is a static table, so the lowercase
+/// concatenations are built once per process instead of once per query
+/// (lookup_skill runs in every agent round; ai_explain searches once per
+/// rule plus its tool lookups).
+static HAYSTACKS: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| SKILL_DB.iter().map(haystack).collect());
 
 /// Lowercase, split on non-alphanumerics, drop 1-char tokens, dedupe.
 fn tokenize(query: &str) -> Vec<String> {
