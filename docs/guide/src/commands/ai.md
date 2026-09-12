@@ -156,6 +156,12 @@ loop. The steps:
   passes the floor — an unterminated draft fails extraction, the
   artifact is not written, and the error explains why.
 - Provider failures (auth, quota, network) fail fast with the error.
+  One carve-out: a transient transport failure (dropped connection,
+  mid-transfer reset — the classic flake where one request out of a
+  healthy session dies) is retried twice with a short backoff before
+  surfacing, since retrying is what a user would do. Timeouts are not
+  retried — they have their own knob (`OXO_FLOW_AI_TIMEOUT_SECS`) and a
+  retry would deterministically re-timeout.
 
 ### Scientist Team profile (opt-in)
 
@@ -174,7 +180,7 @@ in the repository (see also
 | Variable | Default | When to change |
 |---|---|---|
 | `OXO_FLOW_AI_MAX_TOKENS` | `16384` | Calibrated for thinking-style backends (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint): reasoning blocks spend against this ceiling, and the old 4096 default was consumed before any TOML was produced. Non-thinking models keep ≥3× headroom (measured: 1.9k–4.4k output tokens per generation) |
-| `OXO_FLOW_AI_TIMEOUT_SECS` | `120` | Non-thinking generations complete in 12–20 s; thinking backends can exceed two minutes per call — raise together with `OXO_FLOW_AI_MAX_TOKENS`, or long completions die mid-body |
+| `OXO_FLOW_AI_TIMEOUT_SECS` | `300` | Non-thinking generations complete in 12–20 s; a single thinking round routinely runs past two minutes (a measured GLM round took 145 s, so the old 120 s default killed mid-round) — raise further for slower endpoints, together with `OXO_FLOW_AI_MAX_TOKENS` |
 
 Both are consumed by the Anthropic Messages backend; the DeepSeek-native,
 OpenAI-compatible, and Ollama backends have their own budgets.

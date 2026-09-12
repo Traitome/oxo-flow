@@ -54,10 +54,12 @@ const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 /// Shared HTTP client for all provider backends. Without explicit timeouts a
 /// hung endpoint would block the agent loop indefinitely; the request timeout
-/// (default 120s, `OXO_FLOW_AI_TIMEOUT_SECS`) must also cover slow long-form
-/// completions — thinking backends with a raised `OXO_FLOW_AI_MAX_TOKENS`
-/// routinely exceed two minutes, and a mid-body timeout surfaces as a
-/// confusing "error decoding response body".
+/// (default 300s, `OXO_FLOW_AI_TIMEOUT_SECS`) must also cover slow long-form
+/// completions — a single thinking round routinely runs past two minutes (a
+/// measured GLM round on a thinking backend took 145s), and a mid-body
+/// timeout surfaces as a confusing "error decoding response body". The 10s
+/// connect timeout still fails fast on dead endpoints, so the longer wall
+/// only binds while a server is actively generating.
 fn provider_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -74,7 +76,86 @@ fn parse_timeout_secs(value: Option<&str>) -> u64 {
     value
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(120)
+        .unwrap_or(300)
+}
+
+// ── Transport retry ────────────────────────────────────────────────────────
+
+/// Backoff between transient-transport retries: one after 2s, one after 5s.
+/// The benchmark's dominant flake class is a single dropped request out of
+/// a healthy session, so two quick retries absorb it without turning a
+/// genuinely dead endpoint into a minute of hanging.
+const TRANSPORT_BACKOFFS: &[std::time::Duration] = &[
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(5),
+];
+
+/// Whether a [`reqwest::Error`] is a transient transport failure worth
+/// retrying: connection setup/reset and mid-transfer failures ("error
+/// sending request" was the observed benchmark flake). Timeouts are
+/// deliberately excluded — the request timeout has its own documented knob
+/// (`OXO_FLOW_AI_TIMEOUT_SECS`), and a retry would deterministically
+/// re-timeout against the same slow completion.
+fn is_transient_transport_error(e: &reqwest::Error) -> bool {
+    !e.is_timeout() && (e.is_connect() || e.is_request() || e.is_body())
+}
+
+/// Send a prepared request, retrying transient transport failures
+/// (see [`is_transient_transport_error`]) with `backoffs` pauses between
+/// attempts. HTTP error statuses are *not* retried here — they carry
+/// provider semantics (429 back-off, auth, context overflow) that the
+/// caller classifies. When the transport stays broken after every retry,
+/// [`AiError::RetryExhausted`] reports the total attempt count.
+async fn send_with_transport_retry(
+    request: reqwest::RequestBuilder,
+    provider: &str,
+    secret: Option<&str>,
+    backoffs: &[std::time::Duration],
+) -> Result<reqwest::Response, AiError> {
+    let mask = |message: String| match secret {
+        Some(key) => mask_secret(&message, key),
+        None => message,
+    };
+    let mut attempt = 0usize;
+    loop {
+        // `.json()` buffers the body, so the builder is replayable; a
+        // non-clonable body would be a construction bug, not a runtime case.
+        let result = request
+            .try_clone()
+            .ok_or_else(|| AiError::Provider {
+                provider: provider.into(),
+                message: "request body is not replayable for retry".into(),
+            })?
+            .send()
+            .await;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(e) if !is_transient_transport_error(&e) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: mask(e.to_string()),
+                });
+            }
+            Err(e) if attempt >= backoffs.len() => {
+                return Err(AiError::RetryExhausted {
+                    attempts: attempt as u32 + 1,
+                    message: mask(e.to_string()),
+                });
+            }
+            Err(e) => {
+                let backoff = backoffs[attempt];
+                tracing::warn!(
+                    provider,
+                    attempt = attempt + 1,
+                    backoff_secs = backoff.as_secs(),
+                    error = mask(e.to_string()),
+                    "transient transport error — retrying"
+                );
+                attempt += 1;
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
 }
 
 // ── AiProvider enum ────────────────────────────────────────────────────────
@@ -473,19 +554,18 @@ impl ClaudeBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: "claude".into(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
+        let resp = send_with_transport_retry(
+            self.client
+                .post(&self.api_url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body),
+            "claude",
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+        )
+        .await?;
 
         let status = resp.status();
         let retry_after = retry_after_header(resp.headers());
@@ -809,18 +889,17 @@ impl OpenAiBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: self.label.clone(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
+        let resp = send_with_transport_retry(
+            self.client
+                .post(&self.api_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .json(&body),
+            &self.label,
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+        )
+        .await?;
 
         let status = resp.status();
         let retry_after = retry_after_header(resp.headers());
@@ -974,17 +1053,16 @@ impl OllamaBackend {
     ) -> Result<AiResponse, AiError> {
         let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: "ollama".into(),
-                message: e.to_string(),
-            })?;
+        let resp = send_with_transport_retry(
+            self.client
+                .post(&self.api_url)
+                .header("content-type", "application/json")
+                .json(&body),
+            "ollama",
+            None,
+            TRANSPORT_BACKOFFS,
+        )
+        .await?;
 
         let status = resp.status();
         let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
@@ -1189,18 +1267,17 @@ impl OpenAiBackend {
         // endpoints this backend serves (OpenAI, DeepSeek) support it.
         body["stream_options"] = serde_json::json!({"include_usage": true});
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: self.label.clone(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
+        let resp = send_with_transport_retry(
+            self.client
+                .post(&self.api_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .json(&body),
+            &self.label,
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+        )
+        .await?;
 
         let status = resp.status();
         let retry_after = retry_after_header(resp.headers());
@@ -1578,12 +1655,80 @@ mod tests {
     #[test]
     fn timeout_env_override_parses_strictly() {
         // Same contract as the max_tokens override: clean positive integers
-        // only, 120s fallback.
-        assert_eq!(parse_timeout_secs(Some("300")), 300);
+        // only, 300s fallback (a measured thinking round ran 145s).
+        assert_eq!(parse_timeout_secs(Some("600")), 600);
         assert_eq!(parse_timeout_secs(Some(" 90 ")), 90);
-        assert_eq!(parse_timeout_secs(Some("0")), 120);
-        assert_eq!(parse_timeout_secs(Some("x")), 120);
-        assert_eq!(parse_timeout_secs(None), 120);
+        assert_eq!(parse_timeout_secs(Some("0")), 300);
+        assert_eq!(parse_timeout_secs(Some("x")), 300);
+        assert_eq!(parse_timeout_secs(None), 300);
+    }
+
+    #[tokio::test]
+    async fn transport_retry_exhausts_connection_failures_into_retry_exhausted() {
+        // Connection-refused is the benchmark's observed transport flake
+        // class: the send path must retry through the backoff budget and
+        // then report the total attempt count, not a bare provider error.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // nothing listens now — connects are refused
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_transport_retry(request, "test", None, &backoffs)
+            .await
+            .unwrap_err();
+
+        match err {
+            AiError::RetryExhausted { attempts, message } => {
+                assert_eq!(attempts, backoffs.len() as u32 + 1);
+                assert!(
+                    message.contains("error sending request"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RetryExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transport_retry_skips_timeouts() {
+        // A timed-out request would deterministically re-timeout on retry —
+        // the remedy is the documented OXO_FLOW_AI_TIMEOUT_SECS knob — so a
+        // timeout must surface as-is instead of burning the retry budget.
+        // (reqwest classifies timeouts under is_request(), the same kind as
+        // the transient "error sending request" — the exclusion guard is
+        // what keeps them apart.)
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Accept and hold the connection open without ever responding.
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_transport_retry(request, "test", None, &backoffs)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, AiError::Provider { .. }),
+            "timeouts must not be retried, got {err:?}"
+        );
     }
 
     #[test]
