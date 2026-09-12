@@ -596,7 +596,7 @@ enabled = false
 max_retries = 1
 auto_fix = "never"
 "#;
-        let table: toml::Table = toml::from_str(&toml_str).unwrap();
+        let table: toml::Table = toml::from_str(toml_str).unwrap();
         let config = AiConfig::from_rule_table(&table).unwrap();
         assert!(!config.enabled);
         assert_eq!(config.max_retries, 1);
