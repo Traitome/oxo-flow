@@ -76,28 +76,28 @@ impl Orchestrator {
         loop {
             rounds += 1;
             if rounds > self.max_rounds {
-                // Archive what the round budget bought before giving up —
-                // the provider calls already happened and were paid for;
-                // dropping the session here made the spend invisible. The
-                // transcript must land in the session too: the CLI's
-                // degraded-delivery path extracts the generated TOML from
-                // it, and an empty shell made that recovery impossible.
-                record_transcript(&mut session, &messages, tool_call_records, modifications);
-                let failed = session.fail(&format!(
-                    "exceeded max rounds ({}) without valid output",
-                    self.max_rounds
-                ));
-                log_session_usage(&failed);
-                let _ = crate::session::save_session(&failed);
+                archive_failed_generation(
+                    session,
+                    &messages,
+                    tool_call_records,
+                    modifications,
+                    format!(
+                        "exceeded max rounds ({}) without valid output",
+                        self.max_rounds
+                    ),
+                );
                 return Err(AiError::MaxRoundsExceeded {
                     max: self.max_rounds,
                 });
             }
             if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
-                record_transcript(&mut session, &messages, tool_call_records, modifications);
-                let failed = session.fail("cancelled by caller");
-                log_session_usage(&failed);
-                let _ = crate::session::save_session(&failed);
+                archive_failed_generation(
+                    session,
+                    &messages,
+                    tool_call_records,
+                    modifications,
+                    "cancelled by caller".into(),
+                );
                 return Err(AiError::ToolError {
                     tool: "cancelled".into(),
                     message: "cancelled by caller".to_string(),
@@ -106,10 +106,28 @@ impl Orchestrator {
 
             // 2. GATHER/ACT — call AI with current messages + tools
             let tool_defs = ctx.tool_registry.to_defs();
-            let response = self
+            let response = match self
                 .provider
                 .chat_with_tools_overflow_safe(&messages, &tool_defs)
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    // A provider failure aborts the whole generation, but
+                    // the rounds before it were real paid work — archive
+                    // them like the round-cap exit; a bare `?` here dropped
+                    // the transcript and reported 0-token runs for
+                    // generations that had completed many tool rounds.
+                    archive_failed_generation(
+                        session,
+                        &messages,
+                        tool_call_records,
+                        modifications,
+                        format!("provider error: {error}"),
+                    );
+                    return Err(error);
+                }
+            };
 
             session.add_usage(&response.usage);
 
@@ -379,11 +397,32 @@ fn log_session_usage(session: &crate::session::AiSession) {
     }
 }
 
+/// Archive a doomed generation before surfacing `message` — the provider
+/// calls already happened and were paid for, so the transcript and token
+/// spend must land in the saved session (a bare error return made the
+/// spend invisible), and the CLI's degraded-delivery path extracts the
+/// generated TOML from that transcript, which an empty shell made
+/// impossible. One helper for every abort inside the round loop: round
+/// cap, cancellation, provider error.
+fn archive_failed_generation(
+    session: AiSession,
+    messages: &[Message],
+    tool_call_records: Vec<ToolCallRecord>,
+    modifications: Vec<Modification>,
+    message: String,
+) {
+    let mut session = session;
+    record_transcript(&mut session, messages, tool_call_records, modifications);
+    let failed = session.fail(&message);
+    log_session_usage(&failed);
+    let _ = crate::session::save_session(&failed);
+}
+
 /// Snapshot the loop transcript into the session (sanitized previews).
 ///
-/// One helper for all three exit paths — loop exhaustion, cancellation,
-/// and normal exit — so a failed run's paid-for transcript survives into
-/// the archived session exactly as a successful one's does.
+/// Called by every exit path — loop exhaustion, cancellation, provider
+/// error, and normal exit — so a failed run's paid-for transcript
+/// survives into the archived session exactly as a successful one's does.
 fn record_transcript(
     session: &mut AiSession,
     messages: &[Message],
@@ -858,6 +897,37 @@ mod tests {
         assert!(
             matches!(result, Err(AiError::MaxRoundsExceeded { max: 3 })),
             "round-cap exhaustion must surface MaxRoundsExceeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_error_archives_and_surfaces_without_retry() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // Arrange: round 1 produces prose the picky agent rejects; round 2
+        // dies with a provider error — the shape every mid-generation
+        // timeout on a thinking backend produced. (Contract pin for the
+        // provider-error arm: the error surfaces as-is and the loop does
+        // not silently retry it; the paid transcript is archived by the
+        // same helper the round-cap path uses.)
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("BAD OUTPUT v1"),
+            ScriptedTurn::error("provider:request timeout"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+
+        // Act
+        let result = orch.execute(&PickyAgent, &test_context()).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(AiError::Provider { .. })),
+            "the provider error must surface as-is, not as MaxRoundsExceeded"
+        );
+        assert_eq!(
+            backend.observed_calls().await.len(),
+            2,
+            "a provider error must not be silently retried"
         );
     }
 
