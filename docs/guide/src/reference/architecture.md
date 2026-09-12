@@ -591,7 +591,7 @@ The surfaces differ only in adapter concerns:
 | Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
 | Correction budget | `--ai-max-retries` (default 10) | 10 rounds | 10 rounds |
 | Session destination | `~/.oxo-flow/ai_sessions/` archive | failure sessions archived by the shared orchestrator; every run's token usage in the operation log | chat messages in DB; token usage in the operation log |
-| Failure behavior | degrade: deliver the transcript's TOML with a warning | `AI_NOT_CONFIGURED` when no provider is usable; template-keyword fallback when providers fail | `AI_NOT_CONFIGURED` when no provider is usable; degraded delivery over SSE |
+| Failure behavior | degrade: deliver the transcript's TOML with a warning — extraction accepts only a fence segment (latest-first) or raw prefix that parses as TOML and passes the structural floor; a parseable-but-incomplete fence fragment is a best-effort fallback | `AI_NOT_CONFIGURED` when no provider is usable; template-keyword fallback when providers fail | `AI_NOT_CONFIGURED` when no provider is usable; degraded delivery over SSE |
 
 Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):

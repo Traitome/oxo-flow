@@ -140,7 +140,21 @@ loop. The steps:
 - If the budget runs out after a pipeline was drafted, the command
   **degrades instead of discarding**: the generated TOML is extracted
   from the transcript and written with a prominent review warning —
-  a paid-for artifact is never silently lost.
+  a paid-for artifact is never silently lost. Degraded delivery never
+  writes structurally broken TOML. Extraction scans the transcript's
+  toml-fenced drafts latest-first (correction rounds accumulate, and the
+  last complete draft is the model's final word); a fenced candidate is
+  accepted only when it parses as TOML and passes the structural floor
+  (a `[workflow]` table plus every rule carrying a `shell`). A draft the
+  model corrected by opening a fresh fence — without closing the stale
+  one — cannot shadow the correction: the stray fence line closes the
+  dangling draft and reopens. When no complete draft exists, a
+  parseable-but-incomplete fenced fragment is kept as a best-effort
+  fallback (still delivered under the review warning). With no closed
+  fence at all (budget expired mid-block), the raw fallback from the
+  first `[workflow]` line likewise only accepts a prefix that parses and
+  passes the floor — an unterminated draft fails extraction, the
+  artifact is not written, and the error explains why.
 - Provider failures (auth, quota, network) fail fast with the error.
 
 ### Scientist Team profile (opt-in)
