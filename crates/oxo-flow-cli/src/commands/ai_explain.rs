@@ -226,9 +226,10 @@ fn match_tools(shell: &str) -> Vec<String> {
 
 /// Match embedded bioSkills records for one rule.
 ///
-/// `search_skills` matches the whole query as a substring, so each token
-/// (rule name, tool names) is queried separately; results are deduplicated
-/// and capped to keep the prompt bounded.
+/// Each rule name and tool name is queried separately so results carry
+/// per-tool attribution; results are deduplicated and capped to keep the
+/// prompt bounded. (`search_skills` also tokenizes multi-word queries
+/// internally, so a multi-token rule name still matches.)
 const MAX_SKILLS_PER_RULE: usize = 3;
 
 fn match_skills(rule_name: &str, tools: &[String]) -> Vec<SkillRef> {

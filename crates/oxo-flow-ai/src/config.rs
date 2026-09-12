@@ -66,16 +66,20 @@ pub struct AiConfig {
 /// The shipped round-budget default. Single source for every consumer that
 /// sizes an agent loop without explicit user configuration — the CLI config
 /// chain, the web surfaces' chat budget, and config writes (a reconfigure
-/// that persisted the old starved default would quietly reintroduce it).
+/// that persisted a starved default would quietly reintroduce it).
 pub fn default_max_retries() -> u32 {
     // Rounds are shared between knowledge-tool lookups and validation-feedback
     // corrections: tool-heavy intents routinely spend 2-3 rounds querying the
     // embedded databases before writing any TOML, and a correction pass needs
     // 1-2 more. A budget of 3 starved those intents into a failed run whose
     // only remedy was paying for a full re-generation (the web surfaces
-    // already run 6 for exactly this reason); 6 covers both phases, and the
-    // loop still stops as soon as a draft validates.
-    6
+    // already run 6 for exactly this reason). The model-axis benchmark
+    // (eval/frontier/results/model-axis-csu3) showed exploration-heavy models
+    // like GLM spend 7-10 rounds all-tool-call before drafting — 6 exhausted
+    // on every run while 10 went 5/5 on the same archetypes. The loop stops
+    // as soon as a draft validates, so the extra headroom is only paid when
+    // a run would otherwise fail.
+    10
 }
 
 impl Default for AiConfig {
@@ -120,6 +124,12 @@ impl AiConfig {
         if other.api_url.is_some() {
             self.api_url = other.api_url.clone();
         }
+        // Same sentinel idiom as provider: a default-valued max_retries is
+        // treated as "unset" so an absent key in a higher tier can't shrink a
+        // lower tier's explicit budget. The cost is that an explicit
+        // `max_retries = <default>` in a higher tier cannot override a lower
+        // tier's non-default value — acceptable, since the lower tier's value
+        // is at least deliberate.
         if other.max_retries != default_max_retries() {
             self.max_retries = other.max_retries;
         }
@@ -555,11 +565,27 @@ name = "test"
             ..AiConfig::default()
         };
         let cli = AiConfig {
-            max_retries: 10,
+            max_retries: 12,
             ..Default::default()
         };
         let resolved = AiConfig::resolve_chain(Some(&global), None, None, None, Some(&cli));
-        assert_eq!(resolved.max_retries, 10);
+        assert_eq!(resolved.max_retries, 12);
+    }
+
+    #[test]
+    fn resolve_chain_default_valued_tier_is_treated_as_unset() {
+        // merge() uses default_max_retries() as the "unset" sentinel (same
+        // idiom as provider), so a higher tier still carrying the shipped
+        // default cannot override a lower tier's explicit budget. Pin that
+        // cost at the new default: workflow's explicit 4 survives a CLI tier
+        // left at 10.
+        let workflow = AiConfig {
+            max_retries: 4,
+            ..AiConfig::default()
+        };
+        let cli = AiConfig::default();
+        let resolved = AiConfig::resolve_chain(None, None, Some(&workflow), None, Some(&cli));
+        assert_eq!(resolved.max_retries, 4);
     }
 
     #[test]
@@ -575,5 +601,16 @@ auto_fix = "never"
         assert!(!config.enabled);
         assert_eq!(config.max_retries, 1);
         assert_eq!(config.auto_fix, AutoFixMode::Never);
+    }
+
+    #[test]
+    fn round_budget_default_covers_exploration_heavy_models() {
+        // Model-axis benchmark (eval/frontier/results/model-axis-csu3): GLM's
+        // explore-then-write style needs 7-10 rounds; at the old default of 6
+        // every one of its 29 benchmark runs died of round exhaustion despite
+        // sound tool choices, while 10 rounds went 5/5 on the same archetypes.
+        // Arrange + Act: read the shipped default.
+        // Assert: it is the calibrated budget.
+        assert_eq!(default_max_retries(), 10);
     }
 }

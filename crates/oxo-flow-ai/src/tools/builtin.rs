@@ -24,7 +24,7 @@ impl Tool for ReadFileTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_file".into(),
-            description: "Read the contents of a local file. Use this to get information from user-provided reference files or existing workflow configurations.".into(),
+            description: "Read the contents of a local file. Use this to get information from user-provided reference files or existing workflow configurations. Embedded skills and tool docs are not on disk — get them with lookup_skill/lookup_tool instead of reading files.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -56,7 +56,9 @@ impl Tool for ReadFileTool {
 
         let content = std::fs::read_to_string(path).map_err(|e| AiError::ToolError {
             tool: "read_file".into(),
-            message: format!("cannot read '{path}': {e}"),
+            message: format!(
+                "cannot read '{path}': {e} — embedded skills and tool docs are not files on disk; get them with lookup_skill and lookup_tool instead of read_file"
+            ),
         })?;
 
         Ok(content)
@@ -149,7 +151,7 @@ async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
     let url = reqwest::Url::parse(raw).map_err(|e| format!("unparseable URL: {e}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
-            "scheme {:?} not allowed (http/https only)",
+            "scheme {:?} not allowed (http/https only) — embedded knowledge lives behind lookup_skill, not fetch_url",
             url.scheme()
         ));
     }
@@ -196,6 +198,20 @@ async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
         url,
         pin: Some((host, addrs[0])),
     })
+}
+
+/// Classify a final response status. Non-success statuses become a steering
+/// error: the model would otherwise stream 404 or bot-block HTML back to
+/// itself as "documentation" and burn rounds chasing it, while the knowledge
+/// it was hunting (tool/skill docs) is embedded behind lookup_tool/lookup_skill.
+/// `None` means the body is real content and should stream.
+fn status_failure(status: reqwest::StatusCode) -> Option<String> {
+    if status.is_success() {
+        return None;
+    }
+    Some(format!(
+        "HTTP {status} — the page returned no content; for embedded knowledge (tool docs, skills) use lookup_tool or lookup_skill instead of fetch_url"
+    ))
 }
 
 /// GET with manual redirects (max 5 hops), re-running the SSRF screen on
@@ -306,7 +322,7 @@ impl Tool for FetchUrlTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "fetch_url".into(),
-            description: "Fetch content from a URL. Use this to retrieve protocol documentation, tool references, or other web resources. Returns the text content of the page.".into(),
+            description: "Fetch content from a public http or https URL. Use this to retrieve protocol documentation, tool references, or other web resources; returns the text content of the page. Only http/https URLs are allowed — never invent other schemes. For embedded knowledge (skills, tool docs) use lookup_skill instead of this tool.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -343,6 +359,12 @@ impl Tool for FetchUrlTool {
                     tool: "fetch_url".into(),
                     message: format!("blocked: {reason}"),
                 })?;
+        if let Some(reason) = status_failure(response.status()) {
+            return Err(AiError::ToolError {
+                tool: "fetch_url".into(),
+                message: format!("blocked: {reason}"),
+            });
+        }
 
         let mut body = CappedBody::new();
         let mut stream = response.bytes_stream();
@@ -503,9 +525,34 @@ mod tests {
     }
 
     #[test]
+    fn read_file_tool_description_points_to_lookup_skill() {
+        // Live germline-gatk runs invented /root/.bioos/.../SKILL.md paths
+        // because skills are described as SKILL.md-standard files; the
+        // description must say up front that embedded skills are not on disk.
+        let desc = ReadFileTool::new().def().description;
+        assert!(
+            desc.contains("lookup_skill"),
+            "description must point at lookup_skill for embedded skills: {desc}"
+        );
+    }
+
+    #[test]
     fn fetch_url_tool_has_correct_def() {
         let tool = FetchUrlTool::new();
         assert_eq!(tool.name(), "fetch_url");
+        // Models invent schemes when the constraint is unstated: a run
+        // burned two rounds calling this tool with `skill://...` because
+        // the description never said http/https-only and never said that
+        // embedded knowledge comes from lookup_skill instead.
+        let desc = tool.def().description;
+        assert!(
+            desc.contains("http"),
+            "description must name the scheme constraint: {desc}"
+        );
+        assert!(
+            desc.to_lowercase().contains("lookup_skill"),
+            "description must point at lookup_skill for embedded knowledge: {desc}"
+        );
     }
 
     #[test]
@@ -529,10 +576,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_file_tool_errors_on_missing_file() {
+    async fn read_file_error_on_missing_file_steers_to_embedded_knowledge() {
+        // Live germline-gatk runs retried the same hallucinated path 4×
+        // because the bare os error offered no alternative; the error must
+        // point embedded-knowledge seekers at lookup_skill/lookup_tool.
         let tool = ReadFileTool::new();
-        let result = tool.execute(r#"{"path": "/nonexistent/file.txt"}"#).await;
-        assert!(result.is_err());
+        let err = tool
+            .execute(
+                r#"{"path": "/root/.bioos/skills/variant-calling/bio-gatk-variant-calling/SKILL.md"}"#,
+            )
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot read"),
+            "path context must be preserved: {msg}"
+        );
+        assert!(
+            msg.contains("lookup_skill") || msg.contains("lookup_tool"),
+            "cannot-read error must steer to embedded knowledge tools: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -1027,5 +1090,60 @@ mod fetch_url_ssrf_tests {
             .err()
             .unwrap();
         assert!(err.contains("scheme"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod fetch_url_status_tests {
+    use super::*;
+
+    #[test]
+    fn client_and_server_errors_are_steering_errors_not_content() {
+        // Live agents burned ~7 fetch_url rounds feeding 404 and
+        // Cloudflare-block HTML back to themselves as if it were real
+        // documentation; every non-success status must surface as a tool
+        // error that steers back to embedded knowledge instead.
+        for code in [400, 401, 403, 404, 410, 429, 500, 502, 503] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            let reason = status_failure(status)
+                .unwrap_or_else(|| panic!("HTTP {code} must be a tool error"));
+            assert!(
+                reason.contains(&code.to_string()),
+                "must name the status: {reason}"
+            );
+            assert!(
+                reason.contains("no content"),
+                "must say nothing was returned: {reason}"
+            );
+            assert!(
+                reason.contains("lookup_skill"),
+                "must steer to embedded knowledge: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn success_statuses_stream_their_body() {
+        for code in [200, 201, 204, 206] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            assert!(
+                status_failure(status).is_none(),
+                "HTTP {code} bodies are content and must stream"
+            );
+        }
+    }
+
+    #[test]
+    fn knowledge_chasing_statuses_name_both_lookup_tools() {
+        // The live dead-end pattern: hunting tool/skill docs that only exist
+        // in the embedded libraries — name both lookup tools in the steer.
+        for code in [403, 404, 429] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            let reason = status_failure(status).unwrap();
+            assert!(
+                reason.contains("lookup_tool"),
+                "must mention lookup_tool as well: {reason}"
+            );
+        }
     }
 }

@@ -539,6 +539,13 @@ GET  /api/knowledge/tools       # Tool catalog the AI can call
 GET  /api/knowledge/skills      # Skill catalog the AI can follow
 ```
 
+Both knowledge endpoints accept `?q=<query>&limit=<1-50>` (default 20).
+`/api/knowledge/tools` treats an empty `q` as a browse: it returns the
+first `limit` Bioconda entries. `/api/knowledge/skills` tokenizes the
+query and ranks matches (rare terms first); an empty or unmatched `q`
+returns an empty `skills` array — `total` is always the full catalog
+size, not the hit count.
+
 The translate endpoints take `{ "intent": "<natural-language description>",
 "context": { "data_analysis_id": "<uuid>" } }` — `intent` is REQUIRED (sending
 only a `prompt` field fails deserialization); `context` is optional.

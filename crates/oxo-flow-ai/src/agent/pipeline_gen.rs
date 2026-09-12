@@ -188,63 +188,171 @@ Your TOML MUST include:
 /// Extract `.oxoflow` TOML from a model response — the single canonical
 /// implementation (previously four divergent copies across CLI and web).
 ///
-/// Order: ```toml fence → case-variant ```TOML fence → generic ``` fence
-/// containing `[workflow]` → raw text from the first `[workflow]`. The two
-/// fallbacks require a `[[rules]]`/`[rules]` table so prose is never
-/// mistaken for a pipeline.
+/// Order: fenced segments, scanned latest first (orchestrator transcripts
+/// accumulate correction rounds, and the last complete draft is the
+/// model's final word) → raw text from the first `[workflow]`. A fenced
+/// candidate is accepted whole only when it parses as TOML and passes the
+/// structural floor, so unparseable round-1 garbage can never leak
+/// through a cross-round fence pairing; a parseable-but-incomplete
+/// segment is kept only as a best-effort fallback so an injected
+/// validator can still steer the correction loop. The raw fallback
+/// applies the same floor, so degraded delivery can never write
+/// structurally broken TOML.
 pub fn extract_toml(response: &str) -> Option<String> {
-    for fence in ["```toml", "```TOML"] {
-        if let Some(content) = fenced_block(response, fence)
-            && !content.is_empty()
-        {
-            return Some(content);
+    let mut fallback = None;
+    for segment in fenced_segments(response).into_iter().rev() {
+        let Ok(value) = toml::from_str::<toml::Value>(&segment) else {
+            continue;
+        };
+        if floor_errors(&value).is_empty() {
+            return Some(segment);
+        }
+        // Parseable but incomplete: keep the latest such fragment as a
+        // best-effort fallback in case no complete draft exists.
+        if fallback.is_none() && value.get("workflow").is_some() {
+            fallback = Some(segment);
         }
     }
-    if let Some(content) = fenced_block(response, "```")
-        && content.contains("[workflow]")
-    {
-        return Some(content);
+    fallback.or_else(|| raw_workflow(response))
+}
+
+/// All ```-delimited segments in document order, with the info tag on the
+/// opening fence (```toml, ```TOML, …) dropped. A tagged fence line while
+/// a segment is open closes it and starts a new one: models correct an
+/// unclosed draft by opening a fresh fence, and that stray opener must
+/// not be mistaken for the missing closer (which would let the stale
+/// draft shadow the corrected one). An unclosed fence yields no segment —
+/// its content has no verified boundary, so it is left to the raw
+/// fallback.
+fn fenced_segments(text: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut open: Option<String> = None;
+    for line in text.lines() {
+        match line.trim_start().strip_prefix("```") {
+            None => {
+                if let Some(buf) = open.as_mut() {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+            }
+            // Bare fence: closes the open segment, or opens one from scratch.
+            Some(tag) if tag.trim().is_empty() => match open.take() {
+                Some(buf) => segments.push(buf.trim().to_string()),
+                None => open = Some(String::new()),
+            },
+            // Tagged fence: reopens (implicitly closing any open segment).
+            Some(_) => {
+                if let Some(buf) = open.take() {
+                    segments.push(buf.trim().to_string());
+                }
+                open = Some(String::new());
+            }
+        }
     }
-    raw_workflow(response)
+    segments
 }
 
-fn fenced_block(text: &str, fence: &str) -> Option<String> {
-    let start = text.find(fence)? + fence.len();
-    let after = &text[start..];
-    let end = after.find("```")?;
-    Some(after[..end].trim().to_string())
-}
-
-/// Raw fallback: everything from the first `[workflow]` line, provided at
-/// least one rules table follows — guards against prose-only output.
+/// Raw fallback: everything from a `[workflow]` line, provided the
+/// candidate parses as TOML and still passes the structural floor — guards
+/// against prose and against truncated output (e.g. an unclosed fence cut
+/// off mid-shell-string) being delivered as a broken artifact. Trailing
+/// prose after the workflow body is tolerated: the candidate is cut at the
+/// first line that breaks the TOML parse. Anchors are scanned latest-first
+/// — the same stale-draft-cannot-shadow invariant the fenced path got —
+/// so a broken early unfenced draft cannot hide a later complete one.
 fn raw_workflow(response: &str) -> Option<String> {
-    let idx = response.find("[workflow]")?;
-    let candidate = response[idx..].trim();
-    let looks_like_pipeline = candidate.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with("[[rules]]") || t.starts_with("[rules]")
-    });
-    if looks_like_pipeline {
-        Some(candidate.to_string())
-    } else {
-        None
-    }
+    let anchors: Vec<usize> = response
+        .match_indices("[workflow]")
+        .map(|(i, _)| i)
+        .collect();
+    anchors
+        .iter()
+        .rev()
+        .find_map(|&idx| raw_workflow_from(response, idx))
 }
 
-/// Structural floor used when the caller injects no engine validator:
-/// the TOML must declare a workflow, at least one rule, and shells.
-pub fn basic_structure_errors(toml: &str) -> Vec<String> {
+/// Longest parseable, floor-passing prefix of the tail starting at `idx`.
+fn raw_workflow_from(response: &str, idx: usize) -> Option<String> {
+    let candidate = response[idx..].trim();
+    // Parse the candidate; on failure retry with successively shorter
+    // prefixes. The first prefix that parses and passes the floor is the
+    // workflow body — prose trailing a complete document can no longer
+    // break it, and a truncation mid-string never yields a parseable
+    // prefix that still satisfies the floor (a truncated rule is dropped
+    // with its table header, so `[[rules]]` alone — parseable TOML but
+    // floor-invalid — cannot masquerade as a pipeline).
+    let lines: Vec<&str> = candidate.lines().collect();
+    for end in (1..=lines.len()).rev() {
+        let prefix = lines[..end].join("\n");
+        let Ok(value) = toml::from_str::<toml::Value>(&prefix) else {
+            continue;
+        };
+        if floor_errors(&value).is_empty() {
+            return Some(prefix);
+        }
+    }
+    None
+}
+
+/// Structural floor over a parsed workflow: a `[workflow]` table, at
+/// least one rule, and every rule carrying an execution body — `shell`,
+/// `script`, or `transform` (the engine accepts all three; demanding a
+/// `shell` would disqualify engine-valid script/transform rules and
+/// truncate degraded salvage at the first such rule). Checked per rule
+/// (an empty string counts as absent), so a dangling body-less rule
+/// cannot survive salvage on the strength of an earlier rule's body,
+/// which substring-level probes cannot distinguish.
+fn floor_errors(value: &toml::Value) -> Vec<String> {
     let mut errors = Vec::new();
-    if !toml.contains("[workflow]") {
+    if value.get("workflow").is_none() {
         errors.push("Generated TOML missing [workflow] section".into());
     }
-    if !toml.contains("[[rules]]") {
+    let Some(rules) = value.get("rules").and_then(|rules| rules.as_array()) else {
+        errors.push("Generated TOML has no [[rules]] sections".into());
+        return errors;
+    };
+    if rules.is_empty() {
         errors.push("Generated TOML has no [[rules]] sections".into());
     }
-    if !toml.contains("shell") {
-        errors.push("Generated TOML rules missing 'shell' field".into());
+    for (idx, rule) in rules.iter().enumerate() {
+        let has_body = ["shell", "script"].iter().any(|key| {
+            rule.get(*key)
+                .is_some_and(|body| body.as_str().is_some_and(|cmd| !cmd.trim().is_empty()))
+        }) || rule.get("transform").is_some();
+        if !has_body {
+            errors.push(format!(
+                "Rule {} has no 'shell', 'script', or 'transform' body",
+                idx + 1
+            ));
+        }
     }
     errors
+}
+
+/// Structural floor for workflow text: with no engine validator injected
+/// this is the sole acceptance check for generated TOML, and it gates
+/// `raw_workflow`'s salvage even when a validator is in play. Parseable
+/// input is checked per rule via [`floor_errors`]; unparseable input
+/// falls back to substring probes so the caller still learns which
+/// skeleton pieces are absent.
+pub fn basic_structure_errors(toml: &str) -> Vec<String> {
+    match toml::from_str::<toml::Value>(toml) {
+        Ok(value) => floor_errors(&value),
+        Err(_) => {
+            let mut errors = Vec::new();
+            if !toml.contains("[workflow]") {
+                errors.push("Generated TOML missing [workflow] section".into());
+            }
+            if !toml.contains("[[rules]]") {
+                errors.push("Generated TOML has no [[rules]] sections".into());
+            }
+            if !toml.contains("shell") && !toml.contains("script") && !toml.contains("transform") {
+                errors
+                    .push("Generated TOML rules missing 'shell'/'script'/'transform' body".into());
+            }
+            errors
+        }
+    }
 }
 
 // ── Agent ──────────────────────────────────────────────────────────────────
@@ -400,6 +508,146 @@ mod tests {
             extract_toml("I cannot generate a pipeline right now."),
             None
         );
+    }
+
+    #[test]
+    fn extract_toml_rejects_unparseable_raw_fallback() {
+        // Live Qwen failure: the round cap hit while the ```toml fence was
+        // still open, so no closing ``` exists and both fenced paths return
+        // None. The raw fallback used to deliver this structurally broken
+        // TOML (unterminated shell string) to the degraded arm, which wrote
+        // it to disk. A raw candidate must parse as TOML or be rejected —
+        // the correction loop then gets the fence-oriented retry directive
+        // instead of a broken artifact.
+        let truncated = concat!(
+            "```toml\n",
+            "[workflow]\n",
+            "name = \"hisat2-align\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"align\"\n",
+            "shell = \"\"\"hisat2 -x {config.index} -1 {input[0]} -2 {input[1]} \\\n",
+        );
+        assert_eq!(extract_toml(truncated), None);
+    }
+
+    #[test]
+    fn extract_toml_raw_rejects_truncated_before_rule_fields() {
+        // Truncation before the rule has any fields: the bare `[[rules]]`
+        // prefix parses as TOML but fails the structural floor (no shell),
+        // so nothing is delivered.
+        let truncated = "```toml\n[workflow]\nname = \"x\"\n\n[[rules]]\n";
+        assert_eq!(extract_toml(truncated), None);
+    }
+
+    #[test]
+    fn floor_accepts_script_and_transform_rule_bodies() {
+        // The engine accepts `shell`, `script`, or `transform` as a rule's
+        // execution body — the floor must not disqualify engine-valid
+        // script/transform rules and truncate degraded salvage at the
+        // first such rule.
+        let draft = concat!(
+            "[workflow]\n",
+            "name = \"mixed\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"shelled\"\n",
+            "shell = \"true\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"scripted\"\n",
+            "script = \"run.sh\"\n",
+        );
+        let parsed: toml::Value = toml::from_str(draft).unwrap();
+        assert!(
+            floor_errors(&parsed).is_empty(),
+            "engine-valid script rules pass the floor: {:?}",
+            floor_errors(&parsed)
+        );
+        assert!(extract_toml(&format!("```toml\n{draft}\n```")).is_some());
+
+        let bodyless = "[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"empty\"\n";
+        let parsed: toml::Value = toml::from_str(bodyless).unwrap();
+        let errors = floor_errors(&parsed);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("no 'shell', 'script', or 'transform' body")),
+            "a body-less rule still fails: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn raw_salvage_scans_workflow_anchors_latest_first() {
+        // A broken early unfenced draft must not shadow a later complete
+        // unfenced draft — the same latest-first invariant the fenced path
+        // got. All prefixes anchored at the first [workflow] fail (the
+        // draft is truncated mid-value), so the second anchor wins.
+        let response = concat!(
+            "[workflow]\n",
+            "name = \n",
+            "prose between drafts\n",
+            "[workflow]\n",
+            "name = \"good\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"r\"\n",
+            "shell = \"true\"\n",
+        );
+        let salvaged = extract_toml(response)
+            .unwrap_or_else(|| panic!("the later complete draft must be found"));
+        assert!(
+            salvaged.contains("name = \"good\""),
+            "the latest anchor must win, got: {salvaged}"
+        );
+    }
+
+    #[test]
+    fn extract_toml_prefers_latest_draft_when_fence_reopens() {
+        // Round-1 draft never closes its fence; the corrected round-2 draft
+        // opens its own. The stray tagged opener must close the dangling
+        // fence (not pair as its closer), so the model's final word wins.
+        let response = concat!(
+            "Here is a draft:\n```toml\n[workflow]\nname = \"draft\"\n[[rules]]\nname = \"r\"\nshell = \"echo old\"\n",
+            "Actually, corrected:\n```toml\n[workflow]\nname = \"final\"\n[[rules]]\nname = \"r\"\nshell = \"echo new\"\n```",
+        );
+        let extracted = extract_toml(response).expect("corrected draft extracted");
+        assert!(extracted.contains("final"));
+        assert!(!extracted.contains("draft"));
+    }
+
+    #[test]
+    fn extract_toml_raw_drops_dangling_shell_less_rule() {
+        // A trailing rule missing its shell must not ride on an earlier
+        // rule's shell: the floor is per-rule, so salvage keeps only the
+        // complete rules.
+        let response = "[workflow]\nname = \"x\"\n[[rules]]\nname = \"a\"\nshell = \"echo a\"\n[[rules]]\nname = \"b\"\n";
+        let extracted = extract_toml(response).expect("complete rule salvaged");
+        assert!(extracted.contains("name = \"a\""));
+        assert!(!extracted.contains("name = \"b\""));
+    }
+
+    #[test]
+    fn extract_toml_raw_salvages_prefix_before_trailing_prose() {
+        // Trailing prose must not sink the artifact: the candidate is cut at
+        // the first line that breaks the TOML parse.
+        let ok = extract_toml(
+            "[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"r\"\nshell = \"echo\"\n\nNote: adjust the index path before running.",
+        );
+        assert!(ok.is_some_and(|c| c.starts_with("[workflow]") && c.contains("shell")));
+    }
+
+    #[test]
+    fn floor_requires_shell_in_every_rule() {
+        let value: toml::Value =
+            toml::from_str("[workflow]\n[[rules]]\nname = \"a\"\nshell = \"echo\"").unwrap();
+        assert!(floor_errors(&value).is_empty());
+
+        let dangling: toml::Value = toml::from_str(
+            "[workflow]\n[[rules]]\nname = \"a\"\nshell = \"echo\"\n[[rules]]\nname = \"b\"",
+        )
+        .unwrap();
+        assert!(floor_errors(&dangling).iter().any(|e| e.contains("2")));
     }
 
     #[test]

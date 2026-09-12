@@ -529,7 +529,9 @@ mod tests {
 
     #[test]
     fn test_extract_toml_raw_workflow() {
-        let response = "[workflow]\nname = \"test\"\n[[rules]]\nname = \"step1\"";
+        // Raw fallback requires the structural floor (workflow + rules +
+        // shell), so the fixture carries a shell field.
+        let response = "[workflow]\nname = \"test\"\n[[rules]]\nname = \"step1\"\nshell = \"echo\"";
         let result = oxo_flow_ai::agent::pipeline_gen::extract_toml(response);
         assert!(result.is_some());
         assert!(result.unwrap().contains("[workflow]"));

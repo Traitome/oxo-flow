@@ -14,7 +14,7 @@ use super::events::{AgentEvent, AgentEventSink};
 use super::{Agent, AgentContext, AgentOutcome};
 use crate::error::AiError;
 use crate::provider::AiProvider;
-use crate::session::{Modification, ToolCallRecord, archive_before_modify};
+use crate::session::{AiSession, Modification, ToolCallRecord, archive_before_modify};
 use crate::types::Message;
 
 // ── Orchestrator ───────────────────────────────────────────────────────────
@@ -72,27 +72,40 @@ impl Orchestrator {
         let mut rounds: u32 = 0;
         #[allow(unused_assignments)]
         let mut final_content: Option<String> = None;
+        // Exploration-budget tracking: consecutive rounds whose assistant
+        // turn was pure tool calls (no prose). GLM model-axis draws burned
+        // the whole round budget on knowledge lookups without ever writing
+        // output, and the final-round notice lands exactly at the cap — too
+        // late to change behavior — so nudge once, mid-run, instead.
+        let mut tool_only_rounds: u32 = 0;
+        let mut exploration_nudged = false;
+        let exploration_nudge_threshold = (self.max_rounds / 2).max(2);
 
         loop {
             rounds += 1;
             if rounds > self.max_rounds {
-                // Archive what the round budget bought before giving up —
-                // the provider calls already happened and were paid for;
-                // dropping the session here made the spend invisible.
-                let failed = session.fail(&format!(
-                    "exceeded max rounds ({}) without valid output",
-                    self.max_rounds
-                ));
-                log_session_usage(&failed);
-                let _ = crate::session::save_session(&failed);
+                archive_failed_generation(
+                    session,
+                    &messages,
+                    tool_call_records,
+                    modifications,
+                    format!(
+                        "exceeded max rounds ({}) without valid output",
+                        self.max_rounds
+                    ),
+                );
                 return Err(AiError::MaxRoundsExceeded {
                     max: self.max_rounds,
                 });
             }
             if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
-                let failed = session.fail("cancelled by caller");
-                log_session_usage(&failed);
-                let _ = crate::session::save_session(&failed);
+                archive_failed_generation(
+                    session,
+                    &messages,
+                    tool_call_records,
+                    modifications,
+                    "cancelled by caller".into(),
+                );
                 return Err(AiError::ToolError {
                     tool: "cancelled".into(),
                     message: "cancelled by caller".to_string(),
@@ -101,10 +114,28 @@ impl Orchestrator {
 
             // 2. GATHER/ACT — call AI with current messages + tools
             let tool_defs = ctx.tool_registry.to_defs();
-            let response = self
+            let response = match self
                 .provider
                 .chat_with_tools_overflow_safe(&messages, &tool_defs)
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    // A provider failure aborts the whole generation, but
+                    // the rounds before it were real paid work — archive
+                    // them like the round-cap exit; a bare `?` here dropped
+                    // the transcript and reported 0-token runs for
+                    // generations that had completed many tool rounds.
+                    archive_failed_generation(
+                        session,
+                        &messages,
+                        tool_call_records,
+                        modifications,
+                        format!("provider error: {error}"),
+                    );
+                    return Err(error);
+                }
+            };
 
             session.add_usage(&response.usage);
 
@@ -190,9 +221,54 @@ impl Orchestrator {
                         }
                     }
                 }
+                // Exploration-budget nudge: a run of pure tool-call rounds
+                // (zero prose) is the shape that exhausts the round budget.
+                // The notice rides the last tool result — a bare user turn
+                // after tool results would flatten into consecutive user
+                // turns on the Anthropic wire (tool results map to the user
+                // role there), the exact shape the extraction-failure fix
+                // found made GLM regenerate blind. One-shot per generation,
+                // and never during the final round: an injection the loop
+                // never surfaces (the head check fails first) is dead text.
+                // A round that streamed prose alongside the tool calls is
+                // not silent exploration — the model is narrating its work,
+                // so it breaks the streak instead of feeding it.
+                if response
+                    .content
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    tool_only_rounds = 0;
+                } else {
+                    tool_only_rounds = tool_only_rounds.saturating_add(1);
+                }
+                if !exploration_nudged
+                    && tool_only_rounds >= exploration_nudge_threshold
+                    && rounds < self.max_rounds
+                    && let Some(last) = messages.last_mut()
+                    && last.role == crate::types::MessageRole::Tool
+                {
+                    last.content.push_str(&format!(
+                        "\n\n[system] Exploration budget warning: {tool_only_rounds} \
+                             consecutive rounds produced tool calls only, with no written \
+                             output. Consolidate what you have found and start producing the \
+                             required output now — remaining rounds are limited."
+                    ));
+                    exploration_nudged = true;
+                    tracing::info!(
+                        rounds,
+                        tool_only_rounds,
+                        "exploration budget nudge injected"
+                    );
+                }
                 // Continue loop — model will process tool results
                 continue;
             }
+
+            // No tool calls this round — the pure-tool-call streak is
+            // broken, whether the model wrote usable prose, unextractable
+            // prose, or nothing at all.
+            tool_only_rounds = 0;
 
             // Model returned text content (no tool calls)
             if let Some(content) = &response.content {
@@ -249,21 +325,67 @@ impl Orchestrator {
                     // so the model regenerated blind and could burn every
                     // round without ever learning what it wrote.
                     let rc = response.reasoning_content.as_deref().unwrap_or("");
-                    messages.push(Message::assistant_with_reasoning(text, rc));
                     let feedback = format!(
                         "Your previous output failed validation:\n{}\n\nPlease fix these issues and provide the corrected output.",
                         validation.errors.join("\n")
                     );
-                    messages.push(Message::user(&feedback));
+                    push_retry_feedback(
+                        &mut messages,
+                        text,
+                        rc,
+                        &feedback,
+                        rounds + 1 == self.max_rounds,
+                    );
                     // Continue loop — model will fix
                     continue;
                 }
             }
 
-            // No content, no tool calls — ask model to try again
-            messages.push(Message::user(
-                "Your response did not contain any content or tool calls. Please provide the expected output.",
-            ));
+            // Nothing usable came out of this round. Two distinct surfaces
+            // land here: prose whose extraction failed (the agent only
+            // accepts, e.g., fenced TOML) and a truly empty response. The
+            // former must see its OWN prose echoed before the retry
+            // directive — a bare user nudge after the initial user message
+            // put consecutive user turns on the wire and the model
+            // regenerated blind (GLM model-axis finding). The latter has
+            // nothing to echo — fabricating assistant text would put words
+            // in the model's mouth (audit finding).
+            let final_round = rounds + 1 == self.max_rounds;
+            // An empty or whitespace-only text block is not prose: echoing
+            // it would put an empty assistant text block on the wire, which
+            // Anthropic-compatible endpoints reject with 400. It takes the
+            // bare-nudge branch below instead.
+            if let Some(content) = &response.content
+                && !content.trim().is_empty()
+            {
+                let rc = response.reasoning_content.as_deref().unwrap_or("");
+                push_retry_feedback(
+                    &mut messages,
+                    content,
+                    rc,
+                    "Your previous response could not be processed: the expected content could not be extracted from it. Please provide the complete output in the format the task requires (for example inside a code fence).",
+                    final_round,
+                );
+            } else {
+                let mut nudge =
+                    "Your response did not contain any content or tool calls. Please provide the expected output.".to_string();
+                if final_round {
+                    nudge.push_str(FINAL_ROUND_NOTICE);
+                }
+                // A nudge directly after an echo round's user directive
+                // would land consecutive user turns on the wire — fold it
+                // into the standing directive instead.
+                if messages
+                    .last()
+                    .is_some_and(|m| m.role == crate::types::MessageRole::User)
+                {
+                    let directive = messages.last_mut().expect("length checked above");
+                    directive.content.push_str("\n\n");
+                    directive.content.push_str(&nudge);
+                } else {
+                    messages.push(Message::user(&nudge));
+                }
+            }
         }
 
         // Build outcome
@@ -275,12 +397,7 @@ impl Orchestrator {
         };
 
         // Record messages in session (sanitized previews)
-        session.messages = messages
-            .iter()
-            .map(crate::session::SessionMessage::from_message)
-            .collect();
-        session.tool_calls = tool_call_records;
-        session.modifications = modifications;
+        record_transcript(&mut session, &messages, tool_call_records, modifications);
 
         if let Some(sink) = &mut sink {
             sink(AgentEvent::Done);
@@ -351,6 +468,46 @@ fn log_session_usage(session: &crate::session::AiSession) {
     }
 }
 
+/// Archive a doomed generation before surfacing `message` — the provider
+/// calls already happened and were paid for, so the transcript and token
+/// spend must land in the saved session (a bare error return made the
+/// spend invisible), and the CLI's degraded-delivery path extracts the
+/// generated TOML from that transcript, which an empty shell made
+/// impossible. One helper for every abort inside the round loop: round
+/// cap, cancellation, provider error.
+fn archive_failed_generation(
+    session: AiSession,
+    messages: &[Message],
+    tool_call_records: Vec<ToolCallRecord>,
+    modifications: Vec<Modification>,
+    message: String,
+) {
+    let mut session = session;
+    record_transcript(&mut session, messages, tool_call_records, modifications);
+    let failed = session.fail(&message);
+    log_session_usage(&failed);
+    let _ = crate::session::save_session(&failed);
+}
+
+/// Snapshot the loop transcript into the session (sanitized previews).
+///
+/// Called by every exit path — loop exhaustion, cancellation, provider
+/// error, and normal exit — so a failed run's paid-for transcript
+/// survives into the archived session exactly as a successful one's does.
+fn record_transcript(
+    session: &mut AiSession,
+    messages: &[Message],
+    tool_calls: Vec<ToolCallRecord>,
+    modifications: Vec<Modification>,
+) {
+    session.messages = messages
+        .iter()
+        .map(crate::session::SessionMessage::from_message)
+        .collect();
+    session.tool_calls = tool_calls;
+    session.modifications = modifications;
+}
+
 /// Preview text capped at 200 chars. Byte-slicing (`&s[..200]`) panics when
 /// the cut lands inside a multi-byte UTF-8 sequence, which is common in
 /// bioinformatics tool output — truncate on a char boundary instead.
@@ -364,6 +521,32 @@ fn truncate_preview(content: &str) -> String {
         end -= 1;
     }
     format!("{}...", &content[..end])
+}
+
+/// Appended to the feedback of the round whose successor is the model's
+/// LAST. A notice pushed after the final round is never seen — the loop
+/// fails at the head before the next provider call — so it must ride the
+/// previous feedback instead.
+const FINAL_ROUND_NOTICE: &str =
+    " This is the final round: produce the complete, final output now.";
+
+/// Echo the model's own output as an assistant turn, then append the retry
+/// feedback as a user turn. Wire-safe on both provider paths (no orphan
+/// tool ids, no consecutive user turns); when the upcoming round is the
+/// last, the feedback carries the final-round notice.
+fn push_retry_feedback(
+    messages: &mut Vec<Message>,
+    model_output: &str,
+    reasoning: &str,
+    feedback: &str,
+    is_final_round: bool,
+) {
+    messages.push(Message::assistant_with_reasoning(model_output, reasoning));
+    let mut feedback = feedback.to_string();
+    if is_final_round {
+        feedback.push_str(FINAL_ROUND_NOTICE);
+    }
+    messages.push(Message::user(&feedback));
 }
 
 #[cfg(test)]
@@ -505,6 +688,30 @@ mod tests {
         }
     }
 
+    /// An agent that only extracts fenced content — bare prose is dropped,
+    /// mirroring how pipeline_gen's extract_toml behaves on fence-less prose.
+    struct FenceAgent;
+    #[async_trait]
+    impl Agent for FenceAgent {
+        fn name(&self) -> &str {
+            "fence-agent"
+        }
+        fn plan(&self, _ctx: &AgentContext) -> Message {
+            Message::system("sys")
+        }
+        fn user_message(&self, _ctx: &AgentContext) -> Message {
+            Message::user("produce")
+        }
+        fn extract_content(&self, response_content: &str) -> Option<String> {
+            response_content
+                .contains("```")
+                .then(|| response_content.trim().to_string())
+        }
+        fn validate(&self, _content: &str, _ctx: &AgentContext) -> ValidationResult {
+            ValidationResult::passed()
+        }
+    }
+
     #[tokio::test]
     async fn validation_failure_replays_the_rejected_output() {
         // The model must see its own rejected output before the error list;
@@ -540,6 +747,342 @@ mod tests {
         assert!(
             rejected < feedback,
             "rejected output must precede the feedback: {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extraction_failure_echoes_the_prose_before_the_retry_directive() {
+        // A response whose text cannot be extracted (e.g. prose without the
+        // requested code fences) must be echoed back as an assistant turn
+        // BEFORE the retry directive — a bare user nudge after the initial
+        // user message put consecutive user turns on the wire and the model
+        // regenerated blind (GLM model-axis finding).
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("Here is my plan: trim the reads, then align."),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let outcome = orch.execute(&FenceAgent, &test_context()).await.unwrap();
+        assert!(outcome.success, "the fenced retry must be accepted");
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 2, "one provider call per round");
+        let second = &calls[1];
+        let prose = second
+            .iter()
+            .position(|m| {
+                matches!(m.role, crate::types::MessageRole::Assistant)
+                    && m.content.contains("Here is my plan")
+            })
+            .expect("the unextractable prose must be echoed as an assistant turn");
+        let directive = second
+            .iter()
+            .rposition(|m| matches!(m.role, crate::types::MessageRole::User))
+            .expect("a user retry directive must follow");
+        assert!(
+            prose < directive,
+            "the echoed prose must precede the directive: {second:?}"
+        );
+        for pair in second.windows(2) {
+            assert!(
+                !(matches!(pair[0].role, crate::types::MessageRole::User)
+                    && matches!(pair[1].role, crate::types::MessageRole::User)),
+                "no consecutive user turns may reach the wire: {second:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_response_gets_a_plain_nudge_without_a_fabricated_assistant_turn() {
+        // A truly empty response (no content, no tool calls) has nothing to
+        // echo — fabricating assistant text was rejected by the audit. Pin
+        // the deliberate choice: the bare user nudge is appended as-is.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::default(),
+            ScriptedTurn::content("ACCEPTED"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let outcome = orch.execute(&TestAgent, &test_context()).await.unwrap();
+        assert!(outcome.success, "the retry must be accepted");
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 2);
+        let second = &calls[1];
+        assert!(
+            !second
+                .iter()
+                .any(|m| matches!(m.role, crate::types::MessageRole::Assistant)),
+            "no assistant turn may be fabricated for an empty response: {second:?}"
+        );
+        assert!(
+            second.last().is_some_and(|m| {
+                matches!(m.role, crate::types::MessageRole::User)
+                    && m.content.contains("did not contain")
+            }),
+            "the retry nudge must be the last message: {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn final_failure_feedback_carries_the_final_round_notice() {
+        // When the upcoming round is the model's LAST, the failure feedback
+        // must tell it to produce the final output now. A notice pushed
+        // after the last round is never seen (the loop fails before the
+        // next provider call), so it must ride the second-to-last feedback.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("BAD OUTPUT v1"),
+            ScriptedTurn::content("BAD OUTPUT v2"),
+            ScriptedTurn::content("ACCEPTED v3"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let outcome = orch.execute(&PickyAgent, &test_context()).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3);
+        // Round 2's feedback must NOT yet announce the final round...
+        assert!(
+            !calls[1].iter().any(|m| m.content.contains("final round")),
+            "the notice must wait for the actual final round: {:?}",
+            calls[1]
+        );
+        // ...round 3's feedback must.
+        assert!(
+            calls[2].iter().any(|m| {
+                matches!(m.role, crate::types::MessageRole::User)
+                    && m.content.contains("failed validation")
+                    && m.content.contains("final round")
+            }),
+            "the final-round notice must ride the failure feedback: {:?}",
+            calls[2]
+        );
+    }
+
+    /// A scripted turn whose assistant output is a single tool call to the
+    /// registered read-only scripted tool.
+    fn tool_turn(id: &str) -> crate::scripted::ScriptedTurn {
+        crate::scripted::ScriptedTurn {
+            content: None,
+            tool_calls: Some(vec![crate::types::ToolCall {
+                id: id.into(),
+                name: "read_only_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        }
+    }
+
+    fn tool_registry_with_read_only_tool() -> AgentContext {
+        let mut ctx = test_context();
+        ctx.tool_registry.register(Box::new(ScriptedTool {
+            name: "read_only_tool",
+            read_only: true,
+        }));
+        ctx
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_fires_at_the_threshold() {
+        // Two consecutive pure-tool rounds in a 3-round budget cross the
+        // threshold (max_rounds/2, min 2); the nudge rides the last tool
+        // result and is visible to the third provider call.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            tool_turn("tc-2"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3, "one provider call per round");
+        assert!(
+            !calls[0]
+                .iter()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "the nudge must not precede the streak: {:?}",
+            calls[0]
+        );
+        assert!(
+            calls[2].iter().any(|m| {
+                m.role == crate::types::MessageRole::Tool
+                    && m.content
+                        .contains("Exploration budget warning: 2 consecutive rounds")
+            }),
+            "the nudge must ride a tool result carrying the streak count: {:?}",
+            calls[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_fires_only_once_per_generation() {
+        // Four consecutive tool rounds in a 6-round budget: the nudge
+        // injects at the threshold (3) and must not repeat — the final call
+        // carries exactly one noticed tool result.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            tool_turn("tc-2"),
+            tool_turn("tc-3"),
+            tool_turn("tc-4"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 5, "one provider call per round");
+        let noticed = |call: &[crate::types::Message]| {
+            call.iter()
+                .filter(|m| {
+                    m.role == crate::types::MessageRole::Tool
+                        && m.content.contains("Exploration budget warning")
+                })
+                .count()
+        };
+        assert_eq!(noticed(&calls[2]), 0, "not yet at the threshold");
+        assert_eq!(
+            noticed(&calls[3]),
+            1,
+            "the nudge injects exactly when the threshold is crossed"
+        );
+        assert_eq!(
+            noticed(&calls[4]),
+            1,
+            "history carries the original notice; no second injection"
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_resets_after_a_prose_round() {
+        // tool → unextractable prose → tool → tool in a 6-round budget:
+        // the prose round breaks the streak, so the threshold is never
+        // crossed again and no nudge appears anywhere.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            ScriptedTurn::content("Here is my plan: trim the reads, then align."),
+            tool_turn("tc-2"),
+            tool_turn("tc-3"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 5, "one provider call per round");
+        assert!(
+            !calls
+                .iter()
+                .flatten()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "the prose round must reset the streak: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrated_tool_rounds_do_not_feed_the_exploration_streak() {
+        // A model that narrates a sentence before every lookup is writing
+        // output, not silently exploring — such rounds reset the streak,
+        // so the nudge (whose text claims "no written output") must never
+        // fire for them.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+        use crate::types::ToolCall;
+
+        let narrated_turn = |id: &str| ScriptedTurn {
+            content: Some("Checking the knowledge base for exact tool pins.".into()),
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                name: "read_only_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        };
+        let backend = ScriptedBackend::new(vec![
+            narrated_turn("tc-1"),
+            narrated_turn("tc-2"),
+            narrated_turn("tc-3"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 4, "one provider call per round");
+        assert!(
+            !calls
+                .iter()
+                .flatten()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "narrated tool rounds are not silent exploration: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_text_response_folds_into_the_standing_directive() {
+        // Round 1's unextractable prose leaves an assistant echo plus a
+        // user directive; round 2 returning an EMPTY text block must not
+        // echo that block (an empty assistant text block gets 400'd by
+        // Anthropic-compatible endpoints) nor push a second user turn
+        // after the directive — the nudge folds into the standing
+        // directive instead.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("Here is my plan: trim the reads, then align."),
+            ScriptedTurn::content(""),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 4);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3, "one provider call per round");
+        let final_call = &calls[2];
+        for pair in final_call.windows(2) {
+            assert!(
+                !(matches!(pair[0].role, crate::types::MessageRole::User)
+                    && matches!(pair[1].role, crate::types::MessageRole::User)),
+                "no consecutive user turns may reach the wire: {final_call:?}"
+            );
+        }
+        assert!(
+            !final_call
+                .iter()
+                .any(|m| m.role == crate::types::MessageRole::Assistant && m.content.is_empty()),
+            "an empty assistant text block must not be echoed: {final_call:?}"
+        );
+        let folded = final_call.iter().any(|m| {
+            m.role == crate::types::MessageRole::User
+                && m.content.contains("could not be processed")
+                && m.content
+                    .contains("did not contain any content or tool calls")
+        });
+        assert!(
+            folded,
+            "the empty-response nudge must ride the standing directive: {final_call:?}"
         );
     }
 
@@ -623,5 +1166,108 @@ mod tests {
             .execute_with_sink(&TestAgent, &ctx, None, Some(&cancel))
             .await;
         assert!(result.is_err(), "pre-set cancel must abort the loop");
+    }
+
+    #[tokio::test]
+    async fn max_rounds_exhaustion_surfaces_the_max_rounds_error() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // Arrange: every round produces content the picky agent rejects,
+        // so the loop must exhaust its budget. (Contract pin for the
+        // round-cap path — web chat matches this error's Display text to
+        // choose the degraded-delivery branch.)
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("BAD OUTPUT v1"),
+            ScriptedTurn::content("BAD OUTPUT v2"),
+            ScriptedTurn::content("BAD OUTPUT v3"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend), 3);
+
+        // Act
+        let result = orch.execute(&PickyAgent, &test_context()).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(AiError::MaxRoundsExceeded { max: 3 })),
+            "round-cap exhaustion must surface MaxRoundsExceeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_error_archives_and_surfaces_without_retry() {
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        // Arrange: round 1 produces prose the picky agent rejects; round 2
+        // dies with a provider error — the shape every mid-generation
+        // timeout on a thinking backend produced. (Contract pin for the
+        // provider-error arm: the error surfaces as-is and the loop does
+        // not silently retry it; the paid transcript is archived by the
+        // same helper the round-cap path uses.)
+        let backend = ScriptedBackend::new(vec![
+            ScriptedTurn::content("BAD OUTPUT v1"),
+            ScriptedTurn::error("provider:request timeout"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+
+        // Act
+        let result = orch.execute(&PickyAgent, &test_context()).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(AiError::Provider { .. })),
+            "the provider error must surface as-is, not as MaxRoundsExceeded"
+        );
+        assert_eq!(
+            backend.observed_calls().await.len(),
+            2,
+            "a provider error must not be silently retried"
+        );
+    }
+
+    #[test]
+    fn record_transcript_populates_the_session_before_failure_saves() {
+        use crate::session::ToolCallRecord;
+
+        // Arrange: a transcript shaped like a real failed run — tool
+        // rounds, tool results, a nudge — plus the matching tool-call
+        // records. The round-cap and cancellation exits save the session,
+        // and the CLI's degraded-delivery path reads the generated TOML
+        // from it; before this helper existed both exits saved an empty
+        // shell (messages: [], tool_calls: []).
+        let messages = vec![
+            Message::system("sys prompt"),
+            Message::user("generate the pipeline"),
+            Message::assistant_with_tools(vec![crate::types::ToolCall {
+                id: "tc-1".into(),
+                name: "lookup_tool".into(),
+                arguments: "{\"query\":\"cutadapt\"}".into(),
+            }]),
+            Message::tool("tc-1", "lookup_tool", "found cutadapt"),
+            Message::user("try again"),
+        ];
+        let tool_calls = vec![ToolCallRecord {
+            timestamp: Utc::now(),
+            tool_name: "lookup_tool".into(),
+            arguments: "{\"query\":\"cutadapt\"}".into(),
+            result_preview: "found cutadapt".into(),
+            success: true,
+            duration_ms: 5,
+        }];
+        let mut session = AiSession::new("test", "intent", "noop", "none");
+
+        // Act
+        record_transcript(&mut session, &messages, tool_calls, Vec::new());
+
+        // Assert: every message is sanitized in, roles preserved, tool
+        // calls carried over.
+        assert_eq!(session.messages.len(), messages.len());
+        assert!(
+            session
+                .messages
+                .iter()
+                .any(|m| m.role == "tool" && m.content_preview.contains("cutadapt"))
+        );
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(session.tool_calls[0].tool_name, "lookup_tool");
     }
 }

@@ -51,9 +51,10 @@ well a profile standardizes ambiguous requests. Vague cells are reported
 on their own row and are never compared against the specified tiers.
 
 Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible
-endpoint) need a raised output budget: export
-`OXO_FLOW_AI_MAX_TOKENS=16384` or the loop truncates before the TOML is
-written (the default 4096 is consumed by reasoning blocks).
+endpoint) truncate before the TOML is written if the output budget is too
+small — reasoning blocks consume it. The default is 16384 (raised from the
+old 4096, which thinking backends consumed entirely); raise it further only
+for extreme reasoning lengths.
 
 Results land in `results/<stamp>/` (gitignored): one directory per run
 (generated workflow, gate JSON/stderr, CLI log, session snapshot), plus

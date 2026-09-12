@@ -54,10 +54,12 @@ const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 /// Shared HTTP client for all provider backends. Without explicit timeouts a
 /// hung endpoint would block the agent loop indefinitely; the request timeout
-/// (default 120s, `OXO_FLOW_AI_TIMEOUT_SECS`) must also cover slow long-form
-/// completions — thinking backends with a raised `OXO_FLOW_AI_MAX_TOKENS`
-/// routinely exceed two minutes, and a mid-body timeout surfaces as a
-/// confusing "error decoding response body".
+/// (default 300s, `OXO_FLOW_AI_TIMEOUT_SECS`) must also cover slow long-form
+/// completions — a single thinking round routinely runs past two minutes (a
+/// measured GLM round on a thinking backend took 145s), and a mid-body
+/// timeout surfaces as a confusing "error decoding response body". The 10s
+/// connect timeout still fails fast on dead endpoints, so the longer wall
+/// only binds while a server is actively generating.
 fn provider_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -74,7 +76,139 @@ fn parse_timeout_secs(value: Option<&str>) -> u64 {
     value
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(120)
+        .unwrap_or(300)
+}
+
+// ── Transport retry ────────────────────────────────────────────────────────
+
+/// Backoff between transient-transport retries: one after 2s, one after 5s.
+/// The benchmark's dominant flake class is a single dropped request out of
+/// a healthy session, so two quick retries absorb it without turning a
+/// genuinely dead endpoint into a minute of hanging.
+const TRANSPORT_BACKOFFS: &[std::time::Duration] = &[
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(5),
+];
+
+/// Whether a [`reqwest::Error`] is a transient transport failure worth
+/// retrying: connection setup/reset and mid-transfer failures ("error
+/// sending request" was the observed benchmark flake), plus response
+/// bodies that fail to decode ("error decoding response body" — a
+/// truncated or garbled body from a flaky proxy; retrying refetches it).
+/// Timeouts are deliberately excluded — the request timeout has its own
+/// documented knob (`OXO_FLOW_AI_TIMEOUT_SECS`), and a retry would
+/// deterministically re-timeout against the same slow completion.
+fn is_transient_transport_error(e: &reqwest::Error) -> bool {
+    !e.is_timeout() && (e.is_connect() || e.is_request() || e.is_body() || e.is_decode())
+}
+
+/// Send a prepared request and hand the response to `decode` inside the
+/// retry scope, so a transient failure in either half — the send, or
+/// reading/decoding the body — replays the whole attempt with `backoffs`
+/// pauses between tries (see [`is_transient_transport_error`]). HTTP error
+/// statuses are *not* retried here — they carry provider semantics (429
+/// back-off, auth, context overflow) that the caller classifies from the
+/// returned status and body. When the transport stays broken after every
+/// retry, [`AiError::RetryExhausted`] reports the total attempt count.
+async fn send_with_retry<T, Fut>(
+    request: reqwest::RequestBuilder,
+    provider: &str,
+    secret: Option<&str>,
+    backoffs: &[std::time::Duration],
+    decode: impl Fn(reqwest::Response) -> Fut,
+) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, T), AiError>
+where
+    Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
+{
+    enum StepFailure {
+        NonReplayable,
+        Transport(reqwest::Error),
+        /// A decode failure on a non-2xx response: the status carries
+        /// provider semantics (429 back-off, auth), so the request must
+        /// not be replayed — surface the status instead of masking it as
+        /// a flaky parse.
+        HttpErrorBody(reqwest::StatusCode, reqwest::Error),
+    }
+
+    let mask = |message: String| match secret {
+        Some(key) => mask_secret(&message, key),
+        None => message,
+    };
+    // Decode failures keep the callers' familiar "response parse failed"
+    // prefix; plain transport errors render as reqwest names them.
+    let describe = |e: reqwest::Error| {
+        if e.is_decode() {
+            format!("response parse failed: {e}")
+        } else {
+            e.to_string()
+        }
+    };
+    let mut attempt = 0usize;
+    loop {
+        // The decode closure buffers the body, so the builder is
+        // replayable; a non-clonable body would be a construction bug,
+        // not a runtime case.
+        let result = async {
+            let response = request
+                .try_clone()
+                .ok_or(StepFailure::NonReplayable)?
+                .send()
+                .await
+                .map_err(StepFailure::Transport)?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let decoded = decode(response).await.map_err(|e| {
+                if status.is_success() {
+                    // Garbled success body — the flaky-proxy case retrying
+                    // refetches.
+                    StepFailure::Transport(e)
+                } else {
+                    StepFailure::HttpErrorBody(status, e)
+                }
+            })?;
+            Ok((status, headers, decoded))
+        }
+        .await;
+        match result {
+            Ok(decoded) => return Ok(decoded),
+            Err(StepFailure::NonReplayable) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: "request body is not replayable for retry".into(),
+                });
+            }
+            Err(StepFailure::Transport(e)) if !is_transient_transport_error(&e) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: mask(describe(e)),
+                });
+            }
+            Err(StepFailure::HttpErrorBody(status, e)) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: mask(format!("HTTP {status} — {}", describe(e))),
+                });
+            }
+            Err(StepFailure::Transport(e)) if attempt >= backoffs.len() => {
+                return Err(AiError::RetryExhausted {
+                    attempts: attempt as u32 + 1,
+                    message: mask(describe(e)),
+                });
+            }
+            Err(StepFailure::Transport(e)) => {
+                let backoff = backoffs[attempt];
+                tracing::warn!(
+                    provider,
+                    attempt = attempt + 1,
+                    backoff_secs = backoff.as_secs(),
+                    error = mask(e.to_string()),
+                    "transient transport error — retrying"
+                );
+                attempt += 1;
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
 }
 
 // ── AiProvider enum ────────────────────────────────────────────────────────
@@ -473,26 +607,20 @@ impl ClaudeBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: "claude".into(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: "claude".into(),
-            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
-        })?;
+        let (status, headers, json) = send_with_retry(
+            self.client
+                .post(&self.api_url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body),
+            "claude",
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
+        )
+        .await?;
+        let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
@@ -610,11 +738,13 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
 
 /// Output-token ceiling for the Anthropic Messages backend.
 ///
-/// Defaults to 4096 but is overridable via `OXO_FLOW_AI_MAX_TOKENS`.
-/// Thinking-style backends (e.g. DeepSeek served behind an
+/// Defaults to 16384 but is overridable via `OXO_FLOW_AI_MAX_TOKENS`.
+/// Thinking-style backends (e.g. DeepSeek or GLM served behind an
 /// Anthropic-compatible endpoint) emit `thinking` blocks whose tokens count
-/// against `max_tokens`; a hard 4096 there truncates the answer before any
-/// text is produced, so pipeline generation silently loses its TOML.
+/// against `max_tokens`; the old hard 4096 there was consumed by reasoning
+/// before any text was produced (GLM returned empty content on every round),
+/// so pipeline generation silently lost its TOML. 16384 clears the thinking
+/// budget with room for the TOML (model-axis calibration, 5/5 archetypes).
 fn max_tokens_from_env() -> u32 {
     parse_max_tokens(std::env::var("OXO_FLOW_AI_MAX_TOKENS").ok().as_deref())
 }
@@ -623,7 +753,7 @@ fn parse_max_tokens(value: Option<&str>) -> u32 {
     value
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(4096)
+        .unwrap_or(16384)
 }
 
 fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
@@ -807,25 +937,19 @@ impl OpenAiBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: self.label.clone(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: self.label.clone(),
-            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
-        })?;
+        let (status, headers, json) = send_with_retry(
+            self.client
+                .post(&self.api_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .json(&body),
+            &self.label,
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
+        )
+        .await?;
+        let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
@@ -972,23 +1096,17 @@ impl OllamaBackend {
     ) -> Result<AiResponse, AiError> {
         let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: "ollama".into(),
-                message: e.to_string(),
-            })?;
-
-        let status = resp.status();
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: "ollama".into(),
-            message: format!("response parse failed: {e}"),
-        })?;
+        let (status, _headers, json) = send_with_retry(
+            self.client
+                .post(&self.api_url)
+                .header("content-type", "application/json")
+                .json(&body),
+            "ollama",
+            None,
+            TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
+        )
+        .await?;
 
         if !status.is_success() {
             return Err(AiError::Provider {
@@ -1187,21 +1305,21 @@ impl OpenAiBackend {
         // endpoints this backend serves (OpenAI, DeepSeek) support it.
         body["stream_options"] = serde_json::json!({"include_usage": true});
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Provider {
-                provider: self.label.clone(),
-                message: mask_secret(&e.to_string(), &self.api_key),
-            })?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
+        // Streaming keeps the raw response: the body is consumed
+        // incrementally below, so only the send half is replayable.
+        let (status, headers, resp) = send_with_retry(
+            self.client
+                .post(&self.api_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .json(&body),
+            &self.label,
+            Some(&self.api_key),
+            TRANSPORT_BACKOFFS,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
+        )
+        .await?;
+        let retry_after = retry_after_header(&headers);
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             let err_msg = serde_json::from_str::<serde_json::Value>(&text)
@@ -1559,27 +1677,241 @@ mod tests {
 
     #[test]
     fn max_tokens_env_override_parses_strictly() {
-        // Thinking backends burn the hardcoded 4096 on reasoning blocks and
-        // truncate before the answer; the env override must accept only
-        // clean positive integers and otherwise fall back to 4096.
+        // Thinking backends burn the default budget on reasoning blocks and
+        // truncate before the answer (GLM produced empty text at 4096); the
+        // default is calibrated above that ceiling (16384) and the env
+        // override must accept only clean positive integers, otherwise
+        // falling back to that default.
         assert_eq!(parse_max_tokens(Some("16384")), 16384);
         assert_eq!(parse_max_tokens(Some(" 8192 ")), 8192);
-        assert_eq!(parse_max_tokens(Some("0")), 4096);
-        assert_eq!(parse_max_tokens(Some("-1")), 4096);
-        assert_eq!(parse_max_tokens(Some("abc")), 4096);
-        assert_eq!(parse_max_tokens(Some("")), 4096);
-        assert_eq!(parse_max_tokens(None), 4096);
+        assert_eq!(parse_max_tokens(Some("0")), 16384);
+        assert_eq!(parse_max_tokens(Some("-1")), 16384);
+        assert_eq!(parse_max_tokens(Some("abc")), 16384);
+        assert_eq!(parse_max_tokens(Some("")), 16384);
+        assert_eq!(parse_max_tokens(None), 16384);
     }
 
     #[test]
     fn timeout_env_override_parses_strictly() {
         // Same contract as the max_tokens override: clean positive integers
-        // only, 120s fallback.
-        assert_eq!(parse_timeout_secs(Some("300")), 300);
+        // only, 300s fallback (a measured thinking round ran 145s).
+        assert_eq!(parse_timeout_secs(Some("600")), 600);
         assert_eq!(parse_timeout_secs(Some(" 90 ")), 90);
-        assert_eq!(parse_timeout_secs(Some("0")), 120);
-        assert_eq!(parse_timeout_secs(Some("x")), 120);
-        assert_eq!(parse_timeout_secs(None), 120);
+        assert_eq!(parse_timeout_secs(Some("0")), 300);
+        assert_eq!(parse_timeout_secs(Some("x")), 300);
+        assert_eq!(parse_timeout_secs(None), 300);
+    }
+
+    #[tokio::test]
+    async fn transport_retry_exhausts_connection_failures_into_retry_exhausted() {
+        // Connection-refused is the benchmark's observed transport flake
+        // class: the send path must retry through the backoff budget and
+        // then report the total attempt count, not a bare provider error.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // nothing listens now — connects are refused
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        // Pass-through decode, as the streaming site uses: only the send
+        // half is under test here.
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
+            Ok::<_, reqwest::Error>(resp)
+        })
+        .await
+        .unwrap_err();
+
+        match err {
+            AiError::RetryExhausted { attempts, message } => {
+                assert_eq!(attempts, backoffs.len() as u32 + 1);
+                assert!(
+                    message.contains("error sending request"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RetryExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transport_retry_skips_timeouts() {
+        // A timed-out request would deterministically re-timeout on retry —
+        // the remedy is the documented OXO_FLOW_AI_TIMEOUT_SECS knob — so a
+        // timeout must surface as-is instead of burning the retry budget.
+        // (reqwest classifies timeouts under is_request(), the same kind as
+        // the transient "error sending request" — the exclusion guard is
+        // what keeps them apart.)
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Accept and hold the connection open without ever responding.
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
+            Ok::<_, reqwest::Error>(resp)
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, AiError::Provider { .. }),
+            "timeouts must not be retried, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_retry_replays_garbled_response_bodies() {
+        // The wave-F2 benchmark failure: a 200 whose body fails to decode
+        // ("error decoding response body" — a truncated/garbled response
+        // from a flaky proxy). The retry scope covers the decode, so the
+        // request is refetched instead of surfacing the parse failure.
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let responses = [
+                // Headers claim JSON; the body is not decodable as JSON.
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 8\r\nconnection: close\r\n\r\nnot-json",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf); // drain the request head
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap();
+
+        assert!(status.is_success());
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn transport_retry_exhausts_garbled_bodies_with_parse_prefix() {
+        // Deterministic garbage must not loop forever: after the backoff
+        // budget the decode failure surfaces as RetryExhausted, keeping the
+        // "response parse failed" prefix the session archival path reports.
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 8\r\nconnection: close\r\n\r\nnot-json";
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap_err();
+
+        match err {
+            AiError::RetryExhausted { attempts, message } => {
+                assert_eq!(attempts, backoffs.len() as u32 + 1);
+                assert!(
+                    message.contains("response parse failed"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RetryExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_error_status_with_undecodable_body_is_never_retried() {
+        // A 429 (or 401) answering with an empty/HTML body fails .json()
+        // with a decode error — but the status carries provider semantics,
+        // so the request must not be replayed against the rate-limited
+        // endpoint, and the surfaced message must name the real status
+        // instead of masking it as a flaky parse.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let response = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/html\r\ncontent-length: 5\r\nconnection: close\r\n\r\noops!";
+            if let Ok((mut stream, _)) = listener.accept() {
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the 429 must not be replayed"
+        );
+        match err {
+            AiError::Provider { message, .. } => {
+                assert!(
+                    message.contains("HTTP 429 Too Many Requests"),
+                    "the real status must surface, got: {message}"
+                );
+            }
+            other => panic!("expected Provider error, got {other:?}"),
+        }
     }
 
     #[test]
