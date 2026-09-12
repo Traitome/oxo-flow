@@ -72,6 +72,14 @@ impl Orchestrator {
         let mut rounds: u32 = 0;
         #[allow(unused_assignments)]
         let mut final_content: Option<String> = None;
+        // Exploration-budget tracking: consecutive rounds whose assistant
+        // turn was pure tool calls (no prose). GLM model-axis draws burned
+        // the whole round budget on knowledge lookups without ever writing
+        // output, and the final-round notice lands exactly at the cap — too
+        // late to change behavior — so nudge once, mid-run, instead.
+        let mut tool_only_rounds: u32 = 0;
+        let mut exploration_nudged = false;
+        let exploration_nudge_threshold = (self.max_rounds / 2).max(2);
 
         loop {
             rounds += 1;
@@ -213,9 +221,43 @@ impl Orchestrator {
                         }
                     }
                 }
+                // Exploration-budget nudge: a run of pure tool-call rounds
+                // (zero prose) is the shape that exhausts the round budget.
+                // The notice rides the last tool result — a bare user turn
+                // after tool results would flatten into consecutive user
+                // turns on the Anthropic wire (tool results map to the user
+                // role there), the exact shape the extraction-failure fix
+                // found made GLM regenerate blind. One-shot per generation,
+                // and never during the final round: an injection the loop
+                // never surfaces (the head check fails first) is dead text.
+                tool_only_rounds = tool_only_rounds.saturating_add(1);
+                if !exploration_nudged
+                    && tool_only_rounds >= exploration_nudge_threshold
+                    && rounds < self.max_rounds
+                    && let Some(last) = messages.last_mut()
+                    && last.role == crate::types::MessageRole::Tool
+                {
+                    last.content.push_str(&format!(
+                        "\n\n[system] Exploration budget warning: {tool_only_rounds} \
+                             consecutive rounds produced tool calls only, with no written \
+                             output. Consolidate what you have found and start producing the \
+                             required output now — remaining rounds are limited."
+                    ));
+                    exploration_nudged = true;
+                    tracing::info!(
+                        rounds,
+                        tool_only_rounds,
+                        "exploration budget nudge injected"
+                    );
+                }
                 // Continue loop — model will process tool results
                 continue;
             }
+
+            // No tool calls this round — the pure-tool-call streak is
+            // broken, whether the model wrote usable prose, unextractable
+            // prose, or nothing at all.
+            tool_only_rounds = 0;
 
             // Model returned text content (no tool calls)
             if let Some(content) = &response.content {
@@ -790,6 +832,139 @@ mod tests {
             }),
             "the final-round notice must ride the failure feedback: {:?}",
             calls[2]
+        );
+    }
+
+    /// A scripted turn whose assistant output is a single tool call to the
+    /// registered read-only scripted tool.
+    fn tool_turn(id: &str) -> crate::scripted::ScriptedTurn {
+        crate::scripted::ScriptedTurn {
+            content: None,
+            tool_calls: Some(vec![crate::types::ToolCall {
+                id: id.into(),
+                name: "read_only_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        }
+    }
+
+    fn tool_registry_with_read_only_tool() -> AgentContext {
+        let mut ctx = test_context();
+        ctx.tool_registry.register(Box::new(ScriptedTool {
+            name: "read_only_tool",
+            read_only: true,
+        }));
+        ctx
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_fires_at_the_threshold() {
+        // Two consecutive pure-tool rounds in a 3-round budget cross the
+        // threshold (max_rounds/2, min 2); the nudge rides the last tool
+        // result and is visible to the third provider call.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            tool_turn("tc-2"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 3, "one provider call per round");
+        assert!(
+            !calls[0]
+                .iter()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "the nudge must not precede the streak: {:?}",
+            calls[0]
+        );
+        assert!(
+            calls[2].iter().any(|m| {
+                m.role == crate::types::MessageRole::Tool
+                    && m.content
+                        .contains("Exploration budget warning: 2 consecutive rounds")
+            }),
+            "the nudge must ride a tool result carrying the streak count: {:?}",
+            calls[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_fires_only_once_per_generation() {
+        // Four consecutive tool rounds in a 6-round budget: the nudge
+        // injects at the threshold (3) and must not repeat — the final call
+        // carries exactly one noticed tool result.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            tool_turn("tc-2"),
+            tool_turn("tc-3"),
+            tool_turn("tc-4"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 5, "one provider call per round");
+        let noticed = |call: &[crate::types::Message]| {
+            call.iter()
+                .filter(|m| {
+                    m.role == crate::types::MessageRole::Tool
+                        && m.content.contains("Exploration budget warning")
+                })
+                .count()
+        };
+        assert_eq!(noticed(&calls[2]), 0, "not yet at the threshold");
+        assert_eq!(
+            noticed(&calls[3]),
+            1,
+            "the nudge injects exactly when the threshold is crossed"
+        );
+        assert_eq!(
+            noticed(&calls[4]),
+            1,
+            "history carries the original notice; no second injection"
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_budget_nudge_resets_after_a_prose_round() {
+        // tool → unextractable prose → tool → tool in a 6-round budget:
+        // the prose round breaks the streak, so the threshold is never
+        // crossed again and no nudge appears anywhere.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let backend = ScriptedBackend::new(vec![
+            tool_turn("tc-1"),
+            ScriptedTurn::content("Here is my plan: trim the reads, then align."),
+            tool_turn("tc-2"),
+            tool_turn("tc-3"),
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 6);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(outcome.success);
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(calls.len(), 5, "one provider call per round");
+        assert!(
+            !calls
+                .iter()
+                .flatten()
+                .any(|m| m.content.contains("Exploration budget warning")),
+            "the prose round must reset the streak: {calls:?}"
         );
     }
 
