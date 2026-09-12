@@ -367,6 +367,12 @@ pub async fn generate_workflow(
         if let AgentEvent::Text(ref chunk) = e
             && let Ok(mut buf) = sink_buf.lock()
         {
+            // Rounds concatenate: keep each round's text on its own line so
+            // the line-anchored fence scan cannot glue one round's trailing
+            // prose to the next round's opening ```toml fence.
+            if !buf.is_empty() && !buf.ends_with('\n') {
+                buf.push('\n');
+            }
             buf.push_str(chunk);
         }
         match e {
