@@ -252,14 +252,27 @@ fn fenced_segments(text: &str) -> Vec<String> {
     segments
 }
 
-/// Raw fallback: everything from the first `[workflow]` line, provided the
+/// Raw fallback: everything from a `[workflow]` line, provided the
 /// candidate parses as TOML and still passes the structural floor — guards
 /// against prose and against truncated output (e.g. an unclosed fence cut
 /// off mid-shell-string) being delivered as a broken artifact. Trailing
 /// prose after the workflow body is tolerated: the candidate is cut at the
-/// first line that breaks the TOML parse.
+/// first line that breaks the TOML parse. Anchors are scanned latest-first
+/// — the same stale-draft-cannot-shadow invariant the fenced path got —
+/// so a broken early unfenced draft cannot hide a later complete one.
 fn raw_workflow(response: &str) -> Option<String> {
-    let idx = response.find("[workflow]")?;
+    let anchors: Vec<usize> = response
+        .match_indices("[workflow]")
+        .map(|(i, _)| i)
+        .collect();
+    anchors
+        .iter()
+        .rev()
+        .find_map(|&idx| raw_workflow_from(response, idx))
+}
+
+/// Longest parseable, floor-passing prefix of the tail starting at `idx`.
+fn raw_workflow_from(response: &str, idx: usize) -> Option<String> {
     let candidate = response[idx..].trim();
     // Parse the candidate; on failure retry with successively shorter
     // prefixes. The first prefix that parses and passes the floor is the
@@ -282,9 +295,12 @@ fn raw_workflow(response: &str) -> Option<String> {
 }
 
 /// Structural floor over a parsed workflow: a `[workflow]` table, at
-/// least one rule, and every rule carrying a shell — checked per rule
-/// (an empty shell counts as absent), so a dangling shell-less rule
-/// cannot survive salvage on the strength of an earlier rule's `shell`,
+/// least one rule, and every rule carrying an execution body — `shell`,
+/// `script`, or `transform` (the engine accepts all three; demanding a
+/// `shell` would disqualify engine-valid script/transform rules and
+/// truncate degraded salvage at the first such rule). Checked per rule
+/// (an empty string counts as absent), so a dangling body-less rule
+/// cannot survive salvage on the strength of an earlier rule's body,
 /// which substring-level probes cannot distinguish.
 fn floor_errors(value: &toml::Value) -> Vec<String> {
     let mut errors = Vec::new();
@@ -299,11 +315,15 @@ fn floor_errors(value: &toml::Value) -> Vec<String> {
         errors.push("Generated TOML has no [[rules]] sections".into());
     }
     for (idx, rule) in rules.iter().enumerate() {
-        let has_shell = rule
-            .get("shell")
-            .is_some_and(|shell| shell.as_str().is_some_and(|cmd| !cmd.trim().is_empty()));
-        if !has_shell {
-            errors.push(format!("Rule {} has no 'shell' field", idx + 1));
+        let has_body = ["shell", "script"].iter().any(|key| {
+            rule.get(*key)
+                .is_some_and(|body| body.as_str().is_some_and(|cmd| !cmd.trim().is_empty()))
+        }) || rule.get("transform").is_some();
+        if !has_body {
+            errors.push(format!(
+                "Rule {} has no 'shell', 'script', or 'transform' body",
+                idx + 1
+            ));
         }
     }
     errors
@@ -326,8 +346,9 @@ pub fn basic_structure_errors(toml: &str) -> Vec<String> {
             if !toml.contains("[[rules]]") {
                 errors.push("Generated TOML has no [[rules]] sections".into());
             }
-            if !toml.contains("shell") {
-                errors.push("Generated TOML rules missing 'shell' field".into());
+            if !toml.contains("shell") && !toml.contains("script") && !toml.contains("transform") {
+                errors
+                    .push("Generated TOML rules missing 'shell'/'script'/'transform' body".into());
             }
             errors
         }
@@ -517,6 +538,68 @@ mod tests {
         // so nothing is delivered.
         let truncated = "```toml\n[workflow]\nname = \"x\"\n\n[[rules]]\n";
         assert_eq!(extract_toml(truncated), None);
+    }
+
+    #[test]
+    fn floor_accepts_script_and_transform_rule_bodies() {
+        // The engine accepts `shell`, `script`, or `transform` as a rule's
+        // execution body — the floor must not disqualify engine-valid
+        // script/transform rules and truncate degraded salvage at the
+        // first such rule.
+        let draft = concat!(
+            "[workflow]\n",
+            "name = \"mixed\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"shelled\"\n",
+            "shell = \"true\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"scripted\"\n",
+            "script = \"run.sh\"\n",
+        );
+        let parsed: toml::Value = toml::from_str(draft).unwrap();
+        assert!(
+            floor_errors(&parsed).is_empty(),
+            "engine-valid script rules pass the floor: {:?}",
+            floor_errors(&parsed)
+        );
+        assert!(extract_toml(&format!("```toml\n{draft}\n```")).is_some());
+
+        let bodyless = "[workflow]\nname = \"x\"\n\n[[rules]]\nname = \"empty\"\n";
+        let parsed: toml::Value = toml::from_str(bodyless).unwrap();
+        let errors = floor_errors(&parsed);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("no 'shell', 'script', or 'transform' body")),
+            "a body-less rule still fails: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn raw_salvage_scans_workflow_anchors_latest_first() {
+        // A broken early unfenced draft must not shadow a later complete
+        // unfenced draft — the same latest-first invariant the fenced path
+        // got. All prefixes anchored at the first [workflow] fail (the
+        // draft is truncated mid-value), so the second anchor wins.
+        let response = concat!(
+            "[workflow]\n",
+            "name = \n",
+            "prose between drafts\n",
+            "[workflow]\n",
+            "name = \"good\"\n",
+            "\n",
+            "[[rules]]\n",
+            "name = \"r\"\n",
+            "shell = \"true\"\n",
+        );
+        let salvaged = extract_toml(response)
+            .unwrap_or_else(|| panic!("the later complete draft must be found"));
+        assert!(
+            salvaged.contains("name = \"good\""),
+            "the latest anchor must win, got: {salvaged}"
+        );
     }
 
     #[test]
