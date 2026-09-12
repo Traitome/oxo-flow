@@ -123,6 +123,11 @@ where
     enum StepFailure {
         NonReplayable,
         Transport(reqwest::Error),
+        /// A decode failure on a non-2xx response: the status carries
+        /// provider semantics (429 back-off, auth), so the request must
+        /// not be replayed — surface the status instead of masking it as
+        /// a flaky parse.
+        HttpErrorBody(reqwest::StatusCode, reqwest::Error),
     }
 
     let mask = |message: String| match secret {
@@ -152,7 +157,15 @@ where
                 .map_err(StepFailure::Transport)?;
             let status = response.status();
             let headers = response.headers().clone();
-            let decoded = decode(response).await.map_err(StepFailure::Transport)?;
+            let decoded = decode(response).await.map_err(|e| {
+                if status.is_success() {
+                    // Garbled success body — the flaky-proxy case retrying
+                    // refetches.
+                    StepFailure::Transport(e)
+                } else {
+                    StepFailure::HttpErrorBody(status, e)
+                }
+            })?;
             Ok((status, headers, decoded))
         }
         .await;
@@ -168,6 +181,12 @@ where
                 return Err(AiError::Provider {
                     provider: provider.into(),
                     message: mask(describe(e)),
+                });
+            }
+            Err(StepFailure::HttpErrorBody(status, e)) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: mask(format!("HTTP {status} — {}", describe(e))),
                 });
             }
             Err(StepFailure::Transport(e)) if attempt >= backoffs.len() => {
@@ -1838,6 +1857,60 @@ mod tests {
                 );
             }
             other => panic!("expected RetryExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_error_status_with_undecodable_body_is_never_retried() {
+        // A 429 (or 401) answering with an empty/HTML body fails .json()
+        // with a decode error — but the status carries provider semantics,
+        // so the request must not be replayed against the rate-limited
+        // endpoint, and the surfaced message must name the real status
+        // instead of masking it as a flaky parse.
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits_for_server = hits.clone();
+        std::thread::spawn(move || {
+            let response = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/html\r\ncontent-length: 5\r\nconnection: close\r\n\r\noops!";
+            if let Ok((mut stream, _)) = listener.accept() {
+                hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the 429 must not be replayed"
+        );
+        match err {
+            AiError::Provider { message, .. } => {
+                assert!(
+                    message.contains("HTTP 429 Too Many Requests"),
+                    "the real status must surface, got: {message}"
+                );
+            }
+            other => panic!("expected Provider error, got {other:?}"),
         }
     }
 
