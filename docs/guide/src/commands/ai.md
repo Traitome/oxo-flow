@@ -129,7 +129,13 @@ loop. The steps:
   correction-round budget (default from `[ai]` config, 10 when unset —
   knowledge lookups and the correction pass share the budget, exploration-
   heavy models spend 7–10 rounds before drafting, and the loop stops as
-  soon as a draft validates).
+  soon as a draft validates). When the first half of that budget burns on
+  consecutive rounds whose assistant turns were pure tool calls (zero
+  prose), the orchestrator nudges once: a warning rides the next tool
+  result telling the model to consolidate what it has found and start
+  producing the deliverable — measured on thinking-style backends whose
+  draws otherwise spent every round on lookups and hit the cap with
+  nothing written.
 - `--ai-attempts N` is the fresh-draw budget **across** generations
   (pass@k with early exit): every attempt starts from a new draw, the
   deterministic gates decide, and later attempts are only paid when
