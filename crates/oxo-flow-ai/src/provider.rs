@@ -92,57 +92,91 @@ const TRANSPORT_BACKOFFS: &[std::time::Duration] = &[
 
 /// Whether a [`reqwest::Error`] is a transient transport failure worth
 /// retrying: connection setup/reset and mid-transfer failures ("error
-/// sending request" was the observed benchmark flake). Timeouts are
-/// deliberately excluded — the request timeout has its own documented knob
-/// (`OXO_FLOW_AI_TIMEOUT_SECS`), and a retry would deterministically
-/// re-timeout against the same slow completion.
+/// sending request" was the observed benchmark flake), plus response
+/// bodies that fail to decode ("error decoding response body" — a
+/// truncated or garbled body from a flaky proxy; retrying refetches it).
+/// Timeouts are deliberately excluded — the request timeout has its own
+/// documented knob (`OXO_FLOW_AI_TIMEOUT_SECS`), and a retry would
+/// deterministically re-timeout against the same slow completion.
 fn is_transient_transport_error(e: &reqwest::Error) -> bool {
-    !e.is_timeout() && (e.is_connect() || e.is_request() || e.is_body())
+    !e.is_timeout() && (e.is_connect() || e.is_request() || e.is_body() || e.is_decode())
 }
 
-/// Send a prepared request, retrying transient transport failures
-/// (see [`is_transient_transport_error`]) with `backoffs` pauses between
-/// attempts. HTTP error statuses are *not* retried here — they carry
-/// provider semantics (429 back-off, auth, context overflow) that the
-/// caller classifies. When the transport stays broken after every retry,
-/// [`AiError::RetryExhausted`] reports the total attempt count.
-async fn send_with_transport_retry(
+/// Send a prepared request and hand the response to `decode` inside the
+/// retry scope, so a transient failure in either half — the send, or
+/// reading/decoding the body — replays the whole attempt with `backoffs`
+/// pauses between tries (see [`is_transient_transport_error`]). HTTP error
+/// statuses are *not* retried here — they carry provider semantics (429
+/// back-off, auth, context overflow) that the caller classifies from the
+/// returned status and body. When the transport stays broken after every
+/// retry, [`AiError::RetryExhausted`] reports the total attempt count.
+async fn send_with_retry<T, Fut>(
     request: reqwest::RequestBuilder,
     provider: &str,
     secret: Option<&str>,
     backoffs: &[std::time::Duration],
-) -> Result<reqwest::Response, AiError> {
+    decode: impl Fn(reqwest::Response) -> Fut,
+) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, T), AiError>
+where
+    Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
+{
+    enum StepFailure {
+        NonReplayable,
+        Transport(reqwest::Error),
+    }
+
     let mask = |message: String| match secret {
         Some(key) => mask_secret(&message, key),
         None => message,
     };
+    // Decode failures keep the callers' familiar "response parse failed"
+    // prefix; plain transport errors render as reqwest names them.
+    let describe = |e: reqwest::Error| {
+        if e.is_decode() {
+            format!("response parse failed: {e}")
+        } else {
+            e.to_string()
+        }
+    };
     let mut attempt = 0usize;
     loop {
-        // `.json()` buffers the body, so the builder is replayable; a
-        // non-clonable body would be a construction bug, not a runtime case.
-        let result = request
-            .try_clone()
-            .ok_or_else(|| AiError::Provider {
-                provider: provider.into(),
-                message: "request body is not replayable for retry".into(),
-            })?
-            .send()
-            .await;
+        // The decode closure buffers the body, so the builder is
+        // replayable; a non-clonable body would be a construction bug,
+        // not a runtime case.
+        let result = async {
+            let response = request
+                .try_clone()
+                .ok_or(StepFailure::NonReplayable)?
+                .send()
+                .await
+                .map_err(StepFailure::Transport)?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let decoded = decode(response).await.map_err(StepFailure::Transport)?;
+            Ok((status, headers, decoded))
+        }
+        .await;
         match result {
-            Ok(response) => return Ok(response),
-            Err(e) if !is_transient_transport_error(&e) => {
+            Ok(decoded) => return Ok(decoded),
+            Err(StepFailure::NonReplayable) => {
                 return Err(AiError::Provider {
                     provider: provider.into(),
-                    message: mask(e.to_string()),
+                    message: "request body is not replayable for retry".into(),
                 });
             }
-            Err(e) if attempt >= backoffs.len() => {
+            Err(StepFailure::Transport(e)) if !is_transient_transport_error(&e) => {
+                return Err(AiError::Provider {
+                    provider: provider.into(),
+                    message: mask(describe(e)),
+                });
+            }
+            Err(StepFailure::Transport(e)) if attempt >= backoffs.len() => {
                 return Err(AiError::RetryExhausted {
                     attempts: attempt as u32 + 1,
-                    message: mask(e.to_string()),
+                    message: mask(describe(e)),
                 });
             }
-            Err(e) => {
+            Err(StepFailure::Transport(e)) => {
                 let backoff = backoffs[attempt];
                 tracing::warn!(
                     provider,
@@ -554,7 +588,7 @@ impl ClaudeBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = send_with_transport_retry(
+        let (status, headers, json) = send_with_retry(
             self.client
                 .post(&self.api_url)
                 .header("x-api-key", &self.api_key)
@@ -564,15 +598,10 @@ impl ClaudeBackend {
             "claude",
             Some(&self.api_key),
             TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
         )
         .await?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: "claude".into(),
-            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
-        })?;
+        let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
@@ -889,7 +918,7 @@ impl OpenAiBackend {
     ) -> Result<AiResponse, AiError> {
         let body = self.build_body(messages, tools);
 
-        let resp = send_with_transport_retry(
+        let (status, headers, json) = send_with_retry(
             self.client
                 .post(&self.api_url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
@@ -898,15 +927,10 @@ impl OpenAiBackend {
             &self.label,
             Some(&self.api_key),
             TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
         )
         .await?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: self.label.clone(),
-            message: mask_secret(&format!("response parse failed: {e}"), &self.api_key),
-        })?;
+        let retry_after = retry_after_header(&headers);
 
         if !status.is_success() {
             let err_msg = json["error"]["message"].as_str().unwrap_or("unknown error");
@@ -1053,7 +1077,7 @@ impl OllamaBackend {
     ) -> Result<AiResponse, AiError> {
         let body = build_ollama_body(messages, tools, &self.model, self.temperature);
 
-        let resp = send_with_transport_retry(
+        let (status, _headers, json) = send_with_retry(
             self.client
                 .post(&self.api_url)
                 .header("content-type", "application/json")
@@ -1061,14 +1085,9 @@ impl OllamaBackend {
             "ollama",
             None,
             TRANSPORT_BACKOFFS,
+            |resp| resp.json::<serde_json::Value>(),
         )
         .await?;
-
-        let status = resp.status();
-        let json: serde_json::Value = resp.json().await.map_err(|e| AiError::Provider {
-            provider: "ollama".into(),
-            message: format!("response parse failed: {e}"),
-        })?;
 
         if !status.is_success() {
             return Err(AiError::Provider {
@@ -1267,7 +1286,9 @@ impl OpenAiBackend {
         // endpoints this backend serves (OpenAI, DeepSeek) support it.
         body["stream_options"] = serde_json::json!({"include_usage": true});
 
-        let resp = send_with_transport_retry(
+        // Streaming keeps the raw response: the body is consumed
+        // incrementally below, so only the send half is replayable.
+        let (status, headers, resp) = send_with_retry(
             self.client
                 .post(&self.api_url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
@@ -1276,11 +1297,10 @@ impl OpenAiBackend {
             &self.label,
             Some(&self.api_key),
             TRANSPORT_BACKOFFS,
+            |resp| async move { Ok::<_, reqwest::Error>(resp) },
         )
         .await?;
-
-        let status = resp.status();
-        let retry_after = retry_after_header(resp.headers());
+        let retry_after = retry_after_header(&headers);
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             let err_msg = serde_json::from_str::<serde_json::Value>(&text)
@@ -1679,9 +1699,13 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_transport_retry(request, "test", None, &backoffs)
-            .await
-            .unwrap_err();
+        // Pass-through decode, as the streaming site uses: only the send
+        // half is under test here.
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
+            Ok::<_, reqwest::Error>(resp)
+        })
+        .await
+        .unwrap_err();
 
         match err {
             AiError::RetryExhausted { attempts, message } => {
@@ -1721,14 +1745,100 @@ mod tests {
             .body(r#"{"x":1}"#);
 
         let backoffs = [std::time::Duration::from_millis(1)];
-        let err = send_with_transport_retry(request, "test", None, &backoffs)
-            .await
-            .unwrap_err();
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| async move {
+            Ok::<_, reqwest::Error>(resp)
+        })
+        .await
+        .unwrap_err();
 
         assert!(
             matches!(err, AiError::Provider { .. }),
             "timeouts must not be retried, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transport_retry_replays_garbled_response_bodies() {
+        // The wave-F2 benchmark failure: a 200 whose body fails to decode
+        // ("error decoding response body" — a truncated/garbled response
+        // from a flaky proxy). The retry scope covers the decode, so the
+        // request is refetched instead of surfacing the parse failure.
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let responses = [
+                // Headers claim JSON; the body is not decodable as JSON.
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 8\r\nconnection: close\r\n\r\nnot-json",
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf); // drain the request head
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let (status, _, json) = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap();
+
+        assert!(status.is_success());
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn transport_retry_exhausts_garbled_bodies_with_parse_prefix() {
+        // Deterministic garbage must not loop forever: after the backoff
+        // budget the decode failure surfaces as RetryExhausted, keeping the
+        // "response parse failed" prefix the session archival path reports.
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 8\r\nconnection: close\r\n\r\nnot-json";
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let request = client
+            .post(format!("http://127.0.0.1:{port}/v1/messages"))
+            .header("content-type", "application/json")
+            .body(r#"{"x":1}"#);
+
+        let backoffs = [std::time::Duration::from_millis(1)];
+        let err = send_with_retry(request, "test", None, &backoffs, |resp| {
+            resp.json::<serde_json::Value>()
+        })
+        .await
+        .unwrap_err();
+
+        match err {
+            AiError::RetryExhausted { attempts, message } => {
+                assert_eq!(attempts, backoffs.len() as u32 + 1);
+                assert!(
+                    message.contains("response parse failed"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RetryExhausted, got {other:?}"),
+        }
     }
 
     #[test]

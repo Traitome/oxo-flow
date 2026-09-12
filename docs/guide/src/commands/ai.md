@@ -157,11 +157,12 @@ loop. The steps:
   artifact is not written, and the error explains why.
 - Provider failures (auth, quota, network) fail fast with the error.
   One carve-out: a transient transport failure (dropped connection,
-  mid-transfer reset — the classic flake where one request out of a
-  healthy session dies) is retried twice with a short backoff before
-  surfacing, since retrying is what a user would do. Timeouts are not
-  retried — they have their own knob (`OXO_FLOW_AI_TIMEOUT_SECS`) and a
-  retry would deterministically re-timeout.
+  mid-transfer reset, or a response body that fails to decode — the
+  classic flakes where one request out of a healthy session dies) is
+  retried twice with a short backoff before surfacing, since retrying
+  is what a user would do. Timeouts are not retried — they have their
+  own knob (`OXO_FLOW_AI_TIMEOUT_SECS`) and a retry would
+  deterministically re-timeout.
 
 ### Scientist Team profile (opt-in)
 

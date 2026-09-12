@@ -603,9 +603,10 @@ draft) and
 measured GLM round took 145 s, which the old 120 s default killed
 mid-round). Below the orchestrator, the
 provider backends retry transient transport failures (dropped or
-reset connections) twice with a short backoff before surfacing an
-error — timeouts are excluded, since a retry would deterministically
-re-timeout and the knob above is the remedy. When a provider error does
+reset connections, response bodies that fail to decode) twice with a
+short backoff before surfacing an error — timeouts are excluded,
+since a retry would deterministically re-timeout and the knob above
+is the remedy. When a provider error does
 abort a generation, the orchestrator archives the transcript and logged
 token spend into the saved session instead of dropping them — the
 rounds before the failure were real paid work, and the CLI's
