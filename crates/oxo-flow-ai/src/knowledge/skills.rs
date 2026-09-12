@@ -57,11 +57,18 @@ pub fn list_domains() -> Vec<(String, usize)> {
 /// (name, domain, description, tool_type, primary_tool) with prefix
 /// awareness. Ranking: rare terms first (IDF² sum), then the strongest
 /// field hit (name/primary_tool > domain > description), then name.
-/// Skills matching all searchable terms are preferred; when none exist
-/// the best partial matches are returned, so multi-term queries never
-/// die because one term is missing everywhere.
+/// Skills matching all searchable terms rank first; partial matches
+/// backfill the remaining slots, so multi-term queries never die because
+/// one term is missing everywhere. Queries are capped at
+/// [`MAX_QUERY_TERMS`] tokens — the lexicographically first survive, since
+/// term order carries no relevance signal.
 pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
-    let terms = tokenize(query);
+    let mut terms = tokenize(query);
+    // Pathological queries (model loops have emitted hundreds of repeated
+    // lookup terms) cap the O(terms × corpus) work; terms are sorted, so
+    // the lexicographically first survive — term order carries no
+    // relevance signal.
+    terms.truncate(MAX_QUERY_TERMS);
     if terms.is_empty() {
         return Vec::new();
     }
@@ -69,12 +76,16 @@ pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
     // Document frequency per term over the whole corpus (prefix-aware
     // matching); terms that appear nowhere are agent hallucinations and are
     // dropped rather than killing the query (strict AND would return empty).
+    // Each skill's haystack is needed twice — the document-frequency pass
+    // and the scoring loop below — so build them once.
+    let haystacks: Vec<String> = SKILL_DB.iter().map(haystack).collect();
     let dfs: Vec<usize> = terms
         .iter()
         .map(|t| {
             SKILL_DB
                 .iter()
-                .filter(|s| term_matches(t, &haystack(s)))
+                .zip(&haystacks)
+                .filter(|(_, h)| term_matches(t, h))
                 .count()
         })
         .collect();
@@ -94,12 +105,11 @@ pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
     let n = SKILL_DB.len() as f64;
     let mut full: Vec<Candidate> = Vec::new();
     let mut partial: Vec<Candidate> = Vec::new();
-    for skill in SKILL_DB.iter() {
-        let hay = haystack(skill);
+    for (skill, hay) in SKILL_DB.iter().zip(&haystacks) {
         let matched: Vec<(&str, usize)> = present
             .iter()
             .copied()
-            .filter(|(t, _)| term_matches(t, &hay))
+            .filter(|(t, _)| term_matches(t, hay))
             .collect();
         if matched.is_empty() {
             continue;
@@ -125,9 +135,13 @@ pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
         }
     }
 
-    // Prefer skills matching ALL searchable terms; fall back to the best
-    // partial matches when no full-AND skill exists.
-    let mut pool = if !full.is_empty() { full } else { partial };
+    // Full-AND matches always outrank partials: every additional matched
+    // term adds a non-negative (ln(N/df))² to `primary`, so a full match's
+    // primary is ≥ any partial's, with `secondary` (then name) breaking
+    // ties. Merge the pools and sort once — partials backfill the slots the
+    // full matches leave open instead of being dropped outright.
+    let mut pool = full;
+    pool.append(&mut partial);
     pool.sort_by(|a, b| {
         b.primary
             .partial_cmp(&a.primary)
@@ -144,6 +158,11 @@ struct Candidate {
     primary: f64,
     secondary: u8,
 }
+
+/// Upper bound on tokenized query terms handed to the O(terms × corpus)
+/// scan; pathological multi-term queries (model lookup loops) truncate to
+/// their lexicographically first 32.
+const MAX_QUERY_TERMS: usize = 32;
 
 /// Lowercase, split on non-alphanumerics, drop 1-char tokens, dedupe.
 fn tokenize(query: &str) -> Vec<String> {
@@ -519,5 +538,44 @@ mod tests {
         // Unrelated text should match nothing
         let domains = domains_for_intent("hello world");
         assert!(domains.is_empty());
+    }
+
+    #[test]
+    fn partial_matches_backfill_after_full_matches() {
+        // 'markduplicates' fully matches the duplicate-handling skill while
+        // the bam-statistics skill only matches 'bam' — the partial must
+        // still appear (backfilled after the fulls) instead of being
+        // dropped, and rank below the full match.
+        let results = search_skills("bam markduplicates", 5);
+        let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
+        let dup = names
+            .iter()
+            .position(|n| *n == "bio-duplicate-handling")
+            .unwrap_or_else(|| panic!("the full match must surface, got {names:?}"));
+        let stats = names
+            .iter()
+            .position(|n| *n == "bio-bam-statistics")
+            .unwrap_or_else(|| panic!("the partial match must be backfilled, got {names:?}"));
+        assert!(
+            dup < stats,
+            "full match must outrank the backfilled partial: {names:?}"
+        );
+    }
+
+    #[test]
+    fn pathological_query_is_capped_without_losing_the_signal_term() {
+        // A model lookup loop can emit hundreds of terms; the cap keeps the
+        // lexicographically first 32, and 'markduplicates' sorts before
+        // every 'zzz' filler so the real signal survives.
+        let mut query = "markduplicates".to_string();
+        for i in 0..100 {
+            query.push_str(&format!(" zzznoise{i:03}"));
+        }
+        let results = search_skills(&query, 3);
+        assert!(
+            results.iter().any(|s| s.name == "bio-duplicate-handling"),
+            "the signal term must survive the 32-term cap, got {:?}",
+            results.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()
+        );
     }
 }
