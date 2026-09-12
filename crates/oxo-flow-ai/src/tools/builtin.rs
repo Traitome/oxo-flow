@@ -511,7 +511,10 @@ mod tests {
         // the description never said http/https-only and never said that
         // embedded knowledge comes from lookup_skill instead.
         let desc = tool.def().description;
-        assert!(desc.contains("http"), "description must name the scheme constraint: {desc}");
+        assert!(
+            desc.contains("http"),
+            "description must name the scheme constraint: {desc}"
+        );
         assert!(
             desc.to_lowercase().contains("lookup_skill"),
             "description must point at lookup_skill for embedded knowledge: {desc}"

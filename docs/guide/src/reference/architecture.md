@@ -589,14 +589,15 @@ The surfaces differ only in adapter concerns:
 | Provider resolution | env / `ai_config.json` | per-user → server → env, with Claude/OpenAI/Ollama fallback chain | per-user → server → env |
 | Tools | full registry + MCP; non-read-only needs interactive approval | read-only knowledge registry only | knowledge registry + run-diagnosis tools |
 | Validator | core `WorkflowConfig` parse | workflow service `validate_pipeline` | same as translate |
-| Correction budget | `--ai-max-retries` (default 6) | 6 rounds | 6 rounds |
+| Correction budget | `--ai-max-retries` (default 10) | 10 rounds | 10 rounds |
 | Session destination | `~/.oxo-flow/ai_sessions/` archive | failure sessions archived by the shared orchestrator; every run's token usage in the operation log | chat messages in DB; token usage in the operation log |
 | Failure behavior | degrade: deliver the transcript's TOML with a warning | `AI_NOT_CONFIGURED` when no provider is usable; template-keyword fallback when providers fail | `AI_NOT_CONFIGURED` when no provider is usable; degraded delivery over SSE |
 
 Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):
-`OXO_FLOW_AI_MAX_TOKENS` (default 4096 — calibrated for the
-non-thinking tier with ≥3× headroom; raise for thinking backends) and
+`OXO_FLOW_AI_MAX_TOKENS` (default 16384 — the old 4096 was consumed by
+reasoning blocks before any TOML; 16384 clears thinking with room for the
+draft) and
 `OXO_FLOW_AI_TIMEOUT_SECS` (default 120 — non-thinking generations run
 12–20 s; thinking backends exceed it). Quality/cost evidence for these
 calibrations and the unification itself lives in `eval/frontier/`

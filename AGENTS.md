@@ -111,7 +111,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_AI_API_KEY` | No | — | Generic API key fallback |
 | `OXO_FLOW_AI_API_URL` | No | (provider default) | Custom API endpoint URL |
 | `OXO_FLOW_AI_MODEL` | No | (provider default) | Model name override |
-| `OXO_FLOW_AI_MAX_TOKENS` | No | `4096` | Output-token ceiling for the Anthropic Messages backend. Raise for thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible endpoint) whose reasoning blocks count against `max_tokens` — at the default their answers truncate before any text is produced |
+| `OXO_FLOW_AI_MAX_TOKENS` | No | `16384` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) whose reasoning blocks count against `max_tokens` — the old 4096 default truncated before any text was produced |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | No | `120` | Per-request timeout for all AI provider backends. Raise together with OXO_FLOW_AI_MAX_TOKENS on thinking backends — long completions otherwise die mid-body with "error decoding response body" |
 | `OXO_FLOW_MASTER_KEY` | No | — | AES-256-GCM seed encrypting AI provider keys at rest (`v1:`-prefixed rows in the local DB). Unset = plaintext legacy mode |
 | `ANTHROPIC_AUTH_TOKEN` | No | — | Claude/Anthropic API key (overrides OXO_FLOW_AI_API_KEY) |

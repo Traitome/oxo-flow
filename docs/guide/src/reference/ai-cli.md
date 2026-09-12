@@ -300,7 +300,7 @@ repository.
 | `OXO_FLOW_AI_API_KEY` | Generic API key (fallback for all providers) | — |
 | `OXO_FLOW_AI_API_URL` | Custom API endpoint URL | (provider default) |
 | `OXO_FLOW_AI_MODEL` | Model name override | (provider default) |
-| `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Raise it for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek behind an Anthropic-compatible endpoint) — at the default, answers can truncate before any text is produced | `4096` |
+| `OXO_FLOW_AI_MAX_TOKENS` | Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against `max_tokens` (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced | `16384` |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on thinking backends, or long completions die mid-body ("error decoding response body") | `120` |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |

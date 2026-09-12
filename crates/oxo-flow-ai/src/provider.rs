@@ -610,11 +610,13 @@ fn to_anthropic_messages(messages: &[Message]) -> (String, Vec<serde_json::Value
 
 /// Output-token ceiling for the Anthropic Messages backend.
 ///
-/// Defaults to 4096 but is overridable via `OXO_FLOW_AI_MAX_TOKENS`.
-/// Thinking-style backends (e.g. DeepSeek served behind an
+/// Defaults to 16384 but is overridable via `OXO_FLOW_AI_MAX_TOKENS`.
+/// Thinking-style backends (e.g. DeepSeek or GLM served behind an
 /// Anthropic-compatible endpoint) emit `thinking` blocks whose tokens count
-/// against `max_tokens`; a hard 4096 there truncates the answer before any
-/// text is produced, so pipeline generation silently loses its TOML.
+/// against `max_tokens`; the old hard 4096 there was consumed by reasoning
+/// before any text was produced (GLM returned empty content on every round),
+/// so pipeline generation silently lost its TOML. 16384 clears the thinking
+/// budget with room for the TOML (model-axis calibration, 5/5 archetypes).
 fn max_tokens_from_env() -> u32 {
     parse_max_tokens(std::env::var("OXO_FLOW_AI_MAX_TOKENS").ok().as_deref())
 }
@@ -623,7 +625,7 @@ fn parse_max_tokens(value: Option<&str>) -> u32 {
     value
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(4096)
+        .unwrap_or(16384)
 }
 
 fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
@@ -1559,16 +1561,18 @@ mod tests {
 
     #[test]
     fn max_tokens_env_override_parses_strictly() {
-        // Thinking backends burn the hardcoded 4096 on reasoning blocks and
-        // truncate before the answer; the env override must accept only
-        // clean positive integers and otherwise fall back to 4096.
+        // Thinking backends burn the default budget on reasoning blocks and
+        // truncate before the answer (GLM produced empty text at 4096); the
+        // default is calibrated above that ceiling (16384) and the env
+        // override must accept only clean positive integers, otherwise
+        // falling back to that default.
         assert_eq!(parse_max_tokens(Some("16384")), 16384);
         assert_eq!(parse_max_tokens(Some(" 8192 ")), 8192);
-        assert_eq!(parse_max_tokens(Some("0")), 4096);
-        assert_eq!(parse_max_tokens(Some("-1")), 4096);
-        assert_eq!(parse_max_tokens(Some("abc")), 4096);
-        assert_eq!(parse_max_tokens(Some("")), 4096);
-        assert_eq!(parse_max_tokens(None), 4096);
+        assert_eq!(parse_max_tokens(Some("0")), 16384);
+        assert_eq!(parse_max_tokens(Some("-1")), 16384);
+        assert_eq!(parse_max_tokens(Some("abc")), 16384);
+        assert_eq!(parse_max_tokens(Some("")), 16384);
+        assert_eq!(parse_max_tokens(None), 16384);
     }
 
     #[test]
