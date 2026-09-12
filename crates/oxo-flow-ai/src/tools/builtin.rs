@@ -24,7 +24,7 @@ impl Tool for ReadFileTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_file".into(),
-            description: "Read the contents of a local file. Use this to get information from user-provided reference files or existing workflow configurations.".into(),
+            description: "Read the contents of a local file. Use this to get information from user-provided reference files or existing workflow configurations. Embedded skills and tool docs are not on disk — get them with lookup_skill/lookup_tool instead of reading files.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -56,7 +56,9 @@ impl Tool for ReadFileTool {
 
         let content = std::fs::read_to_string(path).map_err(|e| AiError::ToolError {
             tool: "read_file".into(),
-            message: format!("cannot read '{path}': {e}"),
+            message: format!(
+                "cannot read '{path}': {e} — embedded skills and tool docs are not files on disk; get them with lookup_skill and lookup_tool instead of read_file"
+            ),
         })?;
 
         Ok(content)
@@ -523,6 +525,18 @@ mod tests {
     }
 
     #[test]
+    fn read_file_tool_description_points_to_lookup_skill() {
+        // Live germline-gatk runs invented /root/.bioos/.../SKILL.md paths
+        // because skills are described as SKILL.md-standard files; the
+        // description must say up front that embedded skills are not on disk.
+        let desc = ReadFileTool::new().def().description;
+        assert!(
+            desc.contains("lookup_skill"),
+            "description must point at lookup_skill for embedded skills: {desc}"
+        );
+    }
+
+    #[test]
     fn fetch_url_tool_has_correct_def() {
         let tool = FetchUrlTool::new();
         assert_eq!(tool.name(), "fetch_url");
@@ -562,10 +576,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_file_tool_errors_on_missing_file() {
+    async fn read_file_error_on_missing_file_steers_to_embedded_knowledge() {
+        // Live germline-gatk runs retried the same hallucinated path 4×
+        // because the bare os error offered no alternative; the error must
+        // point embedded-knowledge seekers at lookup_skill/lookup_tool.
         let tool = ReadFileTool::new();
-        let result = tool.execute(r#"{"path": "/nonexistent/file.txt"}"#).await;
-        assert!(result.is_err());
+        let err = tool
+            .execute(
+                r#"{"path": "/root/.bioos/skills/variant-calling/bio-gatk-variant-calling/SKILL.md"}"#,
+            )
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot read"),
+            "path context must be preserved: {msg}"
+        );
+        assert!(
+            msg.contains("lookup_skill") || msg.contains("lookup_tool"),
+            "cannot-read error must steer to embedded knowledge tools: {msg}"
+        );
     }
 
     #[tokio::test]
