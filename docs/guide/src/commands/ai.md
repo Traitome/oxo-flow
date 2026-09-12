@@ -186,7 +186,7 @@ in the repository (see also
 
 | Variable | Default | When to change |
 |---|---|---|
-| `OXO_FLOW_AI_MAX_TOKENS` | `16384` | Calibrated for thinking-style backends (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint): reasoning blocks spend against this ceiling, and the old 4096 default was consumed before any TOML was produced. Non-thinking models keep ≥3× headroom (measured: 1.9k–4.4k output tokens per generation) |
+| `OXO_FLOW_AI_MAX_TOKENS` | `16384` | Calibrated for thinking-style backends (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint): reasoning blocks spend against this ceiling, and the old 4096 default was consumed before any TOML was produced. Non-thinking models keep ≥3× headroom (measured: 1.9k–4.4k output tokens per generation). Older first-party `claude-3-*` models cap `max_tokens` at 4096–8192 server-side — lower the knob when targeting them on the real api.anthropic.com |
 | `OXO_FLOW_AI_TIMEOUT_SECS` | `300` | Non-thinking generations complete in 12–20 s; a single thinking round routinely runs past two minutes (a measured GLM round took 145 s, so the old 120 s default killed mid-round) — raise further for slower endpoints, together with `OXO_FLOW_AI_MAX_TOKENS` |
 
 Both are consumed by the Anthropic Messages backend; the DeepSeek-native,
