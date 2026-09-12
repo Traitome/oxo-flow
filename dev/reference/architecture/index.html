@@ -5026,9 +5026,9 @@ taught a schema the engine rejects (Snakemake-style tables → <code>E017</code>
 </tr>
 <tr>
 <td>Correction budget</td>
-<td><code>--ai-max-retries</code> (default 6)</td>
-<td>6 rounds</td>
-<td>6 rounds</td>
+<td><code>--ai-max-retries</code> (default 10)</td>
+<td>10 rounds</td>
+<td>10 rounds</td>
 </tr>
 <tr>
 <td>Session destination</td>
@@ -5038,7 +5038,7 @@ taught a schema the engine rejects (Snakemake-style tables → <code>E017</code>
 </tr>
 <tr>
 <td>Failure behavior</td>
-<td>degrade: deliver the transcript's TOML with a warning</td>
+<td>degrade: deliver the transcript's TOML with a warning — extraction accepts only a fence segment (latest-first) or raw prefix that parses as TOML and passes the structural floor; a parseable-but-incomplete fence fragment is a best-effort fallback</td>
 <td><code>AI_NOT_CONFIGURED</code> when no provider is usable; template-keyword fallback when providers fail</td>
 <td><code>AI_NOT_CONFIGURED</code> when no provider is usable; degraded delivery over SSE</td>
 </tr>
@@ -5046,11 +5046,23 @@ taught a schema the engine rejects (Snakemake-style tables → <code>E017</code>
 </table>
 <p>Two provider-level ceilings matter for thinking-style backends (models
 that emit reasoning blocks counting against the output budget):
-<code>OXO_FLOW_AI_MAX_TOKENS</code> (default 4096 — calibrated for the
-non-thinking tier with ≥3× headroom; raise for thinking backends) and
-<code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 120 — non-thinking generations run
-12–20 s; thinking backends exceed it). Quality/cost evidence for these
-calibrations and the unification itself lives in <code>eval/frontier/</code>
+<code>OXO_FLOW_AI_MAX_TOKENS</code> (default 16384 — the old 4096 was consumed by
+reasoning blocks before any TOML; 16384 clears thinking with room for the
+draft) and
+<code>OXO_FLOW_AI_TIMEOUT_SECS</code> (default 300 — non-thinking generations run
+12–20 s, but a single thinking round routinely passes two minutes; a
+measured GLM round took 145 s, which the old 120 s default killed
+mid-round). Below the orchestrator, the
+provider backends retry transient transport failures (dropped or
+reset connections, response bodies that fail to decode) twice with a
+short backoff before surfacing an error — timeouts are excluded,
+since a retry would deterministically re-timeout and the knob above
+is the remedy. When a provider error does
+abort a generation, the orchestrator archives the transcript and logged
+token spend into the saved session instead of dropping them — the
+rounds before the failure were real paid work, and the CLI's
+degraded-delivery path reads the generated TOML from that transcript. Quality/cost evidence for
+these calibrations and the unification itself lives in <code>eval/frontier/</code>
 (gate-scored benchmark: deterministic <code>validate</code>/<code>dry-run</code>/<code>lint</code>
 verdicts, no LLM judge).</p>
 <p>Security boundary is unchanged by the harness: <code>oxo-flow-ai</code> holds no

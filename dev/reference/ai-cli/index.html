@@ -4881,13 +4881,13 @@ repository.</p>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
-<td>Output-token ceiling for the Anthropic Messages backend. Raise it for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek behind an Anthropic-compatible endpoint) — at the default, answers can truncate before any text is produced</td>
-<td><code>4096</code></td>
+<td>Output-token ceiling for the Anthropic Messages backend. Calibrated for thinking-style backends whose reasoning blocks count against <code>max_tokens</code> (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint) — the old 4096 default truncated before any text was produced</td>
+<td><code>16384</code></td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
-<td>Per-request timeout for AI provider calls. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on thinking backends, or long completions die mid-body ("error decoding response body")</td>
-<td><code>120</code></td>
+<td>Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code> on slower endpoints</td>
+<td><code>300</code></td>
 </tr>
 <tr>
 <td><code>DEEPSEEK_API_KEY</code></td>

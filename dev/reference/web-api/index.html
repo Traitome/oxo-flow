@@ -5680,6 +5680,12 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 </span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14" href="#__codelineno-49-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
 </span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15" href="#__codelineno-49-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
 </span></code></pre></div>
+<p>Both knowledge endpoints accept <code>?q=&lt;query&gt;&amp;limit=&lt;1-50&gt;</code> (default 20).
+<code>/api/knowledge/tools</code> treats an empty <code>q</code> as a browse: it returns the
+first <code>limit</code> Bioconda entries. <code>/api/knowledge/skills</code> tokenizes the
+query and ranks matches (rare terms first); an empty or unmatched <code>q</code>
+returns an empty <code>skills</code> array — <code>total</code> is always the full catalog
+size, not the hit count.</p>
 <p>The translate endpoints take <code>{ "intent": "&lt;natural-language description&gt;",
 "context": { "data_analysis_id": "&lt;uuid&gt;" } }</code> — <code>intent</code> is REQUIRED (sending
 only a <code>prompt</code> field fails deserialization); <code>context</code> is optional.</p>

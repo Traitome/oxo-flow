@@ -4051,9 +4051,16 @@ loop. The steps:</p>
 <h3 id="correction-budget-and-failure-behavior">Correction budget and failure behavior<a class="headerlink" href="#correction-budget-and-failure-behavior" title="Permanent link">#</a></h3>
 <ul>
 <li><code>--ai-max-retries N</code> sizes the orchestrator's combined tool +
-  correction-round budget (default from <code>[ai]</code> config, 6 when unset —
-  knowledge lookups and the correction pass share the budget, and the
-  loop stops as soon as a draft validates).</li>
+  correction-round budget (default from <code>[ai]</code> config, 10 when unset —
+  knowledge lookups and the correction pass share the budget, exploration-
+  heavy models spend 7–10 rounds before drafting, and the loop stops as
+  soon as a draft validates). When the first half of that budget burns on
+  consecutive rounds whose assistant turns were pure tool calls (zero
+  prose), the orchestrator nudges once: a warning rides the next tool
+  result telling the model to consolidate what it has found and start
+  producing the deliverable — measured on thinking-style backends whose
+  draws otherwise spent every round on lookups and hit the cap with
+  nothing written.</li>
 <li><code>--ai-attempts N</code> is the fresh-draw budget <strong>across</strong> generations
   (pass@k with early exit): every attempt starts from a new draw, the
   deterministic gates decide, and later attempts are only paid when
@@ -4064,8 +4071,29 @@ loop. The steps:</p>
 <li>If the budget runs out after a pipeline was drafted, the command
   <strong>degrades instead of discarding</strong>: the generated TOML is extracted
   from the transcript and written with a prominent review warning —
-  a paid-for artifact is never silently lost.</li>
-<li>Provider failures (auth, quota, network) fail fast with the error.</li>
+  a paid-for artifact is never silently lost. Degraded delivery never
+  writes structurally broken TOML. Extraction scans the transcript's
+  toml-fenced drafts latest-first (correction rounds accumulate, and the
+  last complete draft is the model's final word); a fenced candidate is
+  accepted only when it parses as TOML and passes the structural floor
+  (a <code>[workflow]</code> table plus every rule carrying a <code>shell</code>). A draft the
+  model corrected by opening a fresh fence — without closing the stale
+  one — cannot shadow the correction: the stray fence line closes the
+  dangling draft and reopens. When no complete draft exists, a
+  parseable-but-incomplete fenced fragment is kept as a best-effort
+  fallback (still delivered under the review warning). With no closed
+  fence at all (budget expired mid-block), the raw fallback from the
+  first <code>[workflow]</code> line likewise only accepts a prefix that parses and
+  passes the floor — an unterminated draft fails extraction, the
+  artifact is not written, and the error explains why.</li>
+<li>Provider failures (auth, quota, network) fail fast with the error.
+  One carve-out: a transient transport failure (dropped connection,
+  mid-transfer reset, or a response body that fails to decode — the
+  classic flakes where one request out of a healthy session dies) is
+  retried twice with a short backoff before surfacing, since retrying
+  is what a user would do. Timeouts are not retried — they have their
+  own knob (<code>OXO_FLOW_AI_TIMEOUT_SECS</code>) and a retry would
+  deterministically re-timeout.</li>
 </ul>
 <h3 id="scientist-team-profile-opt-in">Scientist Team profile (opt-in)<a class="headerlink" href="#scientist-team-profile-opt-in" title="Permanent link">#</a></h3>
 <p><code>--ai-team-profile full</code> (or <code>[ai] team_profile = "full"</code>) wraps the same
@@ -4089,13 +4117,13 @@ in the repository (see also
 <tbody>
 <tr>
 <td><code>OXO_FLOW_AI_MAX_TOKENS</code></td>
-<td><code>4096</code></td>
-<td>Thinking-style backends (e.g. DeepSeek behind an Anthropic-compatible endpoint) spend reasoning tokens against this ceiling and truncate before producing TOML — raise to 16384+ there. For non-thinking models the default holds with ≥3× headroom (measured: 1.9k–4.4k output tokens per generation)</td>
+<td><code>16384</code></td>
+<td>Calibrated for thinking-style backends (e.g. DeepSeek or GLM behind an Anthropic-compatible endpoint): reasoning blocks spend against this ceiling, and the old 4096 default was consumed before any TOML was produced. Non-thinking models keep ≥3× headroom (measured: 1.9k–4.4k output tokens per generation). Older first-party <code>claude-3-*</code> models cap <code>max_tokens</code> at 4096–8192 server-side — lower the knob when targeting them on the real api.anthropic.com</td>
 </tr>
 <tr>
 <td><code>OXO_FLOW_AI_TIMEOUT_SECS</code></td>
-<td><code>120</code></td>
-<td>Non-thinking generations complete in 12–20 s; thinking backends can exceed two minutes per call — raise together with <code>OXO_FLOW_AI_MAX_TOKENS</code>, or long completions die mid-body</td>
+<td><code>300</code></td>
+<td>Non-thinking generations complete in 12–20 s; a single thinking round routinely runs past two minutes (a measured GLM round took 145 s, so the old 120 s default killed mid-round) — raise further for slower endpoints, together with <code>OXO_FLOW_AI_MAX_TOKENS</code></td>
 </tr>
 </tbody>
 </table>
