@@ -1,0 +1,10 @@
+[workflow]
+name = "contig-stats"
+version = "0.1.0"
+description = "Extract per-contig statistics"
+
+[[rules]]
+name = "pick_contig"
+input = ["data/contigs.fa"]
+output = ["out/contig_len.txt"]
+shell = "python3 scripts/pick_contig.py {input[0]} {output[0]}"

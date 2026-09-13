@@ -1,0 +1,12 @@
+{
+  "id": "s03-script-error",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": ["chrm", "keyerror", "traceback", "pick_contig\\.py", "missing .*contig", "contig .*missing"],
+  "forbid": [],
+  "setup": {
+    "data/contigs.fa": ">chr1\nACGTACGTACGT\n>chr2\nTGCATGCATGCA\n",
+    "scripts/pick_contig.py": "import sys\n\nfa = {}\nname = None\nfor line in open(sys.argv[1]):\n    if line.startswith(\">\"):\n        name = line[1:].strip().split()[0]\n        fa[name] = []\n    else:\n        fa[name].append(line.strip())\n\ncontig = fa[\"chrM\"]\nwith open(sys.argv[2], \"w\") as out:\n    out.write(str(len(contig)) + \"\\n\")\n"
+  },
+  "ground_truth": "scripts/pick_contig.py requests contig 'chrM' which is absent from data/contigs.fa -> KeyError: 'chrM' traceback"
+}

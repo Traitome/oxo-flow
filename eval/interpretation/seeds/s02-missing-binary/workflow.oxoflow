@@ -1,0 +1,10 @@
+[workflow]
+name = "align-bam"
+version = "0.1.0"
+description = "Align a sample against the reference"
+
+[[rules]]
+name = "align_reads"
+input = ["data/reads/sample_R1.fastq.gz"]
+output = ["out/aln.sam"]
+shell = "bwa-mem2 mem -t 4 ref/genome.fa {input[0]} > {output[0]}"

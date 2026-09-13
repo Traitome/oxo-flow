@@ -1,0 +1,15 @@
+[workflow]
+name = "hello-pipeline"
+version = "0.1.0"
+description = "Two-step demo chain"
+
+[[rules]]
+name = "greet"
+output = ["out/hello.txt"]
+shell = "echo hello > {output[0]}"
+
+[[rules]]
+name = "wrap"
+input = ["out/hello.txt"]
+output = ["out/wrapped.txt"]
+shell = "cat {input[0]} > {output[0]}"

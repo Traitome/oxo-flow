@@ -1,0 +1,10 @@
+[workflow]
+name = "cohort-prep"
+version = "0.1.0"
+description = "Prepare per-sample count summaries for the cohort"
+
+[[rules]]
+name = "count_reads"
+input = ["data/reads/sample_R1.fastq.gz"]
+output = ["out/counts.txt"]
+shell = "zcat {input[0]} > {output[0]}"
