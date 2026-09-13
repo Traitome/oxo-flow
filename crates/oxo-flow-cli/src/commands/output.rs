@@ -1714,8 +1714,7 @@ fn build_interpretation_prompt(
             if let Some(stderr) = run.stderr_tail.as_deref() {
                 let stderr = stderr.trim();
                 if !stderr.is_empty() {
-                    let snippet: String =
-                        stderr.chars().take(INTERPRET_STDERR_CHARS).collect();
+                    let snippet: String = stderr.chars().take(INTERPRET_STDERR_CHARS).collect();
                     per_rule.push(format!("  stderr: {snippet}"));
                 }
             }
@@ -1793,8 +1792,8 @@ async fn interpret_report_with_ai(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_interpretation_prompt, parse_hms_to_secs, parse_maxrss_to_mb,
-        report_extension, resolve_report_workflow, short_checksum,
+        build_interpretation_prompt, parse_hms_to_secs, parse_maxrss_to_mb, report_extension,
+        resolve_report_workflow, short_checksum,
     };
 
     fn config_for(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
