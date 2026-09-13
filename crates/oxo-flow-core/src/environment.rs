@@ -1347,7 +1347,18 @@ impl EnvironmentBackend for PixiBackend {
         // "envs/pixi.toml"`) — `-e` selects an environment NAME inside a
         // pixi.toml already discovered from the CWD, which fails when the
         // manifest lives anywhere else (live-caught on tx-ubuntu).
-        Ok(format!("pixi run --manifest-path {spec} {command}"))
+        //
+        // The whole command must travel INSIDE `pixi run`: the executor
+        // prepends a `mkdir -p out` line, so a bare prefix wrap ran only
+        // the mkdir inside the env and left the rule's own shell on the
+        // host PATH. `pixi run` is a child-process env (like docker), not
+        // a PATH-mutating one (like modules/venv), so shell operators and
+        // continuation lines escape a prefix wrap (issue #354, live-caught
+        // on the workq cluster).
+        let escaped_cmd = escape_for_sh_single_quote(command);
+        Ok(format!(
+            "pixi run --manifest-path {spec} bash -c '{escaped_cmd}'"
+        ))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -3172,8 +3183,28 @@ mod tests {
             .unwrap();
         assert_eq!(
             result,
-            "pixi run --manifest-path envs/pixi.toml python main.py"
+            "pixi run --manifest-path envs/pixi.toml bash -c 'python main.py'"
         );
+    }
+
+    #[test]
+    fn pixi_wrap_keeps_multiline_command_inside_the_env() {
+        // The executor prepends `mkdir -p out` to every rule command; a
+        // prefix-style wrap would leave the rule's own line on the host
+        // PATH (issue #354).
+        let backend = PixiBackend;
+        let result = backend
+            .wrap_command(
+                "mkdir -p out\ncommand -v curl > out/pixi.txt",
+                "envs/pixi.toml",
+                None,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        assert!(result.starts_with("pixi run --manifest-path envs/pixi.toml bash -c '"));
+        // Both lines — including the rule's own — travel inside the env.
+        assert!(result.contains("mkdir -p out\ncommand -v curl"));
+        assert!(result.ends_with('\''));
     }
 
     #[test]
