@@ -95,11 +95,23 @@ def main() -> int:
         )
         return 2
 
-    seed_ids = (
-        [s.strip() for s in args.seeds.split(",")]
-        if args.seeds
-        else sorted(d.name for d in SEEDS_DIR.iterdir() if d.is_dir())
-    )
+    all_dirs = sorted(d.name for d in SEEDS_DIR.iterdir() if d.is_dir())
+    if args.seeds:
+        # Short ids are accepted and resolved by unique-prefix match, so the
+        # README's `--seeds s01,s04` form works against `s01-missing-input`.
+        seed_ids = []
+        for token in (s.strip() for s in args.seeds.split(",")):
+            matches = [d for d in all_dirs if d == token or d.startswith(token)]
+            if len(matches) != 1:
+                print(
+                    f"seed filter '{token}' matched {len(matches)} seeds: "
+                    f"{matches or all_dirs}",
+                    file=sys.stderr,
+                )
+                return 2
+            seed_ids.append(matches[0])
+    else:
+        seed_ids = all_dirs
     stamp = args.stamp or time.strftime("%Y%m%d-%H%M%S")
     out_root = HERE / "results" / stamp
 
