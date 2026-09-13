@@ -262,7 +262,6 @@ async fn sse_production_scale_stress_profile() {
         );
         // Round-robin over readers with a short timeout each so one silent
         // stream cannot mask another's progress.
-        let mut progressed = false;
         for (ri, (_, rx)) in readers.iter_mut().enumerate() {
             if per_reader[ri].len() >= N_RUNS {
                 continue;
@@ -283,13 +282,11 @@ async fn sse_production_scale_stress_profile() {
                         latencies.push(t0.elapsed());
                     }
                     events_left -= 1;
-                    progressed = true;
                 }
                 Ok(None) => panic!("reader {ri}: stream ended prematurely"),
                 Err(_) => {} // timeout — move to the next reader
             }
         }
-        let _ = progressed;
     }
 
     for (ri, seen) in per_reader.iter().enumerate() {
