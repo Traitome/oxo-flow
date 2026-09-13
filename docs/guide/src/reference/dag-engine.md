@@ -137,7 +137,7 @@ let groups: Vec<Vec<String>> = dag.parallel_groups()?;
 // [["fastqc", "trim_reads"], ["align"], ["multiqc"]]
 ```
 
-This is used by `oxo-flow dry-run` to display the execution plan grouped by level, and by `oxo-flow run` to suggest a `-j` value from the maximum group width.
+This is used by `oxo-flow dry-run` to display the execution plan grouped by level, and by `oxo-flow run` to suggest a `-j` value: each group is evaluated against its own heaviest rule (`min(group width, cores ÷ heaviest threads in the group)`), and the suggestion is the maximum across groups — so a wide wave of light rules is not starved by an unrelated heavy wave (issue #361). The resource pool still enforces declared threads at execution time, so running with a higher `-j` than suggested is safe.
 
 ---
 

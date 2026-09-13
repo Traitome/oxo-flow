@@ -4197,6 +4197,39 @@ fn age_ready_list(
     ready
 }
 
+/// Suggest a `-j` (max concurrent jobs) value for the workflow on this
+/// machine, evaluated **per parallel group** (issue #361).
+///
+/// For every wave: the wider of (wave width) and (cores ÷ heaviest rule in
+/// that wave) is the number of jobs that wave can sustain. The suggestion
+/// is the maximum across waves, so a light wide wave is never starved by
+/// an unrelated heavy wave elsewhere in the DAG — the old global
+/// `cores / max_threads_per_rule` formula measured 1.7–3.7× makespan loss
+/// on mixed DAGs. The engine's resource pool already enforces declared
+/// threads, so a generous suggestion is safe: this is a performance hint,
+/// not an oversubscription gate.
+fn suggest_jobs(config: &WorkflowConfig, groups: &[Vec<String>], system_threads: u32) -> u32 {
+    let system_threads = system_threads.max(1);
+    let wave_capacity = |names: &[String]| -> u32 {
+        let max_threads = names
+            .iter()
+            .filter_map(|n| config.get_rule(n))
+            .map(|r| r.effective_threads())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        (system_threads / max_threads)
+            .min(names.len() as u32)
+            .max(1)
+    };
+    groups
+        .iter()
+        .map(|g| wave_capacity(g))
+        .max()
+        .unwrap_or(1)
+        .clamp(1, system_threads)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn dry_run_command(
     workflow: Option<PathBuf>,
@@ -4740,32 +4773,16 @@ pub async fn dry_run_command(
         );
     }
 
-    // Suggest -j based on system threads DIVIDED by the workflow's max
-    // per-rule thread declaration, so concurrent jobs don't oversubscribe
-    // the CPU. E.g. 10 threads / rules-with-4-threads = 2 concurrent jobs.
-    let max_threads_per_rule = config
-        .rules
-        .iter()
-        .map(|r| r.effective_threads())
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    // Suggest -j per parallel group (issue #361): each wave is evaluated
+    // against its own heaviest rule, so a light wide wave is not starved
+    // by an unrelated heavy wave elsewhere in the DAG. The engine's
+    // resource pool enforces declared threads, so this is a performance
+    // hint, not an oversubscription gate.
     let system_threads = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4);
-    // Professional suggestion = the smaller of:
-    //   - DAG width: the maximum number of rules that can ever run
-    //     simultaneously (suggesting -j above this is meaningless)
-    //   - Resource math: system_threads / max_threads_per_rule
-    //     (more concurrent jobs would oversubscribe the CPU)
-    let dag_width = dag
-        .parallel_groups()
-        .map(|groups| groups.iter().map(|g| g.len()).max().unwrap_or(1))
-        .unwrap_or(1) as u32;
-    let suggested_jobs = (system_threads / max_threads_per_rule)
-        .min(dag_width)
-        .clamp(1, 16)
-        .to_string();
+    let groups = dag.parallel_groups().unwrap_or_default();
+    let suggested_jobs = suggest_jobs(&config, &groups, system_threads).to_string();
     eprintln!(
         "\n{}  oxo-flow run {} -j {}",
         "To execute:".bold().cyan(),
@@ -5704,9 +5721,78 @@ pub async fn resume_command(
 mod tests {
     use super::{
         age_ready_list, ai_attempts, cleanup_cache_dir, closest_declared_key, known_modules_hint,
-        parse_cli_overrides, substitute_source_placeholder,
+        parse_cli_overrides, substitute_source_placeholder, suggest_jobs,
     };
     use std::collections::HashSet;
+
+    fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
+        oxo_flow_core::config::WorkflowConfig::parse(rules_toml).unwrap()
+    }
+
+    #[test]
+    fn suggest_jobs_evaluates_each_wave_against_its_own_heaviest_rule() {
+        // Waves: 20×t1, 2×t16, 20×t1 on a 64-core box. The old global
+        // formula suggested 4; the per-group form keeps the wide light
+        // waves at 20 (issue #361 measured 11.0 s vs 3.0 s makespan on
+        // this exact shape).
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"a{i}\"\noutput = [\"a{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        for i in 0..2 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"b{i}\"\noutput = [\"b{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 16\n"
+            ));
+        }
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"c{i}\"\noutput = [\"c{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![
+            (0..20).map(|i| format!("a{i}")).collect::<Vec<_>>(),
+            (0..2).map(|i| format!("b{i}")).collect::<Vec<_>>(),
+            (0..20).map(|i| format!("c{i}")).collect::<Vec<_>>(),
+        ];
+        assert_eq!(suggest_jobs(&config, &groups, 64), 20);
+        // The old global formula would have said 4 here.
+        assert_ne!(suggest_jobs(&config, &groups, 64), 4);
+    }
+
+    #[test]
+    fn suggest_jobs_clamps_to_the_wave_width_and_system_threads() {
+        // A single wave of 5 heavy rules on 4 cores: 4/16 → 0 → clamped
+        // to at least 1 job, and never above the wave width (5).
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..5 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"h{i}\"\noutput = [\"h{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 16\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![(0..5).map(|i| format!("h{i}")).collect::<Vec<_>>()];
+        assert_eq!(suggest_jobs(&config, &groups, 4), 1);
+        // Wide light wave on a big machine: the 16-job legacy ceiling is gone.
+        let mut toml = String::from("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        for i in 0..20 {
+            toml.push_str(&format!(
+                "\n[[rules]]\nname = \"l{i}\"\noutput = [\"l{i}.txt\"]\nshell = \"true\"\n\n[rules.resources]\nthreads = 1\n"
+            ));
+        }
+        let config = config_with_rules(&toml);
+        let groups = vec![(0..20).map(|i| format!("l{i}")).collect::<Vec<_>>()];
+        assert_eq!(suggest_jobs(&config, &groups, 64), 20);
+    }
+
+    #[test]
+    fn suggest_jobs_defaults_to_one_without_rules() {
+        let config = config_with_rules("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
+        assert_eq!(suggest_jobs(&config, &[], 64), 1);
+        assert_eq!(suggest_jobs(&config, &[vec![]], 64), 1);
+    }
 
     #[test]
     fn cleanup_cache_dir_is_recursive() {
