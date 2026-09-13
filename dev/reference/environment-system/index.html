@@ -4327,8 +4327,9 @@ or rename it, build the suffixed env, or drop <code>--skip-env-setup</code>.</p>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>pixi</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses the <code>pixi.toml</code> manifest the rule names</li>
-<li><strong>Activation</strong>: Runs <code>pixi run --manifest-path &lt;pixi.toml&gt; &lt;command&gt;</code> — the spec is a <strong>manifest path</strong>, not an environment name (<code>-e</code> would only search the current directory for a discoverable manifest)</li>
+<li><strong>Activation</strong>: Runs <code>pixi run --manifest-path &lt;pixi.toml&gt; bash -c '&lt;command&gt;'</code> — the <strong>whole</strong> rule command travels inside the env. <code>pixi run</code> is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (<code>&amp;&amp;</code>, <code>|</code>) and the executor's prepended <code>mkdir -p</code> line escape the env and run on the host PATH (live-caught on a SLURM cluster, issue #354). The spec is a <strong>manifest path</strong>, not an environment name (<code>-e</code> would only search the current directory for a discoverable manifest)</li>
 <li><strong>Lockfile</strong>: Pixi's native lockfile ensures reproducible resolution</li>
+<li><strong>Site quirks (live-verified)</strong>: hand-written manifests must declare <code>platforms</code> (e.g. <code>platforms = ["linux-64"]</code>) — modern pixi refuses to solve a workspace without them; and <code>pixi</code> must be on <code>$PATH</code> inside batch jobs, which start with a clean environment</li>
 </ul>
 <h3 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">#</a></h3>
 <ul>
@@ -4356,9 +4357,9 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 </div>
 <h3 id="python-venv">Python venv<a class="headerlink" href="#python-venv" title="Permanent link">#</a></h3>
 <ul>
-<li><strong>Detection</strong>: Checks for <code>python3</code> on <code>$PATH</code></li>
-<li><strong>Resolution</strong>: Parses <code>requirements.txt</code> file</li>
-<li><strong>Activation</strong>: Creates a venv (if needed) and activates it before the command</li>
+<li><strong>Detection</strong>: Checks for <code>python3</code> on <code>$PATH</code> (with <code>ensurepip</code>/<code>venv</code> importable)</li>
+<li><strong>Resolution</strong>: <code>environment.venv</code> names the <strong>venv directory</strong> to create/reuse (e.g. <code>.venv</code>); <code>environment.venv_requirements</code> names the requirements file (default: <code>requirements.txt</code> in the working directory). Declaring a requirements file path in <code>venv</code> itself fails — the backend creates a directory at that path</li>
+<li><strong>Activation</strong>: Creates the venv (if needed) and activates it before the command</li>
 <li><strong>Caching</strong>: Venvs are stored in a cache directory keyed by the declared
   venv spec (<code>venv:&lt;path&gt;</code> — the venv path you declared in the rule), not by
   a hash of the requirements content. Editing <code>requirements.txt</code> in place
@@ -4371,6 +4372,12 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 <li><strong>Resolution</strong>: Parses the module list (comma-separated) from <code>environment.modules</code></li>
 <li><strong>Activation</strong>: Initializes the module system (sources <code>/etc/profile.d/modules.sh</code> or common Lmod/Modules init scripts), then runs <code>module load &lt;modules&gt;</code> before the command. Fails with a clear error if the <code>module</code> command is unavailable.</li>
 <li><strong>Usage</strong>: Set <code>environment.modules = ["gcc/11.2", "cuda/11.7"]</code> in the rule. Modules are used when <code>environment.modules</code> is set and no other backend is declared (priority: mamba, conda, pixi, docker, singularity, venv, modules).</li>
+<li><strong>Site quirks (live-verified)</strong>: the wrap mutates <code>$PATH</code> inside the rule's
+  shell, so a same-named binary from a user-level tool manager (e.g.
+  <code>~/.pixi/bin</code>, <code>~/.local/bin</code>, a conda base) <strong>shadows</strong> the
+  module-provided one — probe with <code>command -v &lt;tool&gt;</code> when diagnosing. The
+  init fallback chain covers Environment Modules under both
+  <code>/usr/share/modules</code> and <code>/usr/share/Modules</code>.</li>
 </ul>
 <h3 id="system">System<a class="headerlink" href="#system" title="Permanent link">#</a></h3>
 <ul>
