@@ -1,0 +1,13 @@
+[workflow]
+name = "qc-suite"
+version = "0.1.0"
+description = "Run QC on sequencing data"
+
+[[rules]]
+name = "fastqc"
+input = ["data/reads/sample_R1.fastq.gz"]
+output = ["out/fastqc.html"]
+shell = "fastqc {input[0]} -o out/"
+
+[rules.environment]
+docker = "biocontainers/fastqc:latest"

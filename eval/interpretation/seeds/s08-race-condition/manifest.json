@@ -1,0 +1,11 @@
+{
+  "id": "s08-race-condition",
+  "surface": "dry-run",
+  "run_expect_exit": 0,
+  "expect_any": ["collision", "race", "identical output", "same output", "same file"],
+  "forbid": [],
+  "setup": {
+    "data/reads/sample_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nIIII\n"
+  },
+  "ground_truth": "two rules declare the identical output out/counts.txt — execution order decides the content (write race)"
+}

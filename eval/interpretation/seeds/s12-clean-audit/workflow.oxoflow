@@ -1,0 +1,20 @@
+[workflow]
+name = "clean-qc"
+version = "1.0.0"
+description = "Minimal fully-declared QC workflow"
+
+[config]
+reads = "data/reads/sample_R1.fastq.gz"
+
+[[rules]]
+name = "fastqc_screen"
+input = ["{config.reads}"]
+output = ["out/sample_R1_fastqc.html"]
+shell = "mkdir -p out && fastqc {input[0]} -o out/ -t {threads}"
+
+[rules.resources]
+threads = 2
+memory = "4G"
+
+[rules.environment]
+docker = "biocontainers/fastqc:v0.11.9_cv1"

@@ -1,0 +1,11 @@
+{
+  "id": "s07-floating-tag",
+  "surface": "dry-run",
+  "run_expect_exit": 0,
+  "expect_any": [":latest", "latest", "reproducib"],
+  "forbid": [],
+  "setup": {
+    "data/reads/sample_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n"
+  },
+  "ground_truth": "docker image pinned to mutable :latest tag — irreproducible across pulls; should be an immutable version tag"
+}

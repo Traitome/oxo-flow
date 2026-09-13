@@ -1,0 +1,12 @@
+{
+  "id": "s09-charset-gate",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": ["charset", "safe default", "character set", "sample;2"],
+  "forbid": [],
+  "setup": {
+    "data/reads/sample_1_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n",
+    "data/reads/sample;2_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n"
+  },
+  "ground_truth": "wildcard value 'sample;2' is rejected by the engine's safe-default charset check (^[A-Za-z0-9._/-]+$); the sample list must use safe characters. Note: the offending value legitimately appears in the expanded instance name — that is engine behavior, not seed leakage"
+}

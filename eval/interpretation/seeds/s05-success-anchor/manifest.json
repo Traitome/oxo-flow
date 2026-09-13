@@ -2,8 +2,15 @@
   "id": "s05-success-anchor",
   "surface": "report",
   "run_expect_exit": 0,
-  "expect_any": ["succeed|succeeded|success|completed|passed|no (error|failure)|without (error|issue)"],
-  "forbid": [],
+  "expect_any": [
+    "succeed|succeeded|success|completed|passed|no (error|failure)|without (error|issue)"
+  ],
+  "forbid": [
+    "workflow failed",
+    "rules failed",
+    "some rules failed",
+    "at least one .* failed"
+  ],
   "setup": {},
   "ground_truth": "both rules succeed; the interpretation should say so"
 }

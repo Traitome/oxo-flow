@@ -50,11 +50,11 @@ def materialize(workdir: Path, setup: dict) -> None:
         path.write_text(content)
 
 
-def run_cmd(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
+def run_cmd(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
     )
-    return proc.returncode, clean(proc.stderr)
+    return proc.returncode, clean(proc.stdout), clean(proc.stderr)
 
 
 def score_seed(manifest: dict, prose: str) -> tuple[bool, list[str], list[str]]:
@@ -124,22 +124,43 @@ def main() -> int:
         shutil.copy(seed_dir / "workflow.oxoflow", workdir / "workflow.oxoflow")
         materialize(workdir, manifest.get("setup", {}))
 
-        run_exit, run_stderr = run_cmd(
-            [str(binary), "run", "workflow.oxoflow"], workdir, args.timeout
-        )
-        (workdir / "run.stderr.log").write_text(run_stderr)
-        exit_ok = run_exit == manifest["run_expect_exit"]
+        run_exit = None
+        exit_ok = True
+        prose = ""
+        analysis_exit = 0
+        if manifest["surface"] == "dry-run":
+            # Pre-execution analysis: no checkpoint exists, the workflow
+            # source (plus the engine's deterministic preflight findings)
+            # is the evidence. `ai_check` prints the analysis to STDOUT
+            # (unlike `report --ai`, which uses stderr). A run without the
+            # "Analysis Results" marker means the AI block never executed
+            # (e.g. provider resolution silently skipped) — that is a
+            # broken seed, not a scoring miss.
+            analysis_exit, stdout, _ = run_cmd(
+                [str(binary), "dry-run", "workflow.oxoflow", "--ai"],
+                workdir,
+                args.timeout,
+            )
+            exit_ok = analysis_exit == manifest["run_expect_exit"]
+            prose = stdout
+            if "Analysis Results" not in prose:
+                exit_ok = False
+        else:
+            run_exit, _, run_stderr = run_cmd(
+                [str(binary), "run", "workflow.oxoflow"], workdir, args.timeout
+            )
+            (workdir / "run.stderr.log").write_text(run_stderr)
+            exit_ok = run_exit == manifest["run_expect_exit"]
 
-        report_cmd = [str(binary), "report", "workflow.oxoflow", "--ai"]
-        if manifest["surface"] == "report-failed":
-            report_cmd.append("--failed")
-        report_cmd += ["--format", "md", "-o", "report.md"]
-        report_exit, report_stderr = run_cmd(report_cmd, workdir, args.timeout)
-        prose = report_stderr
+            report_cmd = [str(binary), "report", "workflow.oxoflow", "--ai"]
+            if manifest["surface"] == "report-failed":
+                report_cmd.append("--failed")
+            report_cmd += ["--format", "md", "-o", "report.md"]
+            analysis_exit, _, prose = run_cmd(report_cmd, workdir, args.timeout)
         (workdir / "ai.txt").write_text(prose)
 
         hit, matched, forbid_hit = score_seed(manifest, prose)
-        broken = not exit_ok or report_exit != 0
+        broken = not exit_ok or analysis_exit != 0
         rows.append(
             {
                 "id": manifest["id"],
@@ -147,7 +168,7 @@ def main() -> int:
                 "ground_truth": manifest["ground_truth"],
                 "run_exit": run_exit,
                 "run_exit_ok": exit_ok,
-                "report_exit": report_exit,
+                "report_exit": analysis_exit,
                 "broken": broken,
                 "hit": hit,
                 "matched": matched,
@@ -160,6 +181,8 @@ def main() -> int:
     summary = {
         "stamp": stamp,
         "binary": str(binary),
+        "provider": os.environ.get("OXO_FLOW_AI_PROVIDER", ""),
+        "model": os.environ.get("ANTHROPIC_MODEL", ""),
         "seeds": len(rows),
         "broken": [r["id"] for r in rows if r["broken"]],
         "hit_rate": (

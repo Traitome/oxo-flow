@@ -1,0 +1,13 @@
+[workflow]
+name = "api-enrichment"
+version = "0.1.0"
+description = "Enrich variants against an external API"
+
+[[rules]]
+name = "enrich_variants"
+input = ["data/variants.vcf"]
+output = ["out/enriched.vcf"]
+shell = "cp {input[0]} {output[0]}"
+
+[rules.resources]
+groups = { enrich_api = 1 }

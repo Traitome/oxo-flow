@@ -1,0 +1,14 @@
+[workflow]
+name = "per-sample-qc"
+version = "0.1.0"
+description = "Per-sample QC summaries"
+
+[[sample_groups]]
+name = "cohort"
+samples = ["sample_1", "sample;2"]
+
+[[rules]]
+name = "qc_sample"
+input = ["data/reads/{sample}_R1.fastq.gz"]
+output = ["out/qc_{sample}.txt"]
+shell = "wc -c {input[0]} > {output[0]}"

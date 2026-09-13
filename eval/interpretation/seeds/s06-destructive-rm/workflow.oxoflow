@@ -1,0 +1,18 @@
+[workflow]
+name = "cleanup-cache"
+version = "0.1.0"
+description = "Build indices and clean intermediates"
+
+[config]
+outdir = ""
+
+[[rules]]
+name = "build_index"
+output = ["idx/ref.index"]
+shell = "mkdir -p idx && printf dummy > {output[0]}"
+
+[[rules]]
+name = "clean_tmp"
+depends_on = ["build_index"]
+output = ["out/cleaned.marker"]
+shell = "rm -rf /tmp/{config.outdir}/intermediate && mkdir -p out && touch {output[0]}"
