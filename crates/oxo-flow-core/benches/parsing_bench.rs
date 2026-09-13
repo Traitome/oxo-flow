@@ -26,6 +26,7 @@ threads = 2
 "#,
         if with_pairs {
             r#"[[pairs]]
+pair_id = "pair_1"
 experiment = "tumor/{sample}"
 control = "normal/{sample}"
 "#
