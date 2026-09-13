@@ -1656,6 +1656,114 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
 
 // ── AI result interpretation ───────────────────────────────────────────────
 
+/// Cap on the stderr excerpt carried per rule into the interpretation
+/// prompt. The checkpoint already bounds `stderr_tail` (`STDERR_TAIL_CHARS`);
+/// this second bound keeps one pathological rule from dominating the prompt.
+const INTERPRET_STDERR_CHARS: usize = 400;
+
+/// Max rules carried into the interpretation prompt.
+const INTERPRET_MAX_RULES: usize = 12;
+
+/// Build the (system, user) prompt pair for AI result interpretation.
+///
+/// Split out from the provider call so the data actually fed to the model is
+/// unit-testable. The prompt must carry each rule's exit status and stderr
+/// tail: without them a failed run is interpreted with no error text at all
+/// and the interpreter can only guess (issue #359 seeded-failure baseline:
+/// 0/4 fault seeds diagnosed; the model itself reported that no error text
+/// was included).
+fn build_interpretation_prompt(
+    config: &WorkflowConfig,
+    checkpoint: Option<&oxo_flow_core::executor::CheckpointState>,
+) -> (String, String) {
+    let total = config.rules.len();
+    let (completed, failed) = match checkpoint {
+        Some(cp) => (cp.completed_rules.len(), cp.failed_rules.len()),
+        None => (0usize, 0usize),
+    };
+
+    let benchmarks: Vec<String> = checkpoint
+        .map(|cp| {
+            let mut names: Vec<&String> = cp.benchmarks.keys().collect();
+            names.sort_unstable();
+            names
+                .into_iter()
+                .map(|n| format!("- {n}: {:.1}s", cp.benchmarks[n].wall_time_secs))
+                .take(20)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut per_rule: Vec<String> = Vec::new();
+    if let Some(cp) = checkpoint {
+        let mut names: Vec<&String> = cp.rule_runs.keys().collect();
+        names.sort_unstable();
+        for name in names.into_iter().take(INTERPRET_MAX_RULES) {
+            let run = &cp.rule_runs[name];
+            let status = if cp.failed_rules.contains(name) {
+                "FAILED"
+            } else {
+                "succeeded"
+            };
+            per_rule.push(format!(
+                "- {name}: {status}, exit {}",
+                run.exit_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "?".into())
+            ));
+            if let Some(stderr) = run.stderr_tail.as_deref() {
+                let stderr = stderr.trim();
+                if !stderr.is_empty() {
+                    let snippet: String =
+                        stderr.chars().take(INTERPRET_STDERR_CHARS).collect();
+                    per_rule.push(format!("  stderr: {snippet}"));
+                }
+            }
+        }
+    }
+
+    let system = r#"## Role
+You are a senior bioinformatics analyst. Interpret workflow execution results
+in plain language for a user who may not be a bioinformatics expert.
+
+## Output Requirements
+Provide:
+1. **Summary** — 1-2 sentences: what ran and whether it succeeded
+2. **Key metrics** — the 2-3 most important numbers and what they mean in plain language
+3. **Caveats** — 1-2 limitations or things to check before trusting the results
+4. **Next steps** — 1-2 concrete suggestions
+
+## Diagnosis rules
+- For a failed rule, name the actual cause and quote the decisive line from
+  its stderr excerpt. Do not speculate past the evidence.
+- A rule can report success while its stderr shows an error (for example, a
+  failed command inside a pipeline whose last stage succeeded). Surface such
+  stderr warnings as caveats even when the exit status is success.
+- Make next steps address the diagnosed cause, not generic advice.
+
+Keep the total under 200 words. Use simple language; explain jargon.
+"#;
+
+    let user = format!(
+        "## Workflow: {} (v{})\nDescription: {}\nRules: {total}, succeeded: {completed}, failed: {failed}\n\n## Per-rule outcomes\n{}\n\n## Per-rule timings\n{}\n\nInterpret these results.",
+        config.workflow.name,
+        config.workflow.version,
+        config.workflow.description.as_deref().unwrap_or("(none)"),
+        if per_rule.is_empty() {
+            "(no per-rule execution records available — legacy checkpoint)".to_string()
+        } else {
+            per_rule.join("\n")
+        },
+        if benchmarks.is_empty() {
+            "(no checkpoint benchmarks available — run the workflow first)".to_string()
+        } else {
+            benchmarks.join("\n")
+        }
+    );
+
+    (system.to_string(), user)
+}
+
 /// Plain-language interpretation of execution outcomes: what succeeded,
 /// what the key metrics mean, caveats, and suggested next steps.
 ///
@@ -1670,55 +1778,10 @@ async fn interpret_report_with_ai(
 ) -> Result<(String, String)> {
     let model = provider.model().unwrap_or_else(|| "default".into());
 
-    // Compact execution summary for the prompt
-    let (completed, failed, total) = match checkpoint {
-        Some(cp) => (
-            cp.completed_rules.len(),
-            cp.failed_rules.len(),
-            config.rules.len(),
-        ),
-        None => (0usize, 0usize, config.rules.len()),
-    };
-    let benchmarks: Vec<String> = checkpoint
-        .map(|cp| {
-            let mut names: Vec<&String> = cp.benchmarks.keys().collect();
-            names.sort_unstable();
-            names
-                .into_iter()
-                .map(|n| format!("- {n}: {:.1}s", cp.benchmarks[n].wall_time_secs))
-                .take(20)
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let system = r#"## Role
-You are a senior bioinformatics analyst. Interpret workflow execution results
-in plain language for a user who may not be a bioinformatics expert.
-
-## Output Requirements
-Provide:
-1. **Summary** — 1-2 sentences: what ran and whether it succeeded
-2. **Key metrics** — the 2-3 most important numbers and what they mean in plain language
-3. **Caveats** — 1-2 limitations or things to check before trusting the results
-4. **Next steps** — 1-2 concrete suggestions
-
-Keep the total under 200 words. Use simple language; explain jargon.
-"#;
-
-    let user = format!(
-        "## Workflow: {} (v{})\nDescription: {}\nRules: {total}, succeeded: {completed}, failed: {failed}\n\n## Per-rule timings\n{}\n\nInterpret these results.",
-        config.workflow.name,
-        config.workflow.version,
-        config.workflow.description.as_deref().unwrap_or("(none)"),
-        if benchmarks.is_empty() {
-            "(no checkpoint benchmarks available — run the workflow first)".to_string()
-        } else {
-            benchmarks.join("\n")
-        }
-    );
+    let (system, user) = build_interpretation_prompt(config, checkpoint);
 
     use oxo_flow_ai::types::Message;
-    let messages = vec![Message::system(system), Message::user(&user)];
+    let messages = vec![Message::system(&system), Message::user(&user)];
     let response = provider.chat_with_tools(&messages, &[]).await?;
     let text = response.content.unwrap_or_default();
 
@@ -1730,9 +1793,74 @@ Keep the total under 200 words. Use simple language; explain jargon.
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_hms_to_secs, parse_maxrss_to_mb, report_extension, resolve_report_workflow,
-        short_checksum,
+        build_interpretation_prompt, parse_hms_to_secs, parse_maxrss_to_mb,
+        report_extension, resolve_report_workflow, short_checksum,
     };
+
+    fn config_for(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, rules_toml).unwrap();
+        // The returned config owns its data, so the tempdir can drop here.
+        oxo_flow_core::config::WorkflowConfig::from_file(&wf).unwrap()
+    }
+
+    #[test]
+    fn interpretation_prompt_carries_rule_outcomes_and_stderr() {
+        let config = config_for(
+            "[workflow]\nname = \"t\"\nversion = \"0.1\"\n\n[[rules]]\nname = \"count_reads\"\noutput = [\"out/x.txt\"]\nshell = \"true\"\n",
+        );
+        let mut cp = oxo_flow_core::executor::CheckpointState::new();
+        cp.failed_rules.insert("count_reads".into());
+        cp.rule_runs.insert(
+            "count_reads".into(),
+            oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(1),
+                command: None,
+                stderr_tail: Some(
+                    "zcat: can't stat: data/reads/sample_R1.fastq.gz: No such file or directory\n"
+                        .into(),
+                ),
+                caption: None,
+            },
+        );
+        let (system, user) = build_interpretation_prompt(&config, Some(&cp));
+        assert!(user.contains("count_reads: FAILED, exit 1"));
+        assert!(user.contains("zcat: can't stat"));
+        // The model must be told to quote evidence, not guess.
+        assert!(system.contains("Diagnosis rules"));
+    }
+
+    #[test]
+    fn interpretation_prompt_marks_success_without_stderr() {
+        let config = config_for(
+            "[workflow]\nname = \"t\"\nversion = \"0.1\"\n\n[[rules]]\nname = \"greet\"\noutput = [\"out/x.txt\"]\nshell = \"true\"\n",
+        );
+        let mut cp = oxo_flow_core::executor::CheckpointState::new();
+        cp.completed_rules.insert("greet".into());
+        cp.rule_runs.insert(
+            "greet".into(),
+            oxo_flow_core::executor::checkpoint::RuleRunRecord {
+                exit_code: Some(0),
+                command: None,
+                stderr_tail: None,
+                caption: None,
+            },
+        );
+        let (_, user) = build_interpretation_prompt(&config, Some(&cp));
+        assert!(user.contains("greet: succeeded, exit 0"));
+        assert!(!user.contains("stderr:"));
+    }
+
+    #[test]
+    fn interpretation_prompt_degrades_gracefully_without_rule_runs() {
+        let config = config_for(
+            "[workflow]\nname = \"t\"\nversion = \"0.1\"\n\n[[rules]]\nname = \"greet\"\noutput = [\"out/x.txt\"]\nshell = \"true\"\n",
+        );
+        let cp = oxo_flow_core::executor::CheckpointState::new();
+        let (_, user) = build_interpretation_prompt(&config, Some(&cp));
+        assert!(user.contains("no per-rule execution records available"));
+    }
 
     #[test]
     fn report_extension_follows_the_requested_format() {

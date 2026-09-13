@@ -104,3 +104,4 @@ benches/macro/results/*.json
 # Frontier benchmark outputs (machine-specific, issue #342)
 eval/frontier/results/
 /results/
+eval/interpretation/results/

@@ -1,0 +1,13 @@
+{
+  "id": "s01-missing-input",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": [
+    "sample_r1\\.fastq\\.gz",
+    "no such file",
+    "can'?t stat"
+  ],
+  "forbid": [],
+  "setup": {},
+  "ground_truth": "data/reads/sample_R1.fastq.gz does not exist; zcat fails with 'No such file or directory' (exit 1)"
+}

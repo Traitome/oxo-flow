@@ -1,0 +1,14 @@
+{
+  "id": "s02-missing-binary",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": [
+    "bwa-?mem2"
+  ],
+  "forbid": [],
+  "setup": {
+    "data/reads/sample_R1.fastq.gz": "@r1\nACGTACGT\n+\nIIIIIIII\n",
+    "ref/genome.fa": ">chr1\nACGTACGTACGT\n"
+  },
+  "ground_truth": "bwa-mem2 is not installed / not on PATH; bash fails with 'command not found'"
+}
