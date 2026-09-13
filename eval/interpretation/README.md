@@ -60,17 +60,27 @@ python3 run_bench.py --stamp my-label    # named results dir
 
 ## Surfaces
 
-v1 covers `report --ai` (the post-execution interpretation surface), both
-failed and successful checkpoints. `dry-run --ai` (pre-execution workflow
-analysis) is a planned second surface; several seeds (e.g. charset-gate
-refusals) only make sense there and will join with it.
+The benchmark covers both AI analysis surfaces:
+
+- **`report --ai`** (post-execution): hard-failure seeds run with `--failed`,
+  silent-failure and success seeds without. The interpretation text arrives
+  on **stderr**.
+- **`dry-run --ai`** (pre-execution): workflow-level faults scored from the
+  audit output. The analysis text arrives on **stdout** (via `ai_check`) —
+  scoring stdout and requiring the `Analysis Results` marker is how the
+  runner detects a silently skipped AI block; without that check a preview
+  echo can masquerade as a diagnosis hit (observed: the engine's E011 gate
+  echoes the blocked `rm -rf` command into the preview, which the s06 regex
+  matched before the stdout capture was fixed).
 
 ## Results
 
-| stamp | binary | hit-rate | note |
-|---|---|---|---|
-| `baseline-tight` | 0.18.1 (pre-fix) | 0.2 (1/5) | only the success anchor passed; the interpreter's prompt carried no stderr — the model itself reported "no error message included" and guessed |
-| `post-fix` | prompt-fix build | 1.0 (5/5) | `report --ai` now receives per-rule exit statuses + stderr tails and quotes them |
+| stamp | binary | provider | hit-rate | note |
+|---|---|---|---|---|
+| `baseline-tight` | 0.18.1 (pre-fix) | GLM | 0.2 (1/5) | only the success anchor passed; the interpreter's prompt carried no stderr — the model itself reported "no error message included" and guessed |
+| `post-fix` | prompt-fix build | GLM | 1.0 (5/5) | `report --ai` now receives per-rule exit statuses + stderr tails and quotes them |
+| `glm-8seed-v2` | post-#364 | GLM | 1.0 (8/8) | both surfaces; runner stdout capture fixed (the first 8-seed pass scored preview stderr and produced a false 0.75 with an s06 false positive) |
+| `deepseek-8seed` | post-#364 | DeepSeek | 1.0 (8/8) | second provider through the same Anthropic-compatible gateway — headline numbers hold across models |
 
 The pre-fix prompt gap is itself the benchmark's first finding: a failed run
 was interpreted from rule counts and timings alone. The fix
@@ -86,8 +96,14 @@ method was designed to measure.
 
 ## Limitations
 
-- 5 seeds, single provider, macOS arm64 — quote with the same caution as the
-  frontier benchmark's small intent set.
+- 8 seeds (5 report, 3 dry-run), two providers through one Anthropic-compatible
+  gateway, macOS arm64 — quote with the same caution as the frontier
+  benchmark's small intent set; single-run cells wobble.
+- The dry-run surface receives the engine's deterministic preflight findings
+  in its prompt, so a hit may partly reflect the engine's own detection being
+  explained rather than an independent AI discovery. The audit prompt also
+  drives independent findings (observed repeatedly: tool-knowledge catches
+  beyond the planted fault, e.g. FastQC output-naming mismatches).
 - Regexes are calibrated to the current seed corpus; new seeds must keep the
   "name the specific cause" bar.
-- `forbid` patterns (negative controls) are defined but empty in v1 seeds.
+- `forbid` patterns (negative controls) are defined but empty in all seeds.

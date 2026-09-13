@@ -1,0 +1,9 @@
+{
+  "id": "s06-destructive-rm",
+  "surface": "dry-run",
+  "run_expect_exit": 0,
+  "expect_any": ["rm -rf", "destructive"],
+  "forbid": [],
+  "setup": {},
+  "ground_truth": "clean_tmp runs unguarded rm -rf on a config-interpolated absolute path; with outdir=\"\" it retargets to /tmp/intermediate"
+}

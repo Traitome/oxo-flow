@@ -1,0 +1,16 @@
+[workflow]
+name = "dual-counter"
+version = "0.1.0"
+description = "Count reads two ways"
+
+[[rules]]
+name = "count_reads"
+input = ["data/reads/sample_R1.fastq.gz"]
+output = ["out/counts.txt"]
+shell = "wc -l < {input[0]} > {output[0]}"
+
+[[rules]]
+name = "count_reads_alt"
+input = ["data/reads/sample_R1.fastq.gz"]
+output = ["out/counts.txt"]
+shell = "grep -c '^@' {input[0]} > {output[0]}"
