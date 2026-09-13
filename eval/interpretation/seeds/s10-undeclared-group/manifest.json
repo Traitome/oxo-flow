@@ -1,0 +1,11 @@
+{
+  "id": "s10-undeclared-group",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": ["enrich_api", "resource group", "resource exhausted", "declared capacity"],
+  "forbid": [],
+  "setup": {
+    "data/variants.vcf": "chr1\t100\t.\tA\tG\t.\tPASS\t.\n"
+  },
+  "ground_truth": "rule requires 1 unit of resource group 'enrich_api' but the workflow declares no [resource_groups] — fast-fail 'resource exhausted ... declared capacity: 0'"
+}

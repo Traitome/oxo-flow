@@ -1,0 +1,11 @@
+{
+  "id": "s12-clean-audit",
+  "surface": "dry-run",
+  "run_expect_exit": 0,
+  "expect_any": ["0 errors|no \\[ERROR\\]|no issues|\\bERROR\\b.*0"],
+  "forbid": ["\\[ERROR\\]"],
+  "setup": {
+    "data/reads/sample_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n"
+  },
+  "ground_truth": "the workflow is fully declared (resources, pinned env, config input, matching output names) — a correct audit reports zero [ERROR] findings; spurious errors are over-flagging"
+}

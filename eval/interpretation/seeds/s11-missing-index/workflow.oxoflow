@@ -1,0 +1,10 @@
+[workflow]
+name = "contig-align"
+version = "0.1.0"
+description = "Map reads against the indexed reference"
+
+[[rules]]
+name = "align_reads"
+input = ["data/reads/sample_R1.fastq.gz", "ref/genome.fa"]
+output = ["out/alignments.txt"]
+shell = "python3 scripts/align_minimal.py {input[1]} ref/genome.fa.index {input[0]} > {output[0]}"

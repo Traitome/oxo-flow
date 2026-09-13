@@ -1,0 +1,18 @@
+{
+  "id": "s11-missing-index",
+  "surface": "report-failed",
+  "run_expect_exit": 1,
+  "expect_any": [
+    "\\.fa\\.index",
+    "index file",
+    "build.*index|index.*build",
+    "no such file"
+  ],
+  "forbid": [],
+  "setup": {
+    "data/reads/sample_R1.fastq.gz": "@r1\nACGT\n+\nIIII\n",
+    "ref/genome.fa": ">chr1\nACGTACGTACGT\n",
+    "scripts/align_minimal.py": "import sys\n\nref, idx, reads = sys.argv[1], sys.argv[2], sys.argv[3]\nkmers = {}\nfor i, line in enumerate(open(idx)):\n    kmers[line.strip()] = i\n\nhits = 0\nfor line in open(reads):\n    if not line.startswith(\"@\"):\n        hits += kmers.get(line.strip()[:4], 0)\n\nprint(hits)\n"
+  },
+  "ground_truth": "aligner script opens ref/genome.fa.index, which was never built (only ref/genome.fa exists) \u2014 FileNotFoundError; the fix is to add an index-building rule upstream"
+}

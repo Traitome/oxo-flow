@@ -73,6 +73,20 @@ The benchmark covers both AI analysis surfaces:
   echoes the blocked `rm -rf` command into the preview, which the s06 regex
   matched before the stdout capture was fixed).
 
+## Negative controls
+
+Two seeds invert the scoring to catch false positives (over-flagging and
+hallucinated failure):
+
+- **s05 (success anchor)** — both rules succeed; the interpretation must
+  state success *and* must not affirm failure (`forbid` patterns target
+  affirmative claims like "workflow failed", calibrated to not fire on
+  negated phrasing such as "no failures").
+- **s12 (clean audit)** — a fully-declared workflow (resources, pinned env,
+  config-declared input, output names matching the tool's convention) must
+  audit with **zero `[ERROR]` findings**; any spurious `[ERROR]` fails the
+  seed via `forbid`. All three providers pass — no over-flagging observed.
+
 ## Results
 
 | stamp | binary | provider | hit-rate | note |
@@ -81,6 +95,9 @@ The benchmark covers both AI analysis surfaces:
 | `post-fix` | prompt-fix build | GLM | 1.0 (5/5) | `report --ai` now receives per-rule exit statuses + stderr tails and quotes them |
 | `glm-8seed-v2` | post-#364 | GLM | 1.0 (8/8) | both surfaces; runner stdout capture fixed (the first 8-seed pass scored preview stderr and produced a false 0.75 with an s06 false positive) |
 | `deepseek-8seed` | post-#364 | DeepSeek | 1.0 (8/8) | second provider through the same Anthropic-compatible gateway — headline numbers hold across models |
+| `glm-12seed` | post-#364 | GLM | 1.0 (12/12) | full corpus incl. charset gate, undeclared resource group, missing index, and both negative controls |
+| `deepseek-12seed` | post-#364 | DeepSeek | 1.0 (12/12) | — |
+| `qwen-12seed` | post-#364 | Qwen | 1.0 (12/12) | third provider |
 
 The pre-fix prompt gap is itself the benchmark's first finding: a failed run
 was interpreted from rule counts and timings alone. The fix
@@ -96,14 +113,18 @@ method was designed to measure.
 
 ## Limitations
 
-- 8 seeds (5 report, 3 dry-run), two providers through one Anthropic-compatible
-  gateway, macOS arm64 — quote with the same caution as the frontier
-  benchmark's small intent set; single-run cells wobble.
+- 12 seeds (6 report, 1 silent-failure, 1 success anchor, 3 dry-run faults,
+  1 clean-audit control) across three providers through one
+  Anthropic-compatible gateway, macOS arm64 — quote with the same caution as
+  the frontier benchmark's small intent set; single-run cells wobble.
 - The dry-run surface receives the engine's deterministic preflight findings
   in its prompt, so a hit may partly reflect the engine's own detection being
   explained rather than an independent AI discovery. The audit prompt also
   drives independent findings (observed repeatedly: tool-knowledge catches
   beyond the planted fault, e.g. FastQC output-naming mismatches).
 - Regexes are calibrated to the current seed corpus; new seeds must keep the
-  "name the specific cause" bar.
-- `forbid` patterns (negative controls) are defined but empty in all seeds.
+  "name the specific cause" bar. s09's offending wildcard value legitimately
+  appears in the engine's expanded instance name — that is evidence in the
+  checkpoint, not seed leakage.
+- A human rubric pass for prose quality (beyond regex scoring) remains
+  future work; per-run `ai.txt` artifacts are retained for it.
