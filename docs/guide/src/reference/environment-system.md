@@ -125,8 +125,9 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 - **Detection**: Checks for `pixi` on `$PATH`
 - **Resolution**: Parses the `pixi.toml` manifest the rule names
-- **Activation**: Runs `pixi run --manifest-path <pixi.toml> <command>` — the spec is a **manifest path**, not an environment name (`-e` would only search the current directory for a discoverable manifest)
+- **Activation**: Runs `pixi run --manifest-path <pixi.toml> bash -c '<command>'` — the **whole** rule command travels inside the env. `pixi run` is a child-process environment (like docker), not a PATH-mutating one (like modules/venv): with a bare prefix wrap, shell operators (`&&`, `|`) and the executor's prepended `mkdir -p` line escape the env and run on the host PATH (live-caught on a SLURM cluster, issue #354). The spec is a **manifest path**, not an environment name (`-e` would only search the current directory for a discoverable manifest)
 - **Lockfile**: Pixi's native lockfile ensures reproducible resolution
+- **Site quirks (live-verified)**: hand-written manifests must declare `platforms` (e.g. `platforms = ["linux-64"]`) — modern pixi refuses to solve a workspace without them; and `pixi` must be on `$PATH` inside batch jobs, which start with a clean environment
 
 ### Docker
 
@@ -153,9 +154,9 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 ### Python venv
 
-- **Detection**: Checks for `python3` on `$PATH`
-- **Resolution**: Parses `requirements.txt` file
-- **Activation**: Creates a venv (if needed) and activates it before the command
+- **Detection**: Checks for `python3` on `$PATH` (with `ensurepip`/`venv` importable)
+- **Resolution**: `environment.venv` names the **venv directory** to create/reuse (e.g. `.venv`); `environment.venv_requirements` names the requirements file (default: `requirements.txt` in the working directory). Declaring a requirements file path in `venv` itself fails — the backend creates a directory at that path
+- **Activation**: Creates the venv (if needed) and activates it before the command
 - **Caching**: Venvs are stored in a cache directory keyed by the declared
   venv spec (`venv:<path>` — the venv path you declared in the rule), not by
   a hash of the requirements content. Editing `requirements.txt` in place
@@ -168,6 +169,12 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 - **Resolution**: Parses the module list (comma-separated) from `environment.modules`
 - **Activation**: Initializes the module system (sources `/etc/profile.d/modules.sh` or common Lmod/Modules init scripts), then runs `module load <modules>` before the command. Fails with a clear error if the `module` command is unavailable.
 - **Usage**: Set `environment.modules = ["gcc/11.2", "cuda/11.7"]` in the rule. Modules are used when `environment.modules` is set and no other backend is declared (priority: mamba, conda, pixi, docker, singularity, venv, modules).
+- **Site quirks (live-verified)**: the wrap mutates `$PATH` inside the rule's
+  shell, so a same-named binary from a user-level tool manager (e.g.
+  `~/.pixi/bin`, `~/.local/bin`, a conda base) **shadows** the
+  module-provided one — probe with `command -v <tool>` when diagnosing. The
+  init fallback chain covers Environment Modules under both
+  `/usr/share/modules` and `/usr/share/Modules`.
 
 ### System
 
