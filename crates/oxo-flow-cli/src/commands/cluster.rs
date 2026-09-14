@@ -837,14 +837,10 @@ mod tests {
                 deps.join(", ")
             ));
         }
-        let path = std::env::temp_dir().join(format!(
-            "oxo-dag-with-{}-{}",
-            sinks.join("-"),
-            std::process::id()
-        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dag.oxoflow");
         std::fs::write(&path, toml).unwrap();
         let config = WorkflowConfig::from_file(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
         WorkflowDag::from_rules(&config.rules).unwrap()
     }
 
@@ -1160,15 +1156,31 @@ mod tests {
         let order = vec!["merge".to_string()];
         let dag = dag_with(&["merge"], &["a", "b"]);
         let out = dir.path();
-        std::fs::write(out.join("a.sh"), "#SBATCH --array=1-3\n").unwrap();
-        std::fs::write(out.join("b.sh"), "#SBATCH --array=1-3\n").unwrap();
-        // No merge.sh on disk: a missing script must degrade to afterok,
-        // never break wrapper generation.
+        std::fs::write(out.join("a.sh"), "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n").unwrap();
+        std::fs::write(out.join("b.sh"), "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n").unwrap();
+        std::fs::write(
+            out.join("merge.sh"),
+            "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n",
+        )
+        .unwrap();
+        // Even with every script present and all three ranges identical, a
+        // downstream with TWO dependencies must never go element-wise —
+        // aftercorr can only pair one upstream per downstream.
         let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
         assert!(
             wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
                 || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
             "fan-in keeps the ready-batch chain:\n{wrapper}"
+        );
+
+        // A missing script must also degrade to afterok, never break
+        // wrapper generation.
+        std::fs::remove_file(out.join("merge.sh")).unwrap();
+        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        assert!(
+            wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
+                || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
+            "missing merge.sh degrades to afterok:\n{wrapper}"
         );
     }
 }

@@ -336,7 +336,7 @@ fn script_log_paths(script: &str) -> Vec<PathBuf> {
 /// other shape (comma lists, steps, repeated directives, the short `-a`
 /// spelling, indented lines) returns `None`: an unparsed range must fall
 /// back to the ready-batch dependency, never guess.
-pub fn parse_array_range(script: &str) -> Option<(u32, u32)> {
+fn parse_array_range(script: &str) -> Option<(u32, u32)> {
     let mut range: Option<(u32, u32)> = None;
     for line in script.lines() {
         let Some(rest) = line.strip_prefix("#SBATCH --array=") else {
