@@ -129,6 +129,85 @@ fn cluster_submit_expands_wildcards_into_per_instance_scripts() {
     );
 }
 
+/// Issue #371: when an `--extra-arg` makes the whole chain a pair of
+/// straight arrays with the same range, the wrapper chains element-wise
+/// via `aftercorr` instead of the ready-batch `afterok`.
+#[test]
+fn straight_array_chains_go_elementwise_with_aftercorr() {
+    let dir = tempfile::tempdir().unwrap();
+    write_scatter(dir.path());
+    let out_dir = submit(
+        dir.path(),
+        &["--with-dependencies", "--extra-arg", "--array=1-3"],
+    );
+    let wrapper = std::fs::read_to_string(out_dir.join("submit.sh")).unwrap();
+
+    assert!(
+        wrapper.contains(
+            "JOB_IDS[stats_batch_S2]=$(oxo_submit --dependency=aftercorr:${JOB_IDS[align_batch_S2]}"
+        ),
+        "matching straight arrays must chain element-wise:\n{wrapper}"
+    );
+    assert!(
+        !wrapper.contains("--dependency=afterok:"),
+        "no ready-batch dependency may remain once every pair is array-array:\n{wrapper}"
+    );
+
+    // The generated scripts really carry the array directive the decision
+    // was made from — and the mock scheduler honours that exact shape.
+    let body = std::fs::read_to_string(out_dir.join("align_batch_S1.sh")).unwrap();
+    assert!(body.contains("#SBATCH --array=1-3"), "got:\n{body}");
+
+    // Live run through the mock scheduler: both arrays fan out into
+    // per-element jobs (6 align elements + 6 stats elements), and the
+    // wrapper still submits exactly six times.
+    let probe = StdCommand::new("bash")
+        .args(["-c", "declare -A a"])
+        .output()
+        .unwrap();
+    if !probe.status.success() {
+        eprintln!("skipping live wrapper run: bash on PATH is too old for associative arrays");
+        return;
+    }
+    let scheduler_state = dir.path().join("scheduler-state");
+    std::fs::create_dir_all(&scheduler_state).unwrap();
+    let path = format!(
+        "{}:{}",
+        fixtures_dir().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = StdCommand::new("bash")
+        .arg(out_dir.join("submit.sh"))
+        .current_dir(dir.path())
+        .env("PATH", path)
+        .env("MOCK_SCHEDULER_DIR", &scheduler_state)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "wrapper failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.matches("as job ID:").count(),
+        6,
+        "six array submissions (one per rule instance):\n{stdout}"
+    );
+    // Six array submissions (3 align + 3 stats instances) × 3 elements each.
+    let elements = std::fs::read_dir(scheduler_state.join("jobs"))
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains('_')
+        })
+        .count();
+    assert_eq!(elements, 18, "both chains must fan out element-wise");
+}
+
 /// The instance names `cluster submit` writes must match the ones `run`
 /// plans — phase 2 keys its run directory off them.
 #[test]
