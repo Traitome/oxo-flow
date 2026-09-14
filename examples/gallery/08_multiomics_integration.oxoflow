@@ -127,10 +127,9 @@ mkdir -p methyl_aligned
 bismark --genome {config.bismark_index} \
         -1 {input[0]} -2 {input[1]} \
         --multicore {threads} \
-        --basename {sample} \
         -o methyl_aligned/
-deduplicate_bismark --paired --bam methyl_aligned/{sample}_bismark_bt2_pe.bam \
-        -o methyl_aligned/{sample}
+deduplicate_bismark --paired --bam methyl_aligned/{sample}_R1_bismark_bt2_pe.bam \
+        -o {sample} --output_dir methyl_aligned
 """
 
 [rules.resources]
