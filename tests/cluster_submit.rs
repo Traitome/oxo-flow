@@ -194,7 +194,7 @@ fn straight_array_chains_go_elementwise_with_aftercorr() {
         6,
         "six array submissions (one per rule instance):\n{stdout}"
     );
-    // 3 align elements × 3 instances + 3 stats elements × 3 instances.
+    // Six array submissions (3 align + 3 stats instances) × 3 elements each.
     let elements = std::fs::read_dir(scheduler_state.join("jobs"))
         .unwrap()
         .filter(|e| {
@@ -205,7 +205,7 @@ fn straight_array_chains_go_elementwise_with_aftercorr() {
                 .contains('_')
         })
         .count();
-    assert_eq!(elements, 12, "both chains must fan out element-wise");
+    assert_eq!(elements, 18, "both chains must fan out element-wise");
 }
 
 /// The instance names `cluster submit` writes must match the ones `run`
