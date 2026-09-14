@@ -2165,6 +2165,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#element-wise-array-chaining-slurm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Element-wise array chaining (SLURM)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4308,6 +4319,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#element-wise-array-chaining-slurm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Element-wise array chaining (SLURM)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4752,6 +4774,19 @@ command under <code>bash</code> when the image ships it — see
 </tr>
 </tbody>
 </table>
+<h3 id="element-wise-array-chaining-slurm">Element-wise array chaining (SLURM)<a class="headerlink" href="#element-wise-array-chaining-slurm" title="Permanent link">#</a></h3>
+<p>When a downstream rule has exactly one upstream dependency and BOTH scripts
+declare the same straight <code>#SBATCH --array=START-END</code> range (typically via
+<code>--extra-arg "--array=1-N"</code>), the wrapper chains them element-wise:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>aftercorr:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
+</span></code></pre></div>
+<p><code>aftercorr</code> pairs array elements by index, so element 1 of the downstream
+starts as soon as element 1 of the upstream finishes instead of waiting for
+the whole array — a pipelining win on straight scatter chains (measured
+1.33× makespan improvement on a real cluster). Any other shape keeps the
+ready-batch <code>afterok</code> dependency: fan-in (multiple dependencies), mismatched
+index ranges, scalar↔array mixes, or a non-array upstream. A <code>%throttle</code>
+suffix does not block the match — it bounds concurrency, not the index set.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
