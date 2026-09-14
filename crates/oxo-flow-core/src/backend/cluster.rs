@@ -325,6 +325,59 @@ fn script_log_paths(script: &str) -> Vec<PathBuf> {
     paths
 }
 
+/// The array index range a SLURM script declares, parsed from the script
+/// TEXT (same philosophy as [`script_log_paths`]: `--extra-arg` lines can
+/// add directives the rule never mentioned, so the rendered script is the
+/// only source of truth).
+///
+/// Accepts only one straight `#SBATCH --array=START-END` directive at
+/// column 0, with an optional `%throttle` — a throttle bounds concurrency,
+/// not the index set, so it does not affect element-wise pairing. Every
+/// other shape (comma lists, steps, repeated directives, the short `-a`
+/// spelling, indented lines) returns `None`: an unparsed range must fall
+/// back to the ready-batch dependency, never guess.
+pub fn parse_array_range(script: &str) -> Option<(u32, u32)> {
+    let mut range: Option<(u32, u32)> = None;
+    for line in script.lines() {
+        let Some(rest) = line.strip_prefix("#SBATCH --array=") else {
+            continue;
+        };
+        let (start, end) = rest.split_once('-')?;
+        // A `%throttle` suffix is allowed; anything else after the end
+        // (steps, spaces) is a shape this parser does not understand.
+        // Trailing whitespace is tolerated — schedulers accept it.
+        let end = end.trim_end().split('%').next()?;
+        let (start, end) = (start.parse().ok()?, end.parse().ok()?);
+        if start > end {
+            return None;
+        }
+        match range {
+            // Two directives: which one the scheduler honours is ambiguous.
+            Some(existing) if existing != (start, end) => return None,
+            Some(_) => {}
+            None => range = Some((start, end)),
+        }
+    }
+    range
+}
+
+/// Whether a downstream rule may chain element-wise onto its single
+/// upstream dependency with `--dependency=aftercorr:` (issue #371).
+///
+/// Requires both scripts to declare the same straight array range — SLURM
+/// pairs `aftercorr` elements by index, so a mismatched start or end would
+/// strand indexes silently. Any other shape keeps the ready-batch
+/// `afterok:` dependency, which is correct for every fallback case.
+pub fn elementwise_aftercorr(upstream_script: &str, downstream_script: &str) -> bool {
+    match (
+        parse_array_range(upstream_script),
+        parse_array_range(downstream_script),
+    ) {
+        (Some(up), Some(down)) => up == down,
+        _ => false,
+    }
+}
+
 /// Pre-create the directories a scheduler will open log files in.
 ///
 /// Every backend opens the `--output`/`-o`/`-e` files at job LAUNCH, before
@@ -1346,6 +1399,61 @@ mod tests {
 
         // Body lines that merely mention the directives stay untouched.
         assert!(script_log_paths("# echo #SBATCH --output=x\ntrue\n").is_empty());
+    }
+
+    #[test]
+    fn parse_array_range_reads_the_straight_slurm_range() {
+        assert_eq!(
+            parse_array_range("#!/bin/bash\n#SBATCH --array=1-3\ntrue\n"),
+            Some((1, 3))
+        );
+        // A %throttle bounds concurrency, not the index set: it must not
+        // block a 1:1 match with an unthrottled downstream.
+        assert_eq!(parse_array_range("#SBATCH --array=1-20%4\n"), Some((1, 20)));
+        assert_eq!(parse_array_range("#SBATCH --array=0-9 \n"), Some((0, 9)));
+    }
+
+    #[test]
+    fn parse_array_range_rejects_every_non_straight_range() {
+        // No array directive at all.
+        assert_eq!(parse_array_range("#!/bin/bash\necho hi\n"), None);
+        // Comma lists and step forms are not one straight range.
+        assert_eq!(parse_array_range("#SBATCH --array=1,3,5\n"), None);
+        assert_eq!(parse_array_range("#SBATCH --array=0-15:4\n"), None);
+        // Reversed or malformed ranges.
+        assert_eq!(parse_array_range("#SBATCH --array=3-1\n"), None);
+        assert_eq!(parse_array_range("#SBATCH --array=1-\n"), None);
+        // Two directives: which one the scheduler honours is ambiguous —
+        // refuse rather than guess.
+        assert_eq!(
+            parse_array_range("#SBATCH --array=1-3\n#SBATCH --array=4-6\n"),
+            None
+        );
+        // sbatch honours directives only at column 0; an indented line is a
+        // shell comment and must NOT read as an array declaration.
+        assert_eq!(parse_array_range("  #SBATCH --array=1-3\n"), None);
+        // The short -a spelling and other backends' directives are not
+        // recognised (they conservatively fall back to afterok downstream).
+        assert_eq!(parse_array_range("#SBATCH -a 1-3\n"), None);
+        assert_eq!(parse_array_range("#PBS -J 1-3\n"), None);
+    }
+
+    #[test]
+    fn elementwise_aftercorr_requires_matching_ranges_on_both_ends() {
+        let up = "#!/bin/bash\n#SBATCH --array=1-3\n";
+        // The straight chain: same start, same end.
+        assert!(elementwise_aftercorr(up, "#SBATCH --array=1-3\n"));
+        // Throttles differ but the index ranges match.
+        assert!(elementwise_aftercorr("#SBATCH --array=1-3%2\n", up));
+        // Mismatched end or start: the element-wise pairing would strand
+        // indexes — fall back.
+        assert!(!elementwise_aftercorr(up, "#SBATCH --array=1-4\n"));
+        assert!(!elementwise_aftercorr(up, "#SBATCH --array=2-3\n"));
+        // Scalar↔array mixes, both directions.
+        assert!(!elementwise_aftercorr("true\n", up));
+        assert!(!elementwise_aftercorr(up, "true\n"));
+        // Both non-array: nothing to pair.
+        assert!(!elementwise_aftercorr("true\n", "true\n"));
     }
 
     #[test]

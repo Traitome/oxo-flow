@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::backend::BackendJobStatus;
 use oxo_flow_core::backend::ExecutorBackend;
+use oxo_flow_core::backend::cluster::elementwise_aftercorr;
 use oxo_flow_core::cluster::{ClusterBackend, ClusterJobConfig};
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
@@ -166,6 +167,13 @@ fn generate_submit_helper(backend: &ClusterBackend) -> String {
     helper
 }
 
+/// Read a rendered script for the aftercorr decision. Failure is not an
+/// error: the decision is an optimization on top of a correct default, so
+/// an unreadable script just means the ready-batch dependency.
+fn read_script(output_dir: &Path, rule: &str) -> String {
+    std::fs::read_to_string(output_dir.join(format!("{rule}.sh"))).unwrap_or_default()
+}
+
 /// Generate a submit wrapper script that handles job dependencies.
 /// This script tracks job IDs and sets up proper dependency chains.
 fn generate_submit_wrapper(
@@ -200,11 +208,29 @@ fn generate_submit_wrapper(
         if !dep_job_refs.is_empty() {
             match backend {
                 ClusterBackend::Slurm => {
-                    let dep_str = dep_job_refs.join(":");
+                    // Element-wise chaining (issue #371): when the single
+                    // upstream and this rule are both straight arrays with
+                    // the same index range, `aftercorr` pairs elements 1:1
+                    // and pipelines the chain (measured 1.33× makespan win
+                    // in issue #355). The decision reads the WRITTEN
+                    // scripts — the only source of truth for `--array`
+                    // directives arriving via `--extra-arg`. Any other
+                    // shape keeps the known-safe ready-batch `afterok:`.
+                    let dep_flag = match deps.as_slice() {
+                        [dep]
+                            if elementwise_aftercorr(
+                                &read_script(output_dir, dep),
+                                &read_script(output_dir, rule_name),
+                            ) =>
+                        {
+                            format!("aftercorr:${{JOB_IDS[{dep}]}}")
+                        }
+                        _ => format!("afterok:{}", dep_job_refs.join(":")),
+                    };
                     script.push_str(&format!(
-                        "JOB_IDS[{}]=$(oxo_submit --dependency=afterok:{} {})\n",
+                        "JOB_IDS[{}]=$(oxo_submit --dependency={} {})\n",
                         rule_name,
-                        dep_str,
+                        dep_flag,
                         script_path.display()
                     ));
                 }
@@ -747,10 +773,15 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cluster_command, query_my_jobs, query_status, resolve_backend_with, status_line};
+    use super::{
+        cluster_command, generate_submit_wrapper, query_my_jobs, query_status,
+        resolve_backend_with, status_line,
+    };
     use crate::ClusterAction;
     use oxo_flow_core::backend::BackendJobStatus;
     use oxo_flow_core::cluster::ClusterBackend;
+    use oxo_flow_core::config::WorkflowConfig;
+    use oxo_flow_core::dag::WorkflowDag;
     use std::path::PathBuf;
 
     fn run(action: ClusterAction) -> anyhow::Result<()> {
@@ -789,6 +820,32 @@ mod tests {
             dry_run,
             with_dependencies: true,
         }
+    }
+
+    /// A DAG where each `sink` depends on every `source`.
+    fn dag_with(sinks: &[&str], sources: &[&str]) -> WorkflowDag {
+        let mut toml = String::from("[workflow]\nname = \"dag\"\n");
+        for name in sources {
+            toml.push_str(&format!(
+                "[[rules]]\nname = \"{name}\"\nshell = \"true\"\noutput = [\"{name}.out\"]\n"
+            ));
+        }
+        for sink in sinks {
+            let deps: Vec<String> = sources.iter().map(|s| format!("\"{s}\"")).collect();
+            toml.push_str(&format!(
+                "[[rules]]\nname = \"{sink}\"\ndepends_on = [{}]\nshell = \"true\"\noutput = [\"{sink}.out\"]\n",
+                deps.join(", ")
+            ));
+        }
+        let path = std::env::temp_dir().join(format!(
+            "oxo-dag-with-{}-{}",
+            sinks.join("-"),
+            std::process::id()
+        ));
+        std::fs::write(&path, toml).unwrap();
+        let config = WorkflowConfig::from_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        WorkflowDag::from_rules(&config.rules).unwrap()
     }
 
     #[test]
@@ -1015,5 +1072,103 @@ mod tests {
         std::fs::remove_dir_all(&scripts).unwrap();
         run(submit_action(workflow, scripts.clone(), "slurm", false)).unwrap();
         assert!(scripts.join("submit.sh").exists());
+    }
+
+    /// SLURM-only: straight array chains go element-wise via `aftercorr`;
+    /// every guardrail shape keeps the ready-batch `afterok`.
+    #[test]
+    fn wrapper_chains_aftercorr_only_for_straight_array_pairs() {
+        use oxo_flow_core::backend::cluster::elementwise_aftercorr;
+
+        let dir = tempfile::tempdir().unwrap();
+        let order = vec!["align".to_string(), "stats".to_string()];
+        let dag = dag_with(&["stats"], &["align"]);
+        let out = dir.path();
+
+        // Straight chain, both arrays with the same range → aftercorr.
+        std::fs::write(
+            out.join("align.sh"),
+            "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n",
+        )
+        .unwrap();
+        std::fs::write(
+            out.join("stats.sh"),
+            "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n",
+        )
+        .unwrap();
+        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        assert!(
+            wrapper
+                .contains("JOB_IDS[stats]=$(oxo_submit --dependency=aftercorr:${JOB_IDS[align]}"),
+            "straight array chain must go element-wise:\n{wrapper}"
+        );
+        assert!(
+            !wrapper.contains("afterok:"),
+            "no fallback may remain:\n{wrapper}"
+        );
+
+        // Mismatched range → afterok.
+        std::fs::write(
+            out.join("stats.sh"),
+            "#!/bin/bash\n#SBATCH --array=1-4\ntrue\n",
+        )
+        .unwrap();
+        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        assert!(
+            wrapper.contains("JOB_IDS[stats]=$(oxo_submit --dependency=afterok:${JOB_IDS[align]}"),
+            "mismatched range must keep the ready-batch chain:\n{wrapper}"
+        );
+
+        // Scalar downstream → afterok.
+        std::fs::write(out.join("stats.sh"), "#!/bin/bash\necho hi\n").unwrap();
+        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        assert!(
+            wrapper.contains("afterok:"),
+            "scalar downstream must keep afterok:\n{wrapper}"
+        );
+
+        // Non-SLURM backends never use aftercorr, arrays or not.
+        std::fs::write(
+            out.join("stats.sh"),
+            "#!/bin/bash\n#SBATCH --array=1-3\ntrue\n",
+        )
+        .unwrap();
+        for backend in [
+            ClusterBackend::Pbs,
+            ClusterBackend::Sge,
+            ClusterBackend::Lsf,
+        ] {
+            let wrapper = generate_submit_wrapper(&backend, &order, &dag, out).unwrap();
+            assert!(
+                !wrapper.contains("aftercorr"),
+                "{backend} must not emit aftercorr:\n{wrapper}"
+            );
+        }
+
+        // The decision function itself stays honest: a fan-in (two deps) can
+        // never be element-wise — `elementwise_aftercorr` is only reached
+        // with one dep, and the wrapper's per-dep check below covers that.
+        assert!(elementwise_aftercorr(
+            "#SBATCH --array=1-3\n",
+            "#SBATCH --array=1-3\n"
+        ));
+    }
+
+    #[test]
+    fn wrapper_falls_back_to_afterok_for_fan_in_and_missing_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let order = vec!["merge".to_string()];
+        let dag = dag_with(&["merge"], &["a", "b"]);
+        let out = dir.path();
+        std::fs::write(out.join("a.sh"), "#SBATCH --array=1-3\n").unwrap();
+        std::fs::write(out.join("b.sh"), "#SBATCH --array=1-3\n").unwrap();
+        // No merge.sh on disk: a missing script must degrade to afterok,
+        // never break wrapper generation.
+        let wrapper = generate_submit_wrapper(&ClusterBackend::Slurm, &order, &dag, out).unwrap();
+        assert!(
+            wrapper.contains("--dependency=afterok:${JOB_IDS[a]}:${JOB_IDS[b]}")
+                || wrapper.contains("--dependency=afterok:${JOB_IDS[b]}:${JOB_IDS[a]}"),
+            "fan-in keeps the ready-batch chain:\n{wrapper}"
+        );
     }
 }
