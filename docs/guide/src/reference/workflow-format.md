@@ -1470,7 +1470,8 @@ fan-out, while `{input}` is **space-joined** for shell consumption. Do
 not shell-loop over `{config.samples_list}` directly — a comma-joined
 value iterates as a single word; use `tr ',' ' '` only if the expansion
 form is genuinely unavailable. Chunk-level aggregation is the transform
-operator's `combine` stage instead (gallery 10).
+operator's `combine` stage instead (see
+[Transform Operator](../gallery/transform-operator.md)).
 
 ---
 
