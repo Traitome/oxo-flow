@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Keep third-party actions pinned to current majors so Node-runtime
+  # deprecations (node20 removal) surface as PRs instead of CI warnings.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
