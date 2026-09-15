@@ -76,8 +76,8 @@ first):
   Failed:    0
 
 Rule timings: (top 3, total 45.2s)
-  ✓ align (30.1s)    peak 28.4/32.0 GiB ⚠
-  ✓ sort_bam (12.3s)  peak 8.1/32.0 GiB
+  ✓ align (30.1s)  peak 29000/32000 MiB ⚠
+  ✓ sort_bam (12.3s)  peak 8100/32000 MiB
   ✓ trim_reads (2.8s)
 ```
 
@@ -95,11 +95,17 @@ With `--json`, output goes to stdout:
     "sort_bam": 12.3,
     "trim_reads": 2.8
   },
-  "total_time_secs": 45.2
+  "total_time_secs": 45.2,
+  "memory": {
+    "align": { "max_memory_mb": 29000, "memory_limit_mb": 32000 },
+    "sort_bam": { "max_memory_mb": 8100, "memory_limit_mb": 32000 }
+  }
 }
 ```
 
-`timings` and `total_time_secs` are only present with `--timing`.
+`timings`, `total_time_secs`, and `memory` are only present with
+`--timing`; `memory` only lists rules with a sampled peak-RSS
+measurement.
 
 ---
 

@@ -41,7 +41,7 @@ Available environment backends:
 Check that all environments declared in a workflow file are valid and their backends are available.
 
 ```bash
-oxo-flow env check <WORKFLOW>
+oxo-flow env check [WORKFLOW]
 ```
 
 | Argument | Description |
@@ -72,7 +72,7 @@ oxo-flow env create [OPTIONS] <SPEC>
 |---|---|---|
 | `--name` | `-n` | Custom name for the created environment (default: derived from the spec filename) |
 | `--ai` | — | Generate the environment spec from a natural-language description (SPEC is the description) |
-| `--backend` | — | Environment backend to generate: conda (YAML) or pixi (TOML) (default: conda) |
+| `--backend` | — | Environment backend to generate: conda (YAML) or pixi (TOML). Default: inferred from the spec's extension, or conda with `--ai` |
 
 **Output (missing backend):**
 
