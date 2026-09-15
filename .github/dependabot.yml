@@ -10,3 +10,13 @@ updates:
       actions:
         patterns:
           - "*"
+  # Cargo workspace + frontend npm deps: security bumps land as PRs
+  # instead of manual commits (cf. the rustls RUSTSEC-2026-0285 bump).
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
