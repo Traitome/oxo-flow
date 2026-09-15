@@ -15,7 +15,7 @@ All example workflows live in one numbered progression:
 | Workflow definitions (`.oxoflow`) | ✅ | Fully reviewed: valid, DAG-correct, read-group and environment consistent |
 | Conda environment specs (`envs/*.yaml`) | ✅ | One file per environment name referenced by the workflows — copy `envs/` next to a workflow (or into your project) and adapt pins to your cluster |
 | Input data (`raw/`, `/data/references/...`) | ❌ | Placeholders — the workflows are reference patterns; replace paths in `[config]` with your own data |
-| Auxiliary scripts (`scripts/*.py`, `scripts/*.R`, `templates/*.Rmd`) | ❌ | User-provided analysis code; the workflows call them by convention, keep the filenames or adjust the rules |
+| Auxiliary scripts (`gallery/scripts/*.py`, `gallery/scripts/*.R`, `gallery/templates/*.Rmd`) | ✅ | Shipped with the gallery (`gallery/scripts/generate_report.py`, `gallery/scripts/report.py`, `gallery/scripts/seurat_analysis.R`, `gallery/templates/sc_report.Rmd`) |
 
 ## Try it
 

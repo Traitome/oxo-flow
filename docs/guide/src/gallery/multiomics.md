@@ -61,8 +61,8 @@ Single-omics analyses provide incomplete pictures:
 
 Integrating all three layers enables:
 
-- **Variant-to-expression correlation** — Do mutations affect gene expression?
-- **Epigenetic-expression coupling** — Does promoter methylation silence gene expression?
+- **Variant-to-expression correlation** — link mutations to expression changes
+- **Epigenetic-expression coupling** — test whether promoter methylation silences gene expression
 - **Multi-layer biomarker discovery** — Combine signals for stronger clinical predictions
 
 !!! note "What this example actually computes"

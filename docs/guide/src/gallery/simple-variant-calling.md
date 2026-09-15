@@ -1,6 +1,6 @@
 # Germline Variant Calling (Simple Chain)
 
-The per-sample GATK germline chain: FastQC + fastp QC, BWA-MEM2 alignment with read groups, MarkDuplicates, BQSR, and HaplotypeCaller GVCF — the simpler sibling of gallery 07, which adds joint calling, VQSR, and annotation.
+The per-sample GATK germline chain: FastQC + fastp QC, BWA-MEM2 alignment with read groups, MarkDuplicates, BQSR, and HaplotypeCaller GVCF — the simpler sibling of [WGS Germline Variant Calling](wgs-germline.md), which adds joint calling, VQSR, and annotation.
 
 ## What It Demonstrates
 

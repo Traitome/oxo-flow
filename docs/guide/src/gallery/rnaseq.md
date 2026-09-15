@@ -49,9 +49,9 @@ The `featureCounts -s 2` flag specifies reverse-strand counting, appropriate for
 - **Phred ≥ 20**: Only bases with ≥99% accuracy are retained
 - **Length ≥ 50**: Reads shorter than 50 bp after trimming are discarded to ensure reliable alignment
 
-### `config.samples` Is Inert
+### Sample Expansion and the `multiqc` Rule
 
-The `samples = "samples.csv"` key in `[config]` is inert: no rule references it, and it does not control wildcard expansion. Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parallel-samples.md) and the [wildcards reference](../reference/wildcards.md)); the `multiqc` rule's `depends_on` ensures it runs exactly once regardless of how samples are expanded.
+Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parallel-samples.md) and the [wildcards reference](../reference/wildcards.md)); for CSV-driven cohorts, use `sample_groups_file` in `[workflow]` instead of an inline list. The `multiqc` rule has no `{sample}` in its inputs and uses `depends_on` to run exactly once, after all per-sample rules that feed its `qc/` and `counts/` directories.
 
 ## Running the Workflow
 

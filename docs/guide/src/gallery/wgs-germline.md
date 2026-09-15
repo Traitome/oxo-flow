@@ -76,7 +76,7 @@ output = ["dedup/{sample}.dedup.bam", "dedup/{sample}.dedup.metrics.txt"]
 description = "Mark PCR and optical duplicates"
 shell = """
 mkdir -p dedup
-gatk MarkDuplicates \
+gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT \
     -I {input[0]} \
     -O {output[0]} \
     -M {output[1]} \
@@ -97,14 +97,14 @@ output = ["bqsr/{sample}.recal.bam"]
 description = "Base quality score recalibration (BQSR)"
 shell = """
 mkdir -p bqsr
-gatk BaseRecalibrator \
+gatk BaseRecalibrator --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     --known-sites {config.known_sites} \
     --known-sites {config.thousand_g} \
     --known-sites {config.known_indels} \
     -O bqsr/{sample}.recal_data.table
 
-gatk ApplyBQSR \
+gatk ApplyBQSR --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     --bqsr-recal-file bqsr/{sample}.recal_data.table \
     -O {output[0]}
@@ -124,7 +124,7 @@ output = ["variants/{sample}.g.vcf.gz"]
 description = "Per-sample variant calling in GVCF mode"
 shell = """
 mkdir -p variants
-gatk HaplotypeCaller \
+gatk HaplotypeCaller --read-validation-stringency SILENT \
     -I {input[0]} -R {config.reference} \
     -O {output[0]} \
     -ERC GVCF \
@@ -333,26 +333,27 @@ memory = "16G"
 conda = "envs/vep.yaml"
 
 [report]
-# template: reserved — supply a real Tera template file path to use one
-# template = "germline_report"
-format = ["html", "json"]
-sections = ["summary", "qc_metrics", "coverage", "variants", "annotations", "provenance"]
+# Optional HTML template override — "report.html" is the built-in default;
+# any other value is a Tera template path resolved next to the workflow file.
+# template = "report.html"
+#
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+# The output format is chosen on the CLI with -f (html, json, md, pdf).
+sections = ["universal", "workflow-info", "execution-status", "metrics", "software-versions", "provenance"]
 ```
 
 !!! note "About `[report]` in this workflow"
     The `[report]` block above is copied verbatim from the example file.
-    `[report].format` is parsed but not consumed — the `report` command
-    warns when it is set and selects the format via `--format`/`-f`
-    instead. `[report].sections` acts as a whitelist filter over the
+    `[report].sections` acts as a whitelist filter over the
     engine's built-in section IDs (`universal`, `execution-status`,
     `failure-diagnosis`, `clinical-compliance`, `workflow-info`, `commands`,
     `rule-captions`, `file-manifest`, `environment`, `metrics`,
     `aggregate-metrics`, `sample-matrix`, `provenance`,
-    `task-summary`, `software-versions`). Of the six free-form names here, only
-    `provenance` matches a built-in ID — so a report generated from
-    this workflow would contain just the provenance section. See
-    [the report command](../commands/report.md) for the supported
-    surface.
+    `task-summary`, `software-versions`). All six names here are
+    built-in generator IDs — a report generated from this workflow
+    includes all six sections. The output format itself is chosen on
+    the CLI with `--format`/`-f`. See [the report
+    command](../commands/report.md) for the supported surface.
 
 ### Sample Expansion
 

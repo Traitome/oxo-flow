@@ -1,6 +1,6 @@
 # Paired Experiment-Control (Multiple Pairs)
 
-The scalable version of gallery 14: the same somatic pipeline driven by `[[pairs]]` with `{experiment}` / `{control}` / `{pair_id}` wildcards, fanning out one branch per pair.
+The scalable version of [Paired Experiment-Control (Single Pair)](paired-experiment-control.md): the same somatic pipeline driven by `[[pairs]]` with `{experiment}` / `{control}` / `{pair_id}` wildcards, fanning out one branch per pair.
 
 ## What It Demonstrates
 
