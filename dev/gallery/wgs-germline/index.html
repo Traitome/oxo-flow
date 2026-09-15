@@ -4347,7 +4347,7 @@ tabs — the delimiter it expects between read group fields.</p>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Mark PCR and optical duplicates"</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="s2">mkdir -p dedup</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s2">gatk MarkDuplicates </span><span class="se">\</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s2">gatk MarkDuplicates --VALIDATION_STRINGENCY SILENT </span><span class="se">\</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="s2">    -I {input[0]} </span><span class="se">\</span>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="s2">    -O {output[0]} </span><span class="se">\</span>
 </span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="s2">    -M {output[1]} </span><span class="se">\</span>
@@ -4368,14 +4368,14 @@ tabs — the delimiter it expects between read group fields.</p>
 </span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Base quality score recalibration (BQSR)"</span>
 </span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
 </span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="s2">mkdir -p bqsr</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="s2">gatk BaseRecalibrator </span><span class="se">\</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="s2">gatk BaseRecalibrator --read-validation-stringency SILENT </span><span class="se">\</span>
 </span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="s2">    -I {input[0]} -R {config.reference} </span><span class="se">\</span>
 </span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="s2">    --known-sites {config.known_sites} </span><span class="se">\</span>
 </span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="s2">    --known-sites {config.thousand_g} </span><span class="se">\</span>
 </span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="s2">    --known-sites {config.known_indels} </span><span class="se">\</span>
 </span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="s2">    -O bqsr/{sample}.recal_data.table</span>
 </span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="s2">gatk ApplyBQSR </span><span class="se">\</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="s2">gatk ApplyBQSR --read-validation-stringency SILENT </span><span class="se">\</span>
 </span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="s2">    -I {input[0]} -R {config.reference} </span><span class="se">\</span>
 </span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="s2">    --bqsr-recal-file bqsr/{sample}.recal_data.table </span><span class="se">\</span>
 </span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a><span class="s2">    -O {output[0]}</span>
@@ -4395,7 +4395,7 @@ tabs — the delimiter it expects between read group fields.</p>
 </span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Per-sample variant calling in GVCF mode"</span>
 </span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"""</span>
 </span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a><span class="s2">mkdir -p variants</span>
-</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="s2">gatk HaplotypeCaller </span><span class="se">\</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="s2">gatk HaplotypeCaller --read-validation-stringency SILENT </span><span class="se">\</span>
 </span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a><span class="s2">    -I {input[0]} -R {config.reference} </span><span class="se">\</span>
 </span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a><span class="s2">    -O {output[0]} </span><span class="se">\</span>
 </span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a><span class="s2">    -ERC GVCF </span><span class="se">\</span>
@@ -4601,26 +4601,27 @@ and the <a href="../../reference/workflow-format/#expand-inputs">field reference
 </span><span id="__span-2-153"><a id="__codelineno-2-153" name="__codelineno-2-153" href="#__codelineno-2-153"></a><span class="n">conda</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"envs/vep.yaml"</span>
 </span><span id="__span-2-154"><a id="__codelineno-2-154" name="__codelineno-2-154" href="#__codelineno-2-154"></a>
 </span><span id="__span-2-155"><a id="__codelineno-2-155" name="__codelineno-2-155" href="#__codelineno-2-155"></a><span class="k">[report]</span>
-</span><span id="__span-2-156"><a id="__codelineno-2-156" name="__codelineno-2-156" href="#__codelineno-2-156"></a><span class="c1"># template: reserved — supply a real Tera template file path to use one</span>
-</span><span id="__span-2-157"><a id="__codelineno-2-157" name="__codelineno-2-157" href="#__codelineno-2-157"></a><span class="c1"># template = "germline_report"</span>
-</span><span id="__span-2-158"><a id="__codelineno-2-158" name="__codelineno-2-158" href="#__codelineno-2-158"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">,</span><span class="w"> </span><span class="s2">"json"</span><span class="p">]</span>
-</span><span id="__span-2-159"><a id="__codelineno-2-159" name="__codelineno-2-159" href="#__codelineno-2-159"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"summary"</span><span class="p">,</span><span class="w"> </span><span class="s2">"qc_metrics"</span><span class="p">,</span><span class="w"> </span><span class="s2">"coverage"</span><span class="p">,</span><span class="w"> </span><span class="s2">"variants"</span><span class="p">,</span><span class="w"> </span><span class="s2">"annotations"</span><span class="p">,</span><span class="w"> </span><span class="s2">"provenance"</span><span class="p">]</span>
+</span><span id="__span-2-156"><a id="__codelineno-2-156" name="__codelineno-2-156" href="#__codelineno-2-156"></a><span class="c1"># Optional HTML template override — "report.html" is the built-in default;</span>
+</span><span id="__span-2-157"><a id="__codelineno-2-157" name="__codelineno-2-157" href="#__codelineno-2-157"></a><span class="c1"># any other value is a Tera template path resolved next to the workflow file.</span>
+</span><span id="__span-2-158"><a id="__codelineno-2-158" name="__codelineno-2-158" href="#__codelineno-2-158"></a><span class="c1"># template = "report.html"</span>
+</span><span id="__span-2-159"><a id="__codelineno-2-159" name="__codelineno-2-159" href="#__codelineno-2-159"></a><span class="c1">#</span>
+</span><span id="__span-2-160"><a id="__codelineno-2-160" name="__codelineno-2-160" href="#__codelineno-2-160"></a><span class="c1"># Section IDs are the built-in generator names (oxo-flow report --list-sections).</span>
+</span><span id="__span-2-161"><a id="__codelineno-2-161" name="__codelineno-2-161" href="#__codelineno-2-161"></a><span class="c1"># The output format is chosen on the CLI with -f (html, json, md, pdf).</span>
+</span><span id="__span-2-162"><a id="__codelineno-2-162" name="__codelineno-2-162" href="#__codelineno-2-162"></a><span class="n">sections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"universal"</span><span class="p">,</span><span class="w"> </span><span class="s2">"workflow-info"</span><span class="p">,</span><span class="w"> </span><span class="s2">"execution-status"</span><span class="p">,</span><span class="w"> </span><span class="s2">"metrics"</span><span class="p">,</span><span class="w"> </span><span class="s2">"software-versions"</span><span class="p">,</span><span class="w"> </span><span class="s2">"provenance"</span><span class="p">]</span>
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">About <code>[report]</code> in this workflow</p>
 <p>The <code>[report]</code> block above is copied verbatim from the example file.
-<code>[report].format</code> is parsed but not consumed — the <code>report</code> command
-warns when it is set and selects the format via <code>--format</code>/<code>-f</code>
-instead. <code>[report].sections</code> acts as a whitelist filter over the
+<code>[report].sections</code> acts as a whitelist filter over the
 engine's built-in section IDs (<code>universal</code>, <code>execution-status</code>,
 <code>failure-diagnosis</code>, <code>clinical-compliance</code>, <code>workflow-info</code>, <code>commands</code>,
 <code>rule-captions</code>, <code>file-manifest</code>, <code>environment</code>, <code>metrics</code>,
 <code>aggregate-metrics</code>, <code>sample-matrix</code>, <code>provenance</code>,
-<code>task-summary</code>, <code>software-versions</code>). Of the six free-form names here, only
-<code>provenance</code> matches a built-in ID — so a report generated from
-this workflow would contain just the provenance section. See
-<a href="../../commands/report/">the report command</a> for the supported
-surface.</p>
+<code>task-summary</code>, <code>software-versions</code>). All six names here are
+built-in generator IDs — a report generated from this workflow
+includes all six sections. The output format itself is chosen on
+the CLI with <code>--format</code>/<code>-f</code>. See <a href="../../commands/report/">the report
+command</a> for the supported surface.</p>
 </div>
 <h3 id="sample-expansion">Sample Expansion<a class="headerlink" href="#sample-expansion" title="Permanent link">#</a></h3>
 <p>The <code>[[sample_groups]]</code> table is the single source of truth for the cohort:</p>

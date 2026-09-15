@@ -3792,17 +3792,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#diagnostic-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3849,6 +3838,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4654,17 +4654,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#diagnostic-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4711,6 +4700,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
+      
+    </span>
+  </a>
   
 </li>
       
@@ -4972,13 +4972,6 @@ input manifest: <code>(scheme, key, size, etag)</code> — S3 ETag or GCS <code>
 Same-size remote rewrites invalidate the rule exactly as local content
 changes do (<a href="../cloud-storage/#content-addressed-invalidation">Cloud Storage</a>).</p>
 <hr />
-<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
-<ul>
-<li><a href="../workflow-format/">Workflow Format Reference</a> — complete TOML specification</li>
-<li><a href="../dag-engine/">DAG Engine</a> — how dependencies are resolved</li>
-<li><a href="../wildcards/">Wildcards Reference</a> — pattern expansion details</li>
-</ul>
-<hr />
 <h2 id="diagnostic-codes">Diagnostic Codes<a class="headerlink" href="#diagnostic-codes" title="Permanent link">#</a></h2>
 <p>Every static check in oxo-flow tags its findings with a stable code so
 tools (and you) can branch on them programmatically:</p>
@@ -5053,7 +5046,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>E016</code></td>
-<td>An environment field contains a shell-unsafe character — the spec would not render as safe argv</td>
+<td>An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry <code>pair_id</code> colliding with an existing instance name (see Checkpoint re-entry)</td>
 </tr>
 <tr>
 <td><code>E017</code></td>
@@ -5179,6 +5172,13 @@ classes run first, before any model round is spent.</p>
   multiple seeds measure sampling variance instead of quoting a single
   lucky/unlucky run.</li>
 </ul>
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
+<ul>
+<li><a href="../workflow-format/">Workflow Format Reference</a> — complete TOML specification</li>
+<li><a href="../dag-engine/">DAG Engine</a> — how dependencies are resolved</li>
+<li><a href="../wildcards/">Wildcards Reference</a> — pattern expansion details</li>
+</ul>
+<hr />
 
 
 

@@ -4108,7 +4108,7 @@
 <h3 id="preview">Preview<a class="headerlink" href="#preview" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>variant-calling.oxoflow
 </span></code></pre></div>
-<p>The dry-run lists all expanded rules and suggests a <code>-j</code> value based on your machine's threads divided by the workflow's heaviest rule.</p>
+<p>The dry-run lists all expanded rules and suggests a <code>-j</code> value evaluated per parallel wave — cores divided by the heaviest rule in that wave, capped by the wave's width — taking the widest wave as the suggestion.</p>
 <h3 id="execute">Execute<a class="headerlink" href="#execute" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Two pairs can run concurrently — one job stream per pair</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>variant-calling.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">2</span><span class="w"> </span>-r<span class="w"> </span><span class="m">1</span>

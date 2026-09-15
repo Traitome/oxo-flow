@@ -3925,7 +3925,7 @@
 <li><a href="../installation/">oxo-flow installed</a></li>
 <li>Paired-end FASTQ files (or the willingness to create test files)</li>
 <li><strong>conda</strong> or <strong>mamba</strong> available for environment management. <ul>
-<li><em>If you don't have either, we recommend <a href="https://github.com/conda-forge/miniforge#miniforge3">Miniforge</a> or <a href="https://github.com/conda-forge/miniforge#mambaforge">Mambaforge</a>.</em></li>
+<li><em>If you don't have either, we recommend <a href="https://github.com/conda-forge/miniforge#miniforge3">Miniforge3</a>, which includes both conda and mamba.</em></li>
 </ul>
 </li>
 </ul>
@@ -4198,7 +4198,7 @@ input is absent or its wildcards cannot be bound.</p>
 <p class="admonition-title">Aggregation rules are expanded per sample too</p>
 <p><code>multiqc</code> became two tasks, but both aggregate the same <code>results</code> directory and write the same <code>results/multiqc/multiqc_report.html</code> — the second run overwrites the first. This duplication is harmless here (MultiQC re-scans the whole directory), but for truly single-shot aggregation steps you may want to run them separately or via <code>depends_on</code> without a sample wildcard in the inputs.</p>
 </div>
-<p>The suggested <code>-j 2</code> comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 ÷ 4 = 2) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.</p>
+<p>The suggested <code>-j 2</code> comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 / 4 → 2, rounded down) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.</p>
 <div class="admonition note">
 <p class="admonition-title">Listing order reflects parallel levels</p>
 <p><code>fastp_trim</code> and <code>fastqc_raw</code> are listed adjacent because they are independent and will run <strong>in parallel</strong> at the same DAG level. Rules within a level are sorted alphabetically; <code>fastqc_trimmed</code> waits for <code>fastp_trim</code>, and <code>multiqc</code> waits for all three.</p>

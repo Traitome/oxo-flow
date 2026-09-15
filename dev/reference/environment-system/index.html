@@ -3177,17 +3177,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#see-also_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -4159,17 +4148,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#see-also_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -4414,7 +4392,7 @@ only ever be lost.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Only one backend per rule — uncomment the one you need:</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/tools.yaml"</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># environment = { docker = "biocontainers/bwa:0.7.17" }</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># environment = { venv = "envs/requirements.txt" }</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># environment = { modules = ["gcc/11.2", "cuda/11.7"] }</span>
 </span></code></pre></div>
 <p>If multiple backends are specified, the first one found is used in this priority order: mamba, conda, pixi, docker, singularity, venv, modules. The <code>system</code> backend is used when a rule declares no environment spec.</p>
@@ -4446,10 +4424,6 @@ declaration-level checks.</p>
 <li><a href="../../how-to/use-environments/">Use Environments how-to</a> — practical recipes</li>
 <li><a href="../../commands/env/"><code>env</code> command</a> — CLI reference</li>
 <li><a href="../../commands/run/"><code>run</code> command</a> — <code>--skip-env-setup</code> and <code>--cache-dir</code> options</li>
-</ul>
-<hr />
-<h2 id="see-also_1">See Also<a class="headerlink" href="#see-also_1" title="Permanent link">#</a></h2>
-<ul>
 <li><a href="../china-mirrors/">China Network Mirrors</a> — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable

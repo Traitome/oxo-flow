@@ -4388,7 +4388,7 @@ substituted when <code>apptainer</code> is absent.</p>
 </tr>
 <tr>
 <td>Pixi</td>
-<td><code>pixi run --manifest-path &lt;pixi.toml&gt; &lt;command&gt;</code></td>
+<td><code>pixi run --manifest-path &lt;pixi.toml&gt; bash -c '&lt;command&gt;'</code></td>
 </tr>
 <tr>
 <td>Venv</td>
@@ -4541,8 +4541,9 @@ itself lives elsewhere (your laptop, a lab server, a container):</p>
 </ol>
 <p>Requirements on the remote host: the <code>oxo-flow</code> CLI on <code>PATH</code> (any recent
 release), <code>tar</code>, and non-interactive SSH access (key auth, <code>BatchMode</code>).
-Cluster connections are admin-managed in team mode (they hold shared SSH
-credentials); every run remains owned by the acting user.</p>
+Cluster connection management (upsert/delete) is admin-only outside
+personal mode — in team and hpc mode (they hold shared SSH credentials);
+every run remains owned by the acting user.</p>
 <h2 id="monitoring-jobs">Monitoring Jobs<a class="headerlink" href="#monitoring-jobs" title="Permanent link">#</a></h2>
 <p>After submission, use your cluster's native tools:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># SLURM</span>

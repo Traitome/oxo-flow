@@ -956,10 +956,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#configsamples-is-inert" class="md-nav__link">
+  <a href="#sample-expansion-and-the-multiqc-rule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        config.samples Is Inert
+        Sample Expansion and the multiqc Rule
       
     </span>
   </a>
@@ -3851,10 +3851,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#configsamples-is-inert" class="md-nav__link">
+  <a href="#sample-expansion-and-the-multiqc-rule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        config.samples Is Inert
+        Sample Expansion and the multiqc Rule
       
     </span>
   </a>
@@ -4104,8 +4104,8 @@
 <li><strong>Phred ≥ 20</strong>: Only bases with ≥99% accuracy are retained</li>
 <li><strong>Length ≥ 50</strong>: Reads shorter than 50 bp after trimming are discarded to ensure reliable alignment</li>
 </ul>
-<h3 id="configsamples-is-inert"><code>config.samples</code> Is Inert<a class="headerlink" href="#configsamples-is-inert" title="Permanent link">#</a></h3>
-<p>The <code>samples = "samples.csv"</code> key in <code>[config]</code> is inert: no rule references it, and it does not control wildcard expansion. Sample expansion is driven by <code>[[sample_groups]]</code> (see <a href="../parallel-samples/">Parallel Samples</a> and the <a href="../../reference/wildcards/">wildcards reference</a>); the <code>multiqc</code> rule's <code>depends_on</code> ensures it runs exactly once regardless of how samples are expanded.</p>
+<h3 id="sample-expansion-and-the-multiqc-rule">Sample Expansion and the <code>multiqc</code> Rule<a class="headerlink" href="#sample-expansion-and-the-multiqc-rule" title="Permanent link">#</a></h3>
+<p>Sample expansion is driven by <code>[[sample_groups]]</code> (see <a href="../parallel-samples/">Parallel Samples</a> and the <a href="../../reference/wildcards/">wildcards reference</a>); for CSV-driven cohorts, use <code>sample_groups_file</code> in <code>[workflow]</code> instead of an inline list. The <code>multiqc</code> rule has no <code>{sample}</code> in its inputs and uses <code>depends_on</code> to run exactly once, after all per-sample rules that feed its <code>qc/</code> and <code>counts/</code> directories.</p>
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/06_rnaseq_quantification.oxoflow

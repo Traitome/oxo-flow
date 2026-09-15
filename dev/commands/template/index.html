@@ -3854,6 +3854,14 @@ immediately complete and runnable.</p>
 <td><code>--ai-max-retries &lt;N&gt;</code></td>
 <td>Maximum AI correction rounds (overrides config)</td>
 </tr>
+<tr>
+<td><code>--ai-team-profile &lt;PROFILE&gt;</code></td>
+<td>Generation team profile: <code>compact</code> (one agent + engine gates, default) or <code>full</code> (adds the task contract, the deterministic Curator brief, and an independent review pass with a bounded fix). Overrides <code>[ai] team_profile</code> in the config</td>
+</tr>
+<tr>
+<td><code>--ai-attempts &lt;N&gt;</code></td>
+<td>Fresh-draw attempts for the whole generation (pass@k with early exit: the deterministic gates decide, so later attempts are only paid when earlier ones fail) [default: 1]</td>
+</tr>
 </tbody>
 </table>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>

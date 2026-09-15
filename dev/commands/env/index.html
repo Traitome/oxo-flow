@@ -3887,7 +3887,7 @@ When given a workflow file, lists the environments used by each rule.</p>
 </span></code></pre></div>
 <h3 id="env-check"><code>env check</code><a class="headerlink" href="#env-check" title="Permanent link">#</a></h3>
 <p>Check that all environments declared in a workflow file are valid and their backends are available.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>&lt;WORKFLOW&gt;
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -3948,7 +3948,7 @@ When given a workflow file, lists the environments used by each rule.</p>
 <tr>
 <td><code>--backend</code></td>
 <td>—</td>
-<td>Environment backend to generate: conda (YAML) or pixi (TOML) (default: conda)</td>
+<td>Environment backend to generate: conda (YAML) or pixi (TOML). Default: inferred from the spec's extension, or conda with <code>--ai</code></td>
 </tr>
 </tbody>
 </table>

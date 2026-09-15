@@ -3847,41 +3847,50 @@ recorded instance set exactly.</p>
 <thead>
 <tr>
 <th>Option</th>
+<th>Short</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>-j, --jobs &lt;JOBS&gt;</code></td>
+<td>—</td>
 <td>Number of parallel jobs (default: 1)</td>
 </tr>
 <tr>
 <td><code>--ai-recover</code></td>
 <td>Enable AI error recovery on rule failure</td>
+<td></td>
 </tr>
 <tr>
 <td><code>--ai-max-retries &lt;N&gt;</code></td>
 <td>Maximum AI attempts for recovery when a call fails (default: 1; only a failed call is retried)</td>
+<td></td>
 </tr>
 <tr>
 <td><code>--workdir &lt;DIR&gt;</code></td>
 <td><code>-d</code></td>
+<td>Working directory to resume in (default: the one recorded in the checkpoint)</td>
 </tr>
 <tr>
 <td><code>--keep-going</code></td>
 <td><code>-k</code></td>
+<td>Continue execution when a job fails (same semantics as <code>run</code>)</td>
 </tr>
 <tr>
 <td><code>--timeout &lt;SECS&gt;</code></td>
 <td>—</td>
+<td>Timeout per job in seconds (0 = disabled), or a duration like <code>1h</code>/<code>30m</code></td>
 </tr>
 <tr>
 <td><code>--no-report-snapshot</code></td>
 <td>—</td>
+<td>Skip the automatic report snapshot after the resumed run (same flag as <code>run</code>)</td>
 </tr>
 <tr>
 <td><code>--background</code></td>
 <td>—</td>
+<td>Detach the resumed run into a background process and exit 0 immediately (see <a href="../run/#background-runs-background">Background runs (--background)</a>)</td>
 </tr>
 </tbody>
 </table>

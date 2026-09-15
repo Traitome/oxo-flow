@@ -4013,7 +4013,7 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow test [OPTIONS] &lt;WORKFLOW&gt;
 </span></code></pre></div>
 <h2 id="description">Description<a class="headerlink" href="#description" title="Permanent link">#</a></h2>
-<p>Performs a comprehensive pre-flight check on a workflow:</p>
+<p>Performs a full pre-flight check on a workflow:</p>
 <ol>
 <li><strong>Validate</strong> — syntax and semantic correctness</li>
 <li><strong>Lint</strong> — best-practice checks (warnings for missing descriptions, logs, etc.)</li>
@@ -4168,9 +4168,10 @@ are skipped and reported by <code>validate</code>/<code>dry-run</code> instead.<
 <li><code>1</code> — validation, lint, or a <code>D001</code> script-file finding</li>
 </ul>
 <h3 id="machine-readable-output">Machine-readable output<a class="headerlink" href="#machine-readable-output" title="Permanent link">#</a></h3>
-<p>With <code>--json</code>, each step emits its own JSON document on stdout; <code>--deep</code>
-adds a fourth, so CI can gate on it:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span><span class="nb">test</span><span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--deep<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-s<span class="w"> </span><span class="s1">'.[-1]'</span>
+<p>With <code>--json</code>, one combined JSON document is emitted on stdout: a <code>steps</code>
+array (validate / lint / dry-run / deep-check statuses) plus per-step
+reports under <code>reports</code>, so CI can gate on either surface:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span><span class="nb">test</span><span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--deep<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.reports."deep-check"'</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># { "command": "deep-check", "diagnostics": [...], "error_count": 1,</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1">#   "warning_count": 3, "passed": false }</span>
 </span></code></pre></div>
