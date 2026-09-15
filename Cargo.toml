@@ -65,7 +65,7 @@ regex = "1"
 tempfile = "3"
 num_cpus = "1"
 sysinfo = "0.38"
-nix = { version = "0.30", features = ["signal", "process"] }
+nix = { version = "0.31", features = ["signal", "process"] }
 fs2 = "0.4"
 
 # Crypto
