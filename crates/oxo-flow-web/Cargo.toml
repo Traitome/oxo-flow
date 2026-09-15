@@ -18,7 +18,7 @@ oxo-flow-core = { workspace = true }
 oxo-flow-ai = { workspace = true }
 oxo-license = "0.1.1"
 axum = { workspace = true, features = ["multipart"] }
-async_zip = { version = "0.0.17", default-features = false }
+async_zip = { version = "0.0.19", default-features = false }
 tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 tokio = { workspace = true }
