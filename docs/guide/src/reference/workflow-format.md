@@ -1052,6 +1052,32 @@ temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
 temporary = true                             # Delete aligned/*.bam once all callers finish
 ```
 
+#### Directory outputs
+
+Directories are valid outputs — declare them with a trailing slash
+(or a bare directory name). Everything a rule writes inside that
+directory counts as produced, which is the idiomatic way to capture
+tool-generated side directories such as `multiqc_data/` and
+`multiqc_plots/`:
+
+```toml
+[[rules]]
+name = "multiqc"
+output = [
+    "results/multiqc/multiqc_report.html",
+    "results/multiqc/multiqc_data/",
+    "results/multiqc/multiqc_plots/",
+]
+```
+
+Declaring directories matters for two reasons: downstream rules and the
+report see the whole directory as available, and the executor checks
+declared outputs after the shell exits — a rule that exits 0 while a
+declared output (file or directory) is missing is marked as **failed**.
+Conversely, do not declare directories the shell only uses as scratch:
+an undeclared directory that the rule recreates on re-run is lost on
+resume.
+
 ### Execution Control
 
 | Field | Type | Default | Description |
