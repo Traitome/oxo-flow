@@ -3028,7 +3028,11 @@ mod tests {
             .find(|d| d.message.starts_with("shell "))
             .expect("W023 for the shell command");
         assert!(shell_msg.message.contains("command substitution via $()"));
-        assert!(shell_msg.message.contains("command substitution via backticks"));
+        assert!(
+            shell_msg
+                .message
+                .contains("command substitution via backticks")
+        );
         assert!(shell_msg.message.contains("recursive force removal"));
     }
 

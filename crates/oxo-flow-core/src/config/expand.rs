@@ -545,8 +545,7 @@ impl WorkflowConfig {
                 {
                     meta_texts.push(text);
                 }
-                for column in crate::config::missing_meta_columns(&meta_texts, &metadata_columns)
-                {
+                for column in crate::config::missing_meta_columns(&meta_texts, &metadata_columns) {
                     let refs = missing_meta_columns.entry(column.to_string()).or_default();
                     if !refs.iter().any(|r| r == &rule.name) {
                         refs.push(rule.name.clone());

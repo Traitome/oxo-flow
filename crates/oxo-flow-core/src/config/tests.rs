@@ -3632,8 +3632,10 @@ fn missing_meta_columns_helper_reports_typos_per_rule() {
     // columns no metadata row defines, deduplicated in order of first
     // appearance — the caller aggregates across rules.
     use crate::config::missing_meta_columns;
-    let known: std::collections::HashSet<String> =
-        ["sample", "strandedness"].iter().map(|s| s.to_string()).collect();
+    let known: std::collections::HashSet<String> = ["sample", "strandedness"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     assert_eq!(
         missing_meta_columns(&["{meta.strandedness}"], &known),
