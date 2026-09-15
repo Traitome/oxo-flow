@@ -19,7 +19,7 @@
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
     "d3-dag": "^1.2.2",
-    "lucide-react": "^1.18.0",
+    "lucide-react": "^1.45.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.17.0"
