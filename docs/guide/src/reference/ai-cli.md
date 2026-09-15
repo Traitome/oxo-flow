@@ -74,7 +74,7 @@ oxo-flow template "RNA-seq analysis with STAR alignment and featureCounts quanti
 # Force AI on (even without [ai] section)
 oxo-flow dry-run workflow.oxoflow --ai
 
-# Force AI off (even with [ai] section) 
+# Force AI off (even with [ai] section)
 # (just don't pass --ai — AI is only auto-detected, never forced)
 ```
 
@@ -226,7 +226,7 @@ explicit disable:
 
 ---
 
-## AI Robustness
+## Provider failure handling
 
 The provider layer treats model failures explicitly — nothing is silently dropped:
 
@@ -380,7 +380,7 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 | Command | AI Flag | Auto-Detect | What It Does |
 |---------|---------|:-----------:|--------------|
 | `oxo-flow ai` | — | — | Quick status: provider, model, endpoint, connectivity, session count |
-| `oxo-flow ai test` | — | — | Comprehensive self-test: connectivity + generation + analysis (tests the AI integration itself — not a workflow; for workflow testing use [`oxo-flow test`](../commands/test.md)) |
+| `oxo-flow ai test` | — | — | Full self-test: connectivity + generation + analysis (tests the AI integration itself — not a workflow; for workflow testing use [`oxo-flow test`](../commands/test.md)) |
 | `oxo-flow ai setup` | — | — | Interactive wizard: choose provider, enter key, save config |
 | `oxo-flow ai explain WORKFLOW` | — | — | Three-layer workflow explanation (overview → steps → scientific review) |
 | `oxo-flow ai explain WORKFLOW --step RULE` | — | — | Focus the explanation on one rule |
@@ -564,6 +564,6 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 4 | Scope-level AI config, AI plugin types | ✅ Complete |
 | Phase 5 | MCP/Skill ecosystem | ✅ Complete |
 | Phase 6 | Workflow explanation (`ai explain`) | ✅ Complete |
-| Phase 7 | Provider robustness (tool-call repair, overflow recovery, bounded results) | ✅ Complete |
+| Phase 7 | Provider failure handling (tool-call repair, overflow recovery, bounded results) | ✅ Complete |
 
 See the full design spec at `docs/superpowers/specs/2026-08-09-ai-native-cli-design.md` (repository root, not included in the published docs) for architecture details.

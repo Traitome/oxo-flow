@@ -133,7 +133,7 @@ Seven stages, three approval gates. Every stage ends with a
 
 ## Scientist Team Mode
 
-Yes — one skill, 3–4 roles. Roles are stage owners in the loop above; the
+One skill covers 3–4 roles. Roles are stage owners in the loop above; the
 handoff artifact is each stage's output. Roles can be played sequentially by
 one agent or by parallel subagents; the independence rule is binding either way.
 

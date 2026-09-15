@@ -177,7 +177,7 @@ environment = { conda = "envs/gatk.yaml" }
 
 [[rules]]
 name = "plot_results"
-environment = { venv = "envs/requirements.txt" }
+environment = { venv = "venv/", venv_requirements = "envs/requirements.txt" }
 # ...
 ```
 

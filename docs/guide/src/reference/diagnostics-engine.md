@@ -12,7 +12,7 @@ The Diagnostics Engine analyzes failed pipeline runs and returns:
 - **Relevant log lines** for context
 
 It does NOT use AI. It matches error signatures (log keywords, exit codes)
-against a curated library of 30+ error patterns.
+against a curated library of 30 error patterns.
 
 ## Error Pattern Library
 

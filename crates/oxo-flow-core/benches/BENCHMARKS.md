@@ -65,13 +65,16 @@ cargo bench -p oxo-flow-core -- --baseline baseline
 
 ## CI Integration
 
-The `make bench` target saves a baseline and reports any regressions.
-Results are cached under `target/criterion/`.  Baseline files should be
-committed to the repository when a release is cut.
+`make bench` runs the criterion suites with `--save-baseline baseline`; a
+later run passes `--baseline baseline` so criterion reports any regression
+against the saved numbers. Results are cached under `target/criterion/`.
+Baseline files should be committed to the repository when a release is cut.
 
 ## Reproducibility
 
 - Pin the Rust toolchain version in `rust-toolchain.toml`
 - Use `--profile=time` for maximum measurement accuracy
 - Isolate benchmarks on dedicated hardware for publication-quality numbers
-- For cross-engine comparison, see `docs/guide/src/reference/benchmarking.md`
+- For cross-engine comparison (Nextflow/Snakemake), see `benches/comparative/README.md`
+  (`make bench-compare`); for CLI-driven macro-benchmarks, see `benches/macro/`
+  (`make bench-macro`)

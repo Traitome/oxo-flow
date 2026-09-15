@@ -49,6 +49,8 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
         .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
     let path = format!("{dir}/report-qa-test.db");
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{path}-wal"));
+    let _ = std::fs::remove_file(format!("{path}-shm"));
     let url = format!("sqlite:{path}?mode=rwc");
     oxo_flow_web::db::init_db(&url).await.ok();
     oxo_flow_web::infra::db::sqlite::init_pool(&url).await;

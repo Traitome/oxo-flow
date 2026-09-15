@@ -66,7 +66,7 @@ DAG: (dry-run) 3 rules would execute
      outputs: ["data/raw.csv"]
      command: mkdir -p data
 echo 'id,name,value' > data/raw.csv
-for i in $(seq 1 100); do echo "$i,item_$i,$((RANDOM % 1000))"; done >> data/raw.csv
+for i in $(seq 1 100); do echo "$i,item_$i,$((i * 37 % 1000))"; done >> data/raw.csv
 
   2. transform
      threads=1

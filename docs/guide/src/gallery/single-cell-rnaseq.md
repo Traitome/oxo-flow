@@ -42,7 +42,7 @@ Traditional "bulk" RNA-seq measures the average expression across thousands of c
 - **Regulatory Networks** — Infer gene regulatory relationships from co-expression across cells
 
 !!! note "Auxiliary files"
-    This workflow references a few helper files that ship with the gallery: `scripts/seurat_analysis.R` (QC, normalization, clustering, UMAP), `templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. Browse them in [examples/gallery/](https://github.com/Traitome/oxo-flow/tree/main/examples/gallery) alongside the `.oxoflow` definition.
+    This workflow references a few helper files that ship with the gallery: `gallery/scripts/seurat_analysis.R` (QC, normalization, clustering, UMAP), `gallery/templates/sc_report.Rmd` (the report template), and the Conda environment files under `envs/`. Browse them in [examples/gallery/](https://github.com/Traitome/oxo-flow/tree/main/examples/gallery) alongside the `.oxoflow` definition.
 
 ### Computational Challenges
 

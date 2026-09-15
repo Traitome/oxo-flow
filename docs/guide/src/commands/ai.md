@@ -4,7 +4,7 @@ AI status, self-test, setup, and three-layer workflow explanation.
 
 ```bash
 oxo-flow ai                 # quick status: provider, model, quota
-oxo-flow ai test            # comprehensive self-test (provider round-trip)
+oxo-flow ai test            # full self-test (provider round-trip)
 oxo-flow ai setup           # interactive provider configuration wizard
 oxo-flow ai explain wf.oxoflow
 ```

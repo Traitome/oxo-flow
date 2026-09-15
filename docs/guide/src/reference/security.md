@@ -1,6 +1,6 @@
 # Security Model
 
-oxo-flow implements defense-in-depth security across three layers: command execution, file system access, and credential protection.
+oxo-flow implements defense-in-depth security across four layers: command execution, file system access, credential protection, and web API rate limiting.
 
 ---
 

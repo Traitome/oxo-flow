@@ -32,9 +32,9 @@ Process (one harness across all generation surfaces):
      env-discovered Claude → OpenAI → Ollama)
   2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
      no provider is usable
-  2. Template names enter the prompt as hints; keyword matching remains a
+  3. Template names enter the prompt as hints; keyword matching remains a
      deterministic fallback when all providers fail
-  3. Every draft is validated by the engine via the web workflow service;
+  4. Every draft is validated by the engine via the web workflow service;
      validation errors feed the orchestrator's correction loop (bounded)
 Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
 ```

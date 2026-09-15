@@ -210,7 +210,7 @@ With 2 pairs, all 7 rules expand to 14 concrete rule instances — `trim_reads_P
 oxo-flow dry-run variant-calling.oxoflow
 ```
 
-The dry-run lists all expanded rules and suggests a `-j` value based on your machine's threads divided by the workflow's heaviest rule.
+The dry-run lists all expanded rules and suggests a `-j` value evaluated per parallel wave — cores divided by the heaviest rule in that wave, capped by the wave's width — taking the widest wave as the suggestion.
 
 ### Execute
 

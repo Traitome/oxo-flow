@@ -76,8 +76,9 @@ Start with the **Tutorials** in order:
 1. [Installation](./tutorials/installation.md) — install the binary
 2. [Quick Start](./tutorials/quickstart.md) — run your first workflow in 5 minutes
 3. [Your First Workflow](./tutorials/first-workflow.md) — build a pipeline from scratch
-4. [Variant Calling Pipeline](./tutorials/variant-calling.md) — complete NGS analysis
-5. [Environment Management](./tutorials/environment-management.md) — conda, mamba, pixi, docker, singularity, venv, system, HPC modules
+4. [Writing Custom Scripts](./tutorials/custom-scripts.md) — embed Python, R, and Bash scripts
+5. [Variant Calling Pipeline](./tutorials/variant-calling.md) — complete NGS analysis
+6. [Environment Management](./tutorials/environment-management.md) — conda, mamba, pixi, docker, singularity, venv, system, HPC modules
 
 ### If you want to learn by example
 
@@ -226,8 +227,8 @@ oxo-flow is a **community-driven, open-source project** licensed under Apache 2.
 
 | How to contribute | Link |
 |---|---|
-| 🐛 Report a bug | [Bug report](https://github.com/Traitome/oxo-flow/issues/new) |
-| 💡 Request a feature | [Feature request](https://github.com/Traitome/oxo-flow/issues/new) |
-| 🤝 Contribute code | [Contributing guide](./development/contributing.md) |
+| Report a bug | [Bug report](https://github.com/Traitome/oxo-flow/issues/new) |
+| Request a feature | [Feature request](https://github.com/Traitome/oxo-flow/issues/new) |
+| Contribute code | [Contributing guide](./development/contributing.md) |
 
 > **Try it, break it, and tell us what happened.** Even a short comment about what worked — or didn't — helps improve oxo-flow for everyone.

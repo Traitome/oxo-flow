@@ -10,7 +10,7 @@ oxo-flow test [OPTIONS] <WORKFLOW>
 
 ## Description
 
-Performs a comprehensive pre-flight check on a workflow:
+Performs a full pre-flight check on a workflow:
 
 1. **Validate** — syntax and semantic correctness
 2. **Lint** — best-practice checks (warnings for missing descriptions, logs, etc.)
@@ -83,11 +83,12 @@ are skipped and reported by `validate`/`dry-run` instead.
 
 ### Machine-readable output
 
-With `--json`, each step emits its own JSON document on stdout; `--deep`
-adds a fourth, so CI can gate on it:
+With `--json`, one combined JSON document is emitted on stdout: a `steps`
+array (validate / lint / dry-run / deep-check statuses) plus per-step
+reports under `reports`, so CI can gate on either surface:
 
 ```bash
-oxo-flow test pipeline.oxoflow --deep --json | jq -s '.[-1]'
+oxo-flow test pipeline.oxoflow --deep --json | jq '.reports."deep-check"'
 # { "command": "deep-check", "diagnostics": [...], "error_count": 1,
 #   "warning_count": 3, "passed": false }
 ```

@@ -195,7 +195,7 @@ complete with
 
 ## Selecting Samples on the Command Line
 
-`--samples` is the single selection entry point. One parameter, four
+`--samples` is the single selection entry point. One parameter, three
 orthogonal semantics — **replace**, **append**, and **filter** (by name,
 pilot size, or readiness):
 

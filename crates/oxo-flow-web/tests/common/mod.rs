@@ -26,6 +26,10 @@ pub fn db_url() -> &'static String {
             std::process::id()
         );
         let _ = std::fs::remove_file(&path);
+        // A stale -wal from a previous process gets replayed into a freshly
+        // created .db and resurrects rows from a former run.
+        let _ = std::fs::remove_file(format!("{path}-wal"));
+        let _ = std::fs::remove_file(format!("{path}-shm"));
         format!("sqlite:{path}?mode=rwc")
     })
 }

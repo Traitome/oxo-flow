@@ -223,7 +223,7 @@ In TOML:
 # Only one backend per rule — uncomment the one you need:
 environment = { conda = "envs/tools.yaml" }
 # environment = { docker = "biocontainers/bwa:0.7.17" }
-# environment = { venv = "envs/requirements.txt" }
+# environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
 # environment = { modules = ["gcc/11.2", "cuda/11.7"] }
 ```
 
@@ -269,11 +269,6 @@ declaration-level checks.
 - [Use Environments how-to](../how-to/use-environments.md) — practical recipes
 - [`env` command](../commands/env.md) — CLI reference
 - [`run` command](../commands/run.md) — `--skip-env-setup` and `--cache-dir` options
-
----
-
-## See Also
-
 - [China Network Mirrors](china-mirrors.md) — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable

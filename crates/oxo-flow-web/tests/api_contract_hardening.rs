@@ -19,6 +19,8 @@ fn db_url() -> &'static str {
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
         let path = format!("{dir}/api-contract-hardening-test.db");
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path}-wal"));
+        let _ = std::fs::remove_file(format!("{path}-shm"));
         format!("sqlite:{path}?mode=rwc")
     })
 }

@@ -342,8 +342,6 @@ CLI override > declared `default` > error if `required` and unset.
 
 ---
 
----
-
 ## `[[references]]` — Auto-Built Indexes & Reference Data
 
 `[[references]]` is for **external, pre-staged** reference artifacts: the
@@ -664,13 +662,22 @@ environment = { conda = "envs/tools.yaml" }
 # environment = { singularity = "docker://biocontainers/bwa:0.7.17" }
 
 # # Python venv
-# environment = { venv = "envs/requirements.txt" }
+# environment = { venv = ".venv/" }
 
 # # HPC modules
 # environment = { modules = ["gcc/11.2.0", "openmpi/4.1.1"] }
 
+# # Mamba / micromamba (auto-detects binary, same YAML format as conda)
+# environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
+
 # # Conda with custom prefix
 # environment = { conda = "envs/qc.yaml", conda_prefix = ".oxo-flow/envs" }
+
+# # venv with custom requirements file
+# environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
+
+# # Reference a named environment group (defined in [env_groups])
+# env_group = "qc_env"
 ```
 
 **Container shell:** `docker`/`singularity` rules run under `bash` inside
@@ -711,17 +718,6 @@ nvidia-container-toolkit on the host. Declaring `gpus` without a docker
 image is a validation error — the flag would otherwise be silently
 ignored on system/conda backends. (Singularity `--nv` passthrough is not
 implemented yet; `gpus` with a `singularity` image is rejected for now.)
-
-# # Mamba / micromamba (auto-detects binary, same YAML format as conda)
-# environment = { mamba = "envs/qc.yaml", mamba_prefix = ".oxo-flow/envs" }
-
-# # venv with custom requirements file
-# environment = { venv = ".venv/", venv_requirements = "envs/dev-requirements.txt" }
-
-# # Reference a named environment group (defined in [env_groups])
-# env_group = "qc_env"
-shell = "tool {input} -o {output}"
-```
 
 #### Named Environment Groups (`[env_groups]`)
 
@@ -1474,7 +1470,8 @@ fan-out, while `{input}` is **space-joined** for shell consumption. Do
 not shell-loop over `{config.samples_list}` directly — a comma-joined
 value iterates as a single word; use `tr ',' ' '` only if the expansion
 form is genuinely unavailable. Chunk-level aggregation is the transform
-operator's `combine` stage instead (gallery 10).
+operator's `combine` stage instead (see
+[Transform Operator](../gallery/transform-operator.md)).
 
 ---
 
@@ -2508,7 +2505,7 @@ memory = "32G"
 
 ## JSON Schema
 
-oxo-flow provides a comprehensive JSON Schema for the `.oxoflow` format. This can be used for automated validation in your CI/CD pipelines or for real-time autocompletion and error checking in your IDE (like VS Code or IntelliJ).
+oxo-flow ships a JSON Schema for the `.oxoflow` format. Use it for automated validation in your CI/CD pipelines or for real-time autocompletion and error checking in your IDE (like VS Code or IntelliJ).
 
 ### Getting the Schema
 

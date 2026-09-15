@@ -1,6 +1,6 @@
 # Paired Experiment-Control (Single Pair)
 
-Somatic variant calling for one tumor/control pair with hardcoded sample names — the readable version of the [[pairs]]-driven pattern shown next.
+Somatic variant calling for one tumor/control pair with hardcoded sample names — the readable version of the [[pairs]]-driven pattern in [Paired Experiment-Control (Multiple Pairs)](paired-experiment-control-pairs.md).
 
 ## What It Demonstrates
 

@@ -1,7 +1,7 @@
 # oxo-flow Roadmap
 
 > **Mission**: Build a Rust-native bioinformatics pipeline engine with first-principles design,
-> first-class clinical-grade reporting, environment management, and a powerful web interface.
+> first-class clinical-grade reporting, environment management, and a full-featured web interface.
 >
 > Licensed under Apache 2.0 — fully open source and free.
 
@@ -314,10 +314,10 @@ memory = "32G"
 
 ## Phase 8: Production Hardening
 
-**Goal**: Production-ready release with comprehensive documentation and testing.
+**Goal**: Production-ready release with complete documentation and testing.
 
 ### Milestone 8.1: Testing
-- [x] Comprehensive unit test coverage across all modules
+- [x] Unit test coverage across all modules
 - [x] Integration tests for CLI commands
 - [x] Integration tests for web API endpoints
 - [x] Example workflow files with validation tests

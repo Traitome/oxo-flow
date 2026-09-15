@@ -34,6 +34,8 @@ immediately complete and runnable.
 | `--from-url <URL>` | URL(s) to use as reference material for AI generation (repeatable) |
 | `--from-file <PATH>` | File(s) to use as reference material for AI generation (repeatable) |
 | `--ai-max-retries <N>` | Maximum AI correction rounds (overrides config) |
+| `--ai-team-profile <PROFILE>` | Generation team profile: `compact` (one agent + engine gates, default) or `full` (adds the task contract, the deterministic Curator brief, and an independent review pass with a bounded fix). Overrides `[ai] team_profile` in the config |
+| `--ai-attempts <N>` | Fresh-draw attempts for the whole generation (pass@k with early exit: the deterministic gates decide, so later attempts are only paid when earlier ones fail) [default: 1] |
 
 ## Examples
 

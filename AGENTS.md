@@ -2,12 +2,12 @@
 
 This document is the primary source of truth for AI agents working on oxo-flow.
 
-**⚠️ CHANGE MANAGEMENT: When you make any structural change (new crate, new subcommand, renamed flag, version bump, port change, provider change, domain change), you MUST update this file AND the corresponding docs in `docs/guide/src/`. Cross-reference README.md for consistency. This is not optional — stale docs cause cascading errors in AI-assisted development.**
+CHANGE MANAGEMENT: any structural change (new crate, new subcommand, renamed flag, version bump, port change, provider change, domain change) requires updating this file and the corresponding docs in `docs/guide/src/`, cross-referenced against README.md. Stale docs cause cascading errors in AI-assisted development.
 
-## 🎯 Project Overview
+## Project Overview
 `oxo-flow` is a high-performance bioinformatics pipeline engine built in Rust. It focuses on reproducibility, environment isolation, and AI-assisted workflow development.
 
-## 🏗️ Workspace Layout
+## Workspace Layout
 - `crates/oxo-flow-core`: DAG engine, executor, environment management, config, scheduling, reporting
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
 - `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 30 subcommands via clap derive
@@ -15,7 +15,7 @@ This document is the primary source of truth for AI agents working on oxo-flow.
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality
 
-## 🛠️ Tech Stack & Conventions
+## Tech Stack & Conventions
 - **Language:** Rust (Edition 2024).
 - **Async:** `tokio` for concurrency.
 - **Error Handling:** `thiserror` for library errors; `anyhow` for CLI/Bin.
@@ -24,27 +24,27 @@ This document is the primary source of truth for AI agents working on oxo-flow.
 - **CLI:** `clap` with the derive API.
 - **Graph Logic:** `petgraph` for DAG operations.
 
-## 🚦 Development Workflow (Mandatory)
+## Development Workflow (Mandatory)
 Before concluding any task, the following suite **must** pass:
 ```bash
 make ci
 ```
 *Included in `make ci`: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo build`, and `cargo test`.*
 
-## 🧠 Key Design Principles
+## Key Design Principles
 1. **DAG-First Execution:** Everything is a graph. Validate dependencies before execution.
 2. **Environment Agnostic:** Support 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules.
 3. **Wildcard Expansion:** Native support for `{sample}`, `{chr}` patterns with regex constraints.
 4. **Reproducibility First:** Every execution must be reproducible and auditable via provenance.
 
-## 📝 Coding Standards
+## Coding Standards
 - **Type Safety:** No `unsafe` unless strictly justified.
 - **Documentation:** Public APIs in `oxo-flow-core` should have doc comments.
 - **Testing:** New features require corresponding unit or integration tests.
 - **Errors:** Return `Result` early; use context where helpful.
 - **Markdown lists:** Always insert a blank line between a text paragraph and a list (`-`/`*`). A paragraph followed immediately by `-` on the next line will NOT render as a list in many Markdown engines — the `-` is shown as literal text. Do NOT insert blank lines between items within the same list; only between a preceding paragraph and the list start.
 
-## 📚 Documentation System
+## Documentation System
 - `docs/guide/` — MkDocs-based user guide (run `mkdocs serve` in `docs/guide/` to preview)
 - `docs/guide/src/reference/web-api.md` — REST API reference (structured errors, endpoints)
 - `docs/guide/src/reference/web-system-architecture.md` — Web system architecture
@@ -53,7 +53,7 @@ make ci
 - `GET /api/openapi.json` — OpenAPI 3.1 schema generated at runtime
 - `docs/schema/oxoflow-v1.schema.json` — Workflow format JSON Schema
 
-## 🌐 Web System (AI-Native API)
+## Web System (AI-Native API)
 The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 
 - **Structured errors**: All responses use `{code, message, detail, suggestion}` format
@@ -63,7 +63,7 @@ The web crate (`oxo-flow-web`) is designed as an AI-native API surface:
 - **Pagination**: `GET /api/runs` uses cursor pagination `{items, next_cursor, total}`; most other list endpoints return bare capped arrays (≤ 100); the storage layer exposes an offset-style `Paginated<T> {items, page, per_page, total_items, total_pages}` internally. There is deliberately no single uniform envelope — document per endpoint (see web-api.md)
 - **Backend capability boundary (issue #207)**: run execution and its lifecycle bookkeeping are SQLite-only. PostgreSQL-backed team servers serve library/AI/auth; every `/api/runs*` request answers `503 {code:"RUNS_REQUIRE_SQLITE"}` via a router-layer gate (`require_sqlite_for_runs` in server.rs)
 
-## 🖥️ Frontend SPA
+## Frontend SPA
 The frontend is a React/TypeScript SPA built with Vite, located in `frontend/`:
 
 ```bash
@@ -91,7 +91,7 @@ The web crate uses a domain-driven modular monolith with 9 domains:
 
 Each domain follows: `types.rs` (data) → `service.rs` (pure logic) → `handlers.rs` (HTTP adapters).
 
-## 🐳 Docker Deployment
+## Docker Deployment
 
 ### Quick Start
 ```bash
@@ -164,7 +164,7 @@ OXO_FLOW_AI_PROVIDER=openai \
 OXO_FLOW_AI_PROVIDER=ollama docker compose up -d
 ```
 
-## 🔧 AI Provider Architecture
+## AI Provider Architecture
 
 The AI provider system supports four backends via an enum-based dispatcher:
 
@@ -178,7 +178,7 @@ AI features stay disabled (config via env vars or `~/.oxo-flow/ai_config.json`).
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()` (web crate, `src/ai_provider.rs`). Workflow generation is UNIFIED (issue #342): every surface — CLI `template --ai`, `POST /api/ai/translate`, and web chat — runs the shared `PipelineGenAgent` (oxo-flow-ai, `src/agent/pipeline_gen.rs`: engine-accurate prompt, canonical TOML extraction, injected validator) through the `Orchestrator` tool-calling + validation-feedback loop, differing only in provider resolution, tool policy, session destination, and presentation. The web keeps its deterministic template-keyword fallback and per-user provider/caching. The CLI additionally offers the opt-in Scientist Team profile (`--ai-team-profile full` / `[ai] team_profile`, oxo-flow-ai `src/agent/team.rs`: bounded task contract, deterministic Curator brief, independent review with one bounded fix); compact is the shipped default and the full profile's marginal value is measured in `eval/frontier/`.
 
-## 🤖 AI CLI Integration
+## AI CLI Integration
 
 The `oxo-flow-ai` crate provides shared AI infrastructure for CLI and web.
 
