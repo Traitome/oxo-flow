@@ -232,7 +232,7 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ## We Need Your Real-World Feedback
 
-oxo-flow is designed for real-world bioinformatics workflows, but we need your help to make it truly robust across diverse deployment scenarios.
+oxo-flow is designed for real-world bioinformatics workflows, but we need your help to make it dependable across diverse deployment scenarios.
 
 ### Why Your Feedback Matters
 

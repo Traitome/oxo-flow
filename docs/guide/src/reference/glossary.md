@@ -301,13 +301,6 @@ changes do ([Cloud Storage](./cloud-storage.md#content-addressed-invalidation)).
 
 ---
 
-## See Also
-
-- [Workflow Format Reference](./workflow-format.md) — complete TOML specification
-- [DAG Engine](./dag-engine.md) — how dependencies are resolved
-- [Wildcards Reference](./wildcards.md) — pattern expansion details
----
-
 ## Diagnostic Codes
 
 Every static check in oxo-flow tags its findings with a stable code so
@@ -341,7 +334,7 @@ below cover the codes referenced across this documentation.
 | `E013` | A `checkpoint = true` rule lacks `checkpoint_manifest` |
 | `E014` | A checkpoint rule is parameterized by `{sample}`/`{group}`/`{pair_id}` (not allowed) |
 | `E015` | Re-entry declares a `pair_id` with conflicting content |
-| `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv |
+| `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry `pair_id` colliding with an existing instance name (see Checkpoint re-entry) |
 | `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`) |
 
 ### Lint warnings (`lint`)
@@ -390,3 +383,11 @@ classes run first, before any model round is spent.
 - **seed** — one repeat of the same intent under identical settings;
   multiple seeds measure sampling variance instead of quoting a single
   lucky/unlucky run.
+
+## See Also
+
+- [Workflow Format Reference](./workflow-format.md) — complete TOML specification
+- [DAG Engine](./dag-engine.md) — how dependencies are resolved
+- [Wildcards Reference](./wildcards.md) — pattern expansion details
+
+---

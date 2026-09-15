@@ -56,7 +56,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | 2,700+ tests (unit, integration, doc) | pytest-based | Varied |
+| **Testing** | 2,800+ tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 
@@ -337,7 +337,7 @@ PostgreSQL server every `/api/runs*` endpoint answers
 
 ## Documentation
 
-Comprehensive documentation is available at **[traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)**.
+Full documentation is available at **[traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)**.
 
 ### 📖 Documentation Quick Links
 
@@ -433,10 +433,10 @@ If you use oxo-flow in academic research, please cite:
 
 ## Community
 
-- 🐛 **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [bug report template](.github/ISSUE_TEMPLATE/bug_report.md))
-- 💡 **Feature requests** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [feature request template](.github/ISSUE_TEMPLATE/feature_request.md))
-- 📖 **Documentation** — [traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)
-- ❓ **Questions** — [Ask DeepWiki](https://deepwiki.com/Traitome/oxo-flow)
+- **Bug reports** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [bug report template](.github/ISSUE_TEMPLATE/bug_report.md))
+- **Feature requests** — [GitHub Issues](https://github.com/Traitome/oxo-flow/issues) (use [feature request template](.github/ISSUE_TEMPLATE/feature_request.md))
+- **Documentation** — [traitome.github.io/oxo-flow/latest/](https://traitome.github.io/oxo-flow/latest/)
+- **Questions** — [Ask DeepWiki](https://deepwiki.com/Traitome/oxo-flow)
 
 ### 🧪 Real-World Feedback
 

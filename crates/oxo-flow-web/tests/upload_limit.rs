@@ -36,6 +36,8 @@ async fn upload_larger_than_default_body_limit_is_stored_whole() {
 
     let db = format!("sqlite:{tmp}/upload-limit-test.db?mode=rwc");
     let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db"));
+    let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db-wal"));
+    let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db-shm"));
     ensure_db(&db).await;
 
     // Hand-built multipart body: a `path` field plus one file field.

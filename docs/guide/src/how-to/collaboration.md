@@ -1,7 +1,7 @@
-# Collaboration
+# Share and Version Pipelines Across a Team
 
-oxo-flow provides collaboration primitives for sharing and versioning
-pipelines across users and teams.
+This guide shows how to fork, diff, share, and import pipelines through the
+web API — the collaboration primitives for working across users and teams.
 
 ## Overview
 

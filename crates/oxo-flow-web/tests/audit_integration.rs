@@ -15,8 +15,15 @@ fn db_url() -> &'static str {
     DB_URL.get_or_init(|| {
         let dir = std::env::var("CARGO_TARGET_TMPDIR")
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        let path = format!("{dir}/audit-test.db");
+        // Per-PID path so a concurrent or recycled process never reuses our
+        // database (same pattern as tests/common/mod.rs).
+        let path = format!("{dir}/audit-{}-test.db", std::process::id());
+        // Remove the WAL/SHM companions too: a stale -wal from a previous
+        // process gets replayed into a freshly created .db and resurrects
+        // rows from a former run (observed as UNIQUE constraint failures).
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path}-wal"));
+        let _ = std::fs::remove_file(format!("{path}-shm"));
         format!("sqlite:{path}?mode=rwc")
     })
 }

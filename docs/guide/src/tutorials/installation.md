@@ -7,7 +7,7 @@ This guide covers all the ways to install the `oxo-flow` binary on your system.
 ## Requirements
 
 - **Operating system**: Linux (x86_64, aarch64) or macOS (Apple Silicon, Intel)
-- **Disk space**: ~23 MB for the binary
+- **Disk space**: ~24 MB for the binary
 - **Optional**: Rust toolchain (1.98+) if building from source
 
 !!! note "Runtime dependencies"

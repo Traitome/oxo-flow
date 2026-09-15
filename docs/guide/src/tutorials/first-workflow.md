@@ -9,7 +9,7 @@ This tutorial walks you through building a realistic bioinformatics workflow fro
 - [oxo-flow installed](./installation.md)
 - Paired-end FASTQ files (or the willingness to create test files)
 - **conda** or **mamba** available for environment management. 
-    - *If you don't have either, we recommend [Miniforge](https://github.com/conda-forge/miniforge#miniforge3) or [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge).*
+    - *If you don't have either, we recommend [Miniforge3](https://github.com/conda-forge/miniforge#miniforge3), which includes both conda and mamba.*
 
 ---
 
@@ -311,7 +311,7 @@ The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of 
 !!! note "Aggregation rules are expanded per sample too"
     `multiqc` became two tasks, but both aggregate the same `results` directory and write the same `results/multiqc/multiqc_report.html` — the second run overwrites the first. This duplication is harmless here (MultiQC re-scans the whole directory), but for truly single-shot aggregation steps you may want to run them separately or via `depends_on` without a sample wildcard in the inputs.
 
-The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 ÷ 4 = 2) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
+The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 / 4 → 2, rounded down) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
 
 !!! note "Listing order reflects parallel levels"
     `fastp_trim` and `fastqc_raw` are listed adjacent because they are independent and will run **in parallel** at the same DAG level. Rules within a level are sorted alphabetically; `fastqc_trimmed` waits for `fastp_trim`, and `multiqc` waits for all three.

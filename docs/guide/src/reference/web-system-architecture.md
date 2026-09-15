@@ -1,6 +1,6 @@
 # Web System Architecture
 
-oxo-flow-web is the web control plane for oxo-flow, designed as the **primary interaction surface** in the AI era (rather than a thin wrapper around the CLI).
+oxo-flow-web is the web control plane for oxo-flow — not a thin wrapper around the CLI.
 
 ---
 

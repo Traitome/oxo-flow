@@ -10,7 +10,7 @@ oxo-flow test [OPTIONS] <WORKFLOW>
 
 ## Description
 
-Performs a comprehensive pre-flight check on a workflow:
+Performs a full pre-flight check on a workflow:
 
 1. **Validate** — syntax and semantic correctness
 2. **Lint** — best-practice checks (warnings for missing descriptions, logs, etc.)
