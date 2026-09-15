@@ -1287,7 +1287,7 @@ impl LocalExecutor {
             // executor path, and a `when` over a multi-GB gzip would
             // otherwise park a tokio worker for the whole read (audit
             // finding).
-            let verdict = {
+            let eval_result = {
                 let condition = condition.clone();
                 let config_values = config_values.clone();
                 let wildcard_values = wildcard_values.clone();
@@ -1303,14 +1303,46 @@ impl LocalExecutor {
                     )
                 })
                 .await
-                .unwrap_or_else(|e| {
+            };
+            // Issue #374: an evaluation *failure* must never masquerade as a
+            // "condition evaluated to false" skip. Two distinct cases:
+            // - Cancelled task (JoinError on abort — e.g. a sibling rule's
+            //   failure triggered `abort_all()`): this rule was interrupted,
+            //   not skipped. Record Cancelled with an honest reason and do
+            //   NOT persist a when-verdict (the gate was never evaluated;
+            //   checkpoint pollution would suppress it on replay).
+            // - Panicked evaluator: engine fault — surface as Failed like a
+            //   panicked task would be. Also no verdict to persist.
+            let verdict = match eval_result {
+                Ok(v) => v,
+                Err(join_err) if join_err.is_cancelled() => {
+                    tracing::warn!(
+                        rule = %rule.name,
+                        error = %join_err,
+                        "when-condition evaluation was interrupted by the run abort \
+                         — the rule is cancelled (not skipped; no gate verdict recorded)"
+                    );
+                    record.status = JobStatus::Cancelled;
+                    record.skip_reason =
+                        Some("when-condition evaluation interrupted by run abort".to_string());
+                    record.finished_at = Some(Utc::now());
+                    return Ok(record);
+                }
+                Err(join_err) => {
                     tracing::error!(
                         rule = %rule.name,
-                        error = %e,
-                        "when-condition evaluation task failed — treating the gate as false"
+                        error = %join_err,
+                        "when-condition evaluation task panicked — treating the rule as failed"
                     );
-                    false
-                })
+                    record.status = JobStatus::Failed;
+                    record.skip_reason = None;
+                    record.stderr = Some(format!(
+                        "when-condition evaluation task panicked: {join_err}"
+                    ));
+                    record.exit_code = Some(-1);
+                    record.finished_at = Some(Utc::now());
+                    return Ok(record);
+                }
             };
             if !verdict {
                 record.status = JobStatus::Skipped;

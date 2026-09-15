@@ -350,16 +350,18 @@ below cover the codes referenced across this documentation.
 |---|---|
 | `W001`/`W002` | Workflow missing `description` / `author` |
 | `W003` | Rule missing a description |
-| `W004` | Rule has a shell command but no `log` file specified |
+| `W004` | *(info)* Rule has a shell command but no `log` file specified — stdout/stderr are still captured into job records |
 | `W005` | Rule uses >8 threads with no `memory` |
 | `W007` | Rule declares no environment — runs in the bare system shell |
-| `W011` | Rule has `retries` but no `retry_delay` |
+| `W011` | Rule uses `shadow` but declares no inputs — the shadow directory is unnecessary |
+| `W012` | Rule has `retries` but no `retry_delay` (retries execute immediately) |
 | `W014` | `depends_on` references an unknown rule |
 | `W016` | Conda/pixi spec is not a lockfile — builds may not be reproducible |
 | `W017` | Input path is absolute |
 | `W018` | Input path references a home directory |
 | `W019` | Rule executes a command but declares no outputs |
 | `W020`/`W021`/`W022` | `pre_exec`/`on_success`/`on_failure` contain a risky pattern |
+| `W023` | Shell command uses flagged idioms (`$()`, backticks, `rm -rf`, `chmod 777`, `eval`, curl-pipe-shell) — aggregated one diagnostic per command; common in bioinformatics scripts, verify intentional |
 | `W024` | A wildcard has no declared source — it will stay literal at run time |
 | `W025` | Legacy `threads =`/`memory =` keys under the rule body (use `resources.`) |
 | `W027` | A `when` condition references a wildcard nothing can bind — evaluates false |

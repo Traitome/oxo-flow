@@ -3626,6 +3626,35 @@ fn pair_when_gates_fan_out_per_config_toggle() {
 }
 
 #[test]
+fn missing_meta_columns_helper_reports_typos_per_rule() {
+    // The plan-time `{meta.<column>}` typo guard (#227 item 2, reported
+    // once per column in #375 §1): the per-rule helper collects the
+    // columns no metadata row defines, deduplicated in order of first
+    // appearance — the caller aggregates across rules.
+    use crate::config::missing_meta_columns;
+    let known: std::collections::HashSet<String> =
+        ["sample", "strandedness"].iter().map(|s| s.to_string()).collect();
+
+    assert_eq!(
+        missing_meta_columns(&["{meta.strandedness}"], &known),
+        Vec::<&str>::new()
+    );
+    // Typo'd column, in order of first appearance, deduplicated.
+    assert_eq!(
+        missing_meta_columns(
+            &["{meta.strandness}", "{meta.sample}_{meta.strandness}"],
+            &known
+        ),
+        vec!["strandness"]
+    );
+    // Multiple distinct typos both surface.
+    assert_eq!(
+        missing_meta_columns(&["{meta.a}", "{meta.b}"], &known),
+        vec!["a", "b"]
+    );
+}
+
+#[test]
 fn pair_when_unknown_config_keys_reports_typos() {
     // A pair `when` referencing a config key absent from [config]
     // evaluates false — at pair scope that silently drops the pair's

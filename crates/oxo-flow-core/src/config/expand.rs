@@ -467,6 +467,13 @@ impl WorkflowConfig {
         // their domain is still empty.
         self.pending_output_pattern.clear();
 
+        // `{meta.<column>}` plan-time typo check (issue #227 item 2, report
+        // format in #375 §1): a column no row defines renders empty on
+        // every instance. Collected per rule here and emitted ONCE PER
+        // COLUMN after the loop — a 161-rule pipeline missing one column
+        // used to print 30+ identical WARN lines.
+        let mut missing_meta_columns: HashMap<String, Vec<String>> = HashMap::new();
+
         for rule in &self.rules {
             if !rule.input_groups.is_empty() {
                 // Per-sample multi-file grouping (issue #227 item 3 — the
@@ -511,10 +518,11 @@ impl WorkflowConfig {
             }
 
             // `{meta.<column>}` plan-time typo check (issue #227 item 2): a
-            // column no row defines renders empty on every instance — warn
-            // once per rule+column so the author notices at plan time,
-            // matching the `{values.name}` stance (warn, never error).
-            // Free-text fields (log, script, hooks) are scanned too.
+            // column no row defines renders empty on every instance —
+            // collect once per rule+column; the aggregated warn fires after
+            // the loop (issue #375 §1), matching the `{values.name}` stance
+            // (warn, never error). Free-text fields (log, script, hooks)
+            // are scanned too.
             if !metadata_columns.is_empty() || all_text.iter().any(|t| t.contains("{meta.")) {
                 let mut meta_texts: Vec<&str> = all_text.clone();
                 if let Some(ref log) = rule.log {
@@ -537,20 +545,11 @@ impl WorkflowConfig {
                 {
                     meta_texts.push(text);
                 }
-                let mut warned_columns: Vec<String> = Vec::new();
-                for text in meta_texts {
-                    for cap in META_NS_RE.captures_iter(text) {
-                        let column = &cap[1];
-                        if !metadata_columns.contains(column)
-                            && !warned_columns.iter().any(|w| w == column)
-                        {
-                            tracing::warn!(
-                                rule = %rule.name,
-                                column,
-                                "rule references '{{meta.{column}}}' but no metadata row defines a column named '{column}' — the placeholder will render empty"
-                            );
-                            warned_columns.push(column.to_string());
-                        }
+                for column in crate::config::missing_meta_columns(&meta_texts, &metadata_columns)
+                {
+                    let refs = missing_meta_columns.entry(column.to_string()).or_default();
+                    if !refs.iter().any(|r| r == &rule.name) {
+                        refs.push(rule.name.clone());
                     }
                 }
             }
@@ -1080,6 +1079,22 @@ impl WorkflowConfig {
                 }
                 expanded_rules.push(rule.clone());
             }
+        }
+
+        // Aggregated `{meta.<column>}` typo report (issue #375 §1): one
+        // warn per missing column, naming the referencing rules so the fix
+        // is attributable even when dozens of rules share the typo.
+        let mut missing_columns: Vec<&String> = missing_meta_columns.keys().collect();
+        missing_columns.sort();
+        for column in missing_columns {
+            let refs = &missing_meta_columns[column];
+            tracing::warn!(
+                column = %column,
+                rules = refs.len(),
+                "no metadata row defines a column '{column}' but {n} rule(s) reference '{{meta.{column}}}' — the placeholder will render empty on every instance: {refs}",
+                n = refs.len(),
+                refs = refs.join(", ")
+            );
         }
 
         // Resolve depends_on references: replace template names with expanded names
@@ -2007,6 +2022,14 @@ impl WorkflowConfig {
         // (`meta.antibody` etc.) are orthogonal to the sample set, and
         // workflows with no declared domain keep the filesystem as the
         // source of truth.
+        //
+        // Severity split (#375 §2): a key that matches no DECLARED sample
+        // is an advisory prune (stale leftovers are normal) — but when a
+        // declared sample's key produced ZERO instances, the user asked
+        // for a run this plan cannot deliver and the downstream graph is
+        // silently broken: that is an error-level report (non-fatal only
+        // because producers may materialize later in v1's declaration
+        // order; see the fan-out comment above).
         if decl.group_by == "sample" {
             let declared: std::collections::HashSet<&str> = self
                 .sample_groups
@@ -2050,6 +2073,26 @@ impl WorkflowConfig {
                         key
                     );
                     grouped.remove(key);
+                }
+                // Every declared sample missing from the grouped keys:
+                // error-level report with the remediation up front. One
+                // line per missing sample keeps `declare the sample`
+                // advice attributable.
+                let missing: Vec<&str> = declared
+                    .iter()
+                    .copied()
+                    .filter(|sample| !grouped.contains_key(*sample))
+                    .collect();
+                if !missing.is_empty() {
+                    tracing::error!(
+                        rule = %rule.name,
+                        pattern = %decl.pattern,
+                        missing = ?missing,
+                        "input_groups rule '{}' produced NO instances for declared sample(s) {:?} — pattern '{}' matched no files for them; downstream consumers of this rule have no producers and the run will fail on those paths (check the pattern, or the producer declaration order — v1 requires producers declared BEFORE their input_groups consumer)",
+                        rule.name,
+                        missing,
+                        decl.pattern
+                    );
                 }
                 if grouped.is_empty() {
                     return Ok(Vec::new());

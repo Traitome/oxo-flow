@@ -721,23 +721,36 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                     });
                 }
 
-                // Warning patterns → W023 Warning
+                // Warning patterns → W023, aggregated per command source
+                // (issue #375 D5): a staging-heavy bioinformatics rule
+                // legitimately trips several idioms at once ($() for
+                // version capture, backticks, rm -rf for staging cleanup)
+                // and one diagnostic per pattern flooded the report — 70
+                // W023s on a 27-rule pipeline port. One diagnostic per
+                // source, listing the matched idioms, keeps the signal
+                // (single-report precedent: the W021 script-edge pass).
+                let mut matched: Vec<&str> = Vec::new();
                 for (re, description) in WARNING_PATTERNS.iter() {
                     if re.is_match(cmd) {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Warning,
-                            message: format!(
-                                "{} command in rule '{}' contains {}",
-                                source, rule.name, description
-                            ),
-                            rule: Some(rule.name.clone()),
-                            code: "W023".to_string(),
-                            suggestion: Some(
-                                "common in bioinformatics scripts; verify this is intentional"
-                                    .to_string(),
-                            ),
-                        });
+                        matched.push(description);
                     }
+                }
+                if !matched.is_empty() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "{} command in rule '{}' uses flagged shell idioms: {}",
+                            source,
+                            rule.name,
+                            matched.join("; ")
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "W023".to_string(),
+                        suggestion: Some(
+                            "common in bioinformatics scripts; verify this is intentional"
+                                .to_string(),
+                        ),
+                    });
                 }
             }
         }
@@ -1083,10 +1096,15 @@ pub fn lint_format(
             });
         }
 
-        // W004: Missing log file for rules with shell commands
+        // W004: Missing log file for rules with shell commands.
+        // Info, not Warning (issue #375 D5): the engine always captures
+        // stdout/stderr into job records regardless of `log`, and the
+        // `{log}` placeholder is wired — so this is advisory polish, and
+        // as a Warning it was 161 of the 240 lint findings on a
+        // 27-rule pipeline port.
         if rule.shell.is_some() && rule.log.is_none() {
             diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
+                severity: Severity::Info,
                 message: "rule has a shell command but no log file specified".to_string(),
                 rule: Some(rule.name.clone()),
                 code: "W004".to_string(),
@@ -2970,7 +2988,48 @@ mod tests {
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
-        assert!(diagnostics.iter().any(|d| d.code == "W004"));
+        let w004 = diagnostics
+            .iter()
+            .find(|d| d.code == "W004")
+            .expect("W004 expected for shell rule without log");
+        // Re-tiered to Info by #375 D5: the engine captures stdout/stderr
+        // into job records regardless of `log`, so this is advisory.
+        assert_eq!(w004.severity, Severity::Info);
+    }
+
+    #[test]
+    fn lint_w023_aggregated_per_command_source() {
+        // #375 D5: one W023 per command source, not one per matching
+        // pattern. This rule trips three idioms in each of two commands.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "noisy"
+            output = ["out.txt"]
+            shell = """
+            v=$(echo 1) && old=$(echo 2); rm -rf staging/`basename $v`
+            """
+            pre_exec = "rm -rf tmp/$(pwd) && eval echo x | bash"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = validate_format(&config).diagnostics;
+        let w023: Vec<_> = diagnostics.iter().filter(|d| d.code == "W023").collect();
+        assert_eq!(
+            w023.len(),
+            2,
+            "expected exactly one W023 per command source, got {w023:?}"
+        );
+        assert!(w023.iter().all(|d| d.severity == Severity::Warning));
+        // Aggregated message names every matched idiom, not just the first.
+        let shell_msg = w023
+            .iter()
+            .find(|d| d.message.starts_with("shell "))
+            .expect("W023 for the shell command");
+        assert!(shell_msg.message.contains("command substitution via $()"));
+        assert!(shell_msg.message.contains("command substitution via backticks"));
+        assert!(shell_msg.message.contains("recursive force removal"));
     }
 
     #[test]

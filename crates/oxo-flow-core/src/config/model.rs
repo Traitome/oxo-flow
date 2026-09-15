@@ -68,6 +68,26 @@ pub(crate) fn pair_when_unknown_config_keys<'a>(
     unknown
 }
 
+/// Collect the `{meta.<column>}` references across a rule's texts that NO
+/// metadata row defines, deduplicated in order of first appearance. The
+/// caller aggregates across rules and emits one warn per column (#375 §1).
+pub(crate) fn missing_meta_columns<'a>(
+    texts: &[&'a str],
+    known: &std::collections::HashSet<String>,
+) -> Vec<&'a str> {
+    let mut missing = Vec::new();
+    for text in texts {
+        for cap in META_NS_RE.captures_iter(text) {
+            let Some(m) = cap.get(1) else { continue };
+            let column = &text[m.start()..m.end()];
+            if !known.contains(column) && !missing.contains(&column) {
+                missing.push(column);
+            }
+        }
+    }
+    missing
+}
+
 pub(crate) fn is_defaults_empty(d: &Defaults) -> bool {
     d.threads.is_none() && d.memory.is_none() && d.environment.is_none() && d.time_limit.is_none()
 }

@@ -232,10 +232,13 @@ static DEFAULT_WILDCARD_RE: LazyLock<regex::Regex> =
 ///
 /// 1. **Default charset (issue #203)** — values for wildcards WITHOUT an
 ///    explicit `wildcard_constraints` entry must match
-///    [`DEFAULT_WILDCARD_PATTERN`]. Pipelines that legitimately need other
-///    characters declare a constraint for that wildcard (the pre-existing
-///    mechanism), or set `OXO_FLOW_UNSAFE_WILDCARDS=1` to relax the charset
-///    layer for the process — a one-time warning is logged.
+///    [`DEFAULT_WILDCARD_PATTERN`], except that the empty string is always
+///    accepted (issue #374: an empty value is a legitimate feature-off
+///    sentinel such as `umi2_pattern = ""`). Pipelines that legitimately
+///    need other characters declare a constraint for that wildcard (the
+///    pre-existing mechanism), or set `OXO_FLOW_UNSAFE_WILDCARDS=1` to
+///    relax the charset layer for the process — a one-time warning is
+///    logged.
 /// 2. **Substitution floor (always enforced, after the charset skip)** — no
 ///    `$(`, no backticks, for EVERY non-`config.*` value, including
 ///    constrained wildcards and unsafe-mode runs. The floor sits after the
@@ -316,6 +319,15 @@ fn validate_wildcard_injection_inner(
                     ),
                 });
             }
+        }
+        // An empty value carries no metacharacters and is a legitimate
+        // "disable this feature" sentinel (issue #374: e.g.
+        // `umi2_pattern = ""` meaning "no second barcode pattern"). The
+        // charset regex below is `+`-quantified and would reject it, so
+        // accept empty explicitly — the substitution floor is trivially
+        // satisfied (an empty string contains no `$(` or backtick).
+        if value.is_empty() {
+            continue;
         }
         if !DEFAULT_WILDCARD_RE.is_match(value) {
             return Err(OxoFlowError::Validation {
@@ -401,6 +413,20 @@ mod wildcard_default_tests {
             ("path", "data/subdir/genome.fa"),
         ]);
         assert!(validate_wildcard_injection_inner(&vals, &HashMap::new(), false).is_ok());
+    }
+
+    #[test]
+    fn empty_string_is_accepted_by_default_charset() {
+        // Issue #374: an empty value is a legitimate feature-off sentinel
+        // (e.g. `umi2_pattern = ""` = "no second barcode pattern"). It must
+        // pass the default charset layer without a declared constraint.
+        let vals = v(&[("umi2_pattern", ""), ("sample", "S1")]);
+        assert!(validate_wildcard_injection_inner(&vals, &HashMap::new(), false).is_ok());
+        // Empty stays accepted under a constraint and in unsafe mode too.
+        let mut constraints = HashMap::new();
+        constraints.insert("umi2_pattern".to_string(), "^.+$".to_string());
+        assert!(validate_wildcard_injection_inner(&vals, &constraints, false).is_ok());
+        assert!(validate_wildcard_injection_inner(&vals, &HashMap::new(), true).is_ok());
     }
 
     #[test]
