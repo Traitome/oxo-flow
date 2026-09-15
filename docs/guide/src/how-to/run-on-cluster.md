@@ -175,7 +175,7 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 | Mamba | `<mamba\|micromamba\|conda> run -n <env> bash -c '<command>'` |
 | Docker | `docker run --rm --user $(id -u):$(id -g) -v <workdir>:<workdir> -w <workdir> <image> sh -c '<shim>' sh '<command>'` |
 | Singularity / Apptainer | `<apptainer\|singularity> exec --bind <workdir>:<workdir> <image> sh -c '<shim>' sh '<command>'` |
-| Pixi | `pixi run --manifest-path <pixi.toml> <command>` |
+| Pixi | `pixi run --manifest-path <pixi.toml> bash -c '<command>'` |
 | Venv | `source <venv>/bin/activate && <command>` |
 | Modules | module-init block, then `module load <mod1> <mod2> && <command>` |
 
@@ -339,8 +339,9 @@ itself lives elsewhere (your laptop, a lab server, a container):
 
 Requirements on the remote host: the `oxo-flow` CLI on `PATH` (any recent
 release), `tar`, and non-interactive SSH access (key auth, `BatchMode`).
-Cluster connections are admin-managed in team mode (they hold shared SSH
-credentials); every run remains owned by the acting user.
+Cluster connection management (upsert/delete) is admin-only outside
+personal mode — in team and hpc mode (they hold shared SSH credentials);
+every run remains owned by the acting user.
 
 ## Monitoring Jobs
 
