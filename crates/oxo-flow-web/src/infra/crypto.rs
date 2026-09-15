@@ -6,8 +6,7 @@
 //! accept both forms, so enabling or rotating is transparent and nothing
 //! bricks when the secret is missing.
 
-use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, Generate, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -25,8 +24,7 @@ fn master_key() -> Option<[u8; 32]> {
 
 fn encrypt_with(key: &[u8; 32], plain: &str) -> String {
     let cipher = Aes256Gcm::new(key.into());
-    let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce_bytes: [u8; 12] = Generate::generate();
     let ct = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), plain.as_bytes())
         .expect("AES-GCM encryption cannot fail for valid inputs");
