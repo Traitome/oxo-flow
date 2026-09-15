@@ -1141,7 +1141,7 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
     {% elif section.content.type == "KeyValue" %}
       <dl>
         {% for pair in section.content.pairs %}
-          <dt>{{ pair.0 }}</dt><dd>{{ pair.1 }}</dd>
+          <dt>{{ pair[0] }}</dt><dd>{{ pair[1] }}</dd>
         {% endfor %}
       </dl>
     {% elif section.content.type == "Json" %}
@@ -1167,7 +1167,7 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
       {% elif sub.content.type == "KeyValue" %}
         <dl>
           {% for pair in sub.content.pairs %}
-            <dt>{{ pair.0 }}</dt><dd>{{ pair.1 }}</dd>
+            <dt>{{ pair[0] }}</dt><dd>{{ pair[1] }}</dd>
           {% endfor %}
         </dl>
       {% endif %}
@@ -1224,7 +1224,7 @@ impl TemplateEngine {
 
     fn build_context(&self, report: &Report) -> Result<tera::Context> {
         let value = serde_json::to_value(report)?;
-        let context = tera::Context::from_value(value).map_err(|e| OxoFlowError::Report {
+        let context = tera::Context::from_serialize(&value).map_err(|e| OxoFlowError::Report {
             message: format!("failed to build template context: {e}"),
         })?;
         Ok(context)
@@ -3523,7 +3523,8 @@ mod tests {
             .unwrap();
         let mut tera = tera::Tera::default();
         tera.add_raw_template("report.html", template).unwrap();
-        let context = tera::Context::from_value(serde_json::to_value(&report).unwrap()).unwrap();
+        let context =
+            tera::Context::from_serialize(&serde_json::to_value(&report).unwrap()).unwrap();
         assert_eq!(tera.render("report.html", &context).unwrap(), expected);
     }
 
