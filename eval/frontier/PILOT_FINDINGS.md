@@ -45,7 +45,7 @@ in the same PR: `OXO_FLOW_AI_MAX_TOKENS` (thinking blocks count against
 1. The cross-path quality gap is real and measurable (0/9 vs 3/9 on the
    same model) — unification P1–P4 is justified by data, not aesthetics.
 2. The dominant CLI failure mode (tool-loop TOML miss + no final-round
-   retry) is an orchestrator-robustness gap that P3 resolves by
+   retry) is a retry-handling gap in the orchestrator that P3 resolves by
    construction; a cheap interim fix is a bounded retry of the
    tool-free final round.
 3. The `E017` class (wrong-dialect keys) is exactly what P2's gate tools
@@ -84,7 +84,8 @@ prompt.
 
 ## Post-default re-measurement (round-budget starvation fix)
 
-The shipped default `[ai] max_retries` moved 3 → 6 after the spot-check
+The shipped default `[ai] max_retries` moved 3 → 6 in this round (raised
+again to 10 by the model-axis round, #353) after the spot-check
 below showed the thinking tier starving at the old default: with 2–3
 rounds the model spends its whole budget on knowledge-tool lookups
 before writing any TOML, and the run dies at the round cap with the

@@ -62,7 +62,7 @@ flowchart LR
 
     subgraph world["Execution substrate"]
         fs["Working directory<br/>inputs / outputs / logs"]
-        env["Environment engines<br/>conda · mamba · pixi<br/>docker · singularity<br/>venv · modules"]
+        env["Environment engines<br/>conda · mamba · pixi<br/>docker · singularity<br/>venv · modules · system"]
         hpc["HPC schedulers<br/>SLURM · PBS · SGE · LSF"]
         obj["Object storage<br/>S3 · GCS"]
         llm["LLM providers<br/>DeepSeek · Claude<br/>OpenAI-compatible · Ollama"]
