@@ -5080,7 +5080,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>W004</code></td>
-<td>Rule has a shell command but no <code>log</code> file specified</td>
+<td><em>(info)</em> Rule has a shell command but no <code>log</code> file specified — stdout/stderr are still captured into job records</td>
 </tr>
 <tr>
 <td><code>W005</code></td>
@@ -5092,7 +5092,11 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>W011</code></td>
-<td>Rule has <code>retries</code> but no <code>retry_delay</code></td>
+<td>Rule uses <code>shadow</code> but declares no inputs — the shadow directory is unnecessary</td>
+</tr>
+<tr>
+<td><code>W012</code></td>
+<td>Rule has <code>retries</code> but no <code>retry_delay</code> (retries execute immediately)</td>
 </tr>
 <tr>
 <td><code>W014</code></td>
@@ -5117,6 +5121,10 @@ below cover the codes referenced across this documentation.</p>
 <tr>
 <td><code>W020</code>/<code>W021</code>/<code>W022</code></td>
 <td><code>pre_exec</code>/<code>on_success</code>/<code>on_failure</code> contain a risky pattern</td>
+</tr>
+<tr>
+<td><code>W023</code></td>
+<td>Shell command uses flagged idioms (<code>$()</code>, backticks, <code>rm -rf</code>, <code>chmod 777</code>, <code>eval</code>, curl-pipe-shell) — aggregated one diagnostic per command; common in bioinformatics scripts, verify intentional</td>
 </tr>
 <tr>
 <td><code>W024</code></td>

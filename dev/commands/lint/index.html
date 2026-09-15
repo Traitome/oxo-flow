@@ -3948,13 +3948,13 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow v0.18.1 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  warning [W003]: rule has no description (rule: bwa_align)
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    hint: add a `description` field to the rule
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  warning [W004]: rule has a shell command but no log file specified (rule: bwa_align)
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  info [W004]: rule has a shell command but no log file specified (rule: bwa_align)
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    hint: add `log = "logs/bwa_align.log"` to the rule
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  info [W007]: leaf rule (no dependents) could be marked as target = true (rule: fastqc)
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  info [W025]: rule uses deprecated rule-level threads/memory (rule: bwa_align)
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    hint: move `threads`/`memory` under `[rules.resources]`
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>Summary: 0 error(s), 2 warning(s), 2 info
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>Summary: 0 error(s), 1 warning(s), 3 info
 </span></code></pre></div>
 <p>Each diagnostic prints a <code>hint:</code> line (when a suggestion exists) showing
 the fix, matching the style of <code>validate</code> and <code>run</code> output. W007
