@@ -1072,18 +1072,25 @@ jobs:
     name: Docker (build release, no publish)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [test, release]
+    needs: [sync-version, test, release]
     if: >-
       always() &&
       needs.test.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.tag != '' &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       (needs.release.result == 'success' ||
        (needs.release.result == 'skipped' && inputs.publish_images_only == true))
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Check out the commit the release job actually built from: with
+          # sync-version's bump applied, github.sha (dispatch HEAD) predates
+          # it and Dockerfile.release's ARG default would carry the old
+          # version.
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -1496,6 +1503,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       # repository_owner is "Traitome" (uppercase) but ghcr requires lowercase
       # image paths — force it down (${VAR,,} bash lowercase).
@@ -1575,12 +1584,20 @@ jobs:
     name: Frontend (lint + build assets)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [test]
-    if: always() && needs.test.result == 'success'
+    # sync-version pins the checkout below: on tag-push releases it re-points
+    # the tag to the bump commit mid-run, and a bare checkout fails its
+    # expected-commit guard against the stale SHA (v0.19.0 run 35037830253).
+    needs: [sync-version, test]
+    if: >-
+      always() &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success'
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -1626,12 +1643,17 @@ jobs:
     name: Frontend (e2e)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [test, frontend-assets]
-    if: always() && needs.test.result == 'success' && needs.frontend-assets.result == 'success'
+    needs: [sync-version, test, frontend-assets]
+    if: >-
+      always() &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success' && needs.frontend-assets.result == 'success'
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -1696,9 +1718,15 @@ jobs:
     name: Deploy versioned documentation (mike)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [test]
+    # sync-version pins the checkout below (tag re-point race, same as
+    # frontend-assets). Its version output also drives the mike branch so a
+    # dispatch release (GITHUB_REF=refs/heads/main, RELEASE_TAG=vX.Y.Z)
+    # deploys the versioned docs instead of silently falling into the dev
+    # branch (v0.19.0 shipped its 0.19.0 docs via a manual local mike run).
+    needs: [sync-version, test]
     if: >-
       always() &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success' &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
@@ -1707,6 +1735,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
       - uses: actions/setup-python@v7
         with:
@@ -1723,8 +1752,11 @@ jobs:
       - name: Deploy with mike
         run: |
           cd docs/guide
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          # Tag-push: GITHUB_REF carries the version. Dispatch: the release
+          # version lives in RELEASE_TAG instead (GITHUB_REF stays main),
+          # so both release paths must be recognized here.
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$RELEASE_TAG" == v* ]]; then
+            VERSION="${RELEASE_TAG#v}"
             echo "Deploying release version ${VERSION} (+ latest alias)"
             mike deploy --push --update-aliases "${VERSION}" latest
           else
