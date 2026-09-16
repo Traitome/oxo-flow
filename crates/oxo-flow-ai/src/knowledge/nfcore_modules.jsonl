@@ -63,8 +63,8 @@
 {"n":"anndata_barcodes","t":"Module to subset AnnData object to cells with matching barcodes from the csv file","license":"BSD-3-clause","biotools_id":"biotools:anndata","doi":"10.21105/joss.04371","v":[]}
 {"n":"anndata_getsize","t":"Get the size (n_cells or n_genes) of an anndata object stored as a h5ad file","license":"BSD-3-clause","biotools_id":"biotools:anndata","doi":"10.21105/joss.04371","v":[]}
 {"n":"annosine","t":"Accelerating de novo SINE annotation in plant and animal genomes","license":"MIT","biotools_id":"biotools:annosine","doi":"10.1101/2024.03.01.582874","v":["annosine2=2.0.8"]}
-{"n":"annotsv_annotsv","t":"Annotation and Ranking of Structural Variation","license":"GPL-3.0","biotools_id":"biotools:AnnotSV","doi":"10.1093/bioinformatics/bty304","v":["annotsv=3.5.3"]}
-{"n":"annotsv_installannotations","t":"Install the AnnotSV annotations","license":"GPL v3","biotools_id":"biotools:AnnotSV","doi":"","v":["annotsv=3.5.3"]}
+{"n":"annotsv_annotsv","t":"Annotation and Ranking of Structural Variation","license":"GPL-3.0","biotools_id":"biotools:AnnotSV","doi":"10.1093/bioinformatics/bty304","v":["annotsv=3.5.10"]}
+{"n":"annotsv_installannotations","t":"Install the AnnotSV annotations","license":"GPL v3","biotools_id":"biotools:AnnotSV","doi":"","v":["annotsv=3.5.10"]}
 {"n":"anota2seq_anota2seqrun","t":"Generally applicable transcriptome-wide analysis of translational efficiency using anota2seq","license":"","biotools_id":"","doi":"","v":["bioconductor-anota2seq=1.24.0"]}
 {"n":"antismash_antismash","t":"  antiSMASH allows the rapid genome-wide identification, annotation\n  and analysis of secondary metabolite biosynthesis gene clusters.","license":"AGPL v3","biotools_id":"biotools:antismash","doi":"10.1093/nar/gkab335","v":["antismash=8.0.1"]}
 {"n":"antismash_antismashdownloaddatabases","t":"antiSMASH allows the rapid genome-wide identification, annotation and analysis of secondary metabolite biosynthesis gene clusters. This module downloads the antiSMASH databases for conda and docker/singularity runs.","license":"AGPL v3","biotools_id":"biotools:antismash","doi":"10.1093/nar/gkab335","v":["antismash=8.0.1"]}
@@ -428,7 +428,7 @@
 {"n":"custom_collectstats","t":"  Collects per-sample read-processing statistics (trimming, decontamination, alignment,\n  feature counting, and optionally taxonomy/function summaries) from a set of\n  heterogeneous log/table files into a single overall-stats table per run.","license":"","biotools_id":"","doi":"","v":[]}
 {"n":"custom_dumpsoftwareversions","t":"Custom module used to dump software versions within the nf-core pipeline template","license":"MIT","biotools_id":"","doi":"","v":["multiqc=1.27"]}
 {"n":"custom_filterdifferentialtable","t":"Filters a differential expression table based on logFC and adjusted p-value thresholds","license":"BSD-3-Clause","biotools_id":"biotools:pandas","doi":"10.5281/zenodo.3509134","v":[]}
-{"n":"custom_geneticmapconvert","t":"  This R script allows to automatically detect the different genetic map format and\n  convert the input file in all the other format type.","license":"MIT","biotools_id":"","doi":"","v":[]}
+{"n":"custom_geneticmapconvert","t":"  This R script allows to automatically detect the different genetic map format and\n  convert the input file in all the other format type.\n  Recombination rate will be recomputed in the following case:\n   - '--remove_duplicated_cm' and uplicated genetic distance present (lines removed except first one)\n   - '--remove_null_rate' and zero rate values present (line removed)","license":"MIT","biotools_id":"","doi":"","v":[]}
 {"n":"custom_getchromsizes","t":"Generates a FASTA file of chromosome sizes and a fasta index file","license":"MIT","biotools_id":"","doi":"10.1093/bioinformatics/btp352","v":["htslib=1.22.1","samtools=1.22.1"]}
 {"n":"custom_gtffilter","t":"Filter a gtf file to keep only regions that are located on a chromosome represented in a given fasta file","license":"","biotools_id":"","doi":"","v":[]}
 {"n":"custom_matrixfilter","t":"filter a matrix based on a minimum value and numbers of samples that must pass.","license":"","biotools_id":"","doi":"","v":[]}
@@ -487,6 +487,7 @@
 {"n":"deepvariant_rundeepvariant","t":"DeepVariant is an analysis pipeline that uses a deep neural network to call genetic variants from next-generation DNA sequencing data","license":"BSD-3-clause","biotools_id":"biotools:deepvariant","doi":"10.1038/nbt.4235","v":[]}
 {"n":"deepvariant_vcfstatsreport","t":"DeepVariant is an analysis pipeline that uses a deep neural network to call genetic variants from next-generation DNA sequencing data","license":"BSD-3-clause","biotools_id":"biotools:deepvariant","doi":"10.1038/nbt.4235","v":[]}
 {"n":"delly_call","t":"Call structural variants","license":"BSD-3-Clause","biotools_id":"","doi":"10.1093/bioinformatics/bts378","v":["delly=1.7.3"]}
+{"n":"delly_sr","t":"Integrated structural variant (SV) prediction method","license":"BSD-3-Clause","biotools_id":"","doi":"10.1093/bioinformatics/bts378","v":["delly=2.6.0"]}
 {"n":"demuxem","t":"Demultiplexing cell nucleus hashing data, using the estimated antibody background probability.","license":"","biotools_id":"","doi":"","v":["demuxem=0.1.7.post1"]}
 {"n":"deseq2_differential","t":"runs a differential expression analysis with DESeq2","license":"","biotools_id":"","doi":"","v":["bioconductor-deseq2=1.34.0","bioconductor-limma=3.50.0"]}
 {"n":"diamond_blastp","t":"Queries a DIAMOND database using blastp mode","license":"GPL v3.0","biotools_id":"biotools:diamond","doi":"10.1038/s41592-021-01101-x","v":["diamond=2.2.1"]}
@@ -518,6 +519,8 @@
 {"n":"dupradar","t":"Assessment of duplication rates in RNA-Seq datasets","license":"GPL v3","biotools_id":"biotools:dupradar","doi":"10.1186/s12859-016-1276-2","v":["bioconductor-dupradar=1.38.0"]}
 {"n":"dysgu_run","t":"Dysgu calls structural variants (SVs) from mapped sequencing reads. It is designed for accurate and efficient detection of structural variations.","license":"GPL-3.0-or-later","biotools_id":"","doi":"10.1093/nar/gkac039","v":["dysgu=1.8.7"]}
 {"n":"eagle2","t":"Perform phasing of genotyped data with or without a reference panel","license":"","biotools_id":"","doi":"","v":["eagle2=2.4.1"]}
+{"n":"easypqp_convert","t":"Convert peptide identifications (pepXML or idXML) and the matching spectra (mzML, mzXML or MGF) into EasyPQP PSM and peak pickle files for spectral library generation.","license":"BSD-3-Clause","biotools_id":"","doi":"","v":["easypqp=0.1.59","pyopenms=3.4.1"]}
+{"n":"easypqp_library","t":"Generate a spectral library (TSV) from EasyPQP PSM and peak pickle files.","license":"BSD-3-Clause","biotools_id":"","doi":"","v":["easypqp=0.1.59","pyopenms=3.4.1"]}
 {"n":"eautils_fastqstats","t":"Calculate general and per-base statistics from FASTQ files","license":"MIT","biotools_id":"","doi":"","v":["ea-utils=1.1.2.779"]}
 {"n":"eautils_gtf2bed","t":"Convert a GTF/GFF annotation file to BED12 format","license":"MIT","biotools_id":"","doi":"","v":[]}
 {"n":"echtvar_anno","t":"Annotate a decomposed (and normalized) VCF with an echtvar file","license":"MIT","biotools_id":"biotools:echtvar","doi":"10.1093/nar/gkac931","v":["echtvar=0.2.4","htslib=1.23.1"]}
@@ -574,7 +577,7 @@
 {"n":"fastp","t":"Perform adapter/quality trimming on sequencing reads","license":"MIT","biotools_id":"biotools:fastp","doi":"10.1093/bioinformatics/bty560","v":["fastp=1.3.6"]}
 {"n":"fastplong","t":"Perform adapter/quality trimming and QC on long sequencing reads (ONT, PacBio, etc.)","license":"","biotools_id":"","doi":"","v":["fastplong=0.4.1"]}
 {"n":"fastqc","t":"Run FastQC on sequenced reads","license":"GPL-2.0-only","biotools_id":"biotools:fastqc","doi":"","v":["fastqc=0.12.1"]}
-{"n":"fastqdl","t":"Download FASTQ files from SRA or ENA repositories.","license":"","biotools_id":"","doi":"","v":["fastq-dl=3.0.1"]}
+{"n":"fastqdl","t":"Download FASTQ files from SRA or ENA repositories.","license":"","biotools_id":"","doi":"","v":["fastq-dl=4.0.1"]}
 {"n":"fastqe","t":"fastqe is a bioinformatics command line tool that uses emojis to represent and analyze genomic data.","license":"MIT","biotools_id":"biotools:fastqe","doi":"10.21105/joss.02400","v":["fastqe=0.5.2"]}
 {"n":"fastqscan","t":"FASTQ summary statistics in JSON format","license":"MIT","biotools_id":"","doi":"","v":["fastq-scan=0.4.4"]}
 {"n":"fastqscreen_buildfromindex","t":"Build fastq screen config file from bowtie index files","license":"","biotools_id":"","doi":"","v":["fastq-screen=0.16.0","perl-gdgraph=1.54"]}
@@ -645,7 +648,7 @@
 {"n":"fq_generate","t":"  fq generate is a FASTQ file pair generator. It creates two reads, formatting names as described by Illumina. While generate creates \"valid\" FASTQ reads, the content of the files are completely random. The sequences do not align to any genome. This requires a seed (--seed) to be supplied in ext.args.","license":"MIT","biotools_id":"","doi":"","v":["fq=0.12.0"]}
 {"n":"fq_lint","t":"fq lint is a FASTQ file pair validator.","license":"MIT","biotools_id":"","doi":"","v":["fq=0.12.0"]}
 {"n":"fq_subsample","t":"fq subsample outputs a subset of records from single or paired FASTQ files. This requires a seed (--seed) to be set in ext.args.","license":"MIT","biotools_id":"","doi":"","v":["fq=0.12.0"]}
-{"n":"fqtk","t":"Demultiplex fastq files","license":"MIT","biotools_id":"","doi":"","v":["fqtk=0.3.1"]}
+{"n":"fqtk","t":"Demultiplex fastq files","license":"MIT","biotools_id":"","doi":"","v":["fqtk=0.4.0"]}
 {"n":"freebayes","t":"A haplotype-based variant detector","license":"MIT","biotools_id":"biotools:freebayes","doi":"10.48550/arXiv.1207.3907","v":["freebayes=1.3.10"]}
 {"n":"freyja_boot","t":"Bootstrap sample demixing by resampling each site based on a multinomial distribution of read depth across all sites, where the event probabilities were determined by the fraction of the total sample reads found at each site, followed by a secondary resampling at each site according to a multinomial distribution (that is, binomial when there was only one SNV at a site), where event probabilities were determined by the frequencies of each base at the site, and the number of trials is given by the sequencing depth.","license":"","biotools_id":"","doi":"","v":["freyja=2.0.3"]}
 {"n":"freyja_demix","t":"specify the relative abundance of each known haplotype","license":"","biotools_id":"","doi":"","v":["freyja=2.0.3"]}
@@ -896,13 +899,14 @@
 {"n":"hmmer_eslreformat","t":"reformats sequence files, see HMMER documentation for details. The module requires that the format is specified in ext.args in a config file, and that this comes last. See the tools help for possible values.","license":"BSD-3-Clause","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_eslsfetch","t":"  Retrieves one or more complete sequences or subsequences from a sequence\n  file using its pre-built SSI index. The esl-sfetch utility is an Easel\n  miniapp bundled with the HMMER package. This module only fetches: the SSI\n  index must be produced beforehand by the sibling module\n  `hmmer/eslsfetchindex`. The keyfile is used to fetch the named sequences\n  (-f), or, with ext.args = '-C', parsed as a subsequence coordinate file\n  (-Cf) to extract and rename subsequences.","license":"BSD-3-Clause","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_eslsfetchindex","t":"  Builds an SSI (sequence/subsequence index) file for a sequence file,\n  using the esl-sfetch utility, an Easel miniapp bundled with the HMMER\n  package (esl-sfetch --index). The resulting index lets esl-sfetch\n  retrieve sequences from the file in constant time. This module is the\n  indexing half of a pair: hmmer/eslsfetchindex builds the SSI index,\n  hmmer/eslsfetch consumes it (or an equivalent one) to fetch sequences\n  or subsequences.","license":"BSD-3-Clause","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
+{"n":"hmmer_formattsv","t":"Convert HMMER's --tblout/--domtblout output to a clean, properly-delimited TSV","license":"BSD","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":[]}
 {"n":"hmmer_hmmalign","t":"hmmalign from the HMMER suite aligns a number of sequences to an HMM profile","license":"BSD-3-Clause","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmbuild","t":"create an hmm profile from a multiple sequence alignment","license":"BSD","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmemit","t":"emit sequences from a profile HMM","license":"BSD","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmfetch","t":"extract hmm from hmm database file or create index for hmm database","license":"BSD","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmlogo","t":"extract logo data from a profile HMM file to produce an HMM logo","license":"BSD","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmpress","t":"compress and index profile database for hmmscan","license":"BSD","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
-{"n":"hmmer_hmmrank","t":"R script that scores output from multiple runs of hmmer/hmmsearch","license":"BSD","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":[]}
+{"n":"hmmer_hmmrank","t":"  Ranks hmmer/hmmsearch hits by score/e-value and, optionally, attaches per-hit domain\n  coordinates -- reading the already-parsed, already-typed Parquet table(s) hmmer/formattsv\n  + duckdb/table2parquet produce, rather than parsing raw hmmsearch tblout/domtblout text\n  itself. The ranking and domain-coordinate merge run as DuckDB SQL (window functions,\n  disk-spillable temp tables) instead of in-memory R/dplyr, so memory use no longer scales\n  with the full width of every input row held at once.","license":"BSD","biotools_id":"","doi":"10.1371/journal.pcbi.1002195","v":[]}
 {"n":"hmmer_hmmsearch","t":"search profile(s) against a sequence database","license":"BSD","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_hmmstat","t":"display summary statistics for each profile HMM in an HMM database file","license":"BSD","biotools_id":"biotools:hmmer","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
 {"n":"hmmer_jackhmmer","t":"iterative searches to detect distant homologs by refining an HMM profile from hits","license":"BSD","biotools_id":"biotools:hmmer3","doi":"10.1371/journal.pcbi.1002195","v":["hmmer=3.4"]}
@@ -966,7 +970,10 @@
 {"n":"ismapper","t":"Identify insertion sites positions in bacterial genomes","license":"BSD-3-Clause","biotools_id":"","doi":"10.1186/s12864-015-1860-2","v":["ismapper=2.0.2"]}
 {"n":"isoseq3_tag","t":"Extract UMI and cell barcodes","license":"BSD-3-clause-Clear","biotools_id":"biotools:isoseq3","doi":"","v":["isoseq3=4.0.0"]}
 {"n":"isoseq_cluster","t":"IsoSeq - Cluster - Cluster trimmed consensus sequences","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=4.0.0"]}
-{"n":"isoseq_refine","t":"Remove polyA tail and artificial concatemers","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=4.0.0"]}
+{"n":"isoseq_cluster2","t":"IsoSeq - Cluster2 - Cluster full-length non-chimeric reads into transcripts","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=26.2.0"]}
+{"n":"isoseq_groupdedup","t":"IsoSeq - GroupDedup - Deduplicate PCR artifacts grouped by cell barcode","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=26.2.0"]}
+{"n":"isoseq_refine","t":"Remove polyA tail and artificial concatemers","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=26.2.0"]}
+{"n":"isoseq_tag","t":"Extract UMI and cell barcodes","license":"BSD-3-Clause-Clear","biotools_id":"","doi":"","v":["isoseq=26.2.0"]}
 {"n":"ivar_consensus","t":"Generate a consensus sequence from a BAM file using iVar","license":"GPL-3.0-or-later","biotools_id":"biotools:andersen-lab_ivar","doi":"","v":["ivar=1.4.4"]}
 {"n":"ivar_trim","t":"Trim primer sequences rom a BAM file with iVar","license":"GPL-3.0-or-later","biotools_id":"biotools:andersen-lab_ivar","doi":"","v":["ivar=1.4.4"]}
 {"n":"ivar_variants","t":"Call variants from a BAM file using iVar","license":"GPL-3.0-or-later","biotools_id":"biotools:andersen-lab_ivar","doi":"","v":["ivar=1.4.4"]}
@@ -1190,6 +1197,8 @@
 {"n":"mobsuite_typer","t":"Bacterial plasmid typing and mobility prediction","license":"","biotools_id":"","doi":"","v":["mob_suite=3.1.9"]}
 {"n":"modkit_bedmethyltobigwig","t":"Convert a bedMethyl file to bigWig format using modkit","license":"","biotools_id":"","doi":"","v":["ont-modkit=0.6.1"]}
 {"n":"modkit_callmods","t":"Call mods from a modbam, creates a new modbam with probabilities set to 100% if a base modification is called or 0% if called canonical","license":"","biotools_id":"","doi":"","v":["ont-modkit=0.6.1"]}
+{"n":"modkit_extractcalls","t":"  Produce a per-read per-position table of base modification **calls**\n  (pass/fail/filtered, with the called base) from a modBAM using the same\n  thresholding algorithm as `modkit pileup`. Complementary to `modkit\n  extract full`, which emits raw probabilities: `extract calls` emits the\n  thresholded categorical decision per site per read.","license":"Oxford Nanopore Technologies PLC. Public License Version 1.0","biotools_id":"","doi":"","v":["ont-modkit=0.6.4"]}
+{"n":"modkit_extractfull","t":"  Transform the probabilities from the MM/ML tags in a modBAM into a\n  tab-separated per-read-per-position table. Emits one row for every\n  modified-base probability call in every read — useful for downstream\n  custom filtering, plotting, and ML training. Optionally BGZF-compressed\n  via `--bgzf` in `ext.args`.","license":"Oxford Nanopore Technologies PLC. Public License Version 1.0","biotools_id":"","doi":"","v":["ont-modkit=0.6.4"]}
 {"n":"modkit_pileup","t":"A bioinformatics tool for working with modified bases","license":"Oxford Nanopore Technologies PLC. Public License Version 1.0","biotools_id":"","doi":"","v":[]}
 {"n":"modkit_repair","t":"Repair the MM/ML tags on trimmed or hard-clipped ONT reads using untrimmed ONT reads.","license":"Oxford Nanopore Technologies PLC. Public License Version 1.0","biotools_id":"","doi":"","v":["ont-modkit=0.6.1"]}
 {"n":"molkartgarage_clahe","t":"Contrast-limited adjusted histogram equalization (CLAHE) on single-channel tif images.","license":"","biotools_id":"","doi":"","v":[]}
@@ -1218,6 +1227,7 @@
 {"n":"muscle5_super5","t":"Muscle is a program for creating multiple alignments of amino acid or nucleotide sequences. This particular module uses the super5 algorithm for very big alignments. It can permutate the guide tree according to a set of flags.","license":"","biotools_id":"","doi":"","v":["muscle=5.1"]}
 {"n":"muse_call","t":"pre-filtering and calculating position-specific summary statistics using the Markov substitution model","license":"","biotools_id":"","doi":"","v":["muse=2.1.2"]}
 {"n":"muse_sump","t":"Computes tier-based cutoffs from a sample-specific error model which is generated by muse/call and reports the finalized variants","license":"","biotools_id":"","doi":"","v":["muse=2.1.2","htslib=1.22.1"]}
+{"n":"mutserve_call","t":"Call homoplasmic and heteroplasmic positions.","license":"MIT","biotools_id":"","doi":"10.1101/gr.256545.119","v":["mutserve=2.0.3"]}
 {"n":"mygene","t":"Fetch the GO concepts for a list of genes","license":"Apache-2.0","biotools_id":"biotools:mygene","doi":"10.1093/nar/gks1114","v":["mygene=3.2.2"]}
 {"n":"mykrobe_predict","t":"AMR predictions for supported species","license":"MIT","biotools_id":"biotools:Mykrobe","doi":"10.1038/ncomms10063","v":["mykrobe=0.11.0"]}
 {"n":"myloasm","t":"  Myloasm is a de novo metagenome assembler for long-read sequencing data.\n  It takes sequencing reads and outputs polished contigs in a single command.","license":"MIT","biotools_id":"","doi":"10.1101/2025.09.05.674543","v":["myloasm=0.6.0"]}
@@ -1252,6 +1262,7 @@
 {"n":"nonpareil_nonpareil","t":"Calculate metagenome redundancy curve from FASTQ files","license":"Artistic License 2.0","biotools_id":"biotools:nonpareil","doi":"10.1128/msystems.00039-","v":["nonpareil=3.5.5"]}
 {"n":"nonpareil_nonpareilcurvesr","t":"Generate summary reports with raw data for Nonpareil NPO curves, including MultiQC compatible JSON/TSV files","license":"Artistic License 2.0","biotools_id":"biotools:nonpareil","doi":"10.1128/msystems.00039-","v":["nonpareil=3.5.5"]}
 {"n":"nonpareil_set","t":"Visualise metagenome redundancy curves in PNG format from multiple Nonpareil npo files in a single image","license":"Artistic License 2.0","biotools_id":"biotools:nonpareil","doi":"10.1128/msystems.00039-","v":["nonpareil=3.5.5"]}
+{"n":"nucleoatac_run","t":"Call nucleosome positions and occupancy from paired-end ATAC-seq data","license":"MIT","biotools_id":"biotools:nucleoatac","doi":"10.1101/gr.192294.115","v":["nucleoatac=1.0.0"]}
 {"n":"nucmer","t":"NUCmer is a pipeline for the alignment of multiple closely related nucleotide sequences.","license":"The Artistic License","biotools_id":"","doi":"10.1186/gb-2004-5-2-r12","v":["mummer=3.23"]}
 {"n":"numorph_3dunet","t":"\"3DUnet for cell nuclei quantification on 3D microscopy images of the","license":"","biotools_id":"","doi":"","v":[]}
 {"n":"numorph_intensity","t":"performs shading correction and intensity normalization between tile stacks","license":"","biotools_id":"","doi":"","v":[]}
@@ -1287,6 +1298,8 @@
 {"n":"openms_idmerger","t":"Merges several idXML files into one idXML file.","license":"","biotools_id":"","doi":"","v":["openms=3.5.0"]}
 {"n":"openms_idripper","t":"Split a merged identification file into their originating identification files","license":"","biotools_id":"","doi":"","v":["openms=3.5.0"]}
 {"n":"openms_idscoreswitcher","t":"Switches between different scores of peptide or protein hits in identification data","license":"","biotools_id":"","doi":"","v":["openms=3.5.0"]}
+{"n":"openms_mapaligneridentification","t":"Corrects retention time distortions between maps based on common peptide identifications and emits one retention-time transformation (trafoXML) per input map.","license":"BSD","biotools_id":"biotools:openms","doi":"10.1038/s41592-024-02197-7","v":["openms=3.5.0"]}
+{"n":"openms_mztabexporter","t":"Exports identification and/or quantification results (idXML, featureXML, consensusXML) to the mzTab standard format.","license":"BSD","biotools_id":"biotools:openms","doi":"10.1038/s41592-024-02197-7","v":["openms=3.5.0"]}
 {"n":"openms_peakpickerhires","t":"A tool for peak detection in high-resolution profile data (Orbitrap or FTICR)","license":"","biotools_id":"","doi":"","v":["openms=3.5.0"]}
 {"n":"openms_peptideindexer","t":"Refreshes the protein references for all peptide hits.","license":"","biotools_id":"","doi":"","v":["openms=3.5.0"]}
 {"n":"openms_psmfeatureextractor","t":"Computes extra features for each input PSM for use with Percolator rescoring.","license":"BSD","biotools_id":"","doi":"10.1038/s41592-024-02197-7","v":["openms=3.5.0"]}
@@ -1350,6 +1363,7 @@
 {"n":"pbtk_pbindex","t":"Minimalistic tool which creates an index file that enables random access into PacBio BAM files","license":"BSD-3-clause-Clear","biotools_id":"","doi":"","v":["pbtk=3.1.1"]}
 {"n":"pbtk_pbmerge","t":"Simple tool which merges several PacBio BAM files together","license":"BSD-3-clause-Clear","biotools_id":"","doi":"no DOI available","v":["pbtk=3.1.1"]}
 {"n":"pcangsd_inbreeding","t":"Estimate per-sample inbreeding coefficients from genotype likelihoods","license":"","biotools_id":"","doi":"","v":["pcangsd=1.36.4"]}
+{"n":"pcaone","t":"Fast, accurate and memory-efficient PCA on large-scale genotype or single-cell data","license":"GPL-3.0-only","biotools_id":"biotools:pcaone","doi":"10.1101/gr.277525.122","v":["pcaone=0.7.2"]}
 {"n":"pcgr_getref","t":"Get reference to run Personal Cancer Genome Reporter (PCGR)","license":"MIT","biotools_id":"","doi":"10.1093/bioinformatics/btx817","v":[]}
 {"n":"pcne","t":"Estimates plasmid copy number from assembled genome","license":"MIT","biotools_id":"","doi":"10.1177/11779322251410037","v":["pcne=3.3.1"]}
 {"n":"pdb2pqr","t":"  Convert PDB files to PQR format by\n  assigning charge and radius parameters for\n  electrostatics calculations (e.g. APBS input preparation).","license":"Custom","biotools_id":"biotools:PDB2PQR","doi":"10.1002/pro.3280","v":[]}
@@ -1523,6 +1537,7 @@
 {"n":"raven","t":"De novo genome assembler for long uncorrected reads.","license":"MIT","biotools_id":"biotools:raven","doi":"10.1038/s43588-021-00073-4","v":["raven-assembler=1.6.1"]}
 {"n":"raw2ometiff","t":"write your description here","license":"","biotools_id":"","doi":"","v":[]}
 {"n":"raxmlng","t":"RAxML-NG is a phylogenetic tree inference tool which uses maximum-likelihood (ML) optimality criterion.","license":"GPL v2-or-later","biotools_id":"","doi":"10.1093/bioinformatics/btz305","v":["raxml-ng=1.2.2"]}
+{"n":"raxmlng_search","t":"Maximum-likelihood tree search with RAxML-NG, optionally combined with its integrated automatic model selection (MOOSE)","license":"GPL v2-or-later","biotools_id":"","doi":"10.1093/bioinformatics/btz305","v":["raxml-ng=2.0.3"]}
 {"n":"rbt_vcfsplit","t":"A tool for splitting VCF/BCF files into N equal chunks, including BND support","license":"MIT","biotools_id":"","doi":"no DOI available","v":["rust-bio-tools=0.42.2"]}
 {"n":"rclone_check","t":"Check that files in source and destination paths match","license":"MIT","biotools_id":"","doi":"","v":[]}
 {"n":"rclone_checksum","t":"Check files in a destination path against a checksum SUM file","license":"MIT","biotools_id":"","doi":"","v":[]}
@@ -1769,6 +1784,7 @@
 {"n":"smncopynumbercaller","t":"tool to call the copy number of full-length SMN1, full-length SMN2, as well as SMN2Δ7–8 (SMN2 with a deletion of Exon7-8) from a whole-genome sequencing (WGS) BAM file.","license":"Apache License Version 2.0","biotools_id":"","doi":"10.1038/s41436-020-0754-0","v":["smncopynumbercaller=1.1.2"]}
 {"n":"smoothxg","t":"Linearize and simplify variation graph in GFA format using blocked partial order alignment","license":"MIT","biotools_id":"","doi":"","v":["smoothxg=0.8.0"]}
 {"n":"smoove_call","t":"smoove simplifies and speeds calling and genotyping SVs for short reads. It also improves specificity by removing many spurious alignment signals that are indicative of low-level noise and often contribute to spurious calls. Developed by Brent Pedersen.","license":"","biotools_id":"","doi":"","v":["smoove=0.2.8"]}
+{"n":"smudgeplot_hetmers","t":"Inference of ploidy and heterozygosity structure using whole genome sequencing data using FASTK databases","license":"https://github.com/KamilSJaron/smudgeplot/blob/master/LICENSE.md","biotools_id":"","doi":"","v":["fastk=1.2","smudgeplot=0.5.3"]}
 {"n":"snakemake","t":"The Snakemake workflow management system is a tool to create reproducible and scalable data analyses. This module runs a simple Snakemake pipeline based on input snakefile. Expect many limitations.\"","license":"MIT","biotools_id":"","doi":"10.1093/bioinformatics/bty350","v":["snakemake=9.14.0"]}
 {"n":"snapaligner_align","t":"Performs fastq alignment to a fasta reference using SNAP","license":"","biotools_id":"","doi":"","v":["snap-aligner=2.0.5"]}
 {"n":"snapaligner_index","t":"Create a SNAP index for reference genome","license":"","biotools_id":"","doi":"","v":["snap-aligner=2.0.5"]}
@@ -1853,9 +1869,9 @@
 {"n":"sushie","t":"Software to perform multi-ancestry SNP fine-mapping on molecular data","license":"MIT","biotools_id":"biotools:sushie","doi":"10.1038/s41588-025-02262-7","v":[]}
 {"n":"svaba","t":"SvABA is an efficient and accurate method for detecting SVs from short-read sequencing data using genome-wide local assembly with low memory and computing requirements","license":"GPL v3","biotools_id":"","doi":"10.1101/gr.221028.117","v":["svaba=1.2.0"]}
 {"n":"svanalyzer_svbenchmark","t":"\"SVbenchmark compares a set of “test” structural variants in VCF format","license":"","biotools_id":"","doi":"","v":["svanalyzer=0.36"]}
-{"n":"svdb_build","t":"Build a structural variant database","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.23","svdb=2.8.4"]}
-{"n":"svdb_merge","t":"The merge module merges structural variants within one or more vcf files.","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.23=*","svdb=2.8.4"]}
-{"n":"svdb_query","t":"Query a structural variant database, using a vcf file as query","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.23","svdb=2.8.4"]}
+{"n":"svdb_build","t":"Build a structural variant database","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.24","svdb=2.12.0"]}
+{"n":"svdb_merge","t":"The merge module merges structural variants within one or more vcf files.","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.24","svdb=2.12.0"]}
+{"n":"svdb_query","t":"Query a structural variant database, using a vcf file as query","license":"MIT","biotools_id":"","doi":"","v":["bcftools=1.24","svdb=2.12.0"]}
 {"n":"svdss_index","t":"Index a reference genome FASTA file using SVDSS (via ropebwt3), producing either an FMD or FMR index for use with SVDSS smooth and search subcommands","license":"MIT","biotools_id":"","doi":"10.1038/s41592-022-01674-1","v":["svdss=2.1.1"]}
 {"n":"svim_alignment","t":"Structural variant detection from long-read sequencing alignments using SVIM.","license":"","biotools_id":"","doi":"","v":["svim=2.0.0"]}
 {"n":"svtk_baftest","t":"Performs tests on BAF files","license":"","biotools_id":"","doi":"","v":["svtk=0.0.20190615"]}
@@ -1875,8 +1891,8 @@
 {"n":"sylphtax_merge","t":"Merge multiple taxonomic profiles from sylphtaxt/taxprof into a tsv table","license":"MIT","biotools_id":"","doi":"","v":["sylph-tax=1.9.0"]}
 {"n":"sylphtax_taxprof","t":"Incorporates taxonomy into sylph metagenomic classifier","license":"MIT","biotools_id":"","doi":"","v":["sylph-tax=1.9.0"]}
 {"n":"syri","t":"Syri compares alignments between two chromosome-level assemblies and identifies synteny and structural rearrangements.","license":"MIT License","biotools_id":"biotools:SyRI","doi":"10.1186/s13059-019-1911-0","v":["syri=1.7.1"]}
-{"n":"t1k_build","t":"A module to create a reference database and coordinate files for T1K.","license":"","biotools_id":"","doi":"","v":["t1k=1.0.9"]}
-{"n":"t1k_run","t":"write your description here","license":"","biotools_id":"","doi":"","v":["t1k=1.0.9"]}
+{"n":"t1k_build","t":"A module to create a reference database and coordinate files for T1K.","license":"MIT","biotools_id":"","doi":"10.1101/gr.277585.122","v":["t1k=1.0.10"]}
+{"n":"t1k_run","t":"write your description here","license":"MIT","biotools_id":"","doi":"10.1101/gr.277585.122","v":["t1k=1.0.10"]}
 {"n":"tabix_bgzip","t":"DEPRECATED. Use HTSLIB/BGZIPTABIX instead. Compresses/decompresses files","license":"MIT","biotools_id":"biotools:tabix","doi":"10.1093/bioinformatics/btp352","v":["htslib=1.21"]}
 {"n":"tabix_bgziptabix","t":"DEPRECATED. Use HTSLIB/BGZIPTABIX instead. bgzip a sorted tab-delimited genome file and then create tabix index","license":"MIT","biotools_id":"biotools:tabix","doi":"10.1093/bioinformatics/btq671","v":["htslib=1.21"]}
 {"n":"tabix_tabix","t":"  DEPRECATED. Use HTSLIB/BGZIPTABIX instead. Create a tabix index from a sorted\n  bgzip TAB-delimited genome file, or extract regions from a bgzipped VCF file\n  using an optional regions file.","license":"MIT","biotools_id":"biotools:tabix","doi":"10.1093/bioinformatics/btq671","v":["htslib=1.21"]}
@@ -1902,6 +1918,7 @@
 {"n":"telescope_assign","t":"The telescope assign program finds overlapping reads between an alignment (SAM/BAM) and an annotation (GTF) then reassigns reads using a statistical model.","license":"MIT","biotools_id":"biotools:Telescope-expression","doi":"10.1371/journal.pcbi.1006453","v":["telescope=1.0.4.1"]}
 {"n":"telogator2","t":"Allele-specific telomere length estimation and TVR characterization from long reads","license":"MIT","biotools_id":"biotools:telogator2","doi":"10.1186/s12859-024-05807-5","v":[]}
 {"n":"telomerehunter","t":"\"In silico estimation of telomere content and composition from cancer","license":"","biotools_id":"","doi":"","v":[]}
+{"n":"telomerehunter2","t":"Estimate telomere content and telomeric variant repeats from indexed BAM sequencing data","license":"GPL-3.0-or-later","biotools_id":"","doi":"10.1093/bioadv/vbag187","v":["telomerehunter2=1.0.11"]}
 {"n":"telseq","t":"Telseq: a software for calculating telomere length","license":"GPL v3","biotools_id":"","doi":"10.1093/nar/gku181","v":["bamtools=2.5.2","samtools=1.20","telseq=0.0.2"]}
 {"n":"tesorter","t":"An accurate and fast method to classify LTR-retrotransposons in plant genomes","license":"GPL v3","biotools_id":"biotools:TEsorter","doi":"10.1093/hr/uhac017","v":["tesorter=1.4.7"]}
 {"n":"tetranscripts","t":"Runs TEtranscripts which summarises transposable element content of a bam file.","license":"GPL v3","biotools_id":"biotools:tetranscripts","doi":"10.1093/bioinformatics/btv422","v":["tetranscripts=2.2.3"]}
@@ -1913,7 +1930,7 @@
 {"n":"tidk_plot","t":"  Plots telomeric repeat frequency against sliding window location\n  using data produced by `tidk/search`","license":"MIT","biotools_id":"","doi":"10.5281/zenodo.10091385","v":["tidk=0.2.7"]}
 {"n":"tidk_search","t":"Searches a genome for a telomere string such as TTAGGG","license":"MIT","biotools_id":"","doi":"10.5281/zenodo.10091385","v":["tidk=0.2.7"]}
 {"n":"tinc","t":"\"TINC is a package to determine the contamination of tumour DNA in a","license":"","biotools_id":"","doi":"","v":["r-cnaqc=1.1.2","r-tinc=0.1.0"]}
-{"n":"tmb_pytmb","t":"\"This module calculates Tumor Mutational Burden (TMB) scores from VCF files","license":"","biotools_id":"","doi":"","v":["tmb=1.5.0"]}
+{"n":"tmb_pytmb","t":"This module calculates Tumor Mutational Burden (TMB) scores from VCF files using the pyTMB tool.","license":"CeCILL FREE SOFTWARE LICENSE AGREEMENT","biotools_id":"biotools:TMB","doi":"10.1186/s12915-024-01839-8","v":["tmb=1.6.0"]}
 {"n":"topas_gencons","t":"Create fasta consensus with TOPAS toolkit with options to penalize substitutions for typical DNA damage present in ancient DNA","license":"","biotools_id":"","doi":"","v":["topas=1.0.1"]}
 {"n":"toulligqc","t":"A post sequencing QC tool for Oxford Nanopore sequencers","license":"CECILL-2.1","biotools_id":"biotools:ToulligQC","doi":"","v":["toulligqc=2.8.4"]}
 {"n":"traitar","t":"\"Traitar3 - predict microbial phenotypes from genomic sequences using\\","license":"","biotools_id":"","doi":"","v":["hmmer=3.4","prodigal=2.6.3"]}
@@ -1925,7 +1942,7 @@
 {"n":"trgt_genotype","t":"Tandem repeat genotyping from PacBio HiFi data","license":"{}","biotools_id":"","doi":"10.1038/s41587-023-02057-3","v":["trgt=5.1.0"]}
 {"n":"trgt_merge","t":"Merge TRGT VCFs from multiple samples","license":"{}","biotools_id":"","doi":"10.1038/s41587-023-02057-3","v":["trgt=5.1.0"]}
 {"n":"trgt_plot","t":"Visualize tandem repeats genotyped by TRGT","license":"{}","biotools_id":"","doi":"10.1038/s41587-023-02057-3","v":["trgt=5.1.0"]}
-{"n":"trimal","t":"trimAl is a tool for the automated removal of spurious sequences or poorly aligned regions from a multiple sequence alignment.","license":"","biotools_id":"","doi":"","v":["trimal=1.5.0"]}
+{"n":"trimal","t":"trimAl is a tool for the automated removal of spurious sequences or poorly aligned regions from a multiple sequence alignment.","license":"GPL v3-or-later, GPL v3 or later (GPL v3+)","biotools_id":"biotools:trimal","doi":"10.1093/bioinformatics/btp348","v":["trimal=1.5.0"]}
 {"n":"trimgalore","t":"  A wrapper around Cutadapt and FastQC to consistently apply adapter and quality trimming to FastQ files,\n  with extra functionality for RRBS data","license":"GPL-3.0-or-later","biotools_id":"biotools:trim_galore","doi":"","v":["trim-galore=2.3.0"]}
 {"n":"trimmomatic","t":"Performs quality and adapter trimming on paired end and single end reads","license":"GPL v3","biotools_id":"biotools:trimmomatic","doi":"10.1093/bioinformatics/btu170","v":["trimmomatic=0.39"]}
 {"n":"trinity","t":"Assembles a de novo transcriptome from RNAseq reads","license":"BSD-3-clause","biotools_id":"biotools:trinity","doi":"10.1038/nbt.1883","v":["trinity=2.15.2"]}
@@ -1981,20 +1998,3 @@
 {"n":"vcf2maf","t":"vcf2maf","license":"Apache-2.0","biotools_id":"","doi":"10.5281/zenodo.593251","v":["ensembl-vep=113.3","vcf2maf=1.6.22"]}
 {"n":"vcf2zarr_convert","t":"Convert VCF data to the VCF Zarr specification reliably, in parallel or distributed over a cluster","license":"Apache-2.0","biotools_id":"biotools:bio2zarr","doi":"10.1101/2024.06.11.598241","v":["bio2zarr=0.1.7"]}
 {"n":"vcf2zarr_explode","t":"Convert VCF(s) to intermediate columnar format","license":"Apache-2.0","biotools_id":"biotools:bio2zarr","doi":"10.1101/2024.06.11.598241","v":["bio2zarr=0.1.8"]}
-{"n":"vcfanno","t":"quickly annotate your VCF with any number of INFO fields from any number of VCFs or BED files","license":"MIT","biotools_id":"biotools:vcfanno","doi":"10.1186/s13059-016-0973-5","v":["htslib=1.23","vcfanno=0.3.7"]}
-{"n":"vcfexpress","t":"Filter a VCF/BCF and optionally print by template expression. If no template is given the output will be VCF/BCF","license":"MIT","biotools_id":"biotools:vcfexpress","doi":"10.5281/zenodo.14898003","v":["vcfexpress=0.3.4"]}
-{"n":"vcflib_vcfbreakmulti","t":"If multiple alleles are specified in a single record, break the record into several lines preserving allele-specific INFO fields","license":"MIT","biotools_id":"biotools:vcflib","doi":"10.1101/2021.05.21.445151","v":["vcflib=1.0.14"]}
-{"n":"vcflib_vcffilter","t":"Command line tools for parsing and manipulating VCF files.","license":"MIT","biotools_id":"biotools:vcflib","doi":"10.1371/journal.pcbi.1009123","v":["vcflib=1.0.14"]}
-{"n":"vcflib_vcffixup","t":"Generates a VCF stream where AC and NS have been generated for each record using sample genotypes.","license":"MIT","biotools_id":"biotools:vcflib","doi":"10.1101/2021.05.21.445151","v":["bcftools=1.23.1","vcflib=1.0.14"]}
-{"n":"vcflib_vcfuniq","t":"List unique genotypes. Like GNU uniq, but for VCF records. Remove records which have the same position, ref, and alt as the previous record.","license":"MIT","biotools_id":"biotools:vcflib","doi":"10.1101/2021.05.21.445151","v":["vcflib=1.0.14"]}
-{"n":"vcfpgloader_load","t":"High-performance VCF to PostgreSQL loader using asyncpg for bulk variant ingestion","license":"MIT","biotools_id":"","doi":"","v":["vcf-pg-loader=0.5.4"]}
-{"n":"vcftools","t":"A set of tools written in Perl and C++ for working with VCF files","license":"LGPL","biotools_id":"biotools:vcftools","doi":"","v":["vcftools=0.1.17"]}
-{"n":"vclust_align","t":"The align command performs pairwise sequence alignments of viral genomes and provides similarity measures like ANI and coverage (alignment fraction)","license":"","biotools_id":"","doi":"","v":["vclust=1.3.1"]}
-{"n":"vclust_cluster","t":"Vclust cluster performs threshold-based clustering by assigning a genome sequence to a cluster if its similarity (e.g., ANI) to the cluster meets or exceeds a user-defined threshold.","license":"GPL v3-or-later","biotools_id":"biotools:vclust","doi":"10.1038/s41592-025-02701-7","v":["vclust=1.3.1"]}
-{"n":"vclust_prefilter","t":"The prefilter command creates a pre-alignment filter that reduces the number of genome pairs to be aligned by filtering out dissimilar sequences before the alignment step.","license":"","biotools_id":"","doi":"","v":["vclust=1.3.1"]}
-{"n":"vcontact3_prepareddatabases","t":"Prepare and format databases for vCONTACT3 viral taxonomic analysis","license":"CC-BY-4.0","biotools_id":"biotools:vcontact3","doi":"10.1101/2025.11.06.686974","v":["vcontact3=3.1.6"]}
-{"n":"velocyto","t":"  Velocyto is a library for the analysis of RNA velocity. velocyto.py CLI use\n  `Path(resolve_path=True)` and breaks the nextflow logic of symbolic links.\n  If in the work dir velocyto find a file named EXACTLY `cellsorted_[ORIGINAL_BAM_NAME]`\n  it will skip the samtools sort step.\n  Cellsorted bam file should be cell sorted with:\n  ```bash\n      samtools sort -t CB -O BAM -o cellsorted_input.bam input.bam\n  ```\n  See module test for an example with the SAMTOOLS_SORT nf-core module.\n  Config example to cellsort input bam using SAMTOOLS_SORT:\n  ```groovy\n      withName: SAMTOOLS_SORT {\n          ext.prefix = { \"cellsorted_${bam.baseName}\" }\n          ext.args = '-t CB -O BAM'\n      }\n  ```\n  Optional mask must be passed with `ext.args` and option `--mask`\n  This is why I need to stage in the work dir 2 bam files (cellsorted and original).\n  See also [velocyto tutorial](https://velocyto.org/velocyto.py/tutorial/cli.html#notes-on-first-runtime-and-parallelization)","license":"MIT","biotools_id":"","doi":"10.1038/s41586-018-0414-6","v":["velocyto.py=0.17.17"]}
-{"n":"vembrane_filter","t":"Filter VCF files with vembrane","license":"MIT","biotools_id":"biotools:vembrane/filter","doi":"10.1093/bioinformatics/btac810","v":["vembrane=2.4.0"]}
-{"n":"vembrane_sort","t":"Sort VCF/BCF files by custom Python expressions for variant prioritization","license":"MIT","biotools_id":"biotools:vembrane","doi":"10.1093/bioinformatics/btac810","v":["vembrane=2.4.0"]}
-{"n":"vembrane_table","t":"Creates tabular (TSV) files from VCF/BCF data with flexible Python expressions","license":"MIT","biotools_id":"biotools:vembrane","doi":"10.1093/bioinformatics/btac810","v":["vembrane=2.4.0"]}
-{"n":"verifybamid_verifybamid","t":"Detecting and estimating inter-sample DNA contamination became a crucial quality assessment step to ensure high quality sequence reads and reliable downstream analysis.","license":"","biotools_id":"","doi":"","v":["verifybamid=1.1.3"]}
