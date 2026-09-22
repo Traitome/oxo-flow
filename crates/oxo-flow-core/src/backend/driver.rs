@@ -517,7 +517,7 @@ impl BackendDriver {
                                 message: format!("cannot write {}: {e}", index_path.display()),
                             })?;
                             for (i, (c_name, c_sr)) in chunk.iter().enumerate() {
-                                let element_id = format!("{}_{}", base_id, i + 1);
+                                let element_id = self.backend.array_element_id(&base_id, i + 1);
                                 // Per-INSTANCE dirs keep the run directory
                                 // greppable (jobs/<instance>/job.sh + job.id)
                                 // — the array stays an implementation detail

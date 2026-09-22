@@ -144,6 +144,15 @@ pub trait ExecutorBackend: Send + Sync {
     fn polls_elements_directly(&self) -> bool {
         false
     }
+
+    /// The scheduler id of one array element, derived from the id qsub
+    /// echoed for the array submission. The default is SLURM's
+    /// `{base}_{index}`; OpenPBS prints the array id as `38[]` and
+    /// addresses elements as `38[2]`, so that base swaps the brackets
+    /// instead (found live, issue #356).
+    fn array_element_id(&self, base: &str, index: usize) -> String {
+        format!("{}_{}", base, index)
+    }
 }
 
 /// One executable unit of the static plan: a fully resolved rule instance.

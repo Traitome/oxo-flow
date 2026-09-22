@@ -20,7 +20,7 @@ PBS_START_COMM=0
 PBS_START_MOM=1
 PBS_ENABLE_TRQACL=N
 PBS_TITLE=OpenPBS
-PBS_VERSION=23.0.6
+PBS_VERSION=23.06.06
 EOF
 
 /opt/pbs/libexec/pbs_postinstall mom 2>/dev/null || /opt/pbs/libexec/pbs_postinstall
@@ -28,4 +28,7 @@ mkdir -p /var/spool/pbs
 echo "$MASTER" > /var/spool/pbs/server_name
 printf '$clienthost %s\n' "$MASTER" > /var/spool/pbs/mom_priv/config
 
-exec /opt/pbs/sbin/pbs_mom -p
+/opt/pbs/sbin/pbs_mom -p
+# pbs_mom daemonizes; keep the container alive afterwards
+touch /var/log/mom-alive
+exec tail -f /var/log/mom-alive

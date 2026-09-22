@@ -26,6 +26,12 @@ run_case() {  # $1 workflow file, $2 profile, $3 run dir, $4 log, $5 snap
   cp "$WF/$(basename "$1")" "$3/"
   cp -r "$WF/profiles" "$3/"
   cd "$3"
+  # Seed workflow inputs inside the run dir (paths are relative to it).
+  mkdir -p input data
+  echo "simulated reads for the matrix" > input/reads.txt
+  for i in 01 02 03 04 05 06 07 08 09 10; do
+    printf "sample-%s simulated reads\n" "$i" > "data/s$i.fq"
+  done
   (
     "$OXO" run "$(basename "$1")" --profile "$2" > "$4" 2>&1
     echo "run_rc=$?" >> "$4"

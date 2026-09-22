@@ -82,8 +82,13 @@ pub fn parse_status_line(
             let id = (*fields.first()?).to_string();
             let status = match *fields.get(4)? {
                 "Q" | "H" | "W" => BackendJobStatus::Pending,
-                "R" | "E" => BackendJobStatus::Running,
+                // "B" is a live array container (elements staged/running).
+                "R" | "B" => BackendJobStatus::Running,
                 "C" => BackendJobStatus::Completed,
+                // F (finished) says nothing about the exit code at table
+                // level — leave Unknown so the accounting probe settles it
+                // with the real exit code.
+                "F" => BackendJobStatus::Unknown,
                 _ => BackendJobStatus::Unknown,
             };
             Some((id, status))
@@ -150,7 +155,14 @@ pub fn status_invocations(
                 "%i|%t".to_string(),
             ],
         )],
-        ClusterBackend::Pbs => vec![("qstat", job_ids.to_vec())],
+        // `-x` includes finished (history) jobs: an OpenPBS by-id listing
+        // without it refuses finished array elements outright (exit 35),
+        // which would read as "left the queue" mid-flight.
+        ClusterBackend::Pbs => {
+            let mut args = vec!["-x".to_string()];
+            args.extend(job_ids.iter().cloned());
+            vec![("qstat", args)]
+        }
         ClusterBackend::Lsf => {
             // `-a`: plain bjobs lists only PEND/RUN, so a job that finished
             // between polls would vanish and settlement would depend on a
@@ -430,22 +442,42 @@ fn finish_script(script: &str, backend: &ClusterBackend, workdir: &Path) -> Stri
     let dir = absolute_workdir(workdir).display().to_string();
     let directive = match backend {
         ClusterBackend::Slurm => format!("#SBATCH --chdir={dir}"),
-        ClusterBackend::Pbs => format!("#PBS -d {dir}"),
+        // OpenPBS qsub has no working-directory option at all (no `-d` —
+        // that is Torque; no `-w` — that is PBS Pro), so for PBS the pin
+        // happens in the script body instead of as a scheduler directive.
+        ClusterBackend::Pbs => format!("cd '{dir}' || exit 1"),
         ClusterBackend::Sge => format!("#$ -wd {dir}"),
         ClusterBackend::Lsf => format!("#BSUB -cwd {dir}"),
     };
     let mut lines = script.lines();
-    let mut finished = vec![lines.next().unwrap_or_default().to_string(), directive];
-    for line in lines {
+    let mut finished = vec![lines.next().unwrap_or_default().to_string()];
+    let mut rest: Vec<String> = lines.map(String::from).collect();
+    if backend == &ClusterBackend::Pbs {
+        // A PBS body `cd` must come AFTER the whole `#PBS` directive block —
+        // qsub stops parsing directives at the first non-directive line, so
+        // inserting it at line 2 would silently drop every directive after
+        // it.
+        let insert_at = rest
+            .iter()
+            .take_while(|line| line.starts_with("#PBS"))
+            .count();
+        rest.insert(insert_at, directive);
+        finished.extend(rest);
+    } else {
+        finished.push(directive);
+        finished.extend(rest);
+    }
+    let mut deduped: Vec<String> = Vec::with_capacity(finished.len());
+    for line in finished {
         let duplicated = (line == "set -e" || line == "mkdir -p logs")
-            && finished.iter().any(|existing| existing.as_str() == line);
+            && deduped.iter().any(|existing| existing.as_str() == line);
         if !duplicated {
-            finished.push(line.to_string());
+            deduped.push(line);
         }
     }
     // Keep whatever trailing newline the generator emitted.
     let tail = if script.ends_with('\n') { "\n" } else { "" };
-    format!("{}{tail}", finished.join("\n"))
+    format!("{}{tail}", deduped.join("\n"))
 }
 
 /// Cluster executor: renders scripts with the existing directive generator
@@ -526,7 +558,19 @@ impl ClusterExecutor {
         job_ids: &[String],
     ) -> Result<HashMap<String, BackendJobStatus>> {
         let args: Vec<&str> = job_ids.iter().map(String::as_str).collect();
-        let out = self.run_cmd(program, &args).await?;
+        // A by-id listing answers for jobs still in the live queue; a job
+        // that already finished makes the whole invocation exit non-zero
+        // (OpenPBS exits 35 with "use -x or -H", LSF prints "not found").
+        // That is expected scheduler behaviour, not a driver failure — read
+        // whatever rows came back and let the accounting probe settle the
+        // missing ids (same shape as the SGE per-job path above).
+        let out = match self.run_cmd(program, &args).await {
+            Ok(out) => out,
+            Err(err) => {
+                tracing::warn!("{} listing failed, treating ids as absent: {}", program, err);
+                return Ok(HashMap::new());
+            }
+        };
         let mut statuses = HashMap::new();
         for line in String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -720,6 +764,17 @@ impl super::ExecutorBackend for ClusterExecutor {
         // report only the array base id (issue #136 H4).
         matches!(self.backend, ClusterBackend::Slurm)
     }
+
+    fn array_element_id(&self, base: &str, index: usize) -> String {
+        // OpenPBS echoes an array submission as `38[]` and addresses its
+        // elements as `38[1]` … — the SLURM `{base}_{index}` form is not a
+        // queryable id there.
+        if matches!(self.backend, ClusterBackend::Pbs) && base.contains("[]") {
+            base.replacen("[]", &format!("[{index}]"), 1)
+        } else {
+            format!("{base}_{index}")
+        }
+    }
 }
 
 /// Split an accounting row on `|` when the store emitted the pipe-separated
@@ -820,8 +875,16 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
         ClusterBackend::Slurm => parse_sacct(text),
         ClusterBackend::Pbs => {
             // qstat -x -f: "    job_state = C" + "    Exit_status = N", with
-            // measurements under "resources_used.<field>".
-            if !text.lines().any(|l| l.trim() == "job_state = C") {
+            // measurements under "resources_used.<field>". OpenPBS 23 marks
+            // history jobs "F" (finished) rather than "C" — the exit code
+            // still says which.
+            let state = text
+                .lines()
+                .map(str::trim)
+                .find_map(|l| l.strip_prefix("job_state = "))
+                .unwrap_or_default()
+                .to_string();
+            if state != "C" && state != "F" && state != "E" {
                 return None;
             }
             let field = |key: &str| {
@@ -830,6 +893,11 @@ fn parse_accounting(backend: &ClusterBackend, text: &str) -> Option<TerminalReco
                     .find_map(|l| l.strip_prefix(key)?.strip_prefix(" = "))
             };
             let exit_code = field("Exit_status").and_then(parse_exit_code);
+            // "E" (exiting) is transient: the job's process is done but the
+            // exit status may not have landed yet. No status, no settlement.
+            if state == "E" && exit_code.is_none() {
+                return None;
+            }
             Some(TerminalRecord {
                 status: if exit_code == Some(0) {
                     BackendJobStatus::Completed
@@ -1126,6 +1194,13 @@ mod tests {
             parse_status_line(&ClusterBackend::Pbs, q_line),
             Some(("778.queue".into(), BackendJobStatus::Pending))
         );
+        // A live array container reports B while its elements run — the
+        // job is alive, so it must not count toward blind settlement.
+        let b_line = "779.queue   chunk      me   0:00:00   B   batch";
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Pbs, b_line),
+            Some(("779.queue".into(), BackendJobStatus::Running))
+        );
     }
 
     #[test]
@@ -1184,9 +1259,11 @@ mod tests {
                 ]
             )]
         );
+        // -x includes history: without it a finished job (esp. array
+        // elements) makes the whole by-id listing exit 35.
         assert_eq!(
             status_invocations(&ClusterBackend::Pbs, &ids),
-            vec![("qstat", ids.to_vec())]
+            vec![("qstat", vec!["-x".to_string(), "101".to_string(), "202".to_string()])]
         );
         // LSF polls with -a so DONE/EXIT rows stay visible; plain bjobs
         // answers only for PEND/RUN jobs and a finished job would vanish.
@@ -1320,18 +1397,37 @@ mod tests {
         // outside the run directory.
         let cases = [
             (ClusterBackend::Slurm, "#SBATCH --chdir=/wf"),
-            (ClusterBackend::Pbs, "#PBS -d /wf"),
+            // OpenPBS qsub has NO working-directory option (no -d — that is
+            // Torque; no -w — that is PBS Pro), so the pin happens in the
+            // script body (found live, issue #356).
+            (ClusterBackend::Pbs, "cd '/wf' || exit 1"),
             (ClusterBackend::Sge, "#$ -wd /wf"),
             (ClusterBackend::Lsf, "#BSUB -cwd /wf"),
         ];
-        for (backend, directive) in cases {
+        for (backend, pin) in cases {
             let script = finish_script("#!/bin/bash\nset -e\ntrue\n", &backend, Path::new("/wf"));
             assert_eq!(
                 script,
-                format!("#!/bin/bash\n{directive}\nset -e\ntrue\n"),
+                format!("#!/bin/bash\n{pin}\nset -e\ntrue\n"),
                 "{backend}: the working directory must be pinned"
             );
         }
+    }
+
+    #[test]
+    fn pbs_body_cd_lands_after_the_directive_block() {
+        // qsub stops parsing `#PBS` directives at the first non-directive
+        // line, so the body `cd` pin must follow — not precede — them.
+        let script = finish_script(
+            "#!/bin/bash\n#PBS -N prep\n#PBS -l nodes=1:ppn=1\nset -e\ntrue\n",
+            &ClusterBackend::Pbs,
+            Path::new("/wf"),
+        );
+        assert_eq!(
+            script,
+            "#!/bin/bash\n#PBS -N prep\n#PBS -l nodes=1:ppn=1\ncd '/wf' || exit 1\nset -e\ntrue\n",
+            "{script}"
+        );
     }
 
     #[test]
@@ -1713,6 +1809,19 @@ resources_used.mem = 65536kb\n    resources_used.cput = 00:03:30\n";
         let rec = parse_accounting(&ClusterBackend::Pbs, &bad).unwrap();
         assert_eq!(rec.status, BackendJobStatus::Failed);
         assert_eq!(rec.exit_code, Some(1));
+        // OpenPBS 23 history marks finished jobs "F" instead of "C".
+        let f = ok.replace("job_state = C", "job_state = F");
+        let rec = parse_accounting(&ClusterBackend::Pbs, &f).unwrap();
+        assert_eq!(rec.status, BackendJobStatus::Completed);
+        // "E" without an Exit_status yet is transient — not terminal.
+        let mut exiting_lines: Vec<String> = ok
+            .lines()
+            .filter(|l| !l.contains("Exit_status"))
+            .map(String::from)
+            .collect();
+        exiting_lines[2] = "    job_state = E".into();
+        let exiting = exiting_lines.join("\n");
+        assert_eq!(parse_accounting(&ClusterBackend::Pbs, &exiting), None);
         // Still running: no terminal state.
         let running = ok.replace("job_state = C", "job_state = R");
         assert_eq!(parse_accounting(&ClusterBackend::Pbs, &running), None);
