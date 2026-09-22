@@ -567,7 +567,11 @@ impl ClusterExecutor {
         let out = match self.run_cmd(program, &args).await {
             Ok(out) => out,
             Err(err) => {
-                tracing::warn!("{} listing failed, treating ids as absent: {}", program, err);
+                tracing::warn!(
+                    "{} listing failed, treating ids as absent: {}",
+                    program,
+                    err
+                );
                 return Ok(HashMap::new());
             }
         };
@@ -1263,13 +1267,19 @@ mod tests {
         // elements) makes the whole by-id listing exit 35.
         assert_eq!(
             status_invocations(&ClusterBackend::Pbs, &ids),
-            vec![("qstat", vec!["-x".to_string(), "101".to_string(), "202".to_string()])]
+            vec![(
+                "qstat",
+                vec!["-x".to_string(), "101".to_string(), "202".to_string()]
+            )]
         );
         // LSF polls with -a so DONE/EXIT rows stay visible; plain bjobs
         // answers only for PEND/RUN jobs and a finished job would vanish.
         assert_eq!(
             status_invocations(&ClusterBackend::Lsf, &ids),
-            vec![("bjobs", vec!["-a".to_string(), "101".to_string(), "202".to_string()])]
+            vec![(
+                "bjobs",
+                vec!["-a".to_string(), "101".to_string(), "202".to_string()]
+            )]
         );
         // SGE answers one job per -j.
         assert_eq!(

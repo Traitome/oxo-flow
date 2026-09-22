@@ -267,9 +267,7 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
 /// already KB. `None` when the text is not a recognisable figure.
 fn lsf_mem_kb(mem: &str) -> Option<u64> {
     let mem = mem.trim();
-    let split = mem
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(mem.len());
+    let split = mem.find(|c: char| !c.is_ascii_digit()).unwrap_or(mem.len());
     let (digits, unit) = mem.split_at(split);
     let multiplier = match unit.trim().to_ascii_lowercase().as_str() {
         "" | "k" | "kb" => 1,
@@ -914,7 +912,10 @@ mod tests {
         // LSF -M takes a KB figure (documented units: KB/MB/GB, default KB);
         // a bare "4G" is not a valid mem_spec. Scheduling placement needs the
         // matching rusage, so both go out.
-        assert!(script.contains("#BSUB -R 'rusage[mem=4194304]'"), "{script}");
+        assert!(
+            script.contains("#BSUB -R 'rusage[mem=4194304]'"),
+            "{script}"
+        );
         assert!(script.contains("#BSUB -M 4194304"), "{script}");
         assert!(script.contains("#BSUB -W 01:00"));
         assert!(script.contains("#BSUB -q short"));
@@ -933,8 +934,7 @@ mod tests {
             walltime: None,
             extra_args: vec![],
         };
-        let script =
-            generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config);
+        let script = generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config);
         assert!(script.contains("#BSUB -M lots"), "{script}");
         assert!(!script.contains("rusage"), "{script}");
     }
