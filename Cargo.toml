@@ -64,7 +64,7 @@ glob = "0.3"
 regex = "1"
 tempfile = "3"
 num_cpus = "1"
-sysinfo = "0.38"
+sysinfo = "0.39"
 nix = { version = "0.31", features = ["signal", "process"] }
 fs2 = "0.4"
 
