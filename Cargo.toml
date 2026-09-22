@@ -69,7 +69,7 @@ nix = { version = "0.31", features = ["signal", "process"] }
 fs2 = "0.4"
 
 # Crypto
-sha2 = "0.10"
+sha2 = "0.11"
 aes-gcm = "0.11"
 sha1 = "0.10"
 hmac = "0.12"
