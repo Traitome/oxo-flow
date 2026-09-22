@@ -2975,7 +2975,7 @@ dependencies = [
  "glob",
  "hex",
  "hmac 0.12.1",
- "md-5 0.10.6",
+ "md-5 0.11.0",
  "nix",
  "num_cpus",
  "petgraph",
