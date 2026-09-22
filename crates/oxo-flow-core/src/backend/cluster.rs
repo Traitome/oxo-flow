@@ -94,12 +94,16 @@ pub fn parse_status_line(
             Some((id, status))
         }
         ClusterBackend::Lsf => {
-            // "JOBID  USER  STAT  QUEUE  ..."
+            // "JOBID  USER  STAT  QUEUE  ..." — STAT follows IBM's bjobs
+            // states. Suspend states split by WHEN the job was held:
+            // USUSP held it while still pending (never started), while
+            // PSUSP/SSUSP held a started job; LSF 10.x merged all three
+            // into SUSP, which in practice means "started, then held".
             let fields: Vec<&str> = line.split_whitespace().collect();
             let id = (*fields.first()?).to_string();
             let status = match *fields.get(2)? {
-                "PEND" | "PSUSP" | "USUSP" => BackendJobStatus::Pending,
-                "RUN" => BackendJobStatus::Running,
+                "PEND" | "USUSP" => BackendJobStatus::Pending,
+                "RUN" | "PSUSP" | "SSUSP" | "SUSP" => BackendJobStatus::Running,
                 "DONE" => BackendJobStatus::Completed,
                 "EXIT" | "ZOMBI" => BackendJobStatus::Failed,
                 _ => BackendJobStatus::Unknown,
@@ -771,12 +775,15 @@ impl super::ExecutorBackend for ClusterExecutor {
 
     fn array_element_id(&self, base: &str, index: usize) -> String {
         // OpenPBS echoes an array submission as `38[]` and addresses its
-        // elements as `38[1]` … — the SLURM `{base}_{index}` form is not a
-        // queryable id there.
-        if matches!(self.backend, ClusterBackend::Pbs) && base.contains("[]") {
-            base.replacen("[]", &format!("[{index}]"), 1)
-        } else {
-            format!("{base}_{index}")
+        // elements as `38[1]` … ; LSF echoes the bare array id and
+        // addresses elements `44[2]` — the SLURM `{base}_{index}` form is
+        // not a queryable id on either.
+        match self.backend {
+            ClusterBackend::Pbs if base.contains("[]") => {
+                base.replacen("[]", &format!("[{index}]"), 1)
+            }
+            ClusterBackend::Pbs | ClusterBackend::Lsf => format!("{base}[{index}]"),
+            _ => format!("{base}_{index}"),
         }
     }
 }
@@ -1241,6 +1248,24 @@ mod tests {
             parse_status_line(&ClusterBackend::Lsf, done),
             Some(("12345".into(), BackendJobStatus::Completed))
         );
+        // Suspend states follow IBM's definitions: USUSP suspended the job
+        // while it was still pending (never started), PSUSP/SSUSP suspended
+        // it after it started, and LSF 10.x merged all three into SUSP —
+        // which in practice means "started, then held".
+        for (stat, expected) in [
+            ("PEND", BackendJobStatus::Pending),
+            ("USUSP", BackendJobStatus::Pending),
+            ("SSUSP", BackendJobStatus::Running),
+            ("PSUSP", BackendJobStatus::Running),
+            ("SUSP", BackendJobStatus::Running),
+        ] {
+            let line = format!("12345  me  {stat}  batch  1  1  8  Aug 14 12:00");
+            assert_eq!(
+                parse_status_line(&ClusterBackend::Lsf, &line),
+                Some(("12345".into(), expected)),
+                "{stat}: wrong mapping"
+            );
+        }
     }
 
     // ─── cluster-path audit findings ───────────────────────────────────────
@@ -1422,6 +1447,23 @@ mod tests {
                 "{backend}: the working directory must be pinned"
             );
         }
+    }
+
+    #[test]
+    fn array_element_ids_match_each_scheduler() {
+        let exec = |backend| ClusterExecutor::new(backend, cluster_config());
+        // SLURM composes `{base}_{index}` (squeue lists elements that way).
+        assert_eq!(
+            exec(ClusterBackend::Slurm).array_element_id("123", 2),
+            "123_2"
+        );
+        // OpenPBS echoes the array as `38[]` and addresses elements `38[1]`.
+        assert_eq!(
+            exec(ClusterBackend::Pbs).array_element_id("38[].pbs-master", 1),
+            "38[1].pbs-master"
+        );
+        // LSF echoes the bare array id and addresses elements `44[2]`.
+        assert_eq!(exec(ClusterBackend::Lsf).array_element_id("44", 2), "44[2]");
     }
 
     #[test]

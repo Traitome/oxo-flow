@@ -261,6 +261,19 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
 // Private helpers for each backend
 // ---------------------------------------------------------------------------
 
+/// The extra placement clause for LSF's `-R`: oxo-flow's `threads` are
+/// shared-memory threads, so multi-threaded jobs must stay on one host
+/// instead of letting LSF spread `-n` slots across machines. Empty for
+/// single-threaded jobs, where spanning is meaningless. Leading space
+/// included so it can be appended straight into an existing `-R` string.
+fn lsf_span_clause(rule: &Rule) -> String {
+    if rule.effective_threads() > 1 {
+        " span[hosts=1]".to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Parse a memory figure into KB for LSF's `-M`/`rusage[mem=]`, whose
 /// documented unit set is KB/MB/GB (default KB). Accepts `K`/`M`/`G`/`T`
 /// with or without the trailing `B`, case-insensitive; a bare number is
@@ -586,18 +599,33 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push(format!("#BSUB -J {}", rule.name));
     lines.push(format!("#BSUB -n {}", rule.effective_threads()));
 
+    let span = lsf_span_clause(rule);
     if let Some(mem) = rule.effective_memory() {
         // -M's documented unit set is KB/MB/GB with KB as the default; the
         // bare "4G" form oxo-flow stores internally is not a valid mem_spec,
         // so the memory travels as an explicit KB figure plus the matching
-        // rusage (which is what places the job on a host with room).
+        // rusage (which is what places the job on a host with room). LSF
+        // reads one -R string, so the span clause rides along in it.
         match lsf_mem_kb(mem) {
             Some(kb) => {
-                lines.push(format!("#BSUB -R 'rusage[mem={kb}]'"));
+                lines.push(format!("#BSUB -R 'rusage[mem={kb}]{span}'"));
                 lines.push(format!("#BSUB -M {kb}"));
             }
-            None => lines.push(format!("#BSUB -M {mem}")),
+            None => {
+                lines.push(format!("#BSUB -M {mem}"));
+                if !span.is_empty() {
+                    lines.push(format!("#BSUB -R '{}'", span.trim_start()));
+                }
+            }
         }
+    } else if !span.is_empty() {
+        lines.push(format!("#BSUB -R '{}'", span.trim_start()));
+    }
+
+    // Account maps to LSF's project (-P), matching -A on PBS and --account
+    // on SLURM.
+    if let Some(account) = &config.account {
+        lines.push(format!("#BSUB -P {account}"));
     }
 
     // GPU handling for LSF: -gpu expects a quoted run-options string
@@ -895,7 +923,7 @@ mod tests {
         let config = ClusterJobConfig {
             backend: ClusterBackend::Lsf,
             queue: Some("short".to_string()),
-            account: None,
+            account: Some("proj01".to_string()),
             walltime: Some("01:00".to_string()),
             extra_args: vec![],
         };
@@ -909,11 +937,20 @@ mod tests {
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#BSUB -J samtools_sort"));
         assert!(script.contains("#BSUB -n 2"));
+        // threads=2 is shared-memory SMP: the -R string must keep the job on
+        // one host (span[hosts=1]) next to the memory reservation.
+        assert!(
+            script.contains("#BSUB -R 'rusage[mem=4194304] span[hosts=1]'"),
+            "{script}"
+        );
+        // Account maps to LSF's project (-P), like -A on PBS and --account
+        // on SLURM.
+        assert!(script.contains("#BSUB -P proj01"), "{script}");
         // LSF -M takes a KB figure (documented units: KB/MB/GB, default KB);
         // a bare "4G" is not a valid mem_spec. Scheduling placement needs the
-        // matching rusage, so both go out.
+        // matching rusage (plus the single-host span), so both go out.
         assert!(
-            script.contains("#BSUB -R 'rusage[mem=4194304]'"),
+            script.contains("#BSUB -R 'rusage[mem=4194304] span[hosts=1]'"),
             "{script}"
         );
         assert!(script.contains("#BSUB -M 4194304"), "{script}");
