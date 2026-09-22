@@ -151,7 +151,15 @@ pub fn status_invocations(
             ],
         )],
         ClusterBackend::Pbs => vec![("qstat", job_ids.to_vec())],
-        ClusterBackend::Lsf => vec![("bjobs", job_ids.to_vec())],
+        ClusterBackend::Lsf => {
+            // `-a`: plain bjobs lists only PEND/RUN, so a job that finished
+            // between polls would vanish and settlement would depend on a
+            // working `bacct` store. With `-a` the DONE/EXIT rows stay
+            // visible directly in the poll answer.
+            let mut args = vec!["-a".to_string()];
+            args.extend(job_ids.iter().cloned());
+            vec![("bjobs", args)]
+        }
         ClusterBackend::Sge => job_ids
             .iter()
             .map(|id| ("qstat", vec!["-j".to_string(), id.clone()]))
@@ -1180,9 +1188,11 @@ mod tests {
             status_invocations(&ClusterBackend::Pbs, &ids),
             vec![("qstat", ids.to_vec())]
         );
+        // LSF polls with -a so DONE/EXIT rows stay visible; plain bjobs
+        // answers only for PEND/RUN jobs and a finished job would vanish.
         assert_eq!(
             status_invocations(&ClusterBackend::Lsf, &ids),
-            vec![("bjobs", ids.to_vec())]
+            vec![("bjobs", vec!["-a".to_string(), "101".to_string(), "202".to_string()])]
         );
         // SGE answers one job per -j.
         assert_eq!(

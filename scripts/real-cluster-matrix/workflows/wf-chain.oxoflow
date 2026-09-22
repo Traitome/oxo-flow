@@ -1,0 +1,76 @@
+# Chain matrix — dependency wiring, mixed resources, walltime passthrough,
+# GPU directives, and settlement evidence for one real scheduler backend.
+# Every rule records the executing host so cross-node scheduling is provable
+# from the artifacts alone.
+
+[workflow]
+name = "chain-matrix"
+version = "1.0.0"
+description = "Real-scheduler matrix: chain, walltime, gpu, settlement"
+
+[[rules]]
+name = "prep"
+input = ["input/reads.txt"]
+output = ["work/prep.txt"]
+shell = "hostname > work/prep.host; cp {input[0]} work/prep.txt"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[[rules]]
+name = "align_s1"
+input = ["work/prep.txt"]
+output = ["work/align.s1.out"]
+shell = "hostname > work/align.s1.host; echo s1-alignment > {output[0]}"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[[rules]]
+name = "align_s2"
+input = ["work/prep.txt"]
+output = ["work/align.s2.out"]
+shell = "hostname > work/align.s2.host; echo s2-alignment > {output[0]}"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[[rules]]
+name = "merge"
+input = [
+    "work/align.s1.out",
+    "work/align.s2.out",
+]
+output = ["work/merged.txt"]
+shell = "hostname > work/merge.host; cat {input[0]} {input[1]} > {output[0]}"
+
+[rules.resources]
+threads = 2
+memory = "2G"
+time_limit = "10m"
+
+[[rules]]
+name = "gpu_step"
+input = ["work/merged.txt"]
+output = ["work/gpu.done"]
+shell = "hostname > work/gpu.host; echo gpu-run > {output[0]}"
+
+[rules.resources]
+threads = 1
+gpu = 1
+
+[[rules]]
+name = "report"
+input = [
+    "work/merged.txt",
+    "work/gpu.done",
+]
+output = ["final/report.txt"]
+shell = "mkdir -p final; hostname > final/report.host; env | sort > final/report.env; cat {input[0]} {input[1]} > {output[0]}"
+
+[rules.resources]
+threads = 1
+memory = "1G"

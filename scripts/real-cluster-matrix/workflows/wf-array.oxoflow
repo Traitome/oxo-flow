@@ -1,0 +1,33 @@
+# Array matrix — array chunking at a small max_array_size, index mapping
+# (index.json), per-element logs, and whole-array completion gating the
+# gather rule. 10 scatter instances with max_array_size = 4 produce 3
+# scheduler array submissions (4+4+2).
+
+[workflow]
+name = "array-matrix"
+version = "1.0.0"
+description = "Real-scheduler matrix: array chunking + element mapping"
+
+[[values]]
+name = "chunk_id"
+values = ["s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09", "s10"]
+
+[[rules]]
+name = "chunk"
+input = ["data/{chunk_id}.fq"]
+output = ["chunks/{chunk_id}.out"]
+shell = "hostname > chunks/{chunk_id}.host; wc -c < {input[0]} > {output[0]}"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[[rules]]
+name = "gather"
+input = ["chunks/{chunk_id}.out"]
+output = ["final/counts.txt"]
+shell = "mkdir -p final; for f in chunks/*.out chunks/*.host; do echo \"$(basename $f): $(cat $f)\"; done > {output[0]}"
+
+[rules.resources]
+threads = 1
+memory = "1G"

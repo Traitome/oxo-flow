@@ -1,0 +1,10 @@
+# PBS cluster profile — chain matrix
+[cluster]
+backend       = "pbs"
+queue         = "workq"
+walltime      = "01:00:00"
+poll_interval = "2s"
+max_submitted = 20
+
+[config]
+matrix_backend = "pbs"

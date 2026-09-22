@@ -1,0 +1,17 @@
+# Version: 8.1.9
+#
+# Global configuration seeded via spooldefaults before the qmaster starts.
+conf_version           0
+mailer                 /bin/mail
+xterm                  none
+execd_spool_dir        /var/spool/gridengine/exec
+shell_start_mode       unix_behavior
+login_shells           sh,bash,csh,tcsh
+min_uid                0
+min_gid                0
+user_shell             /bin/bash
+gid_range              20000-20100
+max_aj_instances       2000
+max_aj_tasks           2000
+max_u_jobs             0
+max_jobs               0

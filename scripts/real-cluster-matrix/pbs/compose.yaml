@@ -1,0 +1,38 @@
+services:
+  master:
+    image: openpbs:23.06
+    hostname: pbs-master
+    container_name: pbs-master
+    volumes:
+      - ./shared:/work
+      - ./setup-master.sh:/opt/cluster/setup-master.sh:ro
+    environment:
+      MASTER_HOST: pbs-master
+      WORKER_HOSTS: pbs-exec1 pbs-exec2
+    command: ["bash", "/opt/cluster/setup-master.sh"]
+
+  exec1:
+    image: openpbs:23.06
+    hostname: pbs-exec1
+    container_name: pbs-exec1
+    depends_on:
+      - master
+    volumes:
+      - ./shared:/work
+      - ./setup-exec.sh:/opt/cluster/setup-exec.sh:ro
+    environment:
+      MASTER_HOST: pbs-master
+    command: ["bash", "/opt/cluster/setup-exec.sh"]
+
+  exec2:
+    image: openpbs:23.06
+    hostname: pbs-exec2
+    container_name: pbs-exec2
+    depends_on:
+      - master
+    volumes:
+      - ./shared:/work
+      - ./setup-exec.sh:/opt/cluster/setup-exec.sh:ro
+    environment:
+      MASTER_HOST: pbs-master
+    command: ["bash", "/opt/cluster/setup-exec.sh"]
