@@ -4,8 +4,9 @@
 //! Timings are reported for the full `parse → validate → prepare`
 //! lifecycle at increasing workflow sizes (1–10 000 rules).
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use oxo_flow_core::config::{Ready, WorkflowConfig, WorkflowState};
+use std::hint::black_box;
 
 /// Generate a TOML workflow with `count` sequential rules and optional pairs.
 fn make_workflow_toml(count: usize, with_pairs: bool) -> String {

@@ -18,9 +18,10 @@
 //! Results are reported as average wall-clock time per iteration and,
 //! where applicable, throughput in rules/second.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::rule::Rule;
+use std::hint::black_box;
 
 // ---------------------------------------------------------------------------
 // Helper: build rules with a given topology

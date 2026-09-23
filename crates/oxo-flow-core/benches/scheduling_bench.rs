@@ -1,9 +1,10 @@
 //! Schedule resolution benchmarks.
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use oxo_flow_core::dag::WorkflowDag;
 use oxo_flow_core::executor::{JobRecord, JobStatus};
 use oxo_flow_core::rule::Rule;
 use oxo_flow_core::scheduler::SchedulerState;
+use std::hint::black_box;
 
 fn chain_rules(count: usize) -> Vec<Rule> {
     let mut rules = Vec::with_capacity(count);
