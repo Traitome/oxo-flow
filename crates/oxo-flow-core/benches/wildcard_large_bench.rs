@@ -4,8 +4,9 @@
 
 use std::collections::HashMap;
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oxo_flow_core::wildcard;
+use std::hint::black_box;
 
 fn bench_wildcard_large(c: &mut Criterion) {
     let mut group = c.benchmark_group("wildcard_large");

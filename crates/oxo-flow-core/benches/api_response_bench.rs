@@ -2,8 +2,9 @@
 //!
 //! Goal: p50 <5ms, p99 <50ms for typical API responses.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
+use std::hint::black_box;
 
 #[derive(Serialize, Deserialize)]
 struct RunStatusResponse {
