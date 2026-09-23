@@ -71,7 +71,10 @@ pub fn config_value_string(value: &toml::Value) -> String {
 pub fn snapshot_value(value: &toml::Value, sensitive: bool) -> String {
     let canonical = config_value_string(value);
     if sensitive {
-        format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(canonical.as_bytes()))
+        )
     } else {
         canonical
     }
@@ -328,7 +331,7 @@ fn rule_fingerprint_impl(
     let env = toml::to_string(&rule.environment).unwrap_or_default();
     add("environment", &env);
 
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// SHA-256 fingerprint of a reference definition plus the config values its
@@ -403,7 +406,7 @@ pub fn reference_fingerprint(
         }
     }
 
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// Outcome of comparing the checkpoint against the current workflow + config.

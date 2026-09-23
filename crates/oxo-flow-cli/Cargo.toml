@@ -40,6 +40,7 @@ glob = { workspace = true }
 filetime = "0.2.29"
 oxo-license = "0.1.1"
 sha2 = { workspace = true }
+hex = { workspace = true }
 tar = "0.4"
 zstd = { version = "0.13", default-features = false }
 flate2 = "1.0"

@@ -535,7 +535,7 @@ fn compute_sha256(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Generate conda lockfiles for collected environment YAML files.

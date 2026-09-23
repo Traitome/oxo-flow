@@ -28,7 +28,7 @@ use std::time::Duration;
 use crate::error::{OxoFlowError, Result};
 use crate::storage::{RemoteStat, StorageBackend, StoragePath};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use md5::Digest;
 use sha1::Sha1;
 

@@ -679,7 +679,7 @@ pub fn compute_file_checksum(path: &Path) -> Result<String> {
         hasher.update(&buffer[..n]);
     }
     let hash = hasher.finalize();
-    Ok(format!("sha256:{:x}", hash))
+    Ok(format!("sha256:{}", hex::encode(hash)))
 }
 
 /// mtime in nanoseconds since the UNIX epoch, for change detection.

@@ -167,7 +167,7 @@ fn compute_keyed_sha256(key: &str, message: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hasher.update(message.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 // ---------------------------------------------------------------------------
