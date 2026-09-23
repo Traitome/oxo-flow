@@ -346,12 +346,17 @@ impl EnvironmentBackend for CondaBackend {
         // Neither arm redirects stderr: conda's solver progress is the only
         // window into a cold bootstrap, and when create fails the engine
         // must report create's root cause, not the fallback update's.
-        // `create || update --prune` runs after the executor's verify step
-        // already found the env missing/broken, so the "already exists"
-        // noise the redirect used to hide is rare.
+        // `create || update` runs after the executor's verify step already
+        // found the env missing/broken, so the "already exists" noise the
+        // redirect used to hide is rare. No `--prune` (issue #429): update
+        // --prune re-resolves every dependency and deletes packages that
+        // the new spec no longer pins — live evidence: it removed
+        // `lib/R/bin/exec/R` from pre-built bioconda R 4.4 envs (deseq2,
+        // summarizedexperiment), breaking every R call in the env. The
+        // fallback only needs to complete the spec; additive is enough.
         let env_name = conda_env_name_from_spec("conda", spec)?;
         Ok(format!(
-            "conda env create -n {env_name} -f {spec} || conda env update -n {env_name} -f {spec} --prune"
+            "conda env create -n {env_name} -f {spec} || conda env update -n {env_name} -f {spec}"
         ))
     }
 
@@ -386,7 +391,7 @@ impl CondaBackend {
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
             Ok(format!(
-                "conda env create -p {prefix} -f {spec} || conda env update -p {prefix} -f {spec} --prune"
+                "conda env create -p {prefix} -f {spec} || conda env update -p {prefix} -f {spec}"
             ))
         } else {
             self.setup_command(spec)
@@ -737,7 +742,7 @@ impl MambaBackend {
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
             Ok(format!(
-                "{} env create -p {prefix} -f {spec} || {} env update -p {prefix} -f {spec} --prune",
+                "{} env create -p {prefix} -f {spec} || {} env update -p {prefix} -f {spec}",
                 self.binary, self.binary
             ))
         } else {
@@ -836,10 +841,11 @@ impl EnvironmentBackend for MambaBackend {
 
     fn setup_command(&self, spec: &str) -> Result<String> {
         // Same name-consistency fix as CondaBackend (see there): mamba 2.x
-        // refuses nameless YAMLs without `-n`.
+        // refuses nameless YAMLs without `-n`. No `--prune` (issue #429,
+        // see CondaBackend::setup_command).
         let env_name = conda_env_name_from_spec("mamba", spec)?;
         Ok(format!(
-            "{} env create -n {env_name} -f {spec} || {} env update -n {env_name} -f {spec} --prune",
+            "{} env create -n {env_name} -f {spec} || {} env update -n {env_name} -f {spec}",
             self.binary, self.binary
         ))
     }
@@ -2251,9 +2257,13 @@ mod tests {
         let cmd = backend.setup_command("envs/qc.yaml").unwrap();
         // `-n <stem>` keeps setup consistent with `conda run -n <stem>`
         // wrapping — nameless YAMLs (nf-core style) no longer fail setup
-        // with "Unable to determine environment" (conda 25+).
+        // with "Unable to determine environment" (conda 25+). No `--prune`
+        // on the update fallback (issue #429): pruning re-resolves the
+        // whole dependency graph and deleted `lib/R/bin/exec/R` from
+        // pre-built bioconda R envs.
         assert!(cmd.contains("conda env create -n qc -f envs/qc.yaml"));
-        assert!(cmd.contains("conda env update -n qc -f envs/qc.yaml --prune"));
+        assert!(cmd.contains("conda env update -n qc -f envs/qc.yaml"));
+        assert!(!cmd.contains("--prune"));
     }
 
     #[test]
@@ -3365,7 +3375,8 @@ mod tests {
             cmd.contains("conda env create -p .oxo-conda -f envs/qc.yaml"),
             "expected -p prefix form, got: {cmd}"
         );
-        assert!(cmd.contains("conda env update -p .oxo-conda -f envs/qc.yaml --prune"));
+        assert!(cmd.contains("conda env update -p .oxo-conda -f envs/qc.yaml"));
+        assert!(!cmd.contains("--prune"), "issue #429: no --prune: {cmd}");
     }
 
     #[test]
