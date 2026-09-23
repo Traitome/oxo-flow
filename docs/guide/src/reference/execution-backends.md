@@ -130,9 +130,15 @@ run's `force_rules` — the same bypass set the local executor receives, since
 the cluster path runs. `tests/cluster_run_profile.rs` pins that combination to
 what the local executor actually executes from identical state.
 
-Real-cluster validation (SLURM scheduler matrix, version quirks) is tracked
-in the cluster testing checklist; job arrays and accounting-backed resource
-feedback have landed, re-attach to in-flight jobs is a follow-up.
+Real-scheduler validation: SLURM is live-verified end-to-end (including
+GPU). SGE (Son of Grid Engine 8.1.9) and OpenPBS 23.06 are verified on
+containerized real schedulers — master + 2 exec hosts built from source —
+with the chain and array matrices passing 6/6 and 20/20 per backend
+(issue #356). The harness, workflows, and runners live in
+`scripts/real-cluster-matrix/`. LSF cannot be stood up the same way (the
+community edition is IBMid-gated); its directive and status semantics are
+cross-checked against IBM's bsub reference and the jokergoo/bsub client.
+Re-attach to in-flight jobs is a follow-up.
 
 Accounting is read once per job as it settles, not once per poll, and feeds
 both the run directory and the checkpoint benchmarks — see

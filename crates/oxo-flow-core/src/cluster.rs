@@ -261,6 +261,37 @@ pub fn status_command(backend: &ClusterBackend) -> &'static str {
 // Private helpers for each backend
 // ---------------------------------------------------------------------------
 
+/// The extra placement clause for LSF's `-R`: oxo-flow's `threads` are
+/// shared-memory threads, so multi-threaded jobs must stay on one host
+/// instead of letting LSF spread `-n` slots across machines. Empty for
+/// single-threaded jobs, where spanning is meaningless. Leading space
+/// included so it can be appended straight into an existing `-R` string.
+fn lsf_span_clause(rule: &Rule) -> String {
+    if rule.effective_threads() > 1 {
+        " span[hosts=1]".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Parse a memory figure into KB for LSF's `-M`/`rusage[mem=]`, whose
+/// documented unit set is KB/MB/GB (default KB). Accepts `K`/`M`/`G`/`T`
+/// with or without the trailing `B`, case-insensitive; a bare number is
+/// already KB. `None` when the text is not a recognisable figure.
+fn lsf_mem_kb(mem: &str) -> Option<u64> {
+    let mem = mem.trim();
+    let split = mem.find(|c: char| !c.is_ascii_digit()).unwrap_or(mem.len());
+    let (digits, unit) = mem.split_at(split);
+    let multiplier = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "k" | "kb" => 1,
+        "m" | "mb" => 1024,
+        "g" | "gb" => 1024 * 1024,
+        "t" | "tb" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    digits.trim().parse::<u64>().ok()?.checked_mul(multiplier)
+}
+
 /// Convert duration string ("24h", "30m", "2d") to scheduler format ("DD-HH:MM:SS" or "HH:MM:SS")
 fn format_walltime_for_scheduler(time_str: &str) -> String {
     let time_str = time_str.trim();
@@ -568,15 +599,41 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     lines.push(format!("#BSUB -J {}", rule.name));
     lines.push(format!("#BSUB -n {}", rule.effective_threads()));
 
+    let span = lsf_span_clause(rule);
     if let Some(mem) = rule.effective_memory() {
-        lines.push(format!("#BSUB -M {mem}"));
+        // -M's documented unit set is KB/MB/GB with KB as the default; the
+        // bare "4G" form oxo-flow stores internally is not a valid mem_spec,
+        // so the memory travels as an explicit KB figure plus the matching
+        // rusage (which is what places the job on a host with room). LSF
+        // reads one -R string, so the span clause rides along in it.
+        match lsf_mem_kb(mem) {
+            Some(kb) => {
+                lines.push(format!("#BSUB -R 'rusage[mem={kb}]{span}'"));
+                lines.push(format!("#BSUB -M {kb}"));
+            }
+            None => {
+                lines.push(format!("#BSUB -M {mem}"));
+                if !span.is_empty() {
+                    lines.push(format!("#BSUB -R '{}'", span.trim_start()));
+                }
+            }
+        }
+    } else if !span.is_empty() {
+        lines.push(format!("#BSUB -R '{}'", span.trim_start()));
     }
 
-    // GPU handling for LSF
+    // Account maps to LSF's project (-P), matching -A on PBS and --account
+    // on SLURM.
+    if let Some(account) = &config.account {
+        lines.push(format!("#BSUB -P {account}"));
+    }
+
+    // GPU handling for LSF: -gpu expects a quoted run-options string
+    // (`num=<count>[:mode=…]`), not a bare count.
     if let Some(gpu_count) = rule.resources.gpu
         && gpu_count_requested(gpu_count)
     {
-        lines.push(format!("#BSUB -gpu {}", gpu_count));
+        lines.push(format!("#BSUB -gpu \"num={gpu_count}\""));
     }
 
     // Per-rule walltime (override config walltime)
@@ -866,7 +923,7 @@ mod tests {
         let config = ClusterJobConfig {
             backend: ClusterBackend::Lsf,
             queue: Some("short".to_string()),
-            account: None,
+            account: Some("proj01".to_string()),
             walltime: Some("01:00".to_string()),
             extra_args: vec![],
         };
@@ -880,12 +937,58 @@ mod tests {
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#BSUB -J samtools_sort"));
         assert!(script.contains("#BSUB -n 2"));
-        assert!(script.contains("#BSUB -M 4G"));
+        // threads=2 is shared-memory SMP: the -R string must keep the job on
+        // one host (span[hosts=1]) next to the memory reservation.
+        assert!(
+            script.contains("#BSUB -R 'rusage[mem=4194304] span[hosts=1]'"),
+            "{script}"
+        );
+        // Account maps to LSF's project (-P), like -A on PBS and --account
+        // on SLURM.
+        assert!(script.contains("#BSUB -P proj01"), "{script}");
+        // LSF -M takes a KB figure (documented units: KB/MB/GB, default KB);
+        // a bare "4G" is not a valid mem_spec. Scheduling placement needs the
+        // matching rusage (plus the single-host span), so both go out.
+        assert!(
+            script.contains("#BSUB -R 'rusage[mem=4194304] span[hosts=1]'"),
+            "{script}"
+        );
+        assert!(script.contains("#BSUB -M 4194304"), "{script}");
         assert!(script.contains("#BSUB -W 01:00"));
         assert!(script.contains("#BSUB -q short"));
         assert!(script.contains("#BSUB -o logs/samtools_sort.out"));
         assert!(script.contains("#BSUB -e logs/samtools_sort.err"));
         assert!(script.contains("samtools sort in.bam -o out.bam"));
+    }
+
+    #[test]
+    fn lsf_memory_falls_back_verbatim_when_unparseable() {
+        let rule = make_rule("odd_job", 1, Some("lots"));
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Lsf, &rule, "echo hi", &config);
+        assert!(script.contains("#BSUB -M lots"), "{script}");
+        assert!(!script.contains("rusage"), "{script}");
+    }
+
+    #[test]
+    fn lsf_mem_kb_parses_every_documented_unit_form() {
+        // KB is the default unit, so a bare figure is already KB.
+        assert_eq!(super::lsf_mem_kb("4096"), Some(4096));
+        assert_eq!(super::lsf_mem_kb("4G"), Some(4 * 1024 * 1024));
+        assert_eq!(super::lsf_mem_kb("4g"), Some(4 * 1024 * 1024));
+        assert_eq!(super::lsf_mem_kb("2GB"), Some(2 * 1024 * 1024));
+        assert_eq!(super::lsf_mem_kb("1500M"), Some(1500 * 1024));
+        assert_eq!(super::lsf_mem_kb("512kb"), Some(512));
+        assert_eq!(super::lsf_mem_kb("1T"), Some(1024 * 1024 * 1024));
+        // Not a figure.
+        assert_eq!(super::lsf_mem_kb("lots"), None);
+        assert_eq!(super::lsf_mem_kb(""), None);
     }
 
     #[test]
@@ -1095,7 +1198,8 @@ mod tests {
         let script =
             generate_submit_script(&ClusterBackend::Lsf, &rule, "python train.py", &config);
 
-        assert!(script.contains("#BSUB -gpu 2"));
+        // -gpu takes a quoted run-options string (num=<n>), not a bare count.
+        assert!(script.contains("#BSUB -gpu \"num=2\""), "{script}");
     }
 
     #[test]

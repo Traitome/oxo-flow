@@ -1,0 +1,39 @@
+services:
+  master:
+    image: sge:8.1.9
+    hostname: sge-master
+    container_name: sge-master
+    volumes:
+      - ./shared:/work
+      - ./setup-master.sh:/opt/cluster/setup-master.sh:ro
+      - ./master-config:/opt/cluster/master-config:ro
+    environment:
+      MASTER_HOST: sge-master
+      WORKER_HOSTS: sge-exec1 sge-exec2
+    command: ["bash", "/opt/cluster/setup-master.sh"]
+
+  exec1:
+    image: sge:8.1.9
+    hostname: sge-exec1
+    container_name: sge-exec1
+    depends_on:
+      - master
+    volumes:
+      - ./shared:/work
+      - ./setup-exec.sh:/opt/cluster/setup-exec.sh:ro
+    environment:
+      MASTER_HOST: sge-master
+    command: ["bash", "/opt/cluster/setup-exec.sh"]
+
+  exec2:
+    image: sge:8.1.9
+    hostname: sge-exec2
+    container_name: sge-exec2
+    depends_on:
+      - master
+    volumes:
+      - ./shared:/work
+      - ./setup-exec.sh:/opt/cluster/setup-exec.sh:ro
+    environment:
+      MASTER_HOST: sge-master
+    command: ["bash", "/opt/cluster/setup-exec.sh"]

@@ -1,0 +1,11 @@
+# PBS cluster profile — array matrix (chunking at 4)
+[cluster]
+backend        = "pbs"
+queue          = "workq"
+walltime       = "01:00:00"
+poll_interval  = "2s"
+max_submitted  = 20
+max_array_size = 4
+
+[config]
+matrix_backend = "pbs"

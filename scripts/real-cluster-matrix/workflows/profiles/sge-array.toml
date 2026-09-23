@@ -1,0 +1,11 @@
+# SGE cluster profile — array matrix (chunking at 4)
+[cluster]
+backend        = "sge"
+queue          = "all.q"
+walltime       = "1h"
+poll_interval  = "2s"
+max_submitted  = 20
+max_array_size = 4
+
+[config]
+matrix_backend = "sge"

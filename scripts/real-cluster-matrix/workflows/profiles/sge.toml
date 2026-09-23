@@ -1,0 +1,10 @@
+# SGE cluster profile — chain matrix
+[cluster]
+backend       = "sge"
+queue         = "all.q"
+walltime      = "1h"
+poll_interval = "2s"
+max_submitted = 20
+
+[config]
+matrix_backend = "sge"
