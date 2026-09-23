@@ -3946,7 +3946,7 @@ per task; follow the links for details on demand.</p>
 </tr>
 <tr>
 <td><strong>This skill (site)</strong></td>
-<td>https://traitome.github.io/oxo-flow/dev/SKILL/ (moves to <code>/SKILL/</code> at the next release; the root serves the newest tagged release)</td>
+<td>https://traitome.github.io/oxo-flow/latest/SKILL/ (newest tagged release; <code>/dev/SKILL/</code> tracks main)</td>
 </tr>
 <tr>
 <td>This skill (raw)</td>
@@ -3986,7 +3986,7 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
 </ul>
 <h3 id="1-plan-the-workflow-shape">1. Plan the Workflow Shape<a class="headerlink" href="#1-plan-the-workflow-shape" title="Permanent link">#</a></h3>
 <ul>
-<li>Prefer an existing base: the docs gallery (16 live-tested workflows),
+<li>Prefer an existing base: the docs gallery (validated example workflows),
   the community library, <code>examples/gallery</code>. Write new only when no base
   matches.</li>
 <li>Choose tools via the knowledge bases (see Link Index); containers must be
@@ -4031,14 +4031,7 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
 <h3 id="5-qc-review-independent">5. QC Review (independent)<a class="headerlink" href="#5-qc-review-independent" title="Permanent link">#</a></h3>
 <ul>
 <li>Outputs exist, non-empty, plausible; <code>oxo-flow provenance verify
-  .oxo-flow/checkpoint.json</code> passes; spot-check logs for silent errors.
-  (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
-  existing files as missing — fall back to direct checksum comparison against
-  the checkpoint, or upgrade oxo-flow. From the release after 0.17.1,
-  transform chunk intermediates deleted by <code>cleanup = true</code> are reported as
-  <code>cleaned (by design)</code> — a separate bucket from <code>missing</code>, never a failure;
-  checkpoints written by older binaries still list them under <code>checksums</code>
-  and report them missing after cleanup.)</li>
+  .oxo-flow/checkpoint.json</code> passes; spot-check logs for silent errors.</li>
 <li>Judge against the Stage 0 success criteria. Performed by an evaluator
   role — <strong>never the author of the workflow</strong>.</li>
 <li>Fail → back to Stage 2 with written findings.</li>
@@ -4136,7 +4129,7 @@ their own work).</p>
 </tr>
 <tr>
 <td>Reference</td>
-<td><code>reference/architecture</code>, <code>gallery/</code> (16 workflows), <code>tutorials/custom-scripts</code>, <code>tutorials/environment-management</code></td>
+<td><code>reference/architecture</code>, <code>gallery/</code>, <code>tutorials/custom-scripts</code>, <code>tutorials/environment-management</code></td>
 </tr>
 <tr>
 <td>Knowledge bases (raw)</td>
