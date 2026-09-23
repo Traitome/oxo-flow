@@ -518,12 +518,14 @@ pub async fn list_runs(
         format!(" WHERE {}", where_clauses.join(" AND "))
     };
 
+    // where_sql only ever contains the static fragments pushed above
+    // (column names and `?` placeholders) — all user input rides in `binds`.
     // Fetch limit+1 to detect a next page without a COUNT(*).
     let sql = format!(
         "SELECT * FROM runs{where_sql} ORDER BY created_at DESC LIMIT {}",
         limit + 1
     );
-    let mut query = sqlx::query_as::<_, models::RunRow>(&sql);
+    let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
     for bind in &binds {
         query = query.bind(bind);
     }
@@ -547,7 +549,7 @@ pub async fn list_runs(
     // Total = number of rows matching the filters (no LIMIT). Bounded by
     // SQLite's rowid; fine for a per-deployment run log.
     let count_sql = format!("SELECT COUNT(*) FROM runs{where_sql}");
-    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
     for bind in &binds {
         count_query = count_query.bind(bind);
     }
