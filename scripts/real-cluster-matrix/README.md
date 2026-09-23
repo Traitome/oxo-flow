@@ -63,4 +63,52 @@ The PBS matrix is the same shape (`pbs/`, profiles `pbs*.toml`, evidence in
   IBMid-gated and its historical direct links are dead. Its checklist items
   were instead cross-checked against the jokergoo/bsub reference client and
   IBM documentation, producing the `bjobs -a`, KB-memory (`-M`/`rusage`),
-  and `-gpu "num=N"` fixes in `crates/oxo-flow-core` (issue #356).
+  and `-gpu "num=N"` fixes in `crates/oxo-flow-core` (issue #356). A second
+  audit round added the suspend-state mapping (`USUSP` pending vs
+  `PSUSP`/`SSUSP`/`SUSP` running), `account` → `-P`, `span[hosts=1]` for
+  multi-thread jobs, and `base[index]` array element ids.
+
+## Setup lessons worth keeping (2026-09-22/23 campaign)
+
+SGE (SoGE 8.1.9 source build — the Debian gridengine packages segfault in
+their postinst inside containers on 22.04 AND 24.04, `--privileged` does
+not help):
+
+- classic spooling params are `"<common>;<spool>"` — two absolute paths
+  joined by a semicolon (`spool_classic_create_context`); there is no
+  `-Acx`/`-scx`/`-Mcx` in 8.1.9, so the consumable `gpu` complex is seeded
+  as a centry file via `spooldefaults complexes` before the qmaster starts
+- the queue template rejects the build-in defaults: `qtype BATCH`,
+  `ckpt_list`, `pe_list`, `rerun`, `slots`, `tmpdir`, `notify`,
+  `user_lists`/`xuser_lists`, `subordinate_list`, `complex_values`,
+  `processors`, `min_cpu_interval` are all REQUIRED; `resume_interval` does
+  not exist (it is `suspend_method`/`resume_method`)
+- exec-host templates (`qconf -Ae file`) take a FILE, not stdin, and
+  reject `load_values` (that field belongs to the execd)
+- the global configuration must carry `gid_range`, or the execd fails
+  every job with "can not parse gid_range" and the queue goes to E state
+- register exec hosts only after the worker containers' compose DNS
+  aliases resolve; `sge_execd` daemonizes, so the container needs a
+  keepalive process after it
+
+OpenPBS 23.06 source build:
+
+- configure needs X11/Tcl/Tk headers, libdb, libpq, libical, libxml2 and
+  swig; python 3.12 removed `Py_SetProgramName` and `eval.h` which
+  Libpython still uses (guard + drop include — see the Dockerfile)
+- the datastore is an embedded postgres: `psql` must be on PATH and
+  `/etc/init.d/pbs start` runs `pbs_habitat` to initialize it — never
+  pre-create `PBS_HOME/datastore` by hand (pg_ctl then refuses it)
+- root cannot submit by default (`acl_roots`), uid mapping needs
+  `flatten_files`, and settlement-by-`qstat -x -f` needs
+  `job_history_enable = true`
+- `PBS_VERSION` in pbs.conf must match `qstat --version` exactly or
+  `pbs_habitat` refuses to initialize ("Version mismatch")
+- `pbs_mom` daemonizes; same keepalive pattern as the SGE execd
+
+Operational:
+
+- register exec hosts only after worker DNS aliases exist; run ONE
+  oxo-flow per run directory (two concurrent runs race on the run dir and
+  the lock); drive detached runs with an rc-marker file — a foreground
+  `docker exec` dies with the ssh session that started it
