@@ -5030,7 +5030,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>E011</code></td>
-<td>A rule command matches a dangerous shell pattern (destructive command class)</td>
+<td>A rule command matches a dangerous shell pattern (destructive command class). Recursive deletions (<code>rm -rf</code>/<code>rm -r</code>) are only blocked when the target resolves OUTSIDE the run workdir — pipelines may delete their own outputs (see Security model)</td>
 </tr>
 <tr>
 <td><code>E013</code></td>

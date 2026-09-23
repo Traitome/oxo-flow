@@ -3915,7 +3915,7 @@
 <tbody>
 <tr>
 <td>Recursive deletion</td>
-<td><code>rm -rf /</code>, <code>rm -rf ~</code>, <code>rm -r /</code></td>
+<td><code>rm -rf /</code>, <code>rm -rf ~</code>, <code>rm -r /</code> — and any <code>rm -rf</code>/<code>rm -r</code> target resolving <strong>outside</strong> the run workdir</td>
 <td>E011</td>
 </tr>
 <tr>
@@ -3950,6 +3950,12 @@
 </tr>
 </tbody>
 </table>
+<p>Recursive-deletion targets are judged after rendering: <code>rm -rf {config.out_dir}/...</code>
+with an absolute <code>out_dir</code> is <strong>allowed</strong> when the resolved path lies inside the
+run workdir (pipelines legitimately clean up their own outputs), while root,
+home (<code>~</code>), <code>--no-preserve-root</code> forms, and any target outside the workdir
+remain hard errors. The static lint (E011) still flags raw <code>rm -rf /</code>-style
+templates regardless.</p>
 <h3 id="warning-patterns-non-blocking">Warning Patterns (Non-Blocking)<a class="headerlink" href="#warning-patterns-non-blocking" title="Permanent link">#</a></h3>
 <p>These emit <strong>warnings</strong> but allow execution (common in bioinformatics scripts):</p>
 <table>
