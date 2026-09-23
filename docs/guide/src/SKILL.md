@@ -21,7 +21,7 @@ per task; follow the links for details on demand.
 | Canonical entry points | URL |
 |---|---|
 | Documentation | https://traitome.github.io/oxo-flow/ |
-| **This skill (site)** | https://traitome.github.io/oxo-flow/dev/SKILL/ (moves to `/SKILL/` at the next release; the root serves the newest tagged release) |
+| **This skill (site)** | https://traitome.github.io/oxo-flow/latest/SKILL/ (newest tagged release; `/dev/SKILL/` tracks main) |
 | This skill (raw) | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/guide/src/SKILL.md |
 | Repository (dev context: AGENTS.md) | https://github.com/Traitome/oxo-flow |
 | Workflow JSON Schema | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/schema/oxoflow-v1.schema.json |
@@ -47,7 +47,7 @@ Seven stages, three approval gates. Every stage ends with a
 
 ### 1. Plan the Workflow Shape
 
-- Prefer an existing base: the docs gallery (16 live-tested workflows),
+- Prefer an existing base: the docs gallery (validated example workflows),
   the community library, `examples/gallery`. Write new only when no base
   matches.
 - Choose tools via the knowledge bases (see Link Index); containers must be
@@ -93,13 +93,6 @@ Seven stages, three approval gates. Every stage ends with a
 
 - Outputs exist, non-empty, plausible; `oxo-flow provenance verify
   .oxo-flow/checkpoint.json` passes; spot-check logs for silent errors.
-  (On releases ≤ 0.14, verify mis-resolves relative output paths and reports
-  existing files as missing — fall back to direct checksum comparison against
-  the checkpoint, or upgrade oxo-flow. From the release after 0.17.1,
-  transform chunk intermediates deleted by `cleanup = true` are reported as
-  `cleaned (by design)` — a separate bucket from `missing`, never a failure;
-  checkpoints written by older binaries still list them under `checksums`
-  and report them missing after cleanup.)
 - Judge against the Stage 0 success criteria. Performed by an evaluator
   role — **never the author of the workflow**.
 - Fail → back to Stage 2 with written findings.
@@ -158,7 +151,7 @@ Progressive disclosure — open only what the current stage needs.
 | Execute | `how-to/run-on-cluster`, `commands/run`, `commands/cluster`, `commands/resume`, `commands/status` |
 | QC | `commands/validate`, `commands/dry-run`, `commands/lint`, `commands/debug`, `commands/graph`, `how-to/troubleshooting` |
 | Delivery | `how-to/generate-reports`, `commands/report`, `commands/provenance`, `commands/export`, `reference/versioning`, `reference/reporting-system` |
-| Reference | `reference/architecture`, `gallery/` (16 workflows), `tutorials/custom-scripts`, `tutorials/environment-management` |
+| Reference | `reference/architecture`, `gallery/`, `tutorials/custom-scripts`, `tutorials/environment-management` |
 | Knowledge bases (raw) | `crates/oxo-flow-ai/src/knowledge/bioconda_tools.jsonl`, `skills_index.jsonl`, `nfcore_modules.jsonl`, `pipeline_graph.jsonl` |
 
 Docs links resolve under `https://traitome.github.io/oxo-flow/latest/<path>`

@@ -167,6 +167,12 @@ The `oxo-flow graph` command outputs workflows in [DOT format](https://graphviz.
     sudo apt install graphviz
     ```
 
+=== "Linux (RHEL/Fedora/CentOS)"
+
+    ```bash
+    sudo dnf install graphviz   # or: sudo yum install graphviz
+    ```
+
 === "Conda"
 
     ```bash
