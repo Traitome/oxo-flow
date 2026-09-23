@@ -14,13 +14,20 @@ These patterns **halt execution** — the workflow will not run:
 
 | Category | Patterns Blocked | Error Code |
 |----------|-----------------|------------|
-| Recursive deletion | `rm -rf /`, `rm -rf ~`, `rm -r /` | E011 |
+| Recursive deletion | `rm -rf /`, `rm -rf ~`, `rm -r /` — and any `rm -rf`/`rm -r` target resolving **outside** the run workdir | E011 |
 | Filesystem destruction | `mkfs`, `mkswap`, `dd` to `/dev/sd*` | E011 |
 | Permission escalation | `chmod 777 /`, `chmod -R 777` | E011 |
 | Block device writes | `> /dev/sd*`, `>> /dev/sd*` | E011 |
 | Remote code execution | `curl/wget ... \| sh/bash/dash` | E011 |
 | Fork bombs | `() { :\|:& };:` patterns | E011 |
 | Data destruction | `dd if=/dev/zero/random/urandom` | E011 |
+
+Recursive-deletion targets are judged after rendering: `rm -rf {config.out_dir}/...`
+with an absolute `out_dir` is **allowed** when the resolved path lies inside the
+run workdir (pipelines legitimately clean up their own outputs), while root,
+home (`~`), `--no-preserve-root` forms, and any target outside the workdir
+remain hard errors. The static lint (E011) still flags raw `rm -rf /`-style
+templates regardless.
 
 ### Warning Patterns (Non-Blocking)
 

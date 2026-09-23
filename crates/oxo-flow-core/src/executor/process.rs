@@ -28,7 +28,7 @@ pub fn rule_report_caption(rule: &Rule, workdir: &Path) -> Option<String> {
 
 use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
-    sanitize_shell_command, validate_path_safety, validate_shell_safety,
+    sanitize_shell_command, validate_path_safety, validate_shell_safety_in_workdir,
     validate_wildcard_injection,
 };
 
@@ -1630,7 +1630,10 @@ impl LocalExecutor {
         // spawns (issue #276).
         for cmd in &resolved_commands {
             validate_instance_bindings(cmd, wildcard_values)?;
-            validate_shell_safety(cmd)?;
+            // Workdir-aware check (issue #428): `rm -rf <workdir>/...` with an
+            // absolute {config.out_dir} is a legitimate output cleanup idiom;
+            // deletions outside the workdir stay hard errors.
+            validate_shell_safety_in_workdir(cmd, &self.config.workdir)?;
             for warning in sanitize_shell_command(cmd) {
                 tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
             }
@@ -1850,7 +1853,7 @@ impl LocalExecutor {
                     },
                 )
             };
-            if let Err(e) = validate_shell_safety(&rendered) {
+            if let Err(e) = validate_shell_safety_in_workdir(&rendered, &self.config.workdir) {
                 // Nothing ran yet — drop the empty scratch dir rather than
                 // leaking one per attempt (the lifecycle contract: no
                 // leftover dirs on paths where the shell never started).
@@ -2398,8 +2401,12 @@ impl LocalExecutor {
 
                 // Apply shell safety checks in dry-run mode so dangerous
                 // commands are visible to users before actual execution.
+                // Workdir-aware (issue #428) so absolute in-workdir cleanups
+                // don't produce spurious warnings.
                 if let Some(ref cmd) = wrapped {
-                    if let Err(e) = validate_shell_safety(cmd) {
+                    if let Err(e) =
+                        validate_shell_safety_in_workdir(cmd, &self.config.workdir)
+                    {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(cmd) {
@@ -2408,7 +2415,9 @@ impl LocalExecutor {
                 }
                 // Also check the raw command if no wrapped version
                 if let Some(ref raw_cmd) = command {
-                    if let Err(e) = validate_shell_safety(raw_cmd) {
+                    if let Err(e) =
+                        validate_shell_safety_in_workdir(raw_cmd, &self.config.workdir)
+                    {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(raw_cmd) {

