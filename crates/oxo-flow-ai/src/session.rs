@@ -164,9 +164,7 @@ impl SessionMessage {
         } else {
             msg.content.clone()
         };
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(msg.content.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = hex::encode(sha2::Sha256::digest(msg.content.as_bytes()));
 
         Self {
             role,

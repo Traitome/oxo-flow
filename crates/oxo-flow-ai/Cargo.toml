@@ -23,6 +23,7 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Async trait support
 async-trait = "0.1"

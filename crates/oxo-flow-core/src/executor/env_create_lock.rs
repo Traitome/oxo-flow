@@ -67,7 +67,7 @@ fn lock_timeout() -> Duration {
 /// a re-typed copy of it.
 fn lock_path_for(dir: &Path, key: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
-    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let digest = hex::encode(Sha256::digest(key.as_bytes()));
     dir.join(format!("env-{}.lock", &digest[..16]))
 }
 

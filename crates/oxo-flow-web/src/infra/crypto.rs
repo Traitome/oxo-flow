@@ -26,7 +26,7 @@ fn encrypt_with(key: &[u8; 32], plain: &str) -> String {
     let cipher = Aes256Gcm::new(key.into());
     let nonce_bytes: [u8; 12] = Generate::generate();
     let ct = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), plain.as_bytes())
+        .encrypt(&Nonce::from(nonce_bytes), plain.as_bytes())
         .expect("AES-GCM encryption cannot fail for valid inputs");
     format!("{PREFIX}{}:{}", B64.encode(nonce_bytes), B64.encode(ct))
 }
@@ -34,11 +34,11 @@ fn encrypt_with(key: &[u8; 32], plain: &str) -> String {
 fn decrypt_with(key: &[u8; 32], stored: &str) -> Option<String> {
     let body = stored.strip_prefix(PREFIX)?;
     let (nonce_b64, ct_b64) = body.split_once(':')?;
-    let nonce = B64.decode(nonce_b64).ok()?;
+    let nonce: [u8; 12] = B64.decode(nonce_b64).ok()?.try_into().ok()?;
     let ct = B64.decode(ct_b64).ok()?;
     let cipher = Aes256Gcm::new(key.into());
     cipher
-        .decrypt(Nonce::from_slice(&nonce), ct.as_ref())
+        .decrypt(&Nonce::from(nonce), ct.as_ref())
         .ok()
         .and_then(|plain| String::from_utf8(plain).ok())
 }
