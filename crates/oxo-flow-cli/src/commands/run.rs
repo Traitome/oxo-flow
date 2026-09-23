@@ -443,10 +443,16 @@ const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
 const REMOVED_RUN_FLAGS: &[(&str, &str)] = &[("sample", "--samples")];
 
 /// Validate a config value against its ConfigDef declaration.
+///
+/// `from_cli` distinguishes an EXPLICIT user-provided value from a
+/// workflow-declared default: an empty string from the CLI is a legitimate
+/// derive-if-empty override (issue #430) and skips the path checks, while
+/// defaults stay strict.
 fn validate_config_value(
     name: &str,
     value: &str,
     def: &oxo_flow_core::config::ConfigDef,
+    from_cli: bool,
 ) -> anyhow::Result<()> {
     // ── choices ──
     if let Some(ref choices) = def.choices
@@ -495,6 +501,17 @@ fn validate_config_value(
                 }
             }
             "path" => {
+                // issue #430: an explicitly-passed EMPTY value is a
+                // legitimate override — pipelines branch on
+                // `[ -n "{config.x}" ]` for derive-if-empty behavior, so
+                // `--gene_bed ""` selects "derive from fasta+gtf" and must
+                // bypass both the empty-path check and `must_exist` (there
+                // is no file to exist yet). Only DEFAULTS keep the strict
+                // check: a workflow author's default must point at a real
+                // file.
+                if value.is_empty() && from_cli {
+                    return Ok(());
+                }
                 if value.is_empty() {
                     anyhow::bail!(
                         "config '{}' expects a path, got empty string\n  {}",
@@ -622,9 +639,15 @@ fn ai_attempts(cli_max_retries: Option<u32>) -> u32 {
 ///                        `--token` is a typo'd command flag and must not
 ///                        be silently swallowed as an override, issue #71)
 ///   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
+///
+/// `command` names the invoking subcommand ("run", "dry-run", …) so a
+/// swallowed run flag under a command that does not support it says so
+/// (issue #430): under `dry-run`, `-j` reads "not supported by dry-run",
+/// not the run-ordering hint.
 fn parse_cli_overrides(
     cli_args: Vec<String>,
     declared_config_keys: &std::collections::HashSet<String>,
+    command: &str,
 ) -> anyhow::Result<std::collections::HashMap<String, String>> {
     let mut cli_arg_values: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -646,13 +669,37 @@ fn parse_cli_overrides(
                     .map(|name| format!("-{name}"))
             });
         if let Some(flag) = swallowed_flag {
-            anyhow::bail!(
-                "'{flag}' is a command flag, not a config override.\n  \
-                 Command flags must come before KEY=VALUE overrides, e.g.:\n  \
-                 oxo-flow run <workflow.oxoflow> --json min_quality=30\n  \
-                 For a config key that itself starts with dashes, use --arg KEY=VALUE\n  \
-                 (also placed before positional overrides)."
-            );
+            // issue #430: dry-run (and every other command sharing this
+            // parser) accepts only a subset of run's flags — a token like
+            // `-j` under `dry-run` is not a misordered flag but one the
+            // command does not support at all, so the message is
+            // command-aware.
+            let flag_name = flag.trim_start_matches('-');
+            let is_run_flag = RUN_FLAG_NAMES.contains(&flag_name)
+                || (flag_name.len() == 2 && RUN_SHORT_FLAGS.contains(&&flag_name[1..]));
+            let hint = if command == "run" {
+                format!(
+                    "'{flag}' is a command flag, not a config override.\n  \
+                     Command flags must come before KEY=VALUE overrides, e.g.:\n  \
+                     oxo-flow run <workflow.oxoflow> --json min_quality=30\n  \
+                     For a config key that itself starts with dashes, use --arg KEY=VALUE\n  \
+                     (also placed before positional overrides)."
+                )
+            } else if is_run_flag {
+                format!(
+                    "'{flag}' is a run flag and is not supported by {command}.\n  \
+                     Run flags only work on `oxo-flow run`; {command} accepts its own \
+                     flags before KEY=VALUE overrides, e.g.:\n  \
+                     oxo-flow {command} <workflow.oxoflow> --target my_rule min_quality=30"
+                )
+            } else {
+                format!(
+                    "'{flag}' is not supported by {command} and is not a config override.\n  \
+                     Config overrides take KEY=VALUE, e.g.:\n  \
+                     oxo-flow {command} <workflow.oxoflow> min_quality=30"
+                )
+            };
+            anyhow::bail!("{hint}");
         }
         let (k, v) = if let Some(eq) = arg_str.find('=') {
             let k = arg_str[..eq].trim_start_matches('-').to_string();
@@ -694,7 +741,8 @@ fn parse_cli_overrides(
                     .unwrap_or_default();
                 anyhow::bail!(
                     "unknown argument '{arg_str}' — did you mean KEY=VALUE overrides?{rename}\n  \
-                     Config overrides take KEY=VALUE (e.g. threads=8) or --KEY=VALUE; \
+                     Config overrides take KEY=VALUE (e.g. threads=8) or --KEY=VALUE, e.g.:\n  \
+                     oxo-flow {command} <workflow.oxoflow> threads=8; \
                      for a config key that itself starts with dashes, use --arg KEY=VALUE"
                 );
             }
@@ -703,11 +751,14 @@ fn parse_cli_overrides(
                 "invalid config value format: '{arg_str}' — expected KEY=VALUE, --KEY=VALUE, or --KEY VALUE"
             );
         };
-        if k.is_empty() || v.is_empty() {
-            anyhow::bail!(
-                "invalid config value format: '{arg_str}' — KEY and VALUE must be non-empty"
-            );
+        if k.is_empty() {
+            anyhow::bail!("invalid config value format: '{arg_str}' — KEY must be non-empty");
         }
+        // issue #430: an EMPTY VALUE is a legitimate override — pipelines
+        // branch on `[ -n "{config.x}" ]` for derive-if-empty behavior
+        // (rnaseq gene_bed/chrom_sizes/transcript_fasta), and the CLI must
+        // be able to select that branch (`gene_bed=`, `--gene_bed ""`).
+        // Only an empty KEY is a syntax error.
         cli_arg_values.insert(k, v);
     }
     Ok(cli_arg_values)
@@ -722,13 +773,13 @@ fn apply_cli_overrides(
 ) -> anyhow::Result<()> {
     for (name, cfg_def) in &config.config_meta {
         let effective_value = if let Some(val) = cli_arg_values.get(name) {
-            validate_config_value(name, val, cfg_def)?;
+            validate_config_value(name, val, cfg_def, true)?;
             config
                 .config
                 .insert(name.clone(), toml::Value::String(val.clone()));
             val.clone()
         } else if let Some(ref default) = cfg_def.default {
-            validate_config_value(name, default, cfg_def)?;
+            validate_config_value(name, default, cfg_def, false)?;
             config
                 .config
                 .entry(name.clone())
@@ -1019,7 +1070,7 @@ pub async fn run_command(
     // only sees the latter.
     let declared_config_keys: std::collections::HashSet<String> =
         config.config.keys().cloned().collect();
-    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, "run")?;
 
     apply_cli_overrides(&mut config, &cli_arg_values)?;
     // A typo'd override key must not pass silently (audit finding): warn
@@ -4354,7 +4405,7 @@ pub async fn dry_run_command(
     // keys gate the `--KEY VALUE` space form (same rule as run, issue #71).
     let declared_config_keys: std::collections::HashSet<String> =
         config.config.keys().cloned().collect();
-    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys)?;
+    let cli_arg_values = parse_cli_overrides(cli_args, &declared_config_keys, "dry-run")?;
     apply_cli_overrides(&mut config, &cli_arg_values)?;
     // Same typo guard as `run` (shared override machinery).
     warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
@@ -5997,6 +6048,7 @@ mod tests {
                 "--new_key=1".to_string(), // undeclared injection via '=' stays legal
             ],
             &declared(&["threads", "mode"]),
+            "run",
         )
         .unwrap();
         assert_eq!(map["threads"], "8");
@@ -6009,6 +6061,7 @@ mod tests {
         let map = parse_cli_overrides(
             vec!["--min_quality".to_string(), "45".to_string()],
             &declared(&["min_quality"]),
+            "run",
         )
         .unwrap();
         assert_eq!(map["min_quality"], "45");
@@ -6019,6 +6072,7 @@ mod tests {
         let err = parse_cli_overrides(
             vec!["--config".to_string(), "config/x.toml".to_string()],
             &declared(&["min_quality"]),
+            "run",
         )
         .unwrap_err();
         let msg = format!("{err}");
@@ -6034,6 +6088,7 @@ mod tests {
         let err = parse_cli_overrides(
             vec!["threads=8".to_string(), "--json".to_string()],
             &declared(&["threads"]),
+            "run",
         )
         .unwrap_err();
         let msg = format!("{err}");
@@ -6047,6 +6102,7 @@ mod tests {
         let err = parse_cli_overrides(
             vec!["--config".to_string(), "x".to_string()],
             &declared(&[]),
+            "run",
         )
         .unwrap_err();
         assert!(format!("{err}").contains("unknown argument"));
@@ -6057,6 +6113,7 @@ mod tests {
         let err = parse_cli_overrides(
             vec!["--min_quality".to_string()],
             &declared(&["min_quality"]),
+            "run",
         )
         .unwrap_err();
         assert!(format!("{err}").contains("invalid config flag"), "{err:?}");
@@ -6070,6 +6127,7 @@ mod tests {
         let err = parse_cli_overrides(
             vec!["--mode".to_string(), "--json".to_string()],
             &declared(&["mode"]),
+            "run",
         )
         .unwrap_err();
         let msg = format!("{err}");
@@ -6102,8 +6160,88 @@ mod tests {
 
     #[test]
     fn rejects_bare_non_key_value_positional() {
-        let err = parse_cli_overrides(vec!["naked".to_string()], &declared(&[])).unwrap_err();
+        let err =
+            parse_cli_overrides(vec!["naked".to_string()], &declared(&[]), "run").unwrap_err();
         assert!(format!("{err}").contains("KEY=VALUE"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_empty_value_overrides() {
+        // issue #430: `KEY=` and `--KEY ""` are legitimate derive-if-empty
+        // overrides (rnaseq gene_bed/chrom_sizes/transcript_fasta branch on
+        // `[ -n "{config.x}" ]`).
+        let map = parse_cli_overrides(
+            vec![
+                "gene_bed=".to_string(),
+                "--chrom_sizes".to_string(),
+                String::new(),
+                "--transcript_fasta=".to_string(),
+            ],
+            &declared(&["gene_bed", "chrom_sizes", "transcript_fasta"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["gene_bed"], "");
+        assert_eq!(map["chrom_sizes"], "");
+        assert_eq!(map["transcript_fasta"], "");
+    }
+
+    #[test]
+    fn rejects_empty_key_but_accepts_empty_value() {
+        // "=value" trims to an empty KEY — still a syntax error.
+        let err = parse_cli_overrides(vec!["=v".to_string()], &declared(&[]), "run").unwrap_err();
+        assert!(
+            format!("{err}").contains("KEY must be non-empty"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn dry_run_flag_error_is_command_aware() {
+        // issue #430: `-j` under dry-run is not a misordered run flag — the
+        // command does not support it at all. The message must say so
+        // instead of implying a flag-ordering problem.
+        let err = parse_cli_overrides(
+            vec!["-j".to_string(), "12".to_string()],
+            &declared(&[]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not supported by dry-run"), "{msg}");
+        assert!(
+            !msg.contains("command flag, not a config override"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn run_flag_error_under_run_keeps_ordering_hint() {
+        // `run` itself keeps the original ordering guidance (issue #71).
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "-j".to_string()],
+            &declared(&["threads"]),
+            "run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("before KEY=VALUE"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_token_under_dry_run_stays_command_aware() {
+        // An unknown --token under a non-run command points at the command,
+        // not at run's ordering rule.
+        let err = parse_cli_overrides(
+            vec!["--config".to_string(), "x".to_string()],
+            &declared(&[]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown argument"), "{msg}");
+        assert!(msg.contains("dry-run"), "{msg}");
     }
 
     #[test]

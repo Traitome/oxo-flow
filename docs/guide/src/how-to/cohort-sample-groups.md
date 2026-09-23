@@ -136,6 +136,29 @@ disease	D001,D002
 Extra columns beyond `name` and `samples` become group metadata — see
 [Sheet columns as group metadata](../reference/workflow-format.md#sheet-columns-as-group-metadata).
 
+Both `name` and `samples` columns are **required** — a sheet missing
+either fails at parse with the schema contract in the error message.
+
+!!! note "CSV: quote comma-separated samples"
+
+    In CSV the `samples` cell itself must be quoted, or the sample list
+    spills across columns:
+
+    ```csv
+    name,samples
+    healthy,"H001,H002"
+    disease,"D001,D002"
+    ```
+
+    (TSV needs no quoting — the comma is not the delimiter there.)
+
+!!! note "Relative sheet paths"
+
+    A relative `sample_groups_file` path resolves against the **workflow
+    directory** (the directory containing the `.oxoflow` file), not the
+    current working directory — so `oxo-flow run …` works from anywhere
+    inside the project.
+
 For groups with metadata, use JSON format.
 
 ### JSON Format

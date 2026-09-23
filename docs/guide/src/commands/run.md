@@ -247,7 +247,20 @@ oxo-flow run pipeline.oxoflow database=refs/nt threshold=1e-3
 
 # Legacy --arg form (still supported)
 oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
+
+# Empty string = explicit derive-if-empty override
+oxo-flow run pipeline.oxoflow gene_bed=
+oxo-flow run pipeline.oxoflow --gene_bed ""
 ```
+
+!!! note "Empty values select the derive-if-empty branch"
+
+    An **empty** value is accepted and overrides the config key with the
+    empty string. Pipelines that auto-derive a value branch on
+    `[ -n "{config.gene_bed}" ]` — passing `gene_bed=` forces that branch
+    off (e.g. to re-derive from a new reference instead of reusing a
+    declared default path). Only the *key* must be non-empty; `=value`
+    alone is a syntax error.
 
 !!! note "Ordering: run flags before overrides"
 

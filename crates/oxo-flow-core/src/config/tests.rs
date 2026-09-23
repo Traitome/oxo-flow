@@ -7758,6 +7758,55 @@ fn sample_groups_csv_sheet_columns_work_too() {
     assert!(!names.iter().any(|n| n.starts_with("assemble_short")));
 }
 
+#[test]
+fn sample_groups_sheet_missing_column_error_carries_schema_hint() {
+    // issue #430: a missing 'name' or 'samples' column is the most common
+    // first-contact failure — the error must teach the schema contract
+    // (required columns, CSV quoting for comma-joined samples, resolution
+    // base for relative sheet paths).
+    let dir = tempfile::tempdir().unwrap();
+
+    // Missing 'samples' column (TSV).
+    let bad_tsv = dir.path().join("no_samples.tsv");
+    std::fs::write(&bad_tsv, "name\tcondition\ncohort\tcase\n").unwrap();
+    let err = SampleGroup::load_from_file(&bad_tsv)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("missing 'samples' column"),
+        "expected missing-samples error, got: {err}"
+    );
+    assert!(
+        err.contains("'name' (group name) and 'samples' (sample IDs)")
+            && err.contains("quoted")
+            && err.contains("workflow directory"),
+        "missing-column error must carry the schema hint, got: {err}"
+    );
+
+    // Missing 'name' column (CSV, unquoted comma-joined samples).
+    let bad_csv = dir.path().join("no_name.csv");
+    std::fs::write(&bad_csv, "samples,condition\nS1,S2,case\n").unwrap();
+    let err = SampleGroup::load_from_file(&bad_csv)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("missing 'name' column"),
+        "expected missing-name error, got: {err}"
+    );
+    assert!(
+        err.contains("quoted"),
+        "CSV hint must mention quoting comma-joined samples, got: {err}"
+    );
+
+    // The documented quoting form actually works: one row, two samples.
+    let good_csv = dir.path().join("quoted.csv");
+    std::fs::write(&good_csv, "name,samples\ncohort,\"S1,S2\"\n").unwrap();
+    let groups = SampleGroup::load_from_file(&good_csv).unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].name, "cohort");
+    assert_eq!(groups[0].samples, vec!["S1".to_string(), "S2".to_string()]);
+}
+
 // ---------------------------------------------------------------------------
 // Audit remediation: deferred-consumer name collisions, profile defaults,
 // glob `**`, transform combine output, {meta.} in output_pattern, sample
