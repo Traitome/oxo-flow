@@ -3860,7 +3860,7 @@ immediately complete and runnable.</p>
 </tr>
 <tr>
 <td><code>--ai-attempts &lt;N&gt;</code></td>
-<td>Fresh-draw attempts for the whole generation (pass@k with early exit: the deterministic gates decide, so later attempts are only paid when earlier ones fail) [default: 1]</td>
+<td>Fresh-draw attempts for the whole generation (best-of-N: up to N independent tries; the first one passing the deterministic gates wins, so later attempts are only paid when earlier ones fail) [default: 1]</td>
 </tr>
 </tbody>
 </table>

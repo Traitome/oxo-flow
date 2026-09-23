@@ -2044,10 +2044,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fetch-a-jobs-accounting-record" class="md-nav__link">
+  <a href="#fetch-a-jobs-scheduler-record" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fetch a job's accounting record
+        Fetch a job's scheduler record
       
     </span>
   </a>
@@ -4198,10 +4198,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fetch-a-jobs-accounting-record" class="md-nav__link">
+  <a href="#fetch-a-jobs-scheduler-record" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fetch a job's accounting record
+        Fetch a job's scheduler record
       
     </span>
   </a>
@@ -4408,7 +4408,7 @@ or cancel/collect jobs after an interrupted run.</p>
 </tr>
 <tr>
 <td><code>logs</code></td>
-<td>Fetch the accounting record for a submitted cluster job</td>
+<td>Fetch the scheduler's job record (SLURM: <code>sacct</code> accounting output) for a submitted cluster job</td>
 </tr>
 </tbody>
 </table>
@@ -4604,7 +4604,7 @@ finished ones, which are settled from the scheduler's accounting store:</p>
 <h3 id="cancel-specific-jobs">Cancel specific jobs<a class="headerlink" href="#cancel-specific-jobs" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
 </span></code></pre></div>
-<h3 id="fetch-a-jobs-accounting-record">Fetch a job's accounting record<a class="headerlink" href="#fetch-a-jobs-accounting-record" title="Permanent link">#</a></h3>
+<h3 id="fetch-a-jobs-scheduler-record">Fetch a job's scheduler record<a class="headerlink" href="#fetch-a-jobs-scheduler-record" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>logs<span class="w"> </span>-b<span class="w"> </span>slurm<span class="w"> </span><span class="m">12345</span>
 </span></code></pre></div>
 <p>SLURM prints the job's <code>sacct</code> record (<code>JobID|State|ExitCode|Elapsed|MaxRSS</code>);
