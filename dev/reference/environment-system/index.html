@@ -3166,17 +3166,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -4137,17 +4126,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -4412,9 +4390,11 @@ only ever be lost.</p>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
 <p>The <code>env check</code> command calls the resolver's <code>validate_spec</code> for each rule's
-environment, which verifies <strong>backend availability on the current system</strong>
-(e.g. the conda/pixi/docker/singularity binary exists and is runnable; pixi
-additionally requires a <code>pixi.toml</code> in the current directory). It does not
+environment (relative file specs — <code>conda</code>/<code>mamba</code>/<code>pixi</code>/
+<code>venv_requirements</code> — resolve against the workflow directory first, issue</p>
+<h1 id="427-which-verifies-backend-availability-on-the-current-system">427), which verifies <strong>backend availability on the current system</strong><a class="headerlink" href="#427-which-verifies-backend-availability-on-the-current-system" title="Permanent link">#</a></h1>
+<p>(e.g. the conda/pixi/docker/singularity binary exists and is runnable;
+a pixi spec must point at a <code>pixi.toml</code> manifest). It does not
 re-check spec files or image reference syntax — <code>validate</code> and <code>lint</code> cover
 declaration-level checks.</p>
 <hr />

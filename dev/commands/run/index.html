@@ -4815,9 +4815,29 @@ config overrides, <code>--workdir</code>, checkpoint-aware dry-run previews, etc
 <a href="../../how-to/china-mirrors/">China Mirrors</a>).</p>
 <h3 id="custom-working-directory">Custom working directory<a class="headerlink" href="#custom-working-directory" title="Permanent link">#</a></h3>
 <p>Relative paths in the workflow resolve against the workflow file's
-directory by default, keeping a workflow self-contained. For a shared,
-read-only workflow (a fixed reference resource), point <code>--workdir</code> at the
-analysis directory instead:</p>
+directory — the single resolution base (issue #427). When <code>--workdir</code>
+differs from the workflow directory, the engine anchors workflow-shipped
+files so they stay valid from the execution cwd:</p>
+<ul>
+<li><strong>Environments</strong>: relative <code>conda</code> / <code>mamba</code> / <code>pixi</code> /
+  <code>venv_requirements</code> file specs resolve against the workflow directory.</li>
+<li><strong>Rule scripts</strong>: workflow-relative script files render absolute
+  (workflow-rooted) so rule shells — which run with cwd = the workdir —
+  can execute them.</li>
+<li><strong><code>{input}</code> and <code>{log}</code></strong>: stay workdir-relative. Inputs are addressed
+  from the run cwd (freshness/optional-input gates probe workdir-relative
+  paths), and the engine creates log parent dirs under the workdir. Place
+  workflow-consumed data under the workdir (or pass absolute paths).</li>
+<li><strong>input_groups disk scans</strong>: relative patterns scan the workflow
+  directory and emit workflow-absolute paths into <code>{input}</code>.</li>
+<li><strong>Reference sources</strong>: <code>[references].source</code> resolves against the
+  workflow directory; reference outputs still land in the workdir.</li>
+<li><strong>Outputs</strong>: stay workdir-relative — they are run artifacts and land
+  under the workdir, matching the checkpoint and <code>.oxo-flow</code> state.</li>
+</ul>
+<p>This keeps a workflow self-contained: for a shared, read-only workflow (a
+fixed reference resource), point <code>--workdir</code> at the analysis directory
+instead:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Workflow lives in a central, read-only location; data and results</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># belong to the current analysis directory</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>/opt/pipelines/wgs.oxoflow<span class="w"> </span>--workdir<span class="w"> </span>.

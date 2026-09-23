@@ -6950,7 +6950,14 @@ by declaring it explicitly.</p>
 <h3 id="condamamba-environment-naming">Conda/mamba environment naming<a class="headerlink" href="#condamamba-environment-naming" title="Permanent link">#</a></h3>
 <p>For file-backed env specs the conda/mamba env name is derived as
 <code>&lt;stem-or-yaml-name&gt;-&lt;hash8&gt;</code>, where <code>hash8</code> is the first 8 hex chars
-of the SHA-256 of the YAML <strong>content</strong> (issue #159). Two workflows that
+of the SHA-256 of the YAML <strong>content</strong> (issue #159). Relative env file
+specs (<code>conda</code>, <code>mamba</code>, <code>pixi</code>, <code>venv_requirements</code>) resolve against
+the <strong>workflow directory</strong> — the single base for relative paths in the
+workflow file (issue #427); with <code>--workdir</code> the engine anchors them
+automatically, so rule shells running from the workdir still find the
+specs. <code>venv</code> (a directory the backend creates in the workdir) and
+<code>conda_prefix</code>/<code>mamba_prefix</code> (an environment store outside the
+workflow tree) stay relative to the workdir. Two workflows that
 ship different YAMLs under the same name therefore build into distinct
 envs instead of silently sharing one prefix; identical content keeps
 the same name, so specs still deduplicate. Non-file specs (plain names
@@ -9217,7 +9224,15 @@ records:</p>
 <ul>
 <li><strong>Path resolution</strong> — relative paths join against the run <strong>workdir</strong>;
   absolute paths pass through. <code>{sample}</code> and other wildcards expand from
-  the instance context before the read.</li>
+  the instance context before the read. When <code>--workdir</code> differs from the
+  workflow directory, workflow-shipped files are anchored automatically:
+  relative env file specs (<code>conda</code>/<code>mamba</code>/<code>pixi</code>/<code>venv_requirements</code>),
+  rule scripts, <code>input_groups</code> scan patterns, and <code>[[references]].source</code>
+  resolve against the workflow directory. <code>{input}</code> / <code>{log}</code> in rule
+  commands stay workdir-relative — data and logs are addressed from the
+  run cwd (matching the freshness gates and the engine's log-dir
+  creation), so point <code>--workdir</code> at the directory holding your data
+  (issue #427).</li>
 <li><strong>Phase semantics</strong> — at <em>plan time</em> a runtime-function atom whose file
   is missing — or whose file is an output of this run but still holds a
   previous run's stale value — defers (<code>true</code>, the rule stays in the plan
