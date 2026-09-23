@@ -1903,6 +1903,20 @@ impl WorkflowConfig {
             if std::path::Path::new(&expanded_pattern).is_absolute() {
                 let (root, tail) = Self::split_absolute_pattern(&expanded_pattern);
                 (root, tail, true)
+            } else if self
+                .runtime_workdir
+                .as_deref()
+                .is_some_and(|wd| Some(wd) != self.base_dir.as_deref())
+            {
+                // Issue #427: with a run workdir distinct from the workflow
+                // directory, rule shells execute with cwd = workdir, so a
+                // workflow-relative disk-scan path emitted raw would not
+                // resolve from there. Scan the workflow directory as usual
+                // but EMIT workflow-absolute paths — the one representation
+                // valid from the execution cwd, mirroring #425's absolute
+                // emission. Producer outputs (Source 2 below) stay raw:
+                // they are workdir-relative artifacts of this run.
+                (workflow_base.clone(), expanded_pattern, true)
             } else {
                 (workflow_base.clone(), expanded_pattern, false)
             };

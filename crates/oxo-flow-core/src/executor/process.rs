@@ -309,6 +309,15 @@ pub struct ExecutorConfig {
     /// execution time, matching plan-time and every other engine path
     /// semantic. `None` keeps the historical process-cwd behavior (tests).
     pub base_dir: Option<PathBuf>,
+    /// The workflow file's parent directory when the run workdir differs
+    /// from it (issue #427): file-backed environment specs (`conda`,
+    /// `mamba`, `pixi`, `venv_requirements`) and workflow-shipped rule
+    /// inputs/scripts are anchored here before execution, because rule
+    /// shells run with cwd = workdir and would otherwise see paths that
+    /// only resolve from the workflow directory. `None` (tests, workdir =
+    /// workflow dir) keeps the historical raw-spec behavior — the two
+    /// roots coincide, so relative paths already resolve.
+    pub workflow_root: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -334,6 +343,7 @@ impl Default for ExecutorConfig {
             checkpoint: None,
             wildcard_constraints: HashMap::new(),
             base_dir: None,
+            workflow_root: None,
         }
     }
 }
@@ -662,7 +672,16 @@ impl LocalExecutor {
             }
             return Ok(());
         }
-        let env_spec = &rule.environment;
+        // Issue #427: file-backed environment specs resolve against the
+        // workflow root (the single documented base for relative paths),
+        // not the execution cwd — rule shells run with cwd = workdir, so a
+        // relative `conda = "envs/star.yaml"` would only resolve when
+        // --workdir is not used. Anchoring at the boundary keeps the
+        // cache_key, the setup command, verification, and wrapping all on
+        // one consistent (already-absolute) spec.
+        let env_spec = &rule
+            .environment
+            .resolve_relative_paths(self.config.workflow_root.as_deref());
         if env_spec.is_empty() {
             return Ok(());
         }
@@ -914,9 +933,16 @@ impl LocalExecutor {
             );
             resources.memory = Some(format!("{container_ceiling_mb}M"));
         }
+        // Issue #427: wrap with the same workflow-anchored spec the setup
+        // path used — wrap_command probes the spec relative to the
+        // execution cwd, so a relative `conda = "envs/x.yaml"` must be
+        // made valid from workdir before hashing/wrapping.
+        let resolved_env = rule
+            .environment
+            .resolve_relative_paths(self.config.workflow_root.as_deref());
         match self.env_resolver.wrap_command(
             command,
-            &rule.environment,
+            &resolved_env,
             Some(&resources),
             &self.config.workdir,
         ) {
@@ -1422,12 +1448,30 @@ impl LocalExecutor {
         // the main workdir while keeping outputs relative — the shell runs
         // with its cwd in the scratch dir, so relative outputs land there
         // and are collected afterwards.
+        // Issue #427: with a non-scratch rule whose run workdir differs from
+        // the workflow directory, only rule scripts (and env specs and
+        // [references].source, resolved elsewhere) name workflow-shipped
+        // files, so ONLY those anchor to the workflow dir. `{input}` and
+        // `{log}` stay workdir-relative: inputs are addressed from the run
+        // cwd (the freshness/optional gates probe workdir-relative paths),
+        // and the engine creates log parent dirs under the workdir.
         let base_cmd = if rule.scratch {
             build_execution_command_in_scratch(
                 &rule,
                 wildcard_values,
                 &self.config.interpreter_map,
                 &self.config.workdir,
+                crate::scheduler::ResourceLimits {
+                    threads: self.system_threads,
+                    memory_mb: self.system_memory_mb,
+                },
+            )
+        } else if let Some(workflow_root) = self.config.workflow_root.as_deref() {
+            build_execution_command_with_root(
+                &rule,
+                wildcard_values,
+                &self.config.interpreter_map,
+                workflow_root,
                 crate::scheduler::ResourceLimits {
                     threads: self.system_threads,
                     memory_mb: self.system_memory_mb,
@@ -2398,7 +2442,31 @@ pub fn build_execution_command(
     interpreter_map: &HashMap<String, String>,
     limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
-    build_execution_command_inner(rule, wildcard_values, interpreter_map, None, limits)
+    build_execution_command_inner(rule, wildcard_values, interpreter_map, None, None, limits)
+}
+
+/// Workflow-rooted variant (issue #427): when the run workdir differs from
+/// the workflow directory, only rule scripts name workflow-shipped files —
+/// they anchor to the workflow dir so they resolve from the execution cwd.
+/// `{input}` and `{log}` stay workdir-relative: inputs are addressed from
+/// the run cwd (the freshness/optional gates probe workdir-relative paths),
+/// and the engine creates log parent dirs under the workdir. Env specs and
+/// `[references].source` anchor separately (`resolve_relative_paths`).
+pub(crate) fn build_execution_command_with_root(
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+    interpreter_map: &HashMap<String, String>,
+    workflow_root: &Path,
+    limits: crate::scheduler::ResourceLimits,
+) -> Option<String> {
+    build_execution_command_inner(
+        rule,
+        wildcard_values,
+        interpreter_map,
+        None,
+        Some(workflow_root),
+        limits,
+    )
 }
 
 /// Scratch-mode variant: input and script paths render absolute (they live
@@ -2416,6 +2484,7 @@ pub(crate) fn build_execution_command_in_scratch(
         wildcard_values,
         interpreter_map,
         Some(workdir),
+        Some(workdir),
         limits,
     )
 }
@@ -2424,25 +2493,38 @@ fn build_execution_command_inner(
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
     interpreter_map: &HashMap<String, String>,
-    abs_root: Option<&Path>,
+    input_root: InputRoot<'_>,
+    script_root: Option<&Path>,
     limits: crate::scheduler::ResourceLimits,
 ) -> Option<String> {
     let shell_cmd = rule
         .shell
         .as_ref()
-        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, abs_root, limits));
+        .map(|cmd| render_shell_command_inner(cmd, rule, wildcard_values, input_root, limits));
 
     let script_cmd = rule.script.as_ref().map(|script_path| {
         let expanded_script =
-            render_shell_command_inner(script_path, rule, wildcard_values, abs_root, limits);
-        let base_script = expanded_script
+            render_shell_command_inner(script_path, rule, wildcard_values, input_root, limits);
+        // Issue #427: a bare script path carries no placeholders, so the
+        // renderer above cannot anchor it — do it here. In scratch mode
+        // script_root is the MAIN workdir (scripts live there, not in the
+        // scratch dir), and with workflow_root set it is the workflow
+        // directory; without a root the raw path already resolves from the
+        // execution cwd.
+        let anchored_script = match script_root {
+            Some(root) if !Path::new(&expanded_script).is_absolute() => {
+                root.join(&expanded_script).display().to_string()
+            }
+            _ => expanded_script.clone(),
+        };
+        let base_script = anchored_script
             .split_whitespace()
             .next()
-            .unwrap_or(&expanded_script);
+            .unwrap_or(&anchored_script);
 
         match detect_interpreter(base_script, rule.interpreter.as_deref(), interpreter_map) {
-            Some(interp) => build_script_command(&interp, &expanded_script),
-            None => expanded_script,
+            Some(interp) => build_script_command(&interp, &anchored_script),
+            None => anchored_script,
         }
     });
 
@@ -2460,7 +2542,8 @@ fn build_execution_command_inner(
     // Auto-create output directories to eliminate mkdir -p boilerplate in shells
     let mut dirs_to_create: Vec<String> = Vec::new();
     for output in &rule.output {
-        let expanded = render_shell_command_inner(output, rule, wildcard_values, abs_root, limits);
+        let expanded =
+            render_shell_command_inner(output, rule, wildcard_values, input_root, limits);
         // Only create dirs for paths with directory separators, skip wildcards
         if expanded.contains('/')
             && !expanded.contains('{')
@@ -3166,11 +3249,21 @@ pub(crate) fn render_shell_command_in_scratch(
     render_shell_command_inner(cmd, rule, wildcard_values, Some(workdir), limits)
 }
 
+/// Root for `{input}` / `{log}` placeholder anchoring. `None` renders raw
+/// (workdir-relative). Outputs are ALWAYS raw — they are run artifacts
+/// addressed from the execution cwd.
+///
+/// Issue #427: scratch mode passes the main workdir (inputs/logs live
+/// there); the non-scratch `--workdir` path passes `None` because plain
+/// inputs and logs are addressed from the run cwd. Rule scripts are
+/// anchored separately in [`build_execution_command_inner`].
+type InputRoot<'a> = Option<&'a Path>;
+
 fn render_shell_command_inner(
     cmd: &str,
     rule: &Rule,
     wildcard_values: &HashMap<String, String>,
-    abs_root: Option<&Path>,
+    input_root: InputRoot<'_>,
     limits: crate::scheduler::ResourceLimits,
 ) -> String {
     let mut expanded = cmd.to_string();
@@ -3183,9 +3276,9 @@ fn render_shell_command_inner(
         let expanded_log = if cmd == log_path || log_path.contains("{log}") {
             log_path.clone()
         } else {
-            render_shell_command_inner(log_path, rule, wildcard_values, abs_root, limits)
+            render_shell_command_inner(log_path, rule, wildcard_values, input_root, limits)
         };
-        let rendered_log = absolute_path(abs_root, &expanded_log);
+        let rendered_log = absolute_path(input_root, &expanded_log);
         expanded = expanded.replace("{log}", &rendered_log);
         // `{log[0]}` for snakemake ports (log is a scalar here, so the
         // indexed form maps to the same path).
@@ -3204,26 +3297,35 @@ fn render_shell_command_inner(
         }
     }
     // Inputs expand their `{config.x}` / wildcard placeholders here so the
-    // absolute form can be computed; in non-scratch mode the result is
+    // anchored form can be computed; with `input_root = None` the result is
     // byte-identical to the historical raw-pattern pass.
     let all_inputs: Vec<String> = rule
         .input
         .to_vec()
         .iter()
-        .map(|inp| absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values)))
+        .map(|inp| {
+            absolute_path(
+                input_root,
+                &expand_wildcards_in_pattern(inp, wildcard_values),
+            )
+        })
         .collect();
     expanded = expanded.replace("{input}", &all_inputs.join(" "));
     for i in 0..rule.input.len() {
         if let Some(inp) = rule.input.get_index(i) {
-            let rendered =
-                absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values));
+            let rendered = absolute_path(
+                input_root,
+                &expand_wildcards_in_pattern(inp, wildcard_values),
+            );
             expanded = expanded.replace(&format!("{{input[{i}]}}"), &rendered);
         }
     }
     if let FilePatterns::Map(ref m) = rule.input {
         for (name, inp) in m {
-            let rendered =
-                absolute_path(abs_root, &expand_wildcards_in_pattern(inp, wildcard_values));
+            let rendered = absolute_path(
+                input_root,
+                &expand_wildcards_in_pattern(inp, wildcard_values),
+            );
             expanded = expanded.replace(&format!("{{input.{name}}}"), &rendered);
         }
     }
@@ -5154,5 +5256,88 @@ mod tests {
             },
         );
         assert_eq!(rendered2, "tool --flag {wildcard.not_bound}");
+    }
+
+    #[test]
+    fn execution_command_with_root_anchors_scripts_inputs_stay_workdir_relative() {
+        // Issue #427: with the run workdir distinct from the workflow
+        // directory, only rule scripts name workflow-shipped files, so only
+        // they anchor to the workflow dir (rule shells run with cwd =
+        // workdir). `{input}` / `{log}` stay workdir-relative — the
+        // freshness gates probe workdir-relative inputs and the engine
+        // creates log parent dirs under the workdir — and outputs stay raw
+        // so they land under the run workdir.
+        let rule = Rule {
+            name: "anchor".to_string(),
+            input: vec!["data/{sample}.fq.gz".to_string()].into(),
+            output: vec!["out/{sample}.txt".to_string()].into(),
+            log: Some("logs/{sample}.log".to_string()),
+            script: Some("scripts/calc.py".to_string()),
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        values.insert("sample".to_string(), "S1".to_string());
+        let limits = crate::scheduler::ResourceLimits {
+            threads: 4,
+            memory_mb: 8192,
+        };
+        let rendered = build_execution_command_with_root(
+            &rule,
+            &values,
+            &HashMap::new(),
+            std::path::Path::new("/wf"),
+            limits,
+        )
+        .expect("script rule renders");
+        assert!(
+            rendered.contains("/wf/scripts/calc.py"),
+            "script must be workflow-absolute: {rendered}"
+        );
+        assert!(
+            !rendered.contains("/wf/data/") && !rendered.contains("/wf/logs/"),
+            "inputs/logs must stay workdir-relative: {rendered}"
+        );
+        assert!(
+            !rendered.contains("/wf/out/S1.txt"),
+            "output must stay workdir-relative: {rendered}"
+        );
+        // {input}/{log} only appear in the SHELL — exercise them there.
+        let shell_rule = Rule {
+            name: "anchor_shell".to_string(),
+            input: vec!["data/{sample}.fq.gz".to_string()].into(),
+            output: vec!["out/{sample}.txt".to_string()].into(),
+            log: Some("logs/{sample}.log".to_string()),
+            shell: Some("cat {input} > {output[0]} 2> {log}".to_string()),
+            ..Default::default()
+        };
+        let rendered_shell = build_execution_command_with_root(
+            &shell_rule,
+            &values,
+            &HashMap::new(),
+            std::path::Path::new("/wf"),
+            limits,
+        )
+        .expect("shell rule renders");
+        assert!(
+            rendered_shell.contains("cat data/S1.fq.gz"),
+            "input must stay workdir-relative: {rendered_shell}"
+        );
+        assert!(
+            rendered_shell.contains("2> logs/S1.log"),
+            "log must stay workdir-relative: {rendered_shell}"
+        );
+        assert!(
+            rendered_shell.contains("out/S1.txt") && !rendered_shell.contains("/wf/"),
+            "output must stay workdir-relative: {rendered_shell}"
+        );
+        // No root → historical raw rendering (workdir == workflow dir).
+        let raw = build_execution_command(&shell_rule, &values, &HashMap::new(), limits)
+            .expect("shell rule renders");
+        assert!(raw.contains("cat data/S1.fq.gz"));
+        assert!(raw.contains("out/S1.txt"));
+        assert!(!raw.contains("/wf/"));
+        let raw_script = build_execution_command(&rule, &values, &HashMap::new(), limits)
+            .expect("script rule renders");
+        assert!(raw_script.contains("scripts/calc.py") && !raw_script.contains("/wf/"));
     }
 }

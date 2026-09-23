@@ -3267,6 +3267,75 @@ fn input_groups_fans_rule_into_one_instance_per_group_key() {
 }
 
 #[test]
+fn input_groups_emits_workflow_absolute_paths_when_workdir_differs() {
+    // Issue #427: with a run workdir distinct from the workflow directory,
+    // rule shells run with cwd = workdir — a workflow-relative disk-scan
+    // path in `{input}` would not resolve from there. The scan still walks
+    // the workflow directory, but the emitted paths are workflow-absolute.
+    // Producer outputs (Source 2) stay workdir-relative.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("merge.oxoflow");
+    for file in ["raw/S1_L1_R1.fastq.gz", "raw/S1_L2_R1.fastq.gz"] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "merge"
+
+        [[rules]]
+        name = "lanemerge"
+        input_groups = [
+            { pattern = "raw/{sample}_{lane}_R1.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}_R1.fastq.gz"]
+        shell = "cat {input} > merged/{sample}_R1.fastq.gz"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    // A run workdir elsewhere (e.g. /analysis): ≠ base_dir.
+    config.runtime_workdir = Some(std::path::PathBuf::from("/analysis"));
+    config.expand_wildcards().unwrap();
+
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S1")
+        .expect("S1 instance");
+    let wf = dir.path().display().to_string();
+    assert_eq!(
+        s1.input.to_vec(),
+        vec![
+            format!("{wf}/raw/S1_L1_R1.fastq.gz"),
+            format!("{wf}/raw/S1_L2_R1.fastq.gz"),
+        ]
+    );
+    // Output stays workdir-relative — it is a run artifact.
+    assert_eq!(s1.output.to_vec(), vec!["merged/S1_R1.fastq.gz"]);
+
+    // No runtime workdir (or equal to the workflow dir) → raw emission,
+    // unchanged from history.
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "lanemerge_S1")
+        .unwrap();
+    assert_eq!(
+        s1.input.to_vec(),
+        vec!["raw/S1_L1_R1.fastq.gz", "raw/S1_L2_R1.fastq.gz"]
+    );
+}
+
+#[test]
 fn input_groups_intersects_declared_sample_set() {
     // #246: the discovery domain of an input_groups rule is the
     // FILESYSTEM, not the declared sample set — stale files for

@@ -6,26 +6,6 @@ use crate::commands::print_banner;
 
 use crate::{ConfigAction, EnvAction};
 
-/// Resolve a rule's relative manifest paths against the workflow's
-/// directory — the engine's contract for `pixi = "envs/pixi.toml"`. Absolute
-/// paths are left untouched; specs without a pixi declaration are returned
-/// as-is.
-fn resolve_relative_manifests(
-    spec: &oxo_flow_core::rule::EnvironmentSpec,
-    workflow_dir: &std::path::Path,
-) -> oxo_flow_core::rule::EnvironmentSpec {
-    let Some(pixi) = spec.pixi.as_deref() else {
-        return spec.clone();
-    };
-    let path = std::path::Path::new(pixi);
-    if path.is_absolute() {
-        return spec.clone();
-    }
-    let mut resolved = spec.clone();
-    resolved.pixi = Some(workflow_dir.join(path).to_string_lossy().into_owned());
-    resolved
-}
-
 pub async fn env_command(action: EnvAction) -> Result<()> {
     print_banner();
     match action {
@@ -80,7 +60,7 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
 
                     let mut all_ok = true;
                     for rule in &config.rules {
-                        let spec = resolve_relative_manifests(&rule.environment, workflow_dir);
+                        let spec = rule.environment.resolve_relative_paths(Some(workflow_dir));
                         match resolver.validate_spec(&spec) {
                             Ok(()) => {
                                 eprintln!(
