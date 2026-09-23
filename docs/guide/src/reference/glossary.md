@@ -330,7 +330,7 @@ below cover the codes referenced across this documentation.
 | `E008` | `extends` names a rule that does not exist |
 | `E009` | An input path contains `..` and may escape the working directory |
 | `E010` | A rule references an undefined `env_group` |
-| `E011` | A rule command matches a dangerous shell pattern (destructive command class) |
+| `E011` | A rule command matches a dangerous shell pattern (destructive command class). Recursive deletions (`rm -rf`/`rm -r`) are only blocked when the target resolves OUTSIDE the run workdir — pipelines may delete their own outputs (see Security model) |
 | `E013` | A `checkpoint = true` rule lacks `checkpoint_manifest` |
 | `E014` | A checkpoint rule is parameterized by `{sample}`/`{group}`/`{pair_id}` (not allowed) |
 | `E015` | Re-entry declares a `pair_id` with conflicting content |

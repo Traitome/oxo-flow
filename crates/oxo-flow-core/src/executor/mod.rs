@@ -75,5 +75,8 @@ pub(crate) fn expand_to_fixed_point(
 // Re-export common items for backward compatibility and convenience
 pub use checkpoint::{BenchmarkRecord, CheckpointState};
 pub use process::{ExecutionEvent, ExecutorConfig, JobRecord, JobStatus, LocalExecutor};
-pub use security::{sanitize_shell_command, validate_shell_safety, validate_wildcard_injection};
+pub use security::{
+    sanitize_shell_command, validate_shell_safety, validate_shell_safety_in_workdir,
+    validate_wildcard_injection,
+};
 pub use workdir_lock::WorkdirLock;

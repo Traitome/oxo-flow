@@ -4796,14 +4796,23 @@ pub async fn dry_run_command(
             // surface like any other.
             let expanded =
                 oxo_flow_core::executor::process::mask_sensitive(&expanded, &sensitive_values);
-            if let Some((_category, description)) =
+            // Workdir-aware blocking preview (issue #428): E011 only applies
+            // when the deletion target lies outside the run workdir, so an
+            // absolute {config.out_dir} cleanup is not labeled "blocked".
+            let blocked_label = if let Some((_category, description)) =
                 oxo_flow_core::format::shell_blocking_pattern(&expanded)
             {
-                eprintln!(
-                    "     command: {}  {}",
-                    expanded,
-                    format!("(blocked: E011 — {description})").red().bold()
-                );
+                match oxo_flow_core::executor::validate_shell_safety_in_workdir(&expanded, base_dir)
+                {
+                    Err(e) => Some(e.to_string()),
+                    Ok(()) => None,
+                }
+                .map(|_| format!("(blocked: E011 — {description})"))
+            } else {
+                None
+            };
+            if let Some(label) = blocked_label {
+                eprintln!("     command: {}  {}", expanded, label.red().bold());
             } else {
                 eprintln!("     command: {}", expanded);
             }

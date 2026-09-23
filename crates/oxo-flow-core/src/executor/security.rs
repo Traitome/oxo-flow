@@ -217,6 +217,122 @@ pub fn validate_shell_safety(cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// A single `rm -r[f]` deletion target parsed out of a rendered command.
+struct DeletionTarget {
+    /// The path operand as written (post-rendering).
+    target: String,
+}
+
+/// Extract the path operands of `rm -r`/`rm -rf` invocations in `cmd`.
+///
+/// Mirrors the RECURSIVE_DELETION regexes' flexibility (extra spaces,
+/// interleaved `--flags`) so a target the pattern let through is analyzed
+/// here rather than silently skipped.
+fn recursive_deletion_targets(cmd: &str) -> Vec<DeletionTarget> {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"rm\s+(-[rR][fF]?\S*|--recursive\S*)(?:\s+--\S+|\s+-\S+)*\s+(\S+)")
+            .expect("static regex")
+    });
+    RE.captures_iter(cmd)
+        .map(|caps| DeletionTarget {
+            target: caps[2].to_string(),
+        })
+        .collect()
+}
+
+/// Classify an absolute deletion target against the run workdir.
+///
+/// Returns `true` when the target resolves INSIDE `workdir` (deletion of
+/// the rule's own outputs is a legitimate cleanup idiom), `false` when it
+/// points anywhere else. Unresolvable targets fail CLOSED (blocked).
+fn deletion_target_in_workdir(target: &str, workdir: &Path) -> bool {
+    // Tilde paths expand to home — never inside the run workdir unless the
+    // workdir itself lives under home AND the target descends into it; the
+    // path-form resolution below decides that. `~` alone is home itself.
+    let expanded = if target == "~" || target.starts_with("~/") {
+        match std::env::var("HOME") {
+            Ok(home) => target.replacen('~', &home, 1),
+            Err(_) => return false,
+        }
+    } else {
+        target.to_string()
+    };
+
+    let path = Path::new(&expanded);
+    if !path.is_absolute() {
+        // Relative targets resolve against the shell cwd (the workdir or a
+        // scratch dir inside it), so they are inside by construction — and
+        // the category regexes never matched them anyway.
+        return true;
+    }
+
+    // Lexical containment first (no filesystem round-trip): covers paths
+    // that don't exist yet, which is the common case for rule outputs.
+    let canonical_workdir = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
+    if path.starts_with(&canonical_workdir) || path.starts_with(workdir) {
+        // Reject a trailing `..` escape like `<workdir>/../elsewhere`.
+        if expanded.contains("/../") || expanded.ends_with("/..") {
+            return false;
+        }
+        return true;
+    }
+
+    // Fall back to filesystem resolution (symlinks, `.` components).
+    match path.canonicalize() {
+        Ok(canonical) => canonical.starts_with(&canonical_workdir),
+        // Doesn't exist yet (typical for outputs of this very rule) and
+        // lexically outside workdir — fail closed.
+        Err(_) => false,
+    }
+}
+
+/// Workdir-aware variant of [`validate_shell_safety`] (issue #428).
+///
+/// Identical to the base check EXCEPT for recursive deletions
+/// (`rm -rf` / `rm -r`): a target that resolves INSIDE the run `workdir`
+/// is allowed, because pipelines legitimately clean up their own outputs —
+/// e.g. `rm -rf {config.out_dir}/{config.aligner}/stringtie/{sample}.ballgown`
+/// with an absolute `config.out_dir` pointing under the workdir previously
+/// rendered to `rm -rf /abs/...` and hard-failed mid-pipeline. Deletions
+/// targeting root, home, or any path outside the workdir remain hard
+/// errors, as does every other danger category.
+///
+/// The command must already be RENDERED (post wildcard/config expansion) —
+/// callers pass the output of `render_shell_command`, so `{config.*}`
+/// placeholders have become concrete paths.
+#[must_use = "shell safety validation returns a Result that must be checked"]
+pub fn validate_shell_safety_in_workdir(cmd: &str, workdir: &Path) -> Result<()> {
+    // Only the RECURSIVE_DELETION category gets workdir-aware treatment;
+    // probe it first so non-deletion commands pay nothing extra.
+    let deletion_matches = COMPILED_BLOCK_PATTERNS
+        .iter()
+        .any(|(re, name, _)| *name == "RECURSIVE_DELETION" && re.is_match(cmd));
+
+    if !deletion_matches {
+        return validate_shell_safety(cmd);
+    }
+
+    for target in recursive_deletion_targets(cmd) {
+        if !deletion_target_in_workdir(&target.target, workdir) {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Shell command blocked: dangerous recursive deletion pattern detected in '{}'",
+                    cmd
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Recursive deletions must target paths inside the run workdir; \
+                     remove dangerous shell constructs or use a script file instead"
+                        .to_string(),
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Character class accepted for wildcard values when the workflow declares
 /// no explicit `wildcard_constraints` entry (issue #203): letters, digits,
 /// dot, underscore, dash, and path separator — the superset observed across
