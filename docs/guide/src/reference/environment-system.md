@@ -255,9 +255,11 @@ oxo-flow env check pipeline.oxoflow
 ```
 
 The `env check` command calls the resolver's `validate_spec` for each rule's
-environment, which verifies **backend availability on the current system**
-(e.g. the conda/pixi/docker/singularity binary exists and is runnable; pixi
-additionally requires a `pixi.toml` in the current directory). It does not
+environment (relative file specs — `conda`/`mamba`/`pixi`/
+`venv_requirements` — resolve against the workflow directory first, issue
+#427), which verifies **backend availability on the current system**
+(e.g. the conda/pixi/docker/singularity binary exists and is runnable;
+a pixi spec must point at a `pixi.toml` manifest). It does not
 re-check spec files or image reference syntax — `validate` and `lint` cover
 declaration-level checks.
 

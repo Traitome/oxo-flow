@@ -456,6 +456,44 @@ impl EnvironmentSpec {
         Ok(())
     }
 
+    /// Resolves path-backed environment fields against a root directory.
+    ///
+    /// Relative `conda`, `mamba`, `pixi`, and `venv_requirements` specs are
+    /// joined onto `base_dir` when `base_dir` is set and the spec is not
+    /// already absolute (issue #427): the engine documents the workflow
+    /// file's directory as the single resolution base for relative paths,
+    /// but rule execution runs with cwd = workdir, so every file-backed
+    /// spec must be made valid from the execution cwd before the backend
+    /// reads or hashes it. Absolute specs and `base_dir = None` pass
+    /// through unchanged.
+    ///
+    /// Deliberately NOT resolved here:
+    /// - `venv`: the spec may name a workdir-created artifact, and the
+    ///   venv backend's teardown guard rejects absolute/`..` paths —
+    ///   keeping it raw preserves both semantics;
+    /// - `conda_prefix` / `mamba_prefix`: prefix roots point at an
+    ///   environment store outside the workflow tree, not at a
+    ///   workflow-shipped file;
+    /// - container / module references, which are not paths.
+    #[must_use]
+    pub fn resolve_relative_paths(&self, base_dir: Option<&std::path::Path>) -> EnvironmentSpec {
+        let resolve = |field: Option<&String>| -> Option<String> {
+            field.map(|spec| match base_dir {
+                Some(base) if !std::path::Path::new(spec).is_absolute() => {
+                    base.join(spec).to_string_lossy().into_owned()
+                }
+                _ => spec.clone(),
+            })
+        };
+        EnvironmentSpec {
+            conda: resolve(self.conda.as_ref()),
+            mamba: resolve(self.mamba.as_ref()),
+            pixi: resolve(self.pixi.as_ref()),
+            venv_requirements: resolve(self.venv_requirements.as_ref()),
+            ..self.clone()
+        }
+    }
+
     /// Returns `true` if no environment is specified.
     pub fn is_empty(&self) -> bool {
         self.conda.is_none()
@@ -1964,6 +2002,49 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_relative_paths_anchors_file_backed_env_specs() {
+        // Issue #427: rule shells run with cwd = workdir, so relative
+        // file-backed env specs must anchor to the workflow directory.
+        let spec = EnvironmentSpec {
+            conda: Some("envs/qc.yaml".into()),
+            mamba: Some("envs/align.yaml".into()),
+            pixi: Some("envs/pixi.toml".into()),
+            venv_requirements: Some("envs/requirements.txt".into()),
+            ..Default::default()
+        };
+        let resolved = spec.resolve_relative_paths(Some(std::path::Path::new("/wf")));
+        assert_eq!(resolved.conda.as_deref(), Some("/wf/envs/qc.yaml"));
+        assert_eq!(resolved.mamba.as_deref(), Some("/wf/envs/align.yaml"));
+        assert_eq!(resolved.pixi.as_deref(), Some("/wf/envs/pixi.toml"));
+        assert_eq!(
+            resolved.venv_requirements.as_deref(),
+            Some("/wf/envs/requirements.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_relative_paths_preserves_absolute_and_unset_root() {
+        let spec = EnvironmentSpec {
+            conda: Some("/opt/envs/qc.yaml".into()),
+            venv: Some(".venv".into()),
+            conda_prefix: Some(".oxo-flow/envs".into()),
+            ..Default::default()
+        };
+        // Absolute specs pass through; venv and prefixes deliberately stay
+        // raw (venv may name a workdir artifact; prefixes live outside the
+        // workflow tree).
+        let resolved = spec.resolve_relative_paths(Some(std::path::Path::new("/wf")));
+        assert_eq!(resolved.conda.as_deref(), Some("/opt/envs/qc.yaml"));
+        assert_eq!(resolved.venv.as_deref(), Some(".venv"));
+        assert_eq!(resolved.conda_prefix.as_deref(), Some(".oxo-flow/envs"));
+
+        // No workflow root (workdir == workflow dir, tests) → unchanged.
+        let raw = spec.resolve_relative_paths(None);
+        assert_eq!(raw.conda.as_deref(), Some("/opt/envs/qc.yaml"));
+        assert_eq!(raw.venv.as_deref(), Some(".venv"));
+    }
 
     #[test]
     fn default_resources() {

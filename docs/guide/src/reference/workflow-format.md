@@ -486,7 +486,14 @@ shell_prelude = "set -euo pipefail"
 
 For file-backed env specs the conda/mamba env name is derived as
 `<stem-or-yaml-name>-<hash8>`, where `hash8` is the first 8 hex chars
-of the SHA-256 of the YAML **content** (issue #159). Two workflows that
+of the SHA-256 of the YAML **content** (issue #159). Relative env file
+specs (`conda`, `mamba`, `pixi`, `venv_requirements`) resolve against
+the **workflow directory** — the single base for relative paths in the
+workflow file (issue #427); with `--workdir` the engine anchors them
+automatically, so rule shells running from the workdir still find the
+specs. `venv` (a directory the backend creates in the workdir) and
+`conda_prefix`/`mamba_prefix` (an environment store outside the
+workflow tree) stay relative to the workdir. Two workflows that
 ship different YAMLs under the same name therefore build into distinct
 envs instead of silently sharing one prefix; identical content keeps
 the same name, so specs still deduplicate. Non-file specs (plain names
@@ -2157,7 +2164,15 @@ shell = "caller --input {input[0]} --output {output[0]}"
 
 - **Path resolution** — relative paths join against the run **workdir**;
   absolute paths pass through. `{sample}` and other wildcards expand from
-  the instance context before the read.
+  the instance context before the read. When `--workdir` differs from the
+  workflow directory, workflow-shipped files are anchored automatically:
+  relative env file specs (`conda`/`mamba`/`pixi`/`venv_requirements`),
+  rule scripts, `input_groups` scan patterns, and `[[references]].source`
+  resolve against the workflow directory. `{input}` / `{log}` in rule
+  commands stay workdir-relative — data and logs are addressed from the
+  run cwd (matching the freshness gates and the engine's log-dir
+  creation), so point `--workdir` at the directory holding your data
+  (issue #427).
 - **Phase semantics** — at *plan time* a runtime-function atom whose file
   is missing — or whose file is an output of this run but still holds a
   previous run's stale value — defers (`true`, the rule stays in the plan

@@ -361,6 +361,31 @@ fn absolutize(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Lexically collapse `.`/`..` segments from an absolutized path
+/// (`/wf/./data` → `/wf/data`) without touching the filesystem. The
+/// workflow-dir join in `parent_dir` leaves a `.` segment for bare
+/// filenames; anchored {input}/{log} strings inherit it (issue #427).
+fn normalize_dots(path: PathBuf) -> PathBuf {
+    let mut out = PathBuf::with_capacity(path.as_os_str().len());
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                // Only reachable for the leading segments of a relative
+                // input — absolutize already stripped interior `..` against
+                // a real base. Keep it verbatim rather than guessing.
+                out.push(comp);
+            }
+            other => out.push(other),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
+}
+
 /// Long-form names of `oxo-flow run` flags (plus clap's global --help/
 /// --version). Keep in sync with the `Run` variant in main.rs.
 ///
@@ -946,7 +971,14 @@ pub async fn run_command(
         None => (resolve_workflow(None)?, false),
     };
     json_summary.set_workflow(&workflow);
-    let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+    // Issue #427: everything downstream — base_dir, workflow_root,
+    // runtime_workdir comparison in expand.rs, reference anchoring, env
+    // resolution — compares against this directory. A bare `wf.oxoflow`
+    // resolves its parent to ".", so workflow_root = Some(".") anchors
+    // inputs to "./data/…" which still fails from the run workdir.
+    // Absolutize once; relative workflow_dir only resolves from the
+    // invocation cwd anyway.
+    let workflow_dir = normalize_dots(absolutize(oxo_flow_core::parent_dir(&workflow))?);
     // Workdir default: the workflow's own directory, EXCEPT for repository
     // runs, where the current directory holds the user's data (the clone is
     // a read-only cache).
@@ -962,12 +994,16 @@ pub async fn run_command(
     // acquired as early as possible and held for the whole run; the OS
     // releases it automatically if this process exits or crashes, so there
     // are no stale locks.
-    let workdir_effective = workdir.as_ref().unwrap_or(&workdir_default);
+    // Issue #427: absolutize the effective workdir once — the lock file
+    // path, workflow_root comparison, and expand.rs's runtime_workdir
+    // comparison all want canonical forms.
+    let workdir_effective =
+        normalize_dots(absolutize(workdir.as_ref().unwrap_or(&workdir_default))?);
     // Surface the lock error's suggestion (issue #158): without it a user
     // hitting a busy workdir learns WHAT is wrong but not that the lock
     // auto-releases when the other process exits.
     let _workdir_lock =
-        WorkdirLock::acquire(workdir_effective).map_err(|e| match e.suggestion() {
+        WorkdirLock::acquire(&workdir_effective).map_err(|e| match e.suggestion() {
             Some(s) => anyhow::anyhow!("{e}\n  hint: {s}"),
             None => anyhow::anyhow!("{e}"),
         })?;
@@ -1013,6 +1049,16 @@ pub async fn run_command(
     }
 
     config.apply_defaults();
+    // Issue #427: when the run workdir differs from the workflow directory,
+    // tell expansion so relative input_groups disk-scan patterns emit
+    // workflow-absolute paths — rule shells run with cwd = workdir, and
+    // workflow-relative `{input}` would not resolve from there. Every
+    // other expand caller (preview, validate, cluster, web) leaves this
+    // unset and keeps raw emission. Absolutized so the expand.rs comparison
+    // `runtime_workdir != base_dir` sees canonical forms on both sides.
+    if let Some(effective_workdir) = workdir.as_ref() {
+        config.runtime_workdir = Some(normalize_dots(absolutize(effective_workdir)?));
+    }
     config
         .expand_wildcards()
         .context("failed to expand wildcard rules")?;
@@ -1646,7 +1692,14 @@ pub async fn run_command(
     let exec_config = ExecutorConfig {
         max_jobs: jobs,
         dry_run: false,
-        workdir: workdir.clone().unwrap_or_else(|| workdir_default.clone()),
+        // Issue #427: absolutized — the executor's rule shells run with
+        // cwd = workdir, and anchored {input}/{log} rendering assumes a
+        // usable base. A raw relative value would only resolve from the
+        // invocation directory.
+        workdir: match workdir.as_ref() {
+            Some(p) => normalize_dots(absolutize(p)?),
+            None => workdir_default.clone(),
+        },
         sensitive_values: sensitive_values.clone(),
         shell_prelude: config.defaults.shell_prelude.clone(),
         keep_going,
@@ -1684,6 +1737,17 @@ pub async fn run_command(
         // `file_exists(...)` in `when` conditions resolves relative paths
         // against the workflow root (issue #241) — same as plan time.
         base_dir: Some(workflow_dir.clone()),
+        // Issue #427: file-backed env specs and workflow-shipped rule
+        // inputs/scripts anchor to the workflow directory whenever the
+        // run workdir differs from it — rule shells run with cwd = workdir.
+        // workdir_effective is a CLI value here or workflow_dir itself;
+        // both sides of the comparison are absolute (workflow_dir was
+        // absolutized at the top), so a relative --workdir can't fool it.
+        workflow_root: if *workdir_effective != workflow_dir {
+            Some(workflow_dir.clone())
+        } else {
+            None
+        },
         // Shared with the manifest snapshot resolver so staging and
         // invalidation always see the same backends (issue #80 item 2).
         storage_resolver: crate::commands::run_preview::storage_resolver(),
@@ -1864,14 +1928,22 @@ pub async fn run_command(
                 &wildcard_values,
             );
             let output_full = ref_workdir.join(&output_path);
-            // Resolved once: the fingerprint guards the source CONTENT
-            // (issue #97) and the freshness check below guards mtime vs
-            // the output — both need the same workdir-joined path.
+            // Issue #427: the SOURCE is a workflow-shipped file — anchor it
+            // to the workflow directory, not the run workdir, so existence
+            // probes, fingerprints, and content signatures all see the
+            // same file regardless of --workdir. (Outputs stay anchored to
+            // the run workdir: they are run artifacts.)
             let resolved_source = ref_def.source.as_ref().map(|source| {
-                ref_workdir.join(oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
                     source,
                     &wildcard_values,
-                ))
+                );
+                let path = std::path::Path::new(&expanded);
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    workflow_dir.join(path)
+                }
             });
             let current_fp = oxo_flow_core::config_impact::reference_fingerprint(
                 ref_def,
@@ -1980,12 +2052,27 @@ pub async fn run_command(
             };
 
             if let Some(reason) = rebuild_reason {
+                // Issue #427: the synthetic `{input}` is the reference
+                // source — a workflow-shipped file. When the run workdir
+                // differs from the workflow dir, render it workflow-absolute
+                // so the build shell (cwd = ref_workdir) can read it.
+                let source_rendered: Option<String> = ref_def.source.as_ref().map(|source| {
+                    let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                        source,
+                        &wildcard_values,
+                    );
+                    if std::path::Path::new(&expanded).is_absolute() || workflow_dir == *ref_workdir
+                    {
+                        expanded
+                    } else {
+                        workflow_dir.join(expanded).to_string_lossy().into_owned()
+                    }
+                });
                 let synthetic_rule = oxo_flow_core::rule::Rule {
                     name: format!("ref:{}", ref_def.name),
                     // `{input}` is the renderer's alias for the reference
                     // source (documented in config_impact::reference_fingerprint).
-                    input: ref_def
-                        .source
+                    input: source_rendered
                         .as_deref()
                         .map(|s| vec![s.to_string()].into())
                         .unwrap_or_default(),
@@ -2005,12 +2092,8 @@ pub async fn run_command(
                 // path is shell-quoted — a bare splice breaks reference
                 // builds whose source path contains spaces (issue #136
                 // tier-2 audit).
-                if let Some(source) = ref_def.source.as_deref() {
-                    let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                        source,
-                        &wildcard_values,
-                    );
-                    build_cmd = substitute_source_placeholder(&build_cmd, &expanded);
+                if let Some(expanded) = source_rendered.as_deref() {
+                    build_cmd = substitute_source_placeholder(&build_cmd, expanded);
                 }
                 // References take the same shell prelude as rules (issue #92),
                 // before the environment wrapper resolves.
@@ -2026,9 +2109,15 @@ pub async fn run_command(
                     let resolver = oxo_flow_core::environment::EnvironmentResolver::with_cache_dir(
                         &env_cache_dir,
                     );
-                    let key = resolver.cache_key(env);
+                    // Issue #427: file-backed env specs (`conda = "envs/x.yaml"`)
+                    // resolve against the workflow directory — the build shell's
+                    // cwd is the ref workdir, so a workflow-relative spec would
+                    // not resolve from there. One resolved spec feeds cache_key,
+                    // setup, and wrap so all three agree on the same environment.
+                    let resolved_env = env.resolve_relative_paths(Some(&workflow_dir));
+                    let key = resolver.cache_key(&resolved_env);
                     if !resolver.cache_is_ready(&key).await {
-                        let setup = resolver.setup_command(env)?;
+                        let setup = resolver.setup_command(&resolved_env)?;
                         let out = tokio::process::Command::new("sh")
                             .arg("-c")
                             .arg(&setup)
@@ -2059,7 +2148,8 @@ pub async fn run_command(
                             }
                         }
                     }
-                    build_cmd = resolver.wrap_command(&build_cmd, env, None, ref_workdir)?;
+                    build_cmd =
+                        resolver.wrap_command(&build_cmd, &resolved_env, None, ref_workdir)?;
                 }
                 eprintln!(
                     "  {} Building {}: {} ({})",

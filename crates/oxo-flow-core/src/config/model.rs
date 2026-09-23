@@ -1953,6 +1953,18 @@ pub struct WorkflowConfig {
     #[serde(skip)]
     pub(crate) base_dir: Option<std::path::PathBuf>,
 
+    /// Engine-internal: the effective run workdir, set by the `run`
+    /// command when it differs from [`Self::base_dir`] (issue #427).
+    /// When set, relative `input_groups` disk-scan patterns emit
+    /// workflow-absolute paths into `{input}` — rule shells run with cwd
+    /// = workdir, so workflow-relative paths would not resolve from
+    /// there. Producer-chain outputs are exempt (they are always
+    /// workdir-relative). `None` (every other expand caller) keeps the
+    /// historical raw-path emission. Never serialized — user TOML cannot
+    /// set it.
+    #[serde(skip)]
+    pub runtime_workdir: Option<std::path::PathBuf>,
+
     /// Engine-internal: runtime-discovered output fan-out (issue #227
     /// item 5). Fresh wildcard name → producer rule template, registered
     /// at plan time by [`WorkflowConfig::expand_wildcards`]. One producer

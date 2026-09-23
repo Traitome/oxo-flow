@@ -123,9 +123,29 @@ For `github.com` clones the official URL is tried first, then the
 ### Custom working directory
 
 Relative paths in the workflow resolve against the workflow file's
-directory by default, keeping a workflow self-contained. For a shared,
-read-only workflow (a fixed reference resource), point `--workdir` at the
-analysis directory instead:
+directory — the single resolution base (issue #427). When `--workdir`
+differs from the workflow directory, the engine anchors workflow-shipped
+files so they stay valid from the execution cwd:
+
+- **Environments**: relative `conda` / `mamba` / `pixi` /
+  `venv_requirements` file specs resolve against the workflow directory.
+- **Rule scripts**: workflow-relative script files render absolute
+  (workflow-rooted) so rule shells — which run with cwd = the workdir —
+  can execute them.
+- **`{input}` and `{log}`**: stay workdir-relative. Inputs are addressed
+  from the run cwd (freshness/optional-input gates probe workdir-relative
+  paths), and the engine creates log parent dirs under the workdir. Place
+  workflow-consumed data under the workdir (or pass absolute paths).
+- **input_groups disk scans**: relative patterns scan the workflow
+  directory and emit workflow-absolute paths into `{input}`.
+- **Reference sources**: `[references].source` resolves against the
+  workflow directory; reference outputs still land in the workdir.
+- **Outputs**: stay workdir-relative — they are run artifacts and land
+  under the workdir, matching the checkpoint and `.oxo-flow` state.
+
+This keeps a workflow self-contained: for a shared, read-only workflow (a
+fixed reference resource), point `--workdir` at the analysis directory
+instead:
 
 ```bash
 # Workflow lives in a central, read-only location; data and results
