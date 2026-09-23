@@ -7,36 +7,10 @@ use axum::{Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::ApiError;
+use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn err(s: StatusCode, c: &str, m: String) -> (StatusCode, Json<ApiError>) {
-    (
-        s,
-        Json(ApiError {
-            code: c.into(),
-            message: m,
-            detail: None,
-            suggestion: None,
-        }),
-    )
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
 
 /// Extract the Bearer token from request headers.
 fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {

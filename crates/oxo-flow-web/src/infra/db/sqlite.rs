@@ -334,6 +334,7 @@ impl StorageBackend for SqliteBackend {
             CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON pipelines(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
             CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+            CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category);
             CREATE INDEX IF NOT EXISTS idx_shares_pipeline_id ON shares(pipeline_id);

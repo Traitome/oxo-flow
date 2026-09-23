@@ -27,7 +27,7 @@ oxo-flow graph [OPTIONS] <WORKFLOW>
 | `--format <FORMAT>` | `-f` | Output format: `ascii` (terminal), `dot` (Graphviz), `dot-clustered` (level-grouped), `tree` (indented tree), `mermaid` (Mermaid `graph LR`), `metro` (nf-metro metro map). Default: `ascii` |
 | `--output <FILE>` | `-o` | Save output to a file (useful for dot/svg generation) |
 | `--expanded` | | Show the DAG after wildcard/sample/scatter expansion (the actual runtime DAG) |
-| `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations, the nf-core idiom), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
+| `--granularity <LEVEL>` | | `metro` station zoom (metro only): `rule` (one station per rule, default), `process` (chain-connected same-tool rules collapse into tool-named stations — one stop per analysis step), `module` (one station per module section — the publication/overview tier). Passing it with any other format is an error. See [Graph Subcommand Design](../reference/graph-subcommand.md) |
 | `--verbose` | `-v` | Enable debug-level logging |
 | `--quiet` | | Suppress non-essential output (errors only) |
 | `--no-color` | | Disable colored output |

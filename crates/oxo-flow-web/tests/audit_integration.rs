@@ -7,25 +7,18 @@
 use oxo_flow_web::db;
 use oxo_flow_web::infra::db::StorageBackend;
 use oxo_flow_web::infra::db::sqlite::SqliteBackend;
-use std::sync::OnceLock;
 
-static DB_URL: OnceLock<String> = OnceLock::new();
+mod common;
+
+// The audit tests initialize each DB layer explicitly (the very thing they
+// pin), so the harness's combined `ensure_db` is unused in this binary.
+#[allow(dead_code)]
+fn ensure_db_placeholder() {
+    let _ = common::ensure_db;
+}
 
 fn db_url() -> &'static str {
-    DB_URL.get_or_init(|| {
-        let dir = std::env::var("CARGO_TARGET_TMPDIR")
-            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        // Per-PID path so a concurrent or recycled process never reuses our
-        // database (same pattern as tests/common/mod.rs).
-        let path = format!("{dir}/audit-{}-test.db", std::process::id());
-        // Remove the WAL/SHM companions too: a stale -wal from a previous
-        // process gets replayed into a freshly created .db and resurrects
-        // rows from a former run (observed as UNIQUE constraint failures).
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(format!("{path}-wal"));
-        let _ = std::fs::remove_file(format!("{path}-shm"));
-        format!("sqlite:{path}?mode=rwc")
-    })
+    common::db_url()
 }
 
 #[tokio::test]
@@ -55,21 +48,31 @@ async fn audit_log_action_survives_both_init_paths() {
 }
 
 #[tokio::test]
-async fn insert_run_fills_all_columns() {
+async fn runs_schema_accepts_backend_insert() {
     let url = db_url();
     db::init_db(url).await.expect("db init");
 
-    db::insert_run(&db::Run {
-        id: "run-fill-1".into(),
-        user_id: "default".into(),
-        workflow_name: "fill-test".into(),
-        status: "queued".into(),
-        pid: None,
-        started_at: None,
-        finished_at: None,
-    })
-    .await
-    .expect("insert_run");
+    // The production insert path is the sqlite backend's create_run; the
+    // legacy insert_run helper was removed as dead code (its only remaining
+    // purpose was this test).
+    let backend = SqliteBackend::new(url).await.expect("backend connect");
+    backend
+        .create_run(&oxo_flow_web::infra::db::models::RunRow {
+            id: "run-fill-1".into(),
+            user_id: "default".into(),
+            pipeline_id: None,
+            pipeline_snapshot: String::new(),
+            workflow_name: Some("fill-test".into()),
+            status: "queued".into(),
+            phase: "parsing".into(),
+            pid: None,
+            workdir: None,
+            started_at: None,
+            finished_at: None,
+            created_at: String::new(),
+        })
+        .await
+        .expect("create_run");
 
     let pool = db::pool();
     let row: (String, String, String, Option<String>, Option<String>, String) = sqlx::query_as(

@@ -14,42 +14,10 @@ use crate::extract::ApiQuery;
 use super::checkpoint_status;
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::ApiError;
+use crate::domains::workflow::handlers::{ApiError, err, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn err(s: StatusCode, c: &str, m: String) -> (StatusCode, Json<ApiError>) {
-    (
-        s,
-        Json(ApiError {
-            code: c.into(),
-            message: m,
-            detail: None,
-            suggestion: None,
-        }),
-    )
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
-/// Parse a memory declaration ("4GB", "512MB", "8G", bare number = MB)
-/// into megabytes (issue #82 P1-9 quota pre-flight).
-fn parse_memory_mb(value: &str) -> u64 {
-    let v = value.trim().to_lowercase();
-    let (num, mult) = if let Some(n) = v.strip_suffix("gb").or_else(|| v.strip_suffix('g')) {
-        (n.trim(), 1024u64)
-    } else if let Some(n) = v.strip_suffix("mb").or_else(|| v.strip_suffix('m')) {
-        (n.trim(), 1u64)
-    } else {
-        (v.as_str(), 1u64)
-    };
-    num.parse::<f64>()
-        .map(|n| (n * mult as f64) as u64)
-        .unwrap_or(0)
-}
 
 /// Fetch a run row and enforce ownership (issue #82 P0-4): admins may
 /// address any run, everyone else only their own. Foreign and unknown runs
@@ -272,8 +240,11 @@ pub async fn create_run(
             let memory_mb: u64 = wf
                 .rules
                 .iter()
-                .filter_map(|r| r.memory.clone())
-                .map(|m| parse_memory_mb(&m))
+                .filter_map(|r| {
+                    r.memory
+                        .as_deref()
+                        .and_then(oxo_flow_core::scheduler::parse_memory_mb)
+                })
                 .sum();
             (threads.max(1), memory_mb)
         })
@@ -463,8 +434,9 @@ pub async fn create_run(
 /// `next_cursor: null` means the last page.
 ///
 /// Pagination is cursor-based by design: `created_at` is not unique, but a
-/// cursor plus the `ORDER BY created_at DESC` scan is stable and index-free.
-/// A `page` parameter is therefore rejected with 400 rather than ignored.
+/// cursor plus the `ORDER BY created_at DESC` scan is stable, and the
+/// `idx_runs_created_at` index keeps it bounded. A `page` parameter is
+/// therefore rejected with 400 rather than ignored.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListRunsQuery {
@@ -706,9 +678,10 @@ pub async fn get_run_status(
 
     // Real telemetry timeline (issue #82 P1-2): the executor's per-run
     // sampler appends to workdir/metrics.jsonl; an absent file yields an
-    // empty timeline (never fabricated numbers).
+    // empty timeline (never fabricated numbers). Bounded read: this
+    // endpoint is polled, so only the newest window is returned.
     let workdir = std::path::Path::new(run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics(workdir);
+    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
     let last = metrics.last();
     let resources = ResourceSnapshot {
         cpu_pct: last.and_then(|m| m["cpu_pct"].as_f64()).unwrap_or(0.0),
@@ -1682,9 +1655,10 @@ pub async fn get_ai_status(
 
     // Real telemetry (issue #82 P1-2): memory/CPU of the run's process
     // tree, sampled by the executor; the trend timeline travels in the
-    // response alongside the derived analysis.
+    // response alongside the derived analysis. Bounded read: this endpoint
+    // is polled every 5s while the monitor tab is visible.
     let workdir = std::path::Path::new(_run.workdir.as_deref().unwrap_or(""));
-    let metrics = checkpoint_status::load_metrics(workdir);
+    let metrics = checkpoint_status::load_metrics_bounded(workdir, 256 * 1024);
     let last = metrics.last();
     let host = crate::sys::get_host_resources();
     let resources = ResourceUsage {

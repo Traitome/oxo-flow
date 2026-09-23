@@ -20,19 +20,7 @@ use std::path::{Path as FsPath, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::ApiError;
-
-fn err(status: StatusCode, code: &str, msg: String) -> (StatusCode, Json<ApiError>) {
-    (
-        status,
-        Json(ApiError {
-            code: code.into(),
-            message: msg,
-            detail: None,
-            suggestion: None,
-        }),
-    )
-}
+use crate::domains::workflow::handlers::{ApiError, err};
 
 type ApiErrorRes = (StatusCode, Json<ApiError>);
 

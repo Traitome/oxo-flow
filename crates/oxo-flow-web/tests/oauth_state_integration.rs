@@ -9,27 +9,12 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use oxo_flow_web::server;
 use serde_json::{Value, json};
-use std::sync::OnceLock;
 use tower::ServiceExt;
 
-static DB_URL: OnceLock<String> = OnceLock::new();
-
-fn db_url() -> &'static str {
-    DB_URL.get_or_init(|| {
-        let dir = std::env::var("CARGO_TARGET_TMPDIR")
-            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        let path = format!("{dir}/oauth-test.db");
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(format!("{path}-wal"));
-        let _ = std::fs::remove_file(format!("{path}-shm"));
-        format!("sqlite:{path}?mode=rwc")
-    })
-}
+mod common;
 
 async fn ensure_db() {
-    let url = db_url();
-    oxo_flow_web::db::init_db(url).await.ok();
-    oxo_flow_web::infra::db::sqlite::init_pool(url).await;
+    common::ensure_db().await;
 }
 
 async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {

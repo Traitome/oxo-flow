@@ -38,7 +38,8 @@ pub fn discover_workflow_file_in(dir: &Path) -> Result<PathBuf> {
     if oxoflow_files.is_empty() {
         return Err(anyhow::anyhow!(
             "no .oxoflow file found in {}.\n\
-            The repository must contain a workflow file (main.oxoflow or any *.oxoflow).",
+            The repository must contain a workflow file (main.oxoflow or any *.oxoflow).\n\
+            Create one with `oxo-flow init <name>` or `oxo-flow template <description> -o <file>`.",
             dir.display()
         ));
     }
@@ -167,6 +168,26 @@ pub fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<V
 /// quotes (`'` → `'\''`).
 fn shell_quote_word(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Compute SHA-256 checksum of a file (streaming, 64KB buffer).
+pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
+    let mut reader = std::io::BufReader::with_capacity(65536, file);
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Wrap command with environment activation.

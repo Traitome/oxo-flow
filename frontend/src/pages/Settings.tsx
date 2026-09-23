@@ -176,7 +176,7 @@ export default function Settings() {
               <div><SettingLabel text={t('settings.ai.model')} /><SettingInput type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4-pro" /></div>
               <div><SettingLabel text={t('settings.ai.url')} /><SettingInput type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" /></div>
               <div className="row">
-                <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? 'Saving...' : t('settings.ai.save')}</button>
+                <button onClick={handleSave} disabled={saving} className="btn-run">{saving ? t('settings.ai.saving') : t('settings.ai.save')}</button>
                 <button onClick={handleTest} className="action-btn">{t('settings.ai.test')}</button>
               </div>
               {testResult && <div className={`result-bar ${testResult.startsWith('✅') ? 'success' : 'error'}`} style={{ marginTop: 0 }}>{testResult}</div>}
@@ -333,7 +333,7 @@ export default function Settings() {
               </div>
               <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button className="btn-run" onClick={handleSaveQuota} disabled={quotaSaving}>
-                  {quotaSaving ? 'Saving...' : t('settings.quota.save')}
+                  {quotaSaving ? t('settings.ai.saving') : t('settings.quota.save')}
                 </button>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>{t('settings.quota.adminOnly')}</span>
               </div>

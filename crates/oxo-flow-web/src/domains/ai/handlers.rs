@@ -9,20 +9,12 @@ use axum::{Extension, Json, http::StatusCode};
 use crate::domains::ai::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
-use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
+use crate::domains::workflow::handlers::{
+    ApiError, ai_not_configured_error, err, error_event, get_pool,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
 
 /// Shared-provider writes are admin-only outside personal mode (issue #82
 /// P0-5): reconfiguring the runtime AI provider affects every user's AI

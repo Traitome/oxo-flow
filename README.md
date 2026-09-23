@@ -102,16 +102,15 @@ cargo install oxo-flow-cli
 conda install -c bioconda oxo-flow-cli
 ```
 
-> **Version caveat** — the bioconda recipe lags the project. It currently
-> delivers **0.15.0** (verified 2026-09-09), two minor versions behind the
-> current release, and features documented in this README are missing from it
-> (`oxo-flow graph -f metro`, for example, fails with
-> `unsupported graph format: metro`). Install from the pre-built binaries
-> above or `cargo install oxo-flow-cli` (crates.io) for the current version.
+> **Version caveat** — the bioconda recipe can lag a freshly cut release
+> while the bot recipe update lands. Check `conda search -c bioconda
+> oxo-flow-cli` for the currently delivered version; if it is behind the
+> release notes you need, install from the pre-built binaries above or
+> `cargo install oxo-flow-cli` (crates.io).
 
 ### Run with Docker
 
-Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.16`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:
+Pre-built images are published to GitHub Container Registry on every release (and every push to `main`). Release images are multi-arch (`linux/amd64` + `linux/arm64`, so Apple silicon and ARM servers pull a native image). `:latest` moves only after the release image passes a health smoke test; a rolling `:<major.minor>` tag (e.g. `:0.19`) tracks the newest patch of each minor line, and `:main` is a multi-arch dev build from source:
 
 ```bash
 # Web UI at http://localhost:3000 (CLI is inside the same image)
@@ -251,7 +250,7 @@ See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands
 
 ## Web API
 
-The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **100+ endpoints** across 9 domains (observability, pipeline, execution, AI, auth, collaboration, data, chat, clusters). Full API reference at the [OpenAPI 3.1 spec](https://traitome.github.io/oxo-flow/latest/reference/api/).
+The `oxo-flow serve` command starts an [axum](https://github.com/tokio-rs/axum)-powered REST server with **100+ endpoints** across 9 domains (workflow, execution, dag, AI, auth, collaboration, observability, chat, clusters). Full API reference at the [Web API reference](https://traitome.github.io/oxo-flow/latest/reference/web-api/) (`GET /api/openapi.json` serves the live OpenAPI 3.1 spec).
 
 
 oxo-flow is organized as a Cargo workspace with four crates, plus a fifth

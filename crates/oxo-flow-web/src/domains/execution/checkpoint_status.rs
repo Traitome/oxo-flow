@@ -320,11 +320,40 @@ pub fn load_benchmarks(
 /// JSON samples in chronological order: `{ts, memory_mb, cpu_pct,
 /// processes}`. An absent or unreadable file yields an empty list — the
 /// monitor then shows "no telemetry" instead of fabricated numbers.
-pub fn load_metrics(run_dir: &Path) -> Vec<serde_json::Value> {
-    let Ok(content) = std::fs::read_to_string(run_dir.join("metrics.jsonl")) else {
+///
+/// Returns only the newest `max_bytes` of the telemetry file. Telemetry
+/// grows once per sample for the whole run lifetime and status endpoints
+/// re-read it on every poll, so the read is bounded. When truncated, the
+/// leading partial line is skipped and only whole lines within the window
+/// are returned (chronological order preserved).
+pub fn load_metrics_bounded(run_dir: &Path, max_bytes: u64) -> Vec<serde_json::Value> {
+    let Ok(mut file) = std::fs::File::open(run_dir.join("metrics.jsonl")) else {
         return Vec::new();
     };
-    content
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let skip = file_len.saturating_sub(max_bytes);
+    // Seek near the end first so we never read the whole file into memory.
+    if skip > 0 && std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(skip)).is_err() {
+        return Vec::new();
+    }
+    let mut content = String::new();
+    {
+        use std::io::Read;
+        if std::io::BufReader::new(file)
+            .take(max_bytes)
+            .read_to_string(&mut content)
+            .is_err()
+        {
+            return Vec::new();
+        }
+    }
+    // Drop the first line when we skipped into the middle of one.
+    let start = if skip > 0 {
+        content.find('\n').map(|i| i + 1).unwrap_or(content.len())
+    } else {
+        0
+    };
+    content[start..]
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .collect()

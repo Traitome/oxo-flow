@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react';
+import { t } from '../context/I18n';
 
 interface Props {
   children: ReactNode;
@@ -53,9 +54,9 @@ export default class ErrorBoundary extends Component<Props, State> {
           gap: '1rem',
         }}
       >
-        <h2 style={{ margin: 0, color: 'var(--color-error)' }}>Something went wrong</h2>
+        <h2 style={{ margin: 0, color: 'var(--color-error)' }}>{t('errorBoundary.title')}</h2>
         <p style={{ color: 'var(--color-text-secondary)', maxWidth: 480 }}>
-          The application hit an unexpected error. You can reload the page or try resetting the error boundary.
+          {t('errorBoundary.body')}
         </p>
         <pre
           style={{
@@ -72,8 +73,8 @@ export default class ErrorBoundary extends Component<Props, State> {
           {error.message}
         </pre>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-          <button className="btn-run" onClick={this.reload}>Reload</button>
-          <button className="btn-sm" onClick={this.reset}>Reset error boundary</button>
+          <button className="btn-run" onClick={this.reload}>{t('errorBoundary.reload')}</button>
+          <button className="btn-sm" onClick={this.reset}>{t('errorBoundary.reset')}</button>
         </div>
       </div>
     );

@@ -1502,17 +1502,19 @@ pub fn lint_format(
     // emitted the same diagnostic N times; pinned by
     // lint_w021_script_edge_reported_once_regardless_of_rule_count).
     {
-        let has_edge = |rule: &crate::rule::Rule, producer: &str| {
-            rule.depends_on.iter().any(|d| d == producer)
-                || dag.as_ref().is_some_and(|d| {
-                    d.dependencies(&rule.name)
-                        .map(|deps| deps.iter().any(|d| d == producer))
-                        .unwrap_or(false)
-                })
-        };
         for rule in &config.rules {
             let Some(script_path) = rule.script.as_deref() else {
                 continue;
+            };
+            // The DAG dependency set depends only on the consuming rule,
+            // so resolve it once per rule instead of once per producer.
+            let dag_deps: Option<Vec<String>> =
+                dag.as_ref().and_then(|d| d.dependencies(&rule.name).ok());
+            let has_edge = |producer: &str| {
+                rule.depends_on.iter().any(|d| d == producer)
+                    || dag_deps
+                        .as_ref()
+                        .is_some_and(|deps| deps.iter().any(|d| d == producer))
             };
             let mut scanned = script_path.to_string();
             if let Some(base) = script_base
@@ -1522,7 +1524,7 @@ pub fn lint_format(
                 scanned.push_str(&content);
             }
             for producer in &config.rules {
-                if producer.name == rule.name || has_edge(rule, &producer.name) {
+                if producer.name == rule.name || has_edge(&producer.name) {
                     continue;
                 }
                 for output in &producer.output {

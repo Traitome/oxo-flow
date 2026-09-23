@@ -187,7 +187,11 @@ export default function PipelineEditor() {
       });
       session.setRunResult({
         runId: res.run_id,
-        message: `${dryRun ? 'Dry-Run' : 'Run'} started: ${res.run_id.slice(0, 8)}... | ${res.execution_plan.total_rules} rules, est. ${res.estimated_resources.estimated_duration_secs}s`,
+        message: t('editor.runStarted')
+          .replace('{{kind}}', dryRun ? 'Dry-Run' : 'Run')
+          .replace('{{id}}', res.run_id.slice(0, 8))
+          .replace('{{rules}}', String(res.execution_plan.total_rules))
+          .replace('{{secs}}', String(res.estimated_resources.estimated_duration_secs)),
         type: 'success',
       });
       if (!dryRun && res.run_id) {
@@ -195,8 +199,8 @@ export default function PipelineEditor() {
         navigate(`/runs/${res.run_id}`);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to start run';
-      session.setRunResult({ message: `Error: ${msg}`, type: 'error' });
+      const msg = err instanceof Error ? err.message : t('editor.runStartFailed');
+      session.setRunResult({ message: t('editor.errorPrefix').replace('{{message}}', msg), type: 'error' });
     }
     setRunning(false);
   };
@@ -366,14 +370,19 @@ export default function PipelineEditor() {
         // Editing an existing saved pipeline updates it in place (the old
         // behavior always created a duplicate row).
         await api.updatePipeline(savedId, { name, toml_content: toml });
-        session.setRunResult({ message: `Pipeline "${name}" updated`, type: 'success' });
+        session.setRunResult({ message: t('editor.saved').replace('{{name}}', name), type: 'success' });
         return;
       }
       const res = await api.createPipeline({ name, toml_content: toml });
-      session.setRunResult({ message: `Pipeline "${name}" saved (ID: ${res.id.slice(0, 8)}...)`, type: 'success' });
+      session.setRunResult({
+        message: t('editor.saved')
+          .replace('{{name}}', name)
+          .replace('{{id}}', res.id.slice(0, 8)),
+        type: 'success',
+      });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save';
-      session.setRunResult({ message: `Save failed: ${msg}`, type: 'error' });
+      const msg = err instanceof Error ? err.message : t('editor.saveFailed');
+      session.setRunResult({ message: t('editor.saveError').replace('{{message}}', msg), type: 'error' });
     }
   };
 

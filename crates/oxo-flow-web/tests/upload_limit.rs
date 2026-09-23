@@ -12,6 +12,8 @@ use oxo_flow_web::server;
 use serde_json::Value;
 use tower::ServiceExt;
 
+mod common;
+
 const PAYLOAD_BYTES: usize = 5 * 1024 * 1024;
 
 /// This binary contains exactly one test, so mutating the process-global
@@ -19,11 +21,6 @@ const PAYLOAD_BYTES: usize = 5 * 1024 * 1024;
 /// running when `set_var` executes.
 fn set_workspace_root(root: &str) {
     unsafe { std::env::set_var("OXO_FLOW_WORKSPACE", root) };
-}
-
-async fn ensure_db(url: &str) {
-    oxo_flow_web::db::init_db(url).await.ok();
-    oxo_flow_web::infra::db::sqlite::init_pool(url).await;
 }
 
 #[tokio::test]
@@ -34,11 +31,7 @@ async fn upload_larger_than_default_body_limit_is_stored_whole() {
     let _ = std::fs::remove_dir_all(&ws);
     set_workspace_root(&ws);
 
-    let db = format!("sqlite:{tmp}/upload-limit-test.db?mode=rwc");
-    let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db"));
-    let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db-wal"));
-    let _ = std::fs::remove_file(format!("{tmp}/upload-limit-test.db-shm"));
-    ensure_db(&db).await;
+    common::ensure_db().await;
 
     // Hand-built multipart body: a `path` field plus one file field.
     let boundary = "oxoflow-test-boundary";

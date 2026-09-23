@@ -163,10 +163,12 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'audit.lookback': 'Lookback (days)',
     'audit.export': 'Export CSV',
     'audit.empty': 'No audit entries in the last {{days}} days',
-    'audit.page': 'Page',
-    'audit.of': 'of',
+    'audit.pageInfo': 'Page {{page}} of {{pages}} ({{total}} total)',
+    'errorBoundary.title': 'Something went wrong',
+    'errorBoundary.body': 'The application hit an unexpected error. You can reload the page or try resetting the error boundary.',
+    'errorBoundary.reload': 'Reload',
+    'errorBoundary.reset': 'Reset error boundary',
     'audit.perPage': 'per page',
-    'audit.total': '{{total}} total',
     'audit.prev': 'Previous',
     'audit.next': 'Next',
     'audit.time': 'Time',
@@ -245,6 +247,7 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'settings.ai.model': 'Model',
     'settings.ai.url': 'API URL (optional)',
     'settings.ai.save': 'Save',
+    'settings.ai.saving': 'Saving...',
     'settings.ai.test': 'Test Connection',
     'settings.ai.status': 'Current Status',
     'settings.ai.providerLabel': 'Provider',
@@ -370,12 +373,18 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'editor.save': 'Save',
     'editor.run': 'Run',
     'editor.starting': 'Starting...',
+    'editor.runStarted': '{{kind}} started: {{id}}… | {{rules}} rules, est. {{secs}}s',
+    'editor.runStartFailed': 'Failed to start run',
+    'editor.saveFailed': 'Failed to save',
+    'editor.saved': 'Pipeline "{{name}}" updated',
+    'editor.saveError': 'Save failed: {{message}}',
+    'editor.errorPrefix': 'Error: {{message}}',
     'editor.validation.valid': 'Valid',
     'editor.validation.errors': '{{count}} error(s)',
     'editor.validation.tooltip.valid': 'Workflow is valid',
     'editor.validation.tooltip.invalid': 'Show validation errors',
     'editor.errors.title': 'Validation Errors',
-    'editor.errors.line': 'line',
+    'editor.errors.line': 'Line {{line}}',
     'editor.errors.suggestion': '→ {{suggestion}}',
     'editor.history.empty': 'Save the pipeline to enable version history — every save and update snapshots the previous version, and you can load or roll back to any of them here.',
     'editor.history.loading': 'Loading history…',
@@ -691,10 +700,12 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'audit.lookback': '回溯（天）',
     'audit.export': '导出 CSV',
     'audit.empty': '最近 {{days}} 天没有审计记录',
-    'audit.page': '第',
-    'audit.of': '页，共',
+    'audit.pageInfo': '第 {{page}} 页，共 {{pages}} 页（共 {{total}} 条）',
+    'errorBoundary.title': '出错了',
+    'errorBoundary.body': '应用遇到了意外错误。你可以刷新页面，或尝试重置错误边界。',
+    'errorBoundary.reload': '刷新',
+    'errorBoundary.reset': '重置错误边界',
     'audit.perPage': '条/页',
-    'audit.total': '共 {{total}} 条',
     'audit.prev': '上一页',
     'audit.next': '下一页',
     'audit.time': '时间',
@@ -773,6 +784,7 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'settings.ai.model': '模型',
     'settings.ai.url': 'API URL（可选）',
     'settings.ai.save': '保存',
+    'settings.ai.saving': '保存中…',
     'settings.ai.test': '测试连接',
     'settings.ai.status': '当前状态',
     'settings.ai.providerLabel': '提供商',
@@ -898,6 +910,12 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'editor.save': '保存',
     'editor.run': '运行',
     'editor.starting': '启动中…',
+    'editor.runStarted': '{{kind}}已启动: {{id}}… | {{rules}} 条规则, 预计 {{secs}}s',
+    'editor.runStartFailed': '运行启动失败',
+    'editor.saveFailed': '保存失败',
+    'editor.saved': '流水线“{{name}}”已更新',
+    'editor.saveError': '保存失败: {{message}}',
+    'editor.errorPrefix': '错误: {{message}}',
     'editor.validation.valid': '有效',
     'editor.validation.errors': '{{count}} 个错误',
     'editor.validation.tooltip.valid': '流程有效',
@@ -1081,6 +1099,16 @@ interface I18nValue {
 const I18nContext = createContext<I18nValue | null>(null);
 
 const LANG_STORAGE_KEY = 'oxo_lang';
+
+/**
+ * Standalone translator for non-hook contexts (class components like error
+ * boundaries). Reads the current language from localStorage — the same
+ * source I18nProvider persists to — and falls back to the key itself.
+ */
+export function t(key: string): string {
+  const lang = localStorage.getItem(LANG_STORAGE_KEY) === 'zh' ? 'zh' : 'en';
+  return TRANSLATIONS[lang][key] ?? key;
+}
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {

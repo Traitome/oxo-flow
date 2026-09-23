@@ -106,7 +106,7 @@ pub fn error_event(error: &ApiError) -> axum::response::sse::Event {
         .data(data)
 }
 
-fn now_iso() -> String {
+pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 

@@ -41,7 +41,12 @@ use std::path::{Path, PathBuf};
     long_about = "oxo-flow is a high-performance, modular bioinformatics pipeline engine\n\
                    built from first principles in Rust. It supports conda, mamba, pixi,\n\
                    docker, singularity, venv, and environment-modules backends (plus the\n\
-                   system environment) with DAG-based execution."
+                   system environment) with DAG-based execution.",
+    after_help = "Get started:\n  \
+        oxo-flow init my-pipeline && cd my-pipeline   # scaffold an example project\n  \
+        oxo-flow run my-pipeline.oxoflow               # execute it\n  \
+        oxo-flow template \"RNA-seq with STAR\" -o pipeline.oxoflow   # generate a workflow (add --ai for LLM authoring)\n\n\
+        Docs: https://traitome.github.io/oxo-flow/"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -61,8 +66,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// provenance verify, license, and ai explain; every other command rejects
-    /// the flag instead of silently ignoring it.
+    /// schema, license, and ai; every other command rejects the flag instead
+    /// of silently ignoring it.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -338,7 +343,7 @@ pub enum Commands {
         workflow: PathBuf,
         #[arg(
             long,
-            help = "Validate as a sub-workflow fragment (skip DAG validation)"
+            help = "Validate as a sub-workflow fragment (skips DAG and input-existence checks)"
         )]
         as_include: bool,
         /// Enable AI-powered semantic validation.
@@ -394,9 +399,9 @@ pub enum Commands {
         /// fix). Overrides `[ai] team_profile` in the config.
         #[arg(long = "ai-team-profile", value_name = "PROFILE")]
         ai_team_profile: Option<String>,
-        /// Fresh-draw attempts for the whole generation (pass@k with early
-        /// exit: the deterministic gates decide, so later attempts are only
-        /// paid when earlier ones fail).
+        /// Fresh-draw attempts for the whole generation (best-of-N: up to N
+        /// independent tries; the first one passing the deterministic gates
+        /// wins, so later attempts are only paid when earlier ones fail).
         #[arg(long = "ai-attempts", value_name = "N", default_value_t = 1)]
         ai_attempts: u32,
     },
@@ -456,9 +461,9 @@ pub enum Commands {
         expanded: bool,
         /// Station zoom for the metro format (default: rule): 'rule' keeps
         /// one station per rule; 'process' collapses chain-connected
-        /// same-tool rules into tool-named stations (nf-core idiom);
-        /// 'module' emits one station per module section
-        /// (publication/overview tier).
+        /// same-tool rules into tool-named stations (one stop per analysis
+        /// step, like a metro map); 'module' emits one station per module
+        /// section (publication/overview tier).
         #[arg(long, value_enum)]
         granularity: Option<MetroArg>,
     },
@@ -662,7 +667,7 @@ pub enum Commands {
         #[arg(
             long = "acct",
             value_name = "PATH",
-            help = "Import sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section"
+            help = "Import SLURM sacct-style CSV accounting (JobID,JobName,State,Elapsed,CPUTime,MaxRSS) into a Resource Accounting section"
         )]
         acct: Option<PathBuf>,
         #[arg(
@@ -952,7 +957,7 @@ pub enum ClusterAction {
             short = 'o',
             long,
             default_value = "cluster_scripts",
-            help = "Output file path"
+            help = "Directory for generated job scripts"
         )]
         output: PathBuf,
         #[arg(

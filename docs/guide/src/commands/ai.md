@@ -137,7 +137,7 @@ loop. The steps:
   draws otherwise spent every round on lookups and hit the cap with
   nothing written.
 - `--ai-attempts N` is the fresh-draw budget **across** generations
-  (pass@k with early exit): every attempt starts from a new draw, the
+  (best-of-N with early exit): every attempt starts from a new draw, the
   deterministic gates decide, and later attempts are only paid when
   earlier ones fail. Default 1.
 - Before any model round is spent on a failed draft, mechanical error

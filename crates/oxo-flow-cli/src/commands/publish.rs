@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use crate::commands::compute_sha256;
 
 /// Bundle a workflow with its referenced environment files into a verifiable archive.
 ///
@@ -519,23 +519,6 @@ fn collect_directory_files(
         }
     }
     Ok(())
-}
-
-/// Compute SHA-256 checksum of a file (streaming, 64KB buffer).
-fn compute_sha256(path: &Path) -> Result<String> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
-    let mut reader = std::io::BufReader::with_capacity(65536, file);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Generate conda lockfiles for collected environment YAML files.

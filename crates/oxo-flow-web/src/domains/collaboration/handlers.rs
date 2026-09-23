@@ -6,14 +6,10 @@ use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::collaboration::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, get_pool};
+use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
 
 #[utoipa::path(
     post,

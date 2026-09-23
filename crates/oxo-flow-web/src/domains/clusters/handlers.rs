@@ -4,27 +4,13 @@ use axum::extract::Path;
 use axum::{Extension, Json, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, err};
+use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
 
 use super::service;
 use super::types::{ClusterInfo, ClusterProbeResult, ClusterUpsertRequest};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
 
 /// Cluster connections hold SSH credentials shared by the whole platform.
 /// Managing them (upsert/delete) is admin-only outside personal mode

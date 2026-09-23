@@ -25,7 +25,7 @@ oxo-flow cluster <ACTION> [OPTIONS]
 | `submit` | Submit a workflow to a cluster scheduler |
 | `status` | Show the status of submitted cluster jobs |
 | `cancel` | Cancel submitted cluster jobs |
-| `logs` | Fetch the accounting record for a submitted cluster job |
+| `logs` | Fetch the scheduler's job record (SLURM: `sacct` accounting output) for a submitted cluster job |
 
 ---
 
@@ -191,7 +191,7 @@ oxo-flow cluster status 12345 12346
 oxo-flow cluster cancel -b slurm 12345 12346
 ```
 
-### Fetch a job's accounting record
+### Fetch a job's scheduler record
 
 ```bash
 oxo-flow cluster logs -b slurm 12345

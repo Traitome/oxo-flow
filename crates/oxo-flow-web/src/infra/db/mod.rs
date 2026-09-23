@@ -5,18 +5,13 @@ pub mod models;
 pub mod postgres;
 pub mod sqlite;
 
-/// Unified pool accessor: returns a reference to whichever pool is active.
+/// Unified pool accessor: returns a reference to the SQLite pool.
 ///
-/// When the `postgres` feature is enabled, PostgreSQL is tried first
-/// (matching the init order in `main.rs`), then SQLite as fallback.
+/// The handlers are SQLite-backed; even with the `postgres` feature enabled,
+/// `init_pool` (main.rs) decides which backend is live and handlers read
+/// through this SQLite pool accessor.
 #[cfg(feature = "postgres")]
 pub fn try_pool() -> Result<&'static sqlx::SqlitePool, String> {
-    // PostgreSQL takes priority when compiled in
-    if let Ok(_pg) = postgres::try_pool() {
-        // We have a PG pool — but handlers expect SqlitePool.
-        // For now, handlers that are PG-aware will call postgres::try_pool directly.
-        // Others fall back to SQLite.
-    }
     sqlite::try_pool()
 }
 

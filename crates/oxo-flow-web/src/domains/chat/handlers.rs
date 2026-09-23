@@ -11,20 +11,12 @@ use std::convert::Infallible;
 use super::service;
 use super::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
-use crate::domains::workflow::handlers::{ApiError, ai_not_configured_error, err, error_event};
+use crate::domains::workflow::handlers::{
+    ApiError, ai_not_configured_error, err, error_event, get_pool,
+};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
-
-fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
-    crate::infra::db::sqlite::try_pool().map_err(|_| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DB_ERROR",
-            "Database not available".into(),
-        )
-    })
-}
 
 /// Server-side chat persistence (issue #81): upsert the session row and
 /// Whether the caller may write into this session: it either does not exist

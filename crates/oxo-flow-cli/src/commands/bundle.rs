@@ -7,9 +7,10 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use crate::commands::compute_sha256;
 
 /// Supported bundle archive formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,22 +182,6 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
 
     // Verified successfully — hand ownership of the directory to the run.
     Ok((workflow_path, extract_dir.keep()))
-}
-
-/// Compute SHA-256 checksum of a file (streaming, 64KB buffer).
-fn compute_sha256(path: &Path) -> Result<String> {
-    let file = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::with_capacity(65536, file);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Find manifest.json in an extracted bundle directory.

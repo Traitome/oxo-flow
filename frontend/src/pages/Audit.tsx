@@ -135,7 +135,10 @@ export default function Audit() {
             {t('audit.prev')}
           </button>
           <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
-            {t('audit.page')} {data.page} {t('audit.of')} {totalPages} {t('audit.page')} ({t('audit.total').replace('{{total}}', String(data.total))})
+            {t('audit.pageInfo')
+              .replace('{{page}}', String(data.page))
+              .replace('{{pages}}', String(totalPages))
+              .replace('{{total}}', String(data.total))}
           </span>
           <button
             className="btn-sm"
