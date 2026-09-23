@@ -2,7 +2,8 @@
 //!
 //! Goal: <100ms for 1000 log lines against full error pattern library.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 // Simulate the diagnostics benchmark using the core diagnostic logic.
 // In v0.8, the DiagnosticsEngine lives in oxo-flow-web. We benchmark

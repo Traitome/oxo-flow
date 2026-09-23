@@ -2,9 +2,10 @@
 //!
 //! Goal: <50ms for 500 rules.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oxo_flow_core::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use std::hint::black_box;
 
 fn build_rules_toml(count: usize) -> String {
     let mut toml = String::from("[workflow]\nname = \"bench\"\nversion = \"0.1.0\"\n");

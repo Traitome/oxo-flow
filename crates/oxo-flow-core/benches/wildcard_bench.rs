@@ -17,9 +17,10 @@
 //! Variable counts are chosen to reflect real pipeline sizes: 10–1000
 //! samples, 2 read ends, and up to 23 chromosomes for WGS workloads.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use oxo_flow_core::wildcard::{WildcardValues, cartesian_expand, expand_pattern, pattern_to_regex};
 use std::collections::HashMap;
+use std::hint::black_box;
 
 // ---------------------------------------------------------------------------
 // expand_pattern — single substitution
