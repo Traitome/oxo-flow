@@ -363,6 +363,7 @@ impl StorageBackend for SqliteBackend {
         .map_err(|e| e.to_string())?;
 
         // Migrations for v0.8: add columns that may be missing from old schema
+        // (column definitions are compile-time constants, not user input).
         for col in [
             "pipeline_id TEXT NOT NULL DEFAULT ''",
             "pipeline_snapshot TEXT NOT NULL DEFAULT ''",
@@ -370,10 +371,12 @@ impl StorageBackend for SqliteBackend {
             "workdir TEXT",
             "created_at TEXT NOT NULL DEFAULT ''",
         ] {
-            sqlx::query(&format!("ALTER TABLE runs ADD COLUMN {col}"))
-                .execute(&self.pool)
-                .await
-                .ok();
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "ALTER TABLE runs ADD COLUMN {col}"
+            )))
+            .execute(&self.pool)
+            .await
+            .ok();
         }
 
         // Migration: workflow_name for ad-hoc runs (nullable)
