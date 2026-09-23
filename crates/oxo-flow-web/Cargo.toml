@@ -52,7 +52,7 @@ utoipa = { version = "5.5", features = ["axum_extras"] }
 rand = "0.10.1"
 nix = { version = "0.31", features = ["signal"] }
 toml = { workspace = true }
-toml_edit = "0.22"
+toml_edit = "0.25"
 
 [features]
 postgres = ["sqlx/postgres"]
