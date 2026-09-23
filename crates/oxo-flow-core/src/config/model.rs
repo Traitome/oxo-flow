@@ -1454,15 +1454,29 @@ impl SampleGroup {
         let col_index: HashMap<&str, usize> =
             headers.iter().enumerate().map(|(i, h)| (h, i)).collect();
 
+        // issue #430: the errors below are the most common first-contact
+        // failure for new pipelines — enrich them with the schema contract
+        // instead of just naming the missing column.
+        let schema_hint = "sample_groups sheets require columns 'name' (group name) and \
+                          'samples' (sample IDs); any other columns become group metadata. \
+                          In CSV, a cell with comma-separated samples must be quoted: \"S1,S2\". \
+                          Relative sheet paths resolve against the workflow directory, \
+                          not the current working directory.";
         let name_col = col_index.get("name").ok_or_else(|| OxoFlowError::Parse {
             path: path.to_path_buf(),
-            message: "sample_groups file missing 'name' column".to_string(),
+            message: format!(
+                "sample_groups file missing 'name' column\n  {schema_hint}\n  \
+                 Expected header e.g.: name\tsamples\tcondition"
+            ),
         })?;
         let samples_col = col_index
             .get("samples")
             .ok_or_else(|| OxoFlowError::Parse {
                 path: path.to_path_buf(),
-                message: "sample_groups file missing 'samples' column".to_string(),
+                message: format!(
+                    "sample_groups file missing 'samples' column\n  {schema_hint}\n  \
+                     Expected header e.g.: name\tsamples\tcondition"
+                ),
             })?;
 
         // Reserved names must not reappear as sheet columns: the fan-out
