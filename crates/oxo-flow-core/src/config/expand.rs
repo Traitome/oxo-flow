@@ -1742,6 +1742,28 @@ impl WorkflowConfig {
     /// with `{input}` = the group's files (sorted), the instance wildcard
     /// map = group key + first occurrence of every `keep`-listed wildcard,
     /// and `{input_group.<wildcard>}` = space-joined per-group value lists.
+    /// Issue #425: split an absolute expanded pattern into (scan root,
+    /// relative tail). The root is the longest literal directory prefix —
+    /// everything before the first component that carries a `{wildcard}`
+    /// or `*` — so the tree walkers scan a concrete directory and match
+    /// the wildcard-bearing tail against relative paths.
+    ///
+    /// `/data/reads/{sample}_R1.fastq.gz` roots at `/data/reads` with tail
+    /// `{sample}_R1.fastq.gz`; `/data/{run}/{sample}.fq` roots at `/data`.
+    fn split_absolute_pattern(pattern: &str) -> (std::path::PathBuf, String) {
+        let components: Vec<&str> = pattern.split('/').filter(|c| !c.is_empty()).collect();
+        let mut root = std::path::PathBuf::from("/");
+        let mut tail_start = components.len();
+        for (idx, component) in components.iter().enumerate() {
+            if component.contains('{') || component.contains('*') {
+                tail_start = idx;
+                break;
+            }
+            root.push(component);
+        }
+        (root, components[tail_start..].join("/"))
+    }
+
     fn expand_input_groups_rule(
         &mut self,
         rule: &Rule,
@@ -1861,11 +1883,31 @@ impl WorkflowConfig {
 
         // `{config.x}` placeholders resolve against the workflow config
         // before matching, exactly like every other path in the engine.
-        let base = self
+        let workflow_base = self
             .base_dir
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let pattern = expand_config_vars_in_path(&decl.pattern, &self.config);
+        let expanded_pattern = expand_config_vars_in_path(&decl.pattern, &self.config);
+        // Issue #425: a config override can make the expanded pattern
+        // ABSOLUTE (`reads_dir=/abs/reads`). The tree walkers below match
+        // paths RELATIVE to their scan root against a `^`-anchored regex,
+        // so an absolute pattern never matches and the rule silently
+        // drops with "matched no files". Split the literal directory
+        // prefix off — the walk root is everything before the first
+        // wildcard/star-bearing component — and match the relative tail.
+        // Matched files are emitted as ABSOLUTE paths into `{input}`:
+        // rule shells run with cwd = workdir (issue #427), so an absolute
+        // path is the one representation valid from the execution cwd
+        // regardless of --workdir.
+        let (base, pattern, absolute_emit) =
+            if std::path::Path::new(&expanded_pattern).is_absolute() {
+                let (root, tail) = Self::split_absolute_pattern(&expanded_pattern);
+                (root, tail, true)
+            } else {
+                (workflow_base.clone(), expanded_pattern, false)
+            };
+        // Literal scan-root string, for probing producer outputs (#425).
+        let root_prefix = base.to_string_lossy().to_string();
         // Glob face (issue #246): a bare `*` outside `{wildcard}` spans
         // matches within a path segment — `raw/{sample}_*.fq` groups every
         // fq of a sample, the CAT_FASTQ shape. Star-free patterns compile
@@ -1910,21 +1952,30 @@ impl WorkflowConfig {
             }
         };
 
-        // Source 1: files already on disk under the workflow root.
+        // Source 1: files already on disk under the scan root. For a
+        // relative pattern that root is the workflow directory (#425: for
+        // an absolute pattern it is the pattern's own literal directory
+        // prefix, so the override's tree is scanned directly).
         let mut candidates: Vec<(String, crate::wildcard::WildcardValues)> = Vec::new();
         if has_glob_star {
             // Glob face: the walker returns each matched file's concrete
             // relative path (the star text is unbound — it cannot be
             // re-rendered from the combo).
-            for (path, combo) in
+            for (mut path, combo) in
                 crate::wildcard::discover_wildcards_from_pattern_tree_glob(&base, &pattern)?
             {
+                if absolute_emit {
+                    path = format!("{}/{}", root_prefix, path);
+                }
                 candidates.push((path, combo));
             }
         } else {
             for combo in crate::wildcard::discover_wildcards_from_pattern_tree(&base, &pattern)? {
-                let path = crate::wildcard::expand_pattern(&pattern, &combo)
+                let mut path = crate::wildcard::expand_pattern(&pattern, &combo)
                     .unwrap_or_else(|_| pattern.clone());
+                if absolute_emit {
+                    path = format!("{}/{}", root_prefix, path);
+                }
                 candidates.push((path, combo));
             }
         }
@@ -1932,9 +1983,20 @@ impl WorkflowConfig {
         // Source 2: literal outputs of producers already materialized —
         // the files this workflow itself will create. Matching the
         // config-expanded output string against the pattern regex
-        // extracts the same wildcard values a disk scan would.
+        // extracts the same wildcard values a disk scan would. A
+        // producer output can be workflow-relative (the common case)
+        // while an absolute pattern (#425) matches absolute strings —
+        // probe both the raw output and its scan-root-joined form.
         for output in producer_outputs {
-            let Some(captures) = pattern_re.captures(output) else {
+            // The candidate path as the pattern sees it: for an absolute
+            // pattern (#425) a workflow-relative producer output is probed
+            // in its scan-root-joined form, which is also the emitted path.
+            let matched_output = if absolute_emit && !output.starts_with('/') {
+                format!("{}/{}", root_prefix, output)
+            } else {
+                output.clone()
+            };
+            let Some(captures) = pattern_re.captures(&matched_output) else {
                 continue;
             };
             let mut combo = crate::wildcard::WildcardValues::new();
@@ -1953,10 +2015,10 @@ impl WorkflowConfig {
             // regex groups may capture a value different from the named
             // one, so a combo that re-expands to a path other than the
             // matched output can only come from such a mismatch.
-            if !round_trip_ok(&captures, &combo, output) {
+            if !round_trip_ok(&captures, &combo, &matched_output) {
                 continue;
             }
-            candidates.push((output.clone(), combo));
+            candidates.push((matched_output, combo));
         }
 
         if candidates.is_empty() {
@@ -2077,10 +2139,11 @@ impl WorkflowConfig {
                 // error-level report with the remediation up front. One
                 // line per missing sample keeps `declare the sample`
                 // advice attributable.
-                let missing: Vec<&str> = declared
+                let missing: Vec<String> = declared
                     .iter()
                     .copied()
                     .filter(|sample| !grouped.contains_key(*sample))
+                    .map(String::from)
                     .collect();
                 if !missing.is_empty() {
                     tracing::error!(
@@ -2245,25 +2308,25 @@ impl WorkflowConfig {
             // A leftover `{input_group.<name>}` means the author referenced
             // a wildcard this pattern never captures — fail the plan
             // instead of running a literal token.
-            let mut known: Vec<&str> = group_lists.keys().map(String::as_str).collect();
+            let mut known: Vec<String> = group_lists.keys().cloned().collect();
             known.sort_unstable();
-            let mut residual: Vec<&str> = expanded
+            let mut residual: Vec<String> = expanded
                 .input
                 .iter()
-                .map(String::as_str)
-                .chain(expanded.output.iter().map(String::as_str))
+                .cloned()
+                .chain(expanded.output.iter().cloned())
                 .collect();
             if let Some(ref shell) = expanded.shell {
-                residual.push(shell);
+                residual.push(shell.clone());
             }
             if let Some(ref log) = expanded.log {
-                residual.push(log);
+                residual.push(log.clone());
             }
             if let Some(ref script) = expanded.script {
-                residual.push(script);
+                residual.push(script.clone());
             }
             if let Some(ref w) = expanded.when {
-                residual.push(w);
+                residual.push(w.clone());
             }
             if let Some(bad) = residual.iter().find(|t| t.contains("{input_group.")) {
                 return Err(OxoFlowError::Validation {

@@ -3439,6 +3439,108 @@ fn input_groups_matches_zero_files_drops_rule_with_warning() {
 }
 
 #[test]
+fn input_groups_absolute_reads_dir_override_discovers_files() {
+    // Issue #425: an ABSOLUTE config override in an input_groups pattern
+    // (`reads_dir=/abs/reads`) never matched — the tree walkers match
+    // relative paths against a `^`-anchored regex, so the rule dropped
+    // with "matched no files" while the identical relative override
+    // worked. Discovery must split off the pattern's literal directory
+    // prefix, scan it, and emit paths valid from the execution cwd
+    // (absolute — rule shells run with cwd = workdir).
+    let dir = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let reads = data.path().join("reads");
+    for file in ["S1_R1.fastq.gz", "S1_R2.fastq.gz", "S2_R1.fastq.gz"] {
+        let path = reads.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, file).unwrap();
+    }
+    let workflow_path = dir.path().join("merge.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "merge"
+
+        [config]
+        reads_dir = "/nonexistent/default"
+
+        [[rules]]
+        name = "cat_reads"
+        input_groups = [
+            { pattern = "{config.reads_dir}/{sample}_R{read}.fastq.gz", group_by = "sample" }
+        ]
+        output = ["merged/{sample}.fq"]
+        shell = "cat {input} > {output}"
+        "#,
+    )
+    .unwrap();
+
+    // Absolute override: the exact #425 repro shape.
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    let reads_str = reads.to_string_lossy().to_string();
+    config.config.insert(
+        "reads_dir".to_string(),
+        toml::Value::String(reads_str.clone()),
+    );
+    config.expand_wildcards().unwrap();
+
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["cat_reads_S1", "cat_reads_S2"],
+        "absolute reads_dir must discover both samples"
+    );
+    let s1 = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cat_reads_S1")
+        .expect("S1 instance");
+    // Paths are emitted absolute (execution cwd is the workdir, not the
+    // workflow dir), preserving the per-sample read grouping.
+    assert_eq!(
+        s1.input.to_vec(),
+        vec![
+            format!("{reads_str}/S1_R1.fastq.gz"),
+            format!("{reads_str}/S1_R2.fastq.gz"),
+        ]
+    );
+
+    // Relative override still matches (regression guard). The tree walk
+    // does not descend symlinked dirs (followlinks=False), so the relative
+    // case gets real files under the workflow root.
+    let rel_reads = dir.path().join("reads");
+    std::fs::create_dir_all(&rel_reads).unwrap();
+    for file in ["S1_R1.fastq.gz", "S1_R2.fastq.gz", "S2_R1.fastq.gz"] {
+        std::fs::write(rel_reads.join(file), file).unwrap();
+    }
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config
+        .config
+        .insert("reads_dir".to_string(), toml::Value::String("reads".into()));
+    config.expand_wildcards().unwrap();
+    assert!(
+        config.rules.iter().any(|r| r.name == "cat_reads_S1"),
+        "relative reads_dir keeps working"
+    );
+    let s1_rel = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cat_reads_S1")
+        .expect("S1 instance");
+    assert_eq!(
+        s1_rel.input.to_vec(),
+        vec![
+            "reads/S1_R1.fastq.gz".to_string(),
+            "reads/S1_R2.fastq.gz".to_string()
+        ],
+        "relative pattern keeps emitting relative paths"
+    );
+}
+
+#[test]
 fn input_groups_regular_input_appends_after_group_files() {
     // `input` and `input_groups` coexist: the group files come first in
     // the instance's input list, the declared inputs append after them.
