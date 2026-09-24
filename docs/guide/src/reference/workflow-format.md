@@ -628,7 +628,7 @@ memory = "32G"
 | `log` | String | No | Log file path for rule execution output |
 | `group` | String | No | Job group label for cluster submission grouping |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
-| `input_function` | String | No | Dynamic input resolver function name |
+| `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
 | `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
@@ -642,9 +642,9 @@ memory = "32G"
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
 | `ancient` | Array | No | Inputs that never trigger re-execution (e.g., reference files) |
 | `localrule` | Boolean | No | Always run locally — never submit to a cluster scheduler |
-| `format_hint` | Array | No | File format hints for I/O optimization (`"bam"`, `"vcf"`, `"fastq.gz"`) |
-| `pipe` | Boolean | No | Enable FIFO streaming mode for input/output |
-| `checksum` | String | No | Output integrity verification (`"md5"` or `"sha256"`) |
+| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
+| `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
 
 **Note:** When a rule declares outputs, at least one of `shell`, `script`, or `transform` must be provided. If both `shell` and `script` are defined, they execute sequentially: shell first, then script.
@@ -1256,17 +1256,16 @@ retry_delay = "30s"
 | Field | Type | Description |
 |-------|------|-------------|
 | `ancient` | Array | Inputs that never trigger re-execution (reference files) |
-| `format_hint` | Array | File format hints for I/O optimization (`"bam"`, `"vcf"`) |
-| `pipe` | Boolean | Enable FIFO streaming mode for inputs |
-| `checksum` | String | Output checksum algorithm (`"md5"`, `"sha256"`) |
+| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization) |
+| `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
 
 ```toml
 [[rules]]
 name = "align"
 input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
 ancient = ["ref/hg38.fa"]  # Reference never triggers rebuild
-format_hint = ["bam"]
-checksum = "sha256"
+# format_hint and checksum are accepted but currently have no effect
 ```
 
 ### Organization
@@ -1368,7 +1367,7 @@ cache_key = "vc_v2.0"           # Content cache key — outputs are reused when 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_function` | String | Name of a dynamic input resolver function called at runtime |
+| `input_function` | String | Parsed and included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today (use `expand_inputs` or `output_pattern` for dynamic inputs) |
 
 ### Arbitrary Metadata
 
