@@ -2461,6 +2461,27 @@ bwa mem -t {threads} ref.fa {input} | \
 """
 ```
 
+!!! warning "Backslashes inside `\"\"\"` blocks are TOML escape sequences"
+
+    `"""…"""` is a TOML *basic* string: escape sequences like `\n`, `\t`, and
+    `\\` are decoded **before** the shell ever sees the text. Two consequences:
+
+    - The `\` line continuations above only work because TOML folds
+      backslash-newline into nothing. But an embedded heredoc or regex that
+      needs a *literal* `\n` breaks — the shell receives a real newline
+      instead.
+    - For scripts with literal backslashes (embedded `python3 <<'EOF'`
+      heredocs, `sed 's/\t/,/g'`, …), use a **multi-line literal string** with
+      triple *single* quotes — TOML passes its contents through byte-for-byte:
+
+      ```toml
+      shell = '''
+      python3 - <<'PYEOF'
+      print("a\nb")   # literal backslash-n reaches python intact
+      PYEOF
+      '''
+      ```
+
 ---
 
 ## Complete Example
