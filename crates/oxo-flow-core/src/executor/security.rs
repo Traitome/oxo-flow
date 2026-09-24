@@ -64,10 +64,14 @@ struct DangerCategory {
 static DANGER_CATEGORIES: &[DangerCategory] = &[
     DangerCategory {
         name: "RECURSIVE_DELETION",
+        // Flag letters in ANY order (-rf/-fr/-r/-R/-rfv) plus the long
+        // --recursive form: `rm -fr /` deletes recursively just the same,
+        // so the category must fire for every spelling (issue #428 review).
         patterns: &[
-            r"rm\s+-rf\s+(?:--\S+\s+)*/",
-            r"rm\s+-rf\s+(?:--\S+\s+)*~",
-            r"rm\s+-r\s+(?:--\S+\s+)*/",
+            r"rm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:--\S+\s+)*/",
+            r"rm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:--\S+\s+)*~",
+            r"rm\s+--recursive(?:=\S*)?\s+(?:--\S+\s+)*/",
+            r"rm\s+--recursive(?:=\S*)?\s+(?:--\S+\s+)*~",
         ],
         description: "dangerous recursive deletion",
     },
@@ -232,18 +236,64 @@ struct DeletionTarget {
 /// Extract the path operands of `rm -r`/`rm -rf` invocations in `cmd`.
 ///
 /// Mirrors the RECURSIVE_DELETION regexes' flexibility (extra spaces,
-/// interleaved `--flags`) so a target the pattern let through is analyzed
-/// here rather than silently skipped.
-fn recursive_deletion_targets(cmd: &str) -> Vec<DeletionTarget> {
+/// interleaved `--flags`, flag letters in any order) so a target the
+/// pattern let through is analyzed here rather than silently skipped.
+///
+/// EVERY operand of an invocation is captured and validated — checking
+/// only the first would let `rm -rf <workdir>/x /etc` sail through while
+/// the real `rm` deletes both (issue #428 review finding).
+///
+/// Returns `Err` when a recursive-deletion invocation cannot be parsed
+/// reliably (quoted operands or command substitution inside the operand
+/// segment): the caller must treat that as BLOCKED, never as "nothing to
+/// check". An empty `Ok` means no recursive `rm` invocation is present.
+fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
+    // Flags group + operand segment. The segment stops at shell control
+    // operators (&&, ||, ;, |, redirects, newline) so each `rm` invocation
+    // in a pipeline is analyzed on its own.
     static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"rm\s+(-[rR][fF]?\S*|--recursive\S*)(?:\s+--\S+|\s+-\S+)*\s+(\S+)")
-            .expect("static regex")
+        Regex::new(r"rm\s+(-\S+(?:\s+-\S+)*)\s+([^;&|<>\n]+)").expect("static regex")
     });
-    RE.captures_iter(cmd)
-        .map(|caps| DeletionTarget {
-            target: caps[2].to_string(),
-        })
-        .collect()
+    let mut targets = Vec::new();
+    for caps in RE.captures_iter(cmd) {
+        let flags: &str = caps.get(1).map_or("", |m| m.as_str());
+        let is_recursive = flags.split_whitespace().any(|f| {
+            let body = f.strip_prefix('-').unwrap_or(f);
+            // `--recursive` (after one strip) or short flags whose letter
+            // set contains r/R in ANY position: -rf, -fr, -r, -R, -rfv.
+            body == "-recursive"
+                || (body.chars().all(|c| c.is_ascii_alphabetic()) && body.contains(['r', 'R']))
+        });
+        if !is_recursive {
+            continue;
+        }
+        let segment = caps.get(2).map_or("", |m| m.as_str());
+        // Quoting or substitution inside the operand segment defeats
+        // whitespace tokenization — fail closed instead of guessing.
+        if segment.contains(['"', '\'', '`']) || segment.contains("$(") {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Shell command blocked: unparseable recursive deletion in '{}'",
+                    cmd
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Recursive deletions must be plainly spelled out; remove quotes or \
+                     substitution from rm operands, or use a script file instead"
+                        .to_string(),
+                ),
+            });
+        }
+        for operand in segment.split_whitespace() {
+            if operand.starts_with('-') {
+                continue; // trailing flags after the first operand
+            }
+            targets.push(DeletionTarget {
+                target: operand.to_string(),
+            });
+        }
+    }
+    Ok(targets)
 }
 
 /// Classify an absolute deletion target against the run workdir.
@@ -252,6 +302,11 @@ fn recursive_deletion_targets(cmd: &str) -> Vec<DeletionTarget> {
 /// the rule's own outputs is a legitimate cleanup idiom), `false` when it
 /// points anywhere else. Unresolvable targets fail CLOSED (blocked).
 fn deletion_target_in_workdir(target: &str, workdir: &Path) -> bool {
+    // `~`/`~/...` expand to home; `~user` needs a passwd lookup we never
+    // do here — fail closed rather than treating it as a relative path.
+    if target.starts_with('~') && !(target == "~" || target.starts_with("~/")) {
+        return false;
+    }
     // Tilde paths expand to home — never inside the run workdir unless the
     // workdir itself lives under home AND the target descends into it; the
     // path-form resolution below decides that. `~` alone is home itself.
@@ -310,33 +365,36 @@ fn deletion_target_in_workdir(target: &str, workdir: &Path) -> bool {
 /// placeholders have become concrete paths.
 #[must_use = "shell safety validation returns a Result that must be checked"]
 pub fn validate_shell_safety_in_workdir(cmd: &str, workdir: &Path) -> Result<()> {
-    // Only the RECURSIVE_DELETION category gets workdir-aware treatment;
-    // probe it first so non-deletion commands pay nothing extra.
-    let deletion_matches = COMPILED_BLOCK_PATTERNS
-        .iter()
-        .any(|(re, name, _)| *name == "RECURSIVE_DELETION" && re.is_match(cmd));
-
-    if !deletion_matches {
-        return validate_shell_safety(cmd);
-    }
-
-    for target in recursive_deletion_targets(cmd) {
-        if !deletion_target_in_workdir(&target.target, workdir) {
-            return Err(OxoFlowError::Validation {
-                message: format!(
-                    "Shell command blocked: dangerous recursive deletion pattern detected in '{}'",
-                    cmd
-                ),
-                rule: None,
-                suggestion: Some(
-                    "Recursive deletions must target paths inside the run workdir; \
-                     remove dangerous shell constructs or use a script file instead"
-                        .to_string(),
-                ),
-            });
+    // The extractor is authoritative: it finds EVERY rm invocation with
+    // recursive flags (any spelling) and either validates all of its
+    // operands against the workdir or fails closed on unparseable forms
+    // (quotes, substitution). Commands with no recursive rm invocation
+    // fall through to the base category checks unchanged.
+    match recursive_deletion_targets(cmd) {
+        Ok(targets) if targets.is_empty() => validate_shell_safety(cmd),
+        Ok(targets) => {
+            for target in targets {
+                if !deletion_target_in_workdir(&target.target, workdir) {
+                    return Err(OxoFlowError::Validation {
+                        message: format!(
+                            "Shell command blocked: dangerous recursive deletion pattern detected in '{}'",
+                            cmd
+                        ),
+                        rule: None,
+                        suggestion: Some(
+                            "Recursive deletions must target paths inside the run workdir; \
+                             remove dangerous shell constructs or use a script file instead"
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+            Ok(())
         }
+        // Extraction doubles as a fail-closed gate: an rm invocation was
+        // found but its operands cannot be parsed reliably — block.
+        Err(e) => Err(e),
     }
-    Ok(())
 }
 
 /// Character class accepted for wildcard values when the workflow declares
