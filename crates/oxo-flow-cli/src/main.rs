@@ -310,6 +310,11 @@ pub enum Commands {
         /// mirrors the run flag; the preview lists required builds otherwise.
         #[arg(long)]
         skip_ref_build: bool,
+        /// Directory for caching environment setup state — mirrors the run
+        /// flag so run→dry-run transcription is 1:1 (issue #441); the
+        /// preview reads no env cache, so it is accepted and ignored.
+        #[arg(long, value_name = "PATH")]
+        cache_dir: Option<PathBuf>,
         /// Set a workflow config value (overrides `[config]` defaults).
         /// Repeatable — same forms as `run` (issue #77 parity).
         #[arg(
@@ -1506,6 +1511,7 @@ async fn main() -> Result<()> {
             workdir,
             profile,
             skip_ref_build,
+            cache_dir,
             args,
             config_overrides,
             rerun,
@@ -1527,6 +1533,7 @@ async fn main() -> Result<()> {
                 workdir,
                 profile,
                 skip_ref_build,
+                cache_dir,
                 merged_args,
                 rerun,
                 resume_failed,
@@ -1846,6 +1853,7 @@ async fn main() -> Result<()> {
                     workdir.clone(),
                     profile.clone(),
                     false,
+                    None,
                     vec![],
                     false,
                     false,
