@@ -3957,7 +3957,10 @@ home (<code>~</code>), <code>--no-preserve-root</code> forms, and any target out
 remain hard errors. The static lint (E011) still flags raw <code>rm -rf /</code>-style
 templates regardless.</p>
 <h3 id="warning-patterns-non-blocking">Warning Patterns (Non-Blocking)<a class="headerlink" href="#warning-patterns-non-blocking" title="Permanent link">#</a></h3>
-<p>These emit <strong>warnings</strong> but allow execution (common in bioinformatics scripts):</p>
+<p>These emit <strong>warnings</strong> but allow execution — the rule runs either way. The
+warning exists because such idioms can also ride in on rendered wildcard
+values (a <code>$()</code> baked into a sample name), so verify flagged commands are
+intentional:</p>
 <table>
 <thead>
 <tr>
@@ -3992,6 +3995,13 @@ templates regardless.</p>
 </tr>
 </tbody>
 </table>
+<p>At run time (and in <code>dry-run</code> output) each warning reads e.g.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Command substitution detected in 'echo $(date)': this shell idiom is allowed
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>and the rule will run; it is flagged because such content can also ride in on
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>rendered wildcard values — verify it is intentional
+</span></code></pre></div>
+<p>The static lint for the same idioms is <code>W023</code> (aggregated one diagnostic per
+command since #375).</p>
 <hr />
 <h2 id="layer-2-path-traversal-protection">Layer 2 — Path Traversal Protection<a class="headerlink" href="#layer-2-path-traversal-protection" title="Permanent link">#</a></h2>
 <p>Output paths are validated to prevent file system escape:</p>

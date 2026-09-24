@@ -3908,9 +3908,18 @@ When given a workflow file, lists the environments used by each rule.</p>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  ✓ call_variants (docker)
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  ✓ annotate (singularity)
 </span></code></pre></div>
+<p>Without a workflow, each available backend also names the binary that a run
+would resolve — the engine prefers <code>mamba</code> → <code>micromamba</code> → <code>conda</code>, so on a
+machine with several conda-family installs the resolved binary is what
+actually gets invoked:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Environment backend availability:
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  ✓ mamba (resolved: micromamba)
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  ✓ conda
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  ✗ docker (not found)
+</span></code></pre></div>
 <h3 id="env-create"><code>env create</code><a class="headerlink" href="#env-create" title="Permanent link">#</a></h3>
 <p>Create a new environment from a specification file.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span><span class="w"> </span>&lt;SPEC&gt;
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span><span class="w"> </span>&lt;SPEC&gt;
 </span></code></pre></div>
 <table>
 <thead>
@@ -3953,8 +3962,8 @@ When given a workflow file, lists the environments used by each rule.</p>
 </tbody>
 </table>
 <p><strong>Output (missing backend):</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>  ✓ align (conda)
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  ✗ call_variants — Docker is not available on this system
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>  ✓ align (conda)
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  ✗ call_variants — Docker is not available on this system
 </span></code></pre></div>
 <hr />
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
@@ -3976,11 +3985,11 @@ When given a workflow file, lists the environments used by each rule.</p>
 </table>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># List available backends</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Check a specific workflow</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># List available backends</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Check a specific workflow</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
 </span></code></pre></div>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
