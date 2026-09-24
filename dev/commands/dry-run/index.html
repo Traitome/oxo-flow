@@ -4111,6 +4111,11 @@ are up to date is predicted as skipped, exactly as <code>run</code> would skip i
 <td>Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds</td>
 </tr>
 <tr>
+<td><code>--cache-dir &lt;PATH&gt;</code></td>
+<td>—</td>
+<td>Directory for caching environment setup state — accepted for 1:1 run→dry-run transcription (the preview reads no env cache, so it is ignored). A misordered <code>--cache-dir</code> after overrides gets the same ordering hint as under <code>run</code></td>
+</tr>
+<tr>
 <td><code>--ai</code></td>
 <td>—</td>
 <td>Enable AI-powered analysis of the workflow</td>
@@ -4133,6 +4138,14 @@ are up to date is predicted as skipped, exactly as <code>run</code> would skip i
 workflow design and prints findings (e.g. <code>SCI-VQSR-COHORT</code>,
 <code>SCI-MUTECT2-TUMOR-ONLY</code>). With <code>--ai</code>, the findings are also passed to the
 model for a plain-language explanation.</p>
+<p>The <code>SCI-FEATURECOUNTS-STRAND</code> check fires only when featureCounts is
+actually <strong>invoked</strong> (a command word) without a strandness flag — a rule
+that merely passes a <code>.../featurecounts</code> output <em>path</em> to another tool
+stays silent (issue #441). It also stays silent when the config declares
+<code>strandedness = "unstranded"</code> (the default <code>-s 0</code> is then deliberate), and
+its advice is evidence-driven: determine strandedness with RSeQC
+<code>infer_experiment.py</code> or the samplesheet's strandedness column before
+setting <code>-s 1</code>/<code>-s 2</code>.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># A 2-sample pilot of a VQSR workflow fails for scientific reasons —</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># the preflight says so before any compute is spent</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2
@@ -4331,7 +4344,7 @@ instances at runtime are listed under the <code>reentry</code> section of <code>
 (<code>recorded</code> + <code>possible</code>). See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a>.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>  1. generate_data
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>     threads=1
