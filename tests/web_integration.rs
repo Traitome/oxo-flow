@@ -518,7 +518,7 @@ async fn web_dry_run_flag_previews_without_executing() {
         .await
         .unwrap();
     assert!(
-        logs.contains("(dry-run)"),
+        logs.contains("(DAG size:"),
         "preview plan expected in logs: {logs}"
     );
     assert!(
