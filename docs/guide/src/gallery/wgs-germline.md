@@ -405,6 +405,36 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
 
 ## Running the Workflow
 
+### Run
+
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--samples` on the CLI). Each sample needs a paired FASTQ under `raw/`, named `{sample}_R1.fastq.gz` / `{sample}_R2.fastq.gz`.
+
+The `[config]` block points at seven GRCh38 reference assets that you must provision before running (paths are examples — edit them to your layout):
+
+| Config key | Used by | Typical resource |
+|------------|---------|------------------|
+| `reference` | all GATK rules, bwa-mem2 | reference FASTA **plus** BWA-MEM2 index, `.fai`, and `.dict` |
+| `known_sites` (dbSNP) | BQSR, VQSR resources | `dbsnp_146.hg38.vcf.gz` (with `.tbi`) |
+| `known_indels` | BQSR, INDEL VQSR training | `Mills_and_1000G_gold_standard.indels.hg38.vcf.gz` |
+| `intervals` | HaplotypeCaller `-L` | `wgs_calling_regions.hg38.interval_list` |
+| `hapmap` | VQSR SNP truth set | `hapmap_3.3.hg38.vcf.gz` |
+| `omni` | VQSR SNP training | `1000G_omni2.5.hg38.vcf.gz` |
+| `thousand_g` | VQSR SNP training, BQSR | `1000G_phase1.snps.high_confidence.hg38.vcf.gz` |
+
+The VEP step runs with `--offline --cache`, which requires a local VEP cache for GRCh38 (install it once with `vep_install -a cache -s homo_sapiens_merged_vep_110_GRCh38` or the matching installer for your VEP version — the conda env pins `ensembl-vep=110.1`).
+
+```bash
+oxo-flow run examples/gallery/07_wgs_germline.oxoflow -j 2
+```
+
+!!! warning "Small cohorts will stop at VQSR"
+    With the default three-sample cohort, both `vqsr_snps` and
+    `vqsr_indels` fail for scientific reasons (VariantRecalibrator needs
+    ~30+ samples to train). `oxo-flow dry-run` flags this up front with
+    `SCI-VQSR-COHORT` — for a small pilot, either stop before VQSR with
+    `-t annotate_variants`-style task selection or switch to hard
+    filtering (see the note above).
+
 ### Validate
 
 ```bash
