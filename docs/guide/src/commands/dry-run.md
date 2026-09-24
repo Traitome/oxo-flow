@@ -42,6 +42,7 @@ are up to date is predicted as skipped, exactly as `run` would skip it.
 | `--rerun` | — | Preview `run --rerun`: every rule in the execution set is forced (`when`-false rules still skip) |
 | `--resume-failed` | — | Preview `run --resume-failed`: failed rules re-run, completed rules stay skipped |
 | `--skip-ref-build` | — | Skip automatic reference/index building (assume pre-built) — the preview otherwise lists required builds |
+| `--cache-dir <PATH>` | — | Directory for caching environment setup state — accepted for 1:1 run→dry-run transcription (the preview reads no env cache, so it is ignored). A misordered `--cache-dir` after overrides gets the same ordering hint as under `run` |
 | `--ai` | — | Enable AI-powered analysis of the workflow |
 | `--ai-max-retries <N>` | — | Maximum AI analysis attempts when a call fails (default: 1; only a failed call is retried) |
 | `--verbose` | `-v` | Enable debug-level logging |
@@ -54,6 +55,15 @@ Every dry-run runs deterministic, evidence-backed scientific checks on the
 workflow design and prints findings (e.g. `SCI-VQSR-COHORT`,
 `SCI-MUTECT2-TUMOR-ONLY`). With `--ai`, the findings are also passed to the
 model for a plain-language explanation.
+
+The `SCI-FEATURECOUNTS-STRAND` check fires only when featureCounts is
+actually **invoked** (a command word) without a strandness flag — a rule
+that merely passes a `.../featurecounts` output *path* to another tool
+stays silent (issue #441). It also stays silent when the config declares
+`strandedness = "unstranded"` (the default `-s 0` is then deliberate), and
+its advice is evidence-driven: determine strandedness with RSeQC
+`infer_experiment.py` or the samplesheet's strandedness column before
+setting `-s 1`/`-s 2`.
 
 ```bash
 # A 2-sample pilot of a VQSR workflow fails for scientific reasons —

@@ -433,6 +433,12 @@ const RUN_FLAG_NAMES: &[&str] = &[
 /// Short-form run flag names (same contract as [`RUN_FLAG_NAMES`]).
 const RUN_SHORT_FLAGS: &[&str] = &["j", "k", "d", "t", "r", "h", "V"];
 
+/// Run flags that `dry-run` also accepts as real command flags (issue
+/// #441: `--cache-dir` was added for run→dry-run transcription parity).
+/// When the swallowed-flag parser runs under `dry-run`, these names read
+/// as a misordered command flag, not "not supported".
+const DRY_RUN_SHARED_FLAGS: &[&str] = &["cache-dir"];
+
 /// Flags removed from `run`, mapped to their replacement.
 ///
 /// They must NOT live in [`RUN_FLAG_NAMES`]: that list names real command
@@ -686,12 +692,24 @@ pub(crate) fn parse_cli_overrides(
                      (also placed before positional overrides)."
                 )
             } else if is_run_flag {
-                format!(
-                    "'{flag}' is a run flag and is not supported by {command}.\n  \
-                     Run flags only work on `oxo-flow run`; {command} accepts its own \
-                     flags before KEY=VALUE overrides, e.g.:\n  \
-                     oxo-flow {command} <workflow.oxoflow> --target my_rule min_quality=30"
-                )
+                // Issue #441: dry-run shares some run flags for real
+                // (`--cache-dir`) — for those, a swallowed token is a
+                // misordered command flag, not an unsupported one.
+                let shared = command == "dry-run" && DRY_RUN_SHARED_FLAGS.contains(&flag_name);
+                if shared {
+                    format!(
+                        "'{flag}' is a command flag, not a config override.\n  \
+                         Command flags must come before KEY=VALUE overrides, e.g.:\n  \
+                         oxo-flow {command} <workflow.oxoflow> --cache-dir .env-cache min_quality=30"
+                    )
+                } else {
+                    format!(
+                        "'{flag}' is a run flag and is not supported by {command}.\n  \
+                         Run flags only work on `oxo-flow run`; {command} accepts its own \
+                         flags before KEY=VALUE overrides, e.g.:\n  \
+                         oxo-flow {command} <workflow.oxoflow> --target my_rule min_quality=30"
+                    )
+                }
             } else {
                 format!(
                     "'{flag}' is not supported by {command} and is not a config override.\n  \
@@ -4025,10 +4043,31 @@ pub async fn run_command(
         let scientific =
             oxo_flow_core::scientific_preflight::analyze_scientific_constraints(&config);
         if !scientific.is_empty() {
+            // Issue #441: in the run's post-expansion config each template
+            // appears once per sample instance, so a 1-template finding
+            // printed as "3 finding(s)" for a 3-sample pilot. Group by the
+            // finding's content — identical (code, message, suggestion)
+            // across instances is ONE distinct finding with M instances.
+            type WarningGroup<'a> = (
+                (&'a str, &'a str, &'a str),
+                Vec<&'a oxo_flow_core::scientific_preflight::ScientificWarning>,
+            );
+            let mut distinct: Vec<WarningGroup> = Vec::new();
+            for w in &scientific {
+                let key = (w.code.as_str(), w.message.as_str(), w.suggestion.as_str());
+                match distinct.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, group)) => group.push(w),
+                    None => distinct.push((key, vec![w])),
+                }
+            }
             eprintln!(
-                "  {} scientific preflight finding(s) — see 'oxo-flow dry-run --samples ...'",
+                "  {} distinct scientific preflight finding(s) ({} instance(s) across sample rules) — see 'oxo-flow dry-run --samples ...'",
+                distinct.len(),
                 scientific.len()
             );
+            for (key, group) in &distinct {
+                eprintln!("    ⚠ [{}] {} (×{})", key.0, group[0].rule, group.len());
+            }
         }
 
         // AI interpretation when the workflow opts in via [ai].enabled.
@@ -4410,6 +4449,7 @@ pub async fn dry_run_command(
     workdir: Option<PathBuf>,
     profile: Option<String>,
     skip_ref_build: bool,
+    _cache_dir: Option<PathBuf>,
     cli_args: Vec<String>,
     rerun: bool,
     resume_failed: bool,
@@ -6312,6 +6352,32 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("command flag"), "{msg}");
         assert!(msg.contains("--json"), "{msg}");
+    }
+
+    #[test]
+    fn dry_run_treats_shared_run_flags_as_misordered_not_unsupported() {
+        // issue #441: dry-run accepts `--cache-dir` as a real flag now, so a
+        // swallowed one must read as misordered, not "not supported by
+        // dry-run".
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--cache-dir=x".to_string()],
+            &declared(&["threads"]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("command flag"), "{msg}");
+        assert!(msg.contains("must come before"), "{msg}");
+
+        // Other run flags stay "not supported" under dry-run.
+        let err = parse_cli_overrides(
+            vec!["threads=8".to_string(), "--provenance".to_string()],
+            &declared(&["threads"]),
+            "dry-run",
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not supported by dry-run"), "{msg}");
     }
 
     #[test]

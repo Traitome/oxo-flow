@@ -551,8 +551,11 @@ samples' completed records.
 
 After a `--samples` run, a **pilot summary** is printed: samples run,
 wall time, per-sample time, and a linear projection for the full cohort.
-When the workflow enables `[ai]`, a plain-language pilot report (health
-assessment and scale-up advice) is appended automatically.
+Scientific-preflight findings are reported as **distinct findings with
+their instance counts** — one template rule appearing once per sample shows
+as `1 distinct finding (3 instance(s))`, not `3 finding(s)`. When the
+workflow enables `[ai]`, a plain-language pilot report (health assessment
+and scale-up advice) is appended automatically.
 
 ### Incremental data arrival: `--samples ready`
 

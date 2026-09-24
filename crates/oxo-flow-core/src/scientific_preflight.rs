@@ -46,20 +46,60 @@ pub fn count_samples(config: &WorkflowConfig) -> usize {
     seen.len()
 }
 
-/// Whether the shell references a featureCounts strandness flag
+/// Whether a single shell token is a featureCounts strandness flag
 /// (`-s`, `-s0/1/2`, or `--stranded[=...]`). The default is unstranded.
-fn has_strand_flag(shell: &str) -> bool {
-    shell.split_whitespace().any(|token| {
-        token == "-s"
-            || token == "--stranded"
-            || token.starts_with("--stranded=")
-            || (token.starts_with("-s")
-                && token.len() >= 3
-                && token[2..]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_digit()))
-    })
+fn is_strand_flag(token: &str) -> bool {
+    token == "-s"
+        || token == "--stranded"
+        || token.starts_with("--stranded=")
+        || (token.starts_with("-s")
+            && token.len() >= 3
+            && token[2..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit()))
+}
+
+/// Whether a word may be skipped when locating the command word of a shell
+/// segment: leading `VAR=value` env assignments or file-descriptor
+/// redirections like `2>/dev/null`.
+fn is_leading_noise(word: &str) -> bool {
+    if let Some((name, _)) = word.split_once('=')
+        && !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return true;
+    }
+    word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('>')
+}
+
+/// Whether the shell *invokes* featureCounts in a segment that carries no
+/// strandness flag. featureCounts must appear as a command word — first
+/// token of a command segment (after `;`, `&&`/`||`/`&`, `|`, newline, or
+/// `$(`), skipping env assignments and redirections, compared by basename
+/// — not merely mentioned in an argument or path. Issue #441: a rule
+/// passing its output *directory* `.../featurecounts` to a python helper
+/// fired the strand warning, while the real featureCounts rule was
+/// correctly flagged as silent.
+fn featurecounts_without_strand(shell: &str) -> bool {
+    // Join bash line continuations so a multi-line command stays one
+    // segment, then neutralize `$(...)` openers as segment boundaries.
+    let normalized = shell
+        .replace("\\\r\n", " ")
+        .replace("\\\n", " ")
+        .replace("$(", ";");
+    normalized
+        .split([';', '\n', '\r', '|', '&', '`'])
+        .any(|segment| {
+            let Some(command) = segment.split_whitespace().find(|w| !is_leading_noise(w)) else {
+                return false;
+            };
+            let base = command.rsplit('/').next().unwrap_or(command);
+            if !base.eq_ignore_ascii_case("featurecounts") {
+                return false;
+            }
+            !segment.split_whitespace().any(is_strand_flag)
+        })
 }
 
 /// Whether a Mutect2 command declares a matched normal. GATK accepts both
@@ -153,15 +193,29 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
             });
         }
 
-        if shell_lower.contains("featurecounts") && !has_strand_flag(shell) {
+        // Issue #441: only fire when featureCounts is actually *invoked*
+        // (command-word position), not mentioned in an argument or path.
+        // A config that already declares `strandedness = "unstranded"` is
+        // honoring the default deliberately — the default IS `-s 0`, so
+        // warning would push a correct design toward a wrong one.
+        if config.config.get("strandedness").is_some_and(|v| {
+            v.as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case("unstranded"))
+        }) {
+            continue;
+        }
+        if shell_lower.contains("featurecounts") && featurecounts_without_strand(shell) {
             warnings.push(ScientificWarning {
                 code: "SCI-FEATURECOUNTS-STRAND".into(),
                 rule: rule.name.clone(),
                 message: "featureCounts runs without an explicit strandness flag — the default \
                           is unstranded (-s 0), which miscounts stranded libraries."
                     .into(),
-                suggestion: "set -s 2 (Illumina TruSeq/dUTP reverse) or -s 1 per your library \
-                             protocol"
+                suggestion: "determine your library's strandedness from evidence before \
+                             choosing — run RSeQC infer_experiment.py on an alignment (or \
+                             check the samplesheet's strandedness column); then set -s 1 \
+                             (forward) or -s 2 (reverse/dUTP) per that evidence. Leave it \
+                             unset only if the library is verified unstranded"
                     .into(),
             });
         }
@@ -310,6 +364,9 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "SCI-FEATURECOUNTS-STRAND");
+        // Evidence-driven suggestion (issue #441): never prescribe a bare
+        // "-s 2" — unstranded libraries are correct without the flag.
+        assert!(!warnings[0].suggestion.contains("set -s 2"));
 
         for ok_shell in [
             "featureCounts -a genes.gtf -s 2 -o counts.txt aligned/S1.bam",
@@ -321,6 +378,84 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
                 "should not warn for {ok_shell}"
             );
         }
+    }
+
+    #[test]
+    fn featurecounts_path_mention_does_not_warn() {
+        // Issue #441: bam_qc::biotype_multiqc passes its OUTPUT DIRECTORY
+        // `.../featurecounts` to a python helper — featureCounts is never
+        // invoked, so the strand check must stay silent.
+        let config = config_with_rule(
+            "python scripts/mqc_features_stat.py {input[0]} {input[1]} {sample} \
+             {config.out_dir}/{config.aligner}/featurecounts",
+        );
+        assert!(analyze_scientific_constraints(&config).is_empty());
+
+        // Same for the binary appearing as an argument of another tool,
+        // possibly with a path prefix.
+        let arg = config_with_rule("multiqc . --cl-config featurecounts/count.txt");
+        assert!(analyze_scientific_constraints(&arg).is_empty());
+    }
+
+    #[test]
+    fn featurecounts_invocation_forms_warn() {
+        // Command-word forms that must still fire: direct, absolute path,
+        // env assignment prefix, pipe segment, and a second command after
+        // `;`. Each carries no strand flag.
+        for shell in [
+            "featureCounts -a genes.gtf -o counts.txt aligned/S1.bam",
+            "/usr/local/bin/featureCounts -a genes.gtf -o counts.txt in.bam",
+            "TMPDIR=/tmp featureCounts -a genes.gtf -o counts.txt in.bam",
+            "samtools sort -o in.sorted.bam in.bam | featureCounts -o counts.txt",
+            "mkdir -p out; featureCounts -a genes.gtf -o out/counts.txt in.bam",
+        ] {
+            let warnings = analyze_scientific_constraints(&config_with_rule(shell));
+            assert_eq!(warnings.len(), 1, "should warn for {shell}");
+            assert_eq!(warnings[0].code, "SCI-FEATURECOUNTS-STRAND");
+        }
+
+        // A strand flag in the invoking segment silences it — even when
+        // the command continues with `&&`.
+        let ok = config_with_rule(
+            "featureCounts -a genes.gtf -s 2 -o counts.txt in.bam && gzip counts.txt",
+        );
+        assert!(analyze_scientific_constraints(&ok).is_empty());
+
+        // The flag belongs to a different tool in the segment → still warns.
+        let mixed = config_with_rule(
+            "gatk PrintReads -s 2 -I in.bam -O out.bam; featureCounts -o counts.txt in.bam",
+        );
+        let warnings = analyze_scientific_constraints(&mixed);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "SCI-FEATURECOUNTS-STRAND");
+    }
+
+    #[test]
+    fn featurecounts_unstranded_config_is_silent() {
+        // Issue #441: the pilot's libraries ARE unstranded and the config
+        // says so — the check must not push "-s 2" onto a correct design.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [config]
+            strandedness = "unstranded"
+
+            [[rules]]
+            name = "counts"
+            shell = "featureCounts -a genes.gtf -o counts.txt aligned/S1.bam"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert!(analyze_scientific_constraints(&config).is_empty());
+
+        // A strandedness value that is NOT 'unstranded' (e.g. per-sample
+        // metadata with an 'auto' fallback) keeps the check active.
+        let auto = toml.replace("unstranded", "auto");
+        let config = WorkflowConfig::parse(&auto).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "SCI-FEATURECOUNTS-STRAND");
     }
 
     #[test]
