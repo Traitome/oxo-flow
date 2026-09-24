@@ -1890,6 +1890,99 @@ fn workdir_safety_tilde_target_under_home_outside_workdir_is_blocked() {
 }
 
 // ---------------------------------------------------------------------------
+// validate_shell_safety_in_workdir — issue #428 review hardening: every
+// operand of an rm invocation is validated; unparseable invocations and
+// exotic flag spellings fail closed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workdir_safety_checks_every_operand_not_just_the_first() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x /etc", workdir).is_err(),
+        "second operand outside the workdir must block the whole command"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x /", workdir).is_err(),
+        "second operand = / must block the whole command"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x /data/run/y", workdir).is_ok(),
+        "all operands inside the workdir stay allowed"
+    );
+}
+
+#[test]
+fn workdir_safety_blocks_exotic_recursive_flag_spellings() {
+    let workdir = Path::new("/data/run");
+    for variant in [
+        "rm -fr /etc",
+        "rm -Rf /etc",
+        "rm -rfv /etc",
+        "rm --recursive /etc",
+    ] {
+        assert!(
+            validate_shell_safety_in_workdir(variant, workdir).is_err(),
+            "{variant} must be blocked — flag order/spelling must not matter"
+        );
+    }
+    assert!(
+        validate_shell_safety_in_workdir("rm -fr /data/run/x", workdir).is_ok(),
+        "exotic flag spelling with an in-workdir target stays allowed"
+    );
+}
+
+#[test]
+fn workdir_safety_fails_closed_on_unparseable_rm_operands() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/data/run/x\" /etc", workdir).is_err(),
+        "quoted operands defeat tokenization — fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x /etc", workdir).is_err(),
+        "plain multi-operand form must still be analyzed operand-by-operand"
+    );
+}
+
+#[test]
+fn workdir_safety_blocks_tilde_user_targets() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf ~root/x", workdir).is_err(),
+        "~user expansion is never resolved here — fail closed"
+    );
+}
+
+#[test]
+fn workdir_safety_analyzes_each_rm_invocation_in_a_pipeline() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x && rm -rf /etc", workdir).is_err(),
+        "a later rm invocation outside the workdir must block the command"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf /data/run/x ; rm -rf /data/run/y", workdir)
+            .is_ok(),
+        "all invocations inside the workdir stay allowed"
+    );
+}
+
+#[test]
+fn base_safety_blocks_exotic_recursive_flag_spellings() {
+    // The no-workdir variant (workflow load/lint) must catch the same
+    // spellings so `rm -fr /` is never allowed anywhere.
+    assert!(
+        validate_shell_safety("rm -fr /").is_err(),
+        "base validator must block rm -fr /"
+    );
+    assert!(
+        validate_shell_safety("rm --recursive ~").is_err(),
+        "base validator must block rm --recursive ~"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // sanitize_shell_command tests
 // ---------------------------------------------------------------------------
 

@@ -92,15 +92,17 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                             // Surface WHICH binary resolves — on boxes with
                             // several conda-family installs, "conda ✓" alone
                             // hides which one a run would pick (issue #433).
+                            // `resolved_backend_binary` only annotates the
+                            // conda family; other backends (docker, venv,
+                            // modules, ...) resolve structurally, so a
+                            // missing annotation must NOT print "not found"
+                            // for a backend that IS available.
                             match resolver.resolved_backend_binary(backend) {
                                 Some(bin) if bin != *backend => {
                                     eprintln!("  {} {} (resolved: {})", "✓".green(), backend, bin);
                                 }
-                                Some(_) => {
+                                _ => {
                                     eprintln!("  {} {}", "✓".green(), backend);
-                                }
-                                None => {
-                                    eprintln!("  {} {} (not found)", "✗".red(), backend);
                                 }
                             }
                         } else {
