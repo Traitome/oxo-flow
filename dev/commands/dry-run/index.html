@@ -4143,7 +4143,7 @@ complete entry inputs</strong> and which are still waiting for data — designed
 incremental data arrival, when a sequencing center delivers fastq files in
 batches:</p>
 <div class="language-console highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="go">DAG: (dry-run) 100 rules would execute</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="go">Plan: would run: 100 | skip: 0 | completed: 0 (DAG size: 100)</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="go">Sample readiness: 87/100 complete, 13 waiting</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="go">    ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz)</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="go">    ⏳ NA12892 (missing: data/NA12892_R2.fastq.gz)</span>
@@ -4183,7 +4183,7 @@ preview matches what an actual <code>run</code> will do. Without a checkpoint th
 classification still runs against an empty state (every rule "never
 completed", <code>when</code> conditions still honored):</p>
 <div class="language-console highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="gp">$ </span>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>NA12891
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="go">DAG: (dry-run) 12 rules would execute</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="go">Plan: would run: 12 | skip: 0 | completed: 705 (DAG size: 717)</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="go">Checkpoint: ./.oxo-flow/checkpoint.json (modified 2026-08-10 14:32)</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="go">  completed: 705 | will run: 12 | will skip: 0 | protected (outside this run): 693</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="go">  rerun cascade: trim_cohort_NA12891 → align_cohort_NA12891 → combine_gvcfs → genotype_gvcfs → vqsr_snps</span>
@@ -4237,12 +4237,17 @@ their work stays untouched, counted as <code>protected</code>.</p>
 </tr>
 </tbody>
 </table>
-<p>The summary line answers the two questions that matter before a targeted
-re-run: <strong>how much will actually execute</strong> (<code>will run</code>, including the
-cascade) and <strong>how much prior work survives</strong> (<code>protected</code>). The cascade
-line makes the infection chain visible — one sample's data change
-reaching the queue-level rules is exactly the part users cannot see from
-the DAG alone.</p>
+<p>The headline (<code>Plan: would run: N | skip: M | completed: K</code>) answers the
+question that matters before any run: <strong>what happens next</strong> — how many
+rules execute, how many are skipped, and how much completed work the
+checkpoint holds. The total rule count in the DAG is shown as
+<code>DAG size</code>, not as the headline number (issue #432: <code>DAG: 391 rules would
+execute</code> read as "everything re-runs" while 381 of them were actually
+up to date — a costly misread during triage). The summary line also
+answers how much prior work survives (<code>protected</code>): rules outside this
+execution set stay untouched. The cascade line makes the infection chain
+visible — one sample's data change reaching the queue-level rules is
+exactly the part users cannot see from the DAG alone.</p>
 <p><code>--profile &lt;NAME&gt;</code> applies the SAME merge <code>run</code> uses (profile values fill in
 config keys the workflow does not set), so a preview computed with the
 profile matches what a profiled <code>run</code> would invalidate — and a preview
@@ -4327,7 +4332,7 @@ instances at runtime are listed under the <code>reentry</code> section of <code>
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a>.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>DAG: (dry-run) 3 rules would execute
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>  1. generate_data
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>     threads=1
 </span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>     outputs: ["data/raw.csv"]

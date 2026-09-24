@@ -2639,6 +2639,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#touch-outputs-whose-paths-depend-on-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Touch outputs whose paths depend on config
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3811,6 +3822,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#touch-outputs-whose-paths-depend-on-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Touch outputs whose paths depend on config
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3867,7 +3889,7 @@
 <p>Mark workflow outputs as up-to-date without re-executing rules.</p>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow touch [OPTIONS] &lt;WORKFLOW&gt;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow touch [OPTIONS] &lt;WORKFLOW&gt; [KEY=VALUE]...
 </span></code></pre></div>
 <hr />
 <h2 id="arguments">Arguments<a class="headerlink" href="#arguments" title="Permanent link">#</a></h2>
@@ -3882,6 +3904,10 @@
 <tr>
 <td><code>&lt;WORKFLOW&gt;</code></td>
 <td>Path to the <code>.oxoflow</code> workflow file</td>
+</tr>
+<tr>
+<td><code>[KEY=VALUE]...</code></td>
+<td>Direct config overrides as trailing positionals — the same forms <code>run</code> accepts (<code>KEY=VALUE</code>, <code>--KEY=VALUE</code>, and the declared-key-only <code>--KEY VALUE</code>; see <a href="../run/">run</a>). Needed when outputs or wildcard expansion branch on <code>{config.*}</code> (issue #432). Command flags must come <strong>before</strong> the overrides.</td>
 </tr>
 </tbody>
 </table>
@@ -3916,15 +3942,20 @@
 <h3 id="touch-outputs-of-a-specific-rule">Touch outputs of a specific rule<a class="headerlink" href="#touch-outputs-of-a-specific-rule" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>touch<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-r<span class="w"> </span>bwa_align
 </span></code></pre></div>
+<h3 id="touch-outputs-whose-paths-depend-on-config">Touch outputs whose paths depend on config<a class="headerlink" href="#touch-outputs-whose-paths-depend-on-config" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Output pattern "{config.out_dir}/x.bam" — resolve against the override,</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># exactly as `run` would with the same value</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>oxo-flow<span class="w"> </span>touch<span class="w"> </span>pipeline.oxoflow<span class="w"> </span><span class="nv">out_dir</span><span class="o">=</span>results/cohort-A
+</span></code></pre></div>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  ✓ sample1.bam
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  ✓ sample1.bam.bai
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  ✓ sample2.bam
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  ✓ sample2.bam.bai
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>Done: 4 file(s) touched, 0 wildcard pattern(s) skipped
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  ✓ sample1.bam
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  ✓ sample1.bam.bai
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  ✓ sample2.bam
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>  ✓ sample2.bam.bai
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Done: 4 file(s) touched, 0 wildcard pattern(s) skipped
 </span></code></pre></div>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
@@ -3933,6 +3964,9 @@
 <li>If an output file does not exist, an empty file will be created</li>
 <li>Useful for forcing the engine to skip rules when outputs were generated externally</li>
 <li>Wildcard patterns are skipped as they cannot be touched without specific values</li>
+<li>Config overrides reuse <code>run</code>'s override machinery, so <code>touch</code> and <code>run</code>
+  agree on what an override means and on the resolved output locations
+  (issue #432)</li>
 </ul>
 
 
