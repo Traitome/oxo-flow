@@ -403,6 +403,14 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
     `SCI-VQSR-COHORT` for small-cohort VQSR runs, so a pilot never wastes
     compute failing at this step for scientific reasons.
 
+    Cohort size is not the only prerequisite: VariantRecalibrator also
+    needs enough *variants* to train the Gaussian mixture model. A
+    full-cohort run restricted to a small interval list (or a mini-genome
+    reference for testing) can still starve the trainer even with 30+
+    samples — in that case hard filtering is again the right fallback.
+    For INDELs the analogous hard-filter thresholds are
+    `QD < 2.0`, `FS > 200.0`, `ReadPosRankSum < 20.0`.
+
 ## Running the Workflow
 
 ### Run
