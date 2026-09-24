@@ -154,6 +154,10 @@ Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
 
 Log lines carry timestamps in a terminal, and the mode, host, and port follow `--mode`/`--host`/`-p`.
 
+The banner line is interactive-terminal decoration: when stderr is redirected
+(`oxo-flow serve > serve.log 2>&1`, nohup, service managers), it is omitted —
+the log lines alone identify the running version.
+
 ## Platform Configuration
 
 Server-tier settings, AI defaults, and SSH cluster definitions can live in

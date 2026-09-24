@@ -1935,6 +1935,24 @@ fn sanitize_shell_command_detects_eval() {
     );
 }
 
+// Issue #433: the warning must be self-explanatory — it states the rule
+// still runs (non-blocking) and why the pattern is flagged at all.
+#[test]
+fn sanitize_shell_command_warning_is_self_explanatory() {
+    let warnings = sanitize_shell_command("echo $(whoami)");
+    assert!(!warnings.is_empty());
+    for w in &warnings {
+        assert!(
+            w.contains("the rule will run"),
+            "warning should state it is non-blocking: {w}"
+        );
+        assert!(
+            w.contains("verify it is intentional"),
+            "warning should tell the operator what to do: {w}"
+        );
+    }
+}
+
 #[test]
 fn sanitize_shell_command_no_false_positives_simple_cmd() {
     let warnings = sanitize_shell_command("echo hello world");

@@ -723,10 +723,11 @@ fn cli_no_panic_on_non_utf8_args() {
 
 // ─── Run log header (print_banner) ─────────────────────────────────────────
 
-/// Long-running commands print the two-line banner (version + repository)
-/// at the top of their stderr log.
+/// The banner is interactive-terminal decoration: on redirected stderr
+/// (nohup, `> log`, CI) it must be suppressed so captured logs stay clean
+/// (issue #433). Version provenance still lands in the run log header.
 #[test]
-fn cli_run_log_shows_banner() {
+fn cli_run_log_suppresses_banner_on_redirect() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("tiny.oxoflow");
     fs::write(
@@ -747,16 +748,20 @@ fn cli_run_log_shows_banner() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains(&format!("oxo-flow v{}", env!("CARGO_PKG_VERSION"))),
-        "run log should carry the banner version line: {stderr}"
+        !stderr.contains("Rust-native bioinformatics pipeline engine"),
+        "piped stderr should not carry the banner tagline: {stderr}"
     );
     assert!(
-        stderr.contains("Rust-native bioinformatics pipeline engine"),
-        "run log should carry the tagline: {stderr}"
+        !stderr.contains("https://github.com/Traitome/oxo-flow"),
+        "piped stderr should not carry the banner repository URL: {stderr}"
     );
+    // Provenance is not lost: the run log header records the engine version.
+    let log_path = dir.path().join(".oxo-flow/logs/oxo-flow.log");
+    let log = fs::read_to_string(&log_path)
+        .unwrap_or_else(|_| panic!("run log missing at {}: {stderr}", log_path.display()));
     assert!(
-        stderr.contains("https://github.com/Traitome/oxo-flow"),
-        "run log should carry the repository URL: {stderr}"
+        log.contains(&format!("oxo-flow: v{}", env!("CARGO_PKG_VERSION"))),
+        "run log header should record engine version: {log}"
     );
 }
 

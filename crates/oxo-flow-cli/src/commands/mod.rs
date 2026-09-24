@@ -73,6 +73,13 @@ pub fn print_banner() {
     if QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
+    // The banner is decoration for humans at an interactive terminal. When
+    // stderr is redirected (nohup, `> log 2>&1`, CI, schedulers) it becomes
+    // noise on every invocation and pollutes captured logs (issue #433);
+    // version provenance stays available via the run-log header and --version.
+    if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        return;
+    }
     eprintln!(
         "{} v{} — {}",
         "oxo-flow".bold().cyan(),
