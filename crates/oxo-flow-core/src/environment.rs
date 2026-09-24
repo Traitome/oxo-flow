@@ -810,6 +810,13 @@ impl MambaBackend {
             self.cache_key(spec)
         }
     }
+
+    /// The resolved conda-family binary (`mamba`, `micromamba`, or `conda`)
+    /// this backend will actually invoke — diagnostics surface it so a run
+    /// on a box with several conda installs is debuggable (issue #433).
+    pub fn resolved_binary(&self) -> &str {
+        &self.binary
+    }
 }
 
 impl EnvironmentBackend for MambaBackend {
@@ -1989,6 +1996,19 @@ impl EnvironmentResolver {
         ]
     }
 
+    /// Resolve a backend name to the concrete binary the resolver would
+    /// invoke, when that binary is discoverable. Diagnostics (`env check`)
+    /// surface this so "conda available ✓" becomes debuggable on machines
+    /// with several conda-family installs (issue #433).
+    pub fn resolved_backend_binary(&self, backend: &str) -> Option<String> {
+        match backend {
+            "mamba" if self.mamba.is_available() => Some(self.mamba.resolved_binary().to_string()),
+            "conda" if self.conda.is_available() => Some("conda".to_string()),
+            "pixi" if self.pixi.is_available() => Some("pixi".to_string()),
+            _ => None,
+        }
+    }
+
     /// Validate that the required environment backend is available for a spec.
     pub fn validate_spec(&self, env_spec: &EnvironmentSpec) -> Result<()> {
         ensure_no_backend_conflict(env_spec)?;
@@ -2983,6 +3003,65 @@ mod tests {
         let resolver = EnvironmentResolver::new();
         let available = resolver.available_backends();
         assert!(available.contains(&"system"));
+    }
+
+    // ── Resolved-backend-binary transparency (issue #433) ──────────
+
+    #[test]
+    fn resolved_backend_binary_covers_conda_family_when_available() {
+        let resolver = EnvironmentResolver::new();
+        let available = resolver.available_backends();
+        // conda-family backends resolve to the concrete binary when the
+        // backend is usable.
+        if available.contains(&"mamba") {
+            let bin = resolver.resolved_backend_binary("mamba").unwrap();
+            assert!(
+                matches!(bin.as_str(), "mamba" | "micromamba" | "conda"),
+                "unexpected conda-family binary: {bin}"
+            );
+        }
+        if available.contains(&"conda") {
+            assert_eq!(
+                resolver.resolved_backend_binary("conda").as_deref(),
+                Some("conda")
+            );
+        }
+        if available.contains(&"pixi") {
+            assert_eq!(
+                resolver.resolved_backend_binary("pixi").as_deref(),
+                Some("pixi")
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_backend_binary_is_none_for_non_cli_backends() {
+        let resolver = EnvironmentResolver::new();
+        // docker/singularity/venv/modules and unknown names have no single
+        // binary worth surfacing — None by design, regardless of availability.
+        assert_eq!(resolver.resolved_backend_binary("docker"), None);
+        assert_eq!(resolver.resolved_backend_binary("singularity"), None);
+        assert_eq!(resolver.resolved_backend_binary("venv"), None);
+        assert_eq!(resolver.resolved_backend_binary("modules"), None);
+        assert_eq!(resolver.resolved_backend_binary("system"), None);
+        assert_eq!(resolver.resolved_backend_binary("nonsense"), None);
+    }
+
+    #[test]
+    fn resolved_backend_binary_none_when_backend_unavailable() {
+        let resolver = EnvironmentResolver::new();
+        let available = resolver.available_backends();
+        // Whatever this machine lacks, an unavailable conda-family backend
+        // must not fabricate a binary name.
+        if !available.contains(&"mamba") {
+            assert_eq!(resolver.resolved_backend_binary("mamba"), None);
+        }
+        if !available.contains(&"conda") {
+            assert_eq!(resolver.resolved_backend_binary("conda"), None);
+        }
+        if !available.contains(&"pixi") {
+            assert_eq!(resolver.resolved_backend_binary("pixi"), None);
+        }
     }
 
     #[tokio::test]

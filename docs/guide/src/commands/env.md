@@ -56,6 +56,18 @@ oxo-flow env check [WORKFLOW]
   ✓ annotate (singularity)
 ```
 
+Without a workflow, each available backend also names the binary that a run
+would resolve — the engine prefers `mamba` → `micromamba` → `conda`, so on a
+machine with several conda-family installs the resolved binary is what
+actually gets invoked:
+
+```
+Environment backend availability:
+  ✓ mamba (resolved: micromamba)
+  ✓ conda
+  ✗ docker (not found)
+```
+
 ### `env create`
 
 Create a new environment from a specification file.

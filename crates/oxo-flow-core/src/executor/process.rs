@@ -1635,7 +1635,7 @@ impl LocalExecutor {
             // deletions outside the workdir stay hard errors.
             validate_shell_safety_in_workdir(cmd, &self.config.workdir)?;
             for warning in sanitize_shell_command(cmd) {
-                tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
+                tracing::info!(rule = %rule.name, "{warning}");
             }
         }
 
@@ -2410,7 +2410,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(cmd) {
-                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
+                        tracing::info!(rule = %rule.name, "{warning}");
                     }
                 }
                 // Also check the raw command if no wrapped version
@@ -2421,7 +2421,7 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(raw_cmd) {
-                        tracing::info!(rule = %rule.name, "{warning} (common in bioinformatics scripts)");
+                        tracing::info!(rule = %rule.name, "{warning}");
                     }
                 }
 

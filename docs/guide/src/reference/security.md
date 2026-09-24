@@ -31,7 +31,10 @@ templates regardless.
 
 ### Warning Patterns (Non-Blocking)
 
-These emit **warnings** but allow execution (common in bioinformatics scripts):
+These emit **warnings** but allow execution — the rule runs either way. The
+warning exists because such idioms can also ride in on rendered wildcard
+values (a `$()` baked into a sample name), so verify flagged commands are
+intentional:
 
 | Pattern | Warning |
 |---------|---------|
@@ -41,6 +44,17 @@ These emit **warnings** but allow execution (common in bioinformatics scripts):
 | `chmod 777` | Overly permissive chmod |
 | `eval` | eval usage detected |
 | `curl/wget` piped to shell or `&& bash` | Remote pipe to shell detected |
+
+At run time (and in `dry-run` output) each warning reads e.g.
+
+```
+Command substitution detected in 'echo $(date)': this shell idiom is allowed
+and the rule will run; it is flagged because such content can also ride in on
+rendered wildcard values — verify it is intentional
+```
+
+The static lint for the same idioms is `W023` (aggregated one diagnostic per
+command since #375).
 
 ---
 

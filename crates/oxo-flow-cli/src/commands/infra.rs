@@ -89,7 +89,20 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                         oxo_flow_core::environment::EnvironmentResolver::all_known_backends()
                     {
                         if available.contains(backend) {
-                            eprintln!("  {} {}", "✓".green(), backend);
+                            // Surface WHICH binary resolves — on boxes with
+                            // several conda-family installs, "conda ✓" alone
+                            // hides which one a run would pick (issue #433).
+                            match resolver.resolved_backend_binary(backend) {
+                                Some(bin) if bin != *backend => {
+                                    eprintln!("  {} {} (resolved: {})", "✓".green(), backend, bin);
+                                }
+                                Some(_) => {
+                                    eprintln!("  {} {}", "✓".green(), backend);
+                                }
+                                None => {
+                                    eprintln!("  {} {} (not found)", "✗".red(), backend);
+                                }
+                            }
                         } else {
                             eprintln!("  {} {} (not found)", "✗".red(), backend);
                         }

@@ -165,8 +165,14 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
     let mut warnings = Vec::new();
     for (re, description) in WARNING_PATTERNS.iter() {
         if re.is_match(cmd) {
+            // Self-explanatory phrasing (issue #433): state what the pattern
+            // means, that the run proceeds, and where the explanation lives —
+            // a bare "Shell command warning" left operators guessing whether
+            // the rule would even run.
             warnings.push(format!(
-                "Shell command warning: {} in '{}'",
+                "{} in '{}': this shell idiom is allowed and the rule will run; \
+                 it is flagged because such content can also ride in on rendered \
+                 wildcard values — verify it is intentional",
                 description, cmd
             ));
         }
