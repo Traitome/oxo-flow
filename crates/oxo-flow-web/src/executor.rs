@@ -1075,7 +1075,7 @@ mod preview_tests {
         // Banner + human lines interleave with the JSON document (the real
         // execution.log shape).
         let log = "oxo-flow v0.11.0 — banner line\n\
-                   DAG: (dry-run) 2 rules would execute\n\
+                   Plan: would run: 2 | skip: 0 | completed: 0 (DAG size: 2)\n\
                    {\"checkpoint_preview\":{\"summary\":{\"will_run\":2,\"will_skip\":0},\"plan\":[{\"name\":\"gather_cohort_S1\",\"status\":\"run-never-completed\"},{\"name\":\"gather_cohort_S2\",\"status\":\"run-never-completed\"}]},\"execution_order\":[\"gather_cohort_S1\",\"gather_cohort_S2\"]}\n";
         let preview = extract_dry_run_preview(log).expect("preview must parse");
         assert_eq!(preview["checkpoint_preview"]["summary"]["will_run"], 2);

@@ -70,7 +70,7 @@ batches:
 
 ```console
 $ oxo-flow dry-run pipeline.oxoflow
-DAG: (dry-run) 100 rules would execute
+Plan: would run: 100 | skip: 0 | completed: 0 (DAG size: 100)
 Sample readiness: 87/100 complete, 13 waiting
     ⏳ NA12891 (missing: data/NA12891_R2.fastq.gz)
     ⏳ NA12892 (missing: data/NA12892_R2.fastq.gz)
@@ -118,7 +118,7 @@ completed", `when` conditions still honored):
 
 ```console
 $ oxo-flow dry-run pipeline.oxoflow --samples NA12891
-DAG: (dry-run) 12 rules would execute
+Plan: would run: 12 | skip: 0 | completed: 705 (DAG size: 717)
 Checkpoint: ./.oxo-flow/checkpoint.json (modified 2026-08-10 14:32)
   completed: 705 | will run: 12 | will skip: 0 | protected (outside this run): 693
   rerun cascade: trim_cohort_NA12891 → align_cohort_NA12891 → combine_gvcfs → genotype_gvcfs → vqsr_snps
@@ -144,12 +144,17 @@ Per-rule status markers:
 | `[skip: up to date]` | Checkpoint hit — work stays protected |
 | `[skip: when condition false]` | The rule's `when` condition evaluates to false against the merged config — `run` skips it regardless of invalidation state |
 
-The summary line answers the two questions that matter before a targeted
-re-run: **how much will actually execute** (`will run`, including the
-cascade) and **how much prior work survives** (`protected`). The cascade
-line makes the infection chain visible — one sample's data change
-reaching the queue-level rules is exactly the part users cannot see from
-the DAG alone.
+The headline (`Plan: would run: N | skip: M | completed: K`) answers the
+question that matters before any run: **what happens next** — how many
+rules execute, how many are skipped, and how much completed work the
+checkpoint holds. The total rule count in the DAG is shown as
+`DAG size`, not as the headline number (issue #432: `DAG: 391 rules would
+execute` read as "everything re-runs" while 381 of them were actually
+up to date — a costly misread during triage). The summary line also
+answers how much prior work survives (`protected`): rules outside this
+execution set stay untouched. The cascade line makes the infection chain
+visible — one sample's data change reaching the queue-level rules is
+exactly the part users cannot see from the DAG alone.
 
 `--profile <NAME>` applies the SAME merge `run` uses (profile values fill in
 config keys the workflow does not set), so a preview computed with the
@@ -267,7 +272,7 @@ instances at runtime are listed under the `reentry` section of `--json`
 
 ```
 oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
-DAG: (dry-run) 3 rules would execute
+Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
   1. generate_data
      threads=1
      outputs: ["data/raw.csv"]

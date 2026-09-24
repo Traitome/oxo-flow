@@ -26,6 +26,7 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 
 | Option | Short | Description |
 |---|---|---|
+| `--workdir <DIR>` | | Resolve the default checkpoint under this run directory (`<DIR>/.oxo-flow/checkpoint.json`) — the same semantics as `run --workdir`; ignored when an explicit CHECKPOINT path is given |
 | `--timing` | | Show per-rule wall-clock times, sampled peak RSS, and total runtime, slowest first |
 | `--limit <LIMIT>` | `-n` | Maximum number of rules in the `--timing` view (default: 10; requires `--timing`) |
 | `--json` | | Output machine-readable JSON to stdout |
@@ -41,6 +42,9 @@ oxo-flow status
 
 # Status from an explicit checkpoint
 oxo-flow status .oxo-flow/checkpoint.json
+
+# Status for a run that executed with --workdir somewhere else
+oxo-flow status --workdir runs/cohort-2026-09
 
 # Per-rule timings, slowest 5 rules
 oxo-flow status --timing -n 5
@@ -68,6 +72,37 @@ Failed rules:
   ✗ mark_duplicates
 ```
 
+### Staleness reasons
+
+When the checkpoint's workflow file is still present and parseable, `status`
+also classifies every completed rule exactly the way `run` would (issue
+#432) and explains **why each rule would re-run right now** — output
+deleted, input manifest mismatch, config change, or a cascade from an
+upstream rule:
+
+```
+Staleness reasons (as of now):
+  why each completed rule would re-run under the current workflow+config
+  ✓ align — input changed (recorded input manifest (paths/size/mtime) no longer matches disk)
+  ✓ trim_reads — up to date
+```
+
+Rules shown as up to date would keep their checkpoint credit on the next
+`run`. The same map is available in `--json` output:
+
+```json
+"staleness": {
+  "align": {
+    "status": "input changed",
+    "detail": "recorded input manifest (paths/size/mtime) no longer matches disk"
+  }
+}
+```
+
+The classification is read-only: it never writes to the checkpoint or
+records baselines on disk. When the workflow file is missing or no longer
+parses, the section degrades to the plain completed/failed listing.
+
 With `--timing`, the rule list is replaced by a wall-time view (slowest
 first):
 
@@ -90,6 +125,12 @@ With `--json`, output goes to stdout:
   "workflow": "pipeline.oxoflow",
   "completed": ["align", "sort_bam", "trim_reads"],
   "failed": [],
+  "staleness": {
+    "align": {
+      "status": "input changed",
+      "detail": "recorded input manifest (paths/size/mtime) no longer matches disk"
+    }
+  },
   "timings": {
     "align": 30.1,
     "sort_bam": 12.3,
@@ -105,7 +146,8 @@ With `--json`, output goes to stdout:
 
 `timings`, `total_time_secs`, and `memory` are only present with
 `--timing`; `memory` only lists rules with a sampled peak-RSS
-measurement.
+measurement. `staleness` is present whenever the workflow file can be
+loaded for classification (see [Staleness reasons](#staleness-reasons)).
 
 ---
 

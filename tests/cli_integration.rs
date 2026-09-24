@@ -504,7 +504,7 @@ fn cli_samples_and_target_intersect() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("1 rules would execute"),
+        stderr.contains("would run: 1"),
         "intersection should yield exactly the 1 fastp rule: {stderr}"
     );
     assert!(
@@ -2691,7 +2691,7 @@ fn cli_dryrun_gallery_file_pipeline() {
         .args(["dry-run", "examples/gallery/02_file_pipeline.oxoflow"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("3 rules would execute"))
+        .stderr(predicate::str::contains("would run: 3"))
         .stderr(predicate::str::contains("generate_data"))
         .stderr(predicate::str::contains("summarize"));
 }
@@ -3884,7 +3884,7 @@ shell = "echo C"
         .args(["dry-run", workflow.to_str().unwrap(), "-t", "step_b"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("2 rules would execute"))
+        .stderr(predicate::str::contains("would run: 2"))
         .stderr(predicate::str::contains("step_a"))
         .stderr(predicate::str::contains("step_b"));
 }
