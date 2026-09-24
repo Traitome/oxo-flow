@@ -471,9 +471,14 @@ pub enum Commands {
     Status {
         #[arg(
             value_name = "CHECKPOINT",
-            help = "Path to the checkpoint file (default: .oxo-flow/checkpoint.json)"
+            help = "Path to the checkpoint file (default: <workdir>/.oxo-flow/checkpoint.json)"
         )]
         checkpoint: Option<PathBuf>,
+        /// Resolve the default checkpoint against this run directory
+        /// (same semantics as `run --workdir`); ignored with an explicit
+        /// CHECKPOINT path.
+        #[arg(long, value_name = "DIR")]
+        workdir: Option<PathBuf>,
         /// Show per-rule wall-clock times and total runtime (slowest first).
         #[arg(long)]
         timing: bool,
@@ -581,6 +586,19 @@ pub enum Commands {
             help = "Working directory the outputs live in (default: the workflow file's directory)"
         )]
         workdir: Option<PathBuf>,
+        #[arg(
+            long = "arg",
+            value_name = "KEY=VALUE",
+            help = "Config override (KEY=VALUE or --KEY VALUE); touch validates output paths against overridden values"
+        )]
+        args: Vec<String>,
+        #[arg(
+            value_name = "OVERRIDES",
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            help = "Config overrides as trailing KEY=VALUE pairs"
+        )]
+        config_overrides: Vec<String>,
     },
     /// Generate reports from workflow execution.
     Report {
@@ -1620,9 +1638,10 @@ async fn main() -> Result<()> {
         } => handle_graph(workflow, format, output, expanded, granularity)?,
         Commands::Status {
             checkpoint,
+            workdir,
             timing,
             limit,
-        } => handle_status(checkpoint, cli.json, timing, limit).await?,
+        } => handle_status(checkpoint, workdir, cli.json, timing, limit).await?,
         Commands::Pull { url, output } => crate::commands::pull::pull_command(&url, output).await?,
         Commands::Config { action } => crate::commands::infra::handle_config(action)?,
         Commands::Diff {
@@ -1656,7 +1675,13 @@ async fn main() -> Result<()> {
             workflow,
             rules,
             workdir,
-        } => touch_command(workflow, rules, workdir)?,
+            args,
+            config_overrides,
+        } => {
+            let mut cli_args = config_overrides;
+            cli_args.extend(args);
+            touch_command(workflow, rules, workdir, cli_args)?
+        }
         Commands::Report {
             workflow,
             format,

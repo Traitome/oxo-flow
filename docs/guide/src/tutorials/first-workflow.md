@@ -236,7 +236,7 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
 INFO Auto-discovered 2 samples from pattern 'raw_data/{sample}_R1.fastq.gz'
-DAG: (dry-run) 8 rules would execute
+Plan: would run: 8 | skip: 0 | completed: 0 (DAG size: 8)
   1. fastp_trim_auto-discovered_sample1
      threads=4
      env=conda

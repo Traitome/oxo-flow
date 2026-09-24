@@ -103,7 +103,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 
 ```
 oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
-DAG: (dry-run) 2 rules would execute
+Plan: would run: 2 | skip: 0 | completed: 0 (DAG size: 2)
   1. create_data
      threads=2
      outputs: ["data/greeting.txt"]

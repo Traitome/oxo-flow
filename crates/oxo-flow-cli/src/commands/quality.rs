@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::commands::print_banner;
@@ -557,10 +558,21 @@ pub fn touch_command(
     workflow: PathBuf,
     rules: Vec<String>,
     workdir: Option<PathBuf>,
+    cli_args: Vec<String>,
 ) -> Result<()> {
     print_banner();
     let mut config = WorkflowConfig::from_file(&workflow)
         .with_context(|| format!("failed to parse {}", workflow.display()))?;
+
+    // Config overrides first: rules may branch on {config.*} before the
+    // engine ever expands wildcards (issue #432). Parsing/validation reuses
+    // the exact `run`/`dry-run` machinery so `touch` and `run` agree on
+    // what an override means.
+    let declared_config_keys: std::collections::HashSet<String> =
+        config.config_meta.keys().cloned().collect();
+    let cli_arg_values = super::run::parse_cli_overrides(cli_args, &declared_config_keys, "touch")?;
+    super::run::apply_cli_overrides(&mut config, &cli_arg_values)?;
+    super::run::warn_unknown_override_keys(&cli_arg_values, &declared_config_keys, &workflow);
 
     config.apply_defaults();
     // Expand wildcards so output patterns are concrete paths
@@ -571,6 +583,12 @@ pub fn touch_command(
             "Info:".dimmed()
         );
     }
+
+    // Outputs may embed {config.*} references (e.g. "{config.out_dir}/x.bam")
+    // — resolve them against the overridden config so `touch` and `run`
+    // agree on where the files live.
+    let config_values: HashMap<String, String> =
+        super::run::config_placeholder_values(&config.config);
 
     // A typo'd rule name must not exit 0 with "0 file(s) touched" — scripts
     // would read that as success (audit #276 P4-5). The command fails at the
@@ -627,6 +645,8 @@ pub fn touch_command(
 
     for rule in &rules_to_touch {
         for output in &rule.output {
+            let output =
+                oxo_flow_core::executor::checkpoint::expand_config_in_path(output, &config_values);
             let has_wildcard = output.contains('{') && output.contains('}');
             if has_wildcard {
                 skipped += 1;
@@ -640,7 +660,7 @@ pub fn touch_command(
                 continue;
             }
 
-            let path = base_dir.join(output);
+            let path = base_dir.join(&output);
             if path.exists() {
                 // Update modification time
                 match filetime::set_file_mtime(&path, filetime::FileTime::now()) {
@@ -840,6 +860,74 @@ shell = "true"
         assert!(
             !stdout.is_empty(),
             "the JSON surface must never be empty, even on a parse failure"
+        );
+    }
+
+    #[test]
+    fn test_touch_accepts_config_overrides() {
+        // Issue #432: `touch` must accept the same KEY=VALUE override form
+        // as `run`, and outputs that reference {config.*} must resolve
+        // against the overridden value.
+        let fragment = r#"
+[workflow]
+name = "touch-override"
+
+[config]
+out_dir = { default = "results", required = false }
+
+[[rules]]
+name = "step"
+input = []
+output = ["{config.out_dir}/done.flag"]
+shell = "touch {output[0]}"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, fragment).unwrap();
+
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["touch", wf.to_str().unwrap(), "out_dir=other"])
+            .assert()
+            .success();
+
+        assert!(
+            dir.path().join("other/done.flag").exists(),
+            "output must resolve under the overridden out_dir"
+        );
+        assert!(
+            !dir.path().join("results/done.flag").exists(),
+            "default out_dir must NOT be touched when overridden"
+        );
+    }
+
+    #[test]
+    fn test_touch_unknown_flag_is_command_aware() {
+        // A run-only flag must be rejected with a touch-aware message
+        // (issue #430 contract shared via parse_cli_overrides).
+        let fragment = r#"
+[workflow]
+name = "touch-flag"
+
+[[rules]]
+name = "step"
+input = []
+output = ["a.txt"]
+shell = "touch a.txt"
+"#;
+        let mut file = NamedTempFile::with_suffix(".oxoflow").unwrap();
+        file.write_all(fragment.as_bytes()).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["touch", file.path().to_str().unwrap(), "--force"])
+            .assert()
+            .failure();
+
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+        assert!(
+            stderr.contains("touch"),
+            "flag error must name the touch command, got: {stderr}"
         );
     }
 }

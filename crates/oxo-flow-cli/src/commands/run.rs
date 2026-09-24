@@ -644,7 +644,7 @@ fn ai_attempts(cli_max_retries: Option<u32>) -> u32 {
 /// swallowed run flag under a command that does not support it says so
 /// (issue #430): under `dry-run`, `-j` reads "not supported by dry-run",
 /// not the run-ordering hint.
-fn parse_cli_overrides(
+pub(crate) fn parse_cli_overrides(
     cli_args: Vec<String>,
     declared_config_keys: &std::collections::HashSet<String>,
     command: &str,
@@ -767,7 +767,7 @@ fn parse_cli_overrides(
 /// Apply parsed overrides and the defaults of declarative config entries
 /// (`key = { default, required, … }` in `[config]`). Shared by `run` and
 /// `dry-run` so preview and execution validate identically.
-fn apply_cli_overrides(
+pub(crate) fn apply_cli_overrides(
     config: &mut WorkflowConfig,
     cli_arg_values: &std::collections::HashMap<String, String>,
 ) -> anyhow::Result<()> {
@@ -827,7 +827,7 @@ fn apply_cli_overrides(
 /// nothing (audit finding). A key counts as used when `[config]` declares it
 /// or the workflow references `{config.KEY}` anywhere; the closest declared
 /// key is named when it is within a two-edit typo.
-fn warn_unknown_override_keys(
+pub(crate) fn warn_unknown_override_keys(
     overrides: &HashMap<String, String>,
     declared: &HashSet<String>,
     workflow: &Path,
@@ -1300,8 +1300,23 @@ pub async fn run_command(
         );
     }
 
+    // Issue #432(a): a corrupt checkpoint must never degrade silently into
+    // an empty state — that silently re-executes every completed rule, which
+    // costs hours on real data. Fail loudly BEFORE any work is scheduled so
+    // the user can back up / repair the file rather than lose the credit.
     let mut loaded_checkpoint = if checkpoint_path.exists() {
-        CheckpointState::load_from_file(&checkpoint_path).unwrap_or_default()
+        match CheckpointState::load_from_file(&checkpoint_path) {
+            Ok(ck) => ck,
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "checkpoint at {} is corrupt and cannot be loaded ({}); \
+                     refusing to start — every completed rule would silently re-run. \
+                     Fix or remove the file, then retry.",
+                    checkpoint_path.display(),
+                    e
+                ));
+            }
+        }
     } else {
         CheckpointState::default()
     };
@@ -1538,11 +1553,22 @@ pub async fn run_command(
                 &mismatched,
             );
             force_rules.extend(invalidated.iter().cloned());
+            // Issue #432(a): say WHY completed credit was lost when the
+            // likely cause is a prior failed run's side effects — the issue
+            // reports users reading this as "restarts lose credit" when it
+            // is deterministic invalidation (shared-dir side effects shift
+            // glob/dir input sets, which cascades downstream).
+            let prior_failures = !ck.failed_rules.is_empty();
             eprintln!(
-                "  {} input changes invalidated {} rule(s): {}",
+                "  {} input changes invalidated {} rule(s): {}{}",
                 "↻".yellow(),
                 invalidated.len(),
-                invalidated.join(", ")
+                invalidated.join(", "),
+                if prior_failures {
+                    " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
+                } else {
+                    ""
+                }
             );
         }
         if baselined > 0 {
@@ -4561,12 +4587,6 @@ pub async fn dry_run_command(
         filtered
     };
 
-    eprintln!(
-        "{} (dry-run) {} rules would execute",
-        "DAG:".bold().yellow(),
-        order.len()
-    );
-
     // All config values (including CLI --arg overrides) become {config.key} in templates.
     let mut wildcard_values: HashMap<String, String> = HashMap::new();
     for (key, value) in &config.config {
@@ -4712,13 +4732,17 @@ pub async fn dry_run_command(
             p.checkpoint_path.display(),
             modified.dimmed()
         );
+        // Issue #432(b): the headline must answer "what happens next", not
+        // "how big is the DAG". `order.len()` is DAG size — shown, but
+        // labelled as such and secondary to the run/skip/completed split.
         let will_run = p.plan.len() - p.will_skip;
         eprintln!(
-            "  completed: {} | will run: {} | will skip: {} | protected (outside this run): {}",
-            p.completed_total,
+            "{} would run: {} | skip: {} | completed: {} (DAG size: {})",
+            "Plan:".bold().yellow(),
             will_run.to_string().green(),
             p.will_skip.to_string().dimmed(),
-            p.protected_outside
+            p.completed_total.to_string().cyan(),
+            order.len()
         );
         for chain in &p.cascade_chains {
             eprintln!("  {} {}", "rerun cascade:".yellow(), chain.join(" → "));
@@ -5590,8 +5614,144 @@ fn print_target_skipped_note(skipped: &str, when_false_rules: &std::collections:
     eprintln!("{} {detail}", "Note:".yellow());
 }
 
+/// Per-rule staleness reasons for `status` (issue #432(c)).
+///
+/// Answers "why will this rule re-run?" with the SAME classification the
+/// dry-run preview uses, by re-parsing the workflow recorded in the
+/// checkpoint and running the shared invalidation detection on a throwaway
+/// state clone (detection mutates the state it is given).
+///
+/// Returns an empty map when the answer cannot be computed — workflow file
+/// missing/moved, config no longer parses, or no completed rules — so the
+/// caller degrades to the plain listing instead of failing.
+#[allow(clippy::type_complexity)]
+fn compute_staleness_reasons(
+    state: &CheckpointState,
+    checkpoint_path: &std::path::Path,
+) -> std::collections::BTreeMap<String, (String, String)> {
+    use crate::commands::run_preview::RuleStatus;
+    let mut reasons = std::collections::BTreeMap::new();
+    if state.completed_rules.is_empty() {
+        return reasons;
+    }
+    let Some(workflow_path) = state.workflow_path.as_ref() else {
+        return reasons;
+    };
+    let workflow = std::path::PathBuf::from(workflow_path);
+    if !workflow.exists() {
+        return reasons;
+    }
+    let Ok(config) = WorkflowConfig::from_file(&workflow) else {
+        return reasons;
+    };
+    let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+    let Ok(dag) = WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config_placeholder_values(&config.config),
+    ) else {
+        return reasons;
+    };
+    let Ok(raw_order) = dag.execution_order() else {
+        return reasons;
+    };
+    let order_set: std::collections::HashSet<String> = raw_order.into_iter().collect();
+    let mut order: Vec<String> = Vec::new();
+    let Ok(groups) = dag.parallel_groups() else {
+        return reasons;
+    };
+    for group in groups {
+        let mut level: Vec<String> = group
+            .into_iter()
+            .filter(|n| order_set.contains(n))
+            .collect();
+        level.sort();
+        order.extend(level);
+    }
+
+    // Read-only: preview_run_plan clones internally and mutates only that
+    // clone (detection may record legacy baselines there) — the on-disk
+    // checkpoint is never touched from `status`. The pristine state must be
+    // passed so completed-rule credit is classified as such.
+    let wildcard_values = config_placeholder_values(&config.config);
+    let sensitive_keys: std::collections::HashSet<String> = config
+        .config_meta
+        .iter()
+        .filter(|(_, def)| def.sensitive)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let interpreter_map = config.workflow.interpreter_map.clone();
+    // `run` and dry-run resolve this identity gate before any preview; from
+    // `status` the checkpoint's own recorded path is the workflow (same file
+    // it was saved under), so adoption is a no-op — but run it anyway to keep
+    // the classification path byte-identical with run's.
+    let mut adopted = state.clone();
+    crate::commands::run::adopt_checkpoint_for_workflow(&mut adopted, &workflow);
+    let preview = crate::commands::run_preview::preview_run_plan(
+        &adopted,
+        &config,
+        &dag,
+        &order,
+        &workflow_dir,
+        &wildcard_values,
+        &sensitive_keys,
+        &interpreter_map,
+        checkpoint_path,
+        false,
+        false,
+    );
+    for entry in &preview.plan {
+        // Only rules recorded as completed are in scope: the question is
+        // "why would this COMPLETED rule re-run".
+        if !state.completed_rules.contains(&entry.name) {
+            continue;
+        }
+        let (reason, detail) = match entry.status {
+            RuleStatus::Skipped | RuleStatus::SkippedByWhen | RuleStatus::SkippedFresh => {
+                continue;
+            }
+            // After adoption a completed rule that survived classification
+            // but is gone from the adopted state means the identity gate
+            // invalidated it — the credit really is gone, so say so.
+            RuleStatus::NeverCompleted if !adopted.completed_rules.contains(&entry.name) => (
+                "checkpoint reset".to_string(),
+                "completed credit was invalidated (foreign workflow adoption)".to_string(),
+            ),
+            RuleStatus::NeverCompleted => (
+                "output missing".to_string(),
+                "completion record present but the executor would re-run — outputs are gone or failed cleanup removed them".to_string(),
+            ),
+            RuleStatus::ConfigInvalidated => (
+                "config changed".to_string(),
+                "an effective config value differs from the recorded snapshot".to_string(),
+            ),
+            RuleStatus::InputInvalidated => (
+                "input changed".to_string(),
+                "recorded input manifest (paths/size/mtime) no longer matches disk".to_string(),
+            ),
+            RuleStatus::OutputsMissing => (
+                "output missing".to_string(),
+                "recorded output is gone from the workdir".to_string(),
+            ),
+            RuleStatus::Cascaded { from: ref f1 } => (
+                "cascaded".to_string(),
+                format!("upstream rule '{f1}' will re-run"),
+            ),
+            RuleStatus::CascadedUpstream { from: ref f2 } => (
+                "missing input".to_string(),
+                format!(
+                    "a downstream rule needs an intermediate that is gone; producer '{f2}' re-runs first"
+                ),
+            ),
+            RuleStatus::Forced => ("forced".to_string(), "--rerun was requested".to_string()),
+        };
+        reasons.insert(entry.name.clone(), (reason, detail));
+    }
+    reasons
+}
+
 pub async fn handle_status(
     checkpoint: Option<PathBuf>,
+    workdir: Option<PathBuf>,
     json: bool,
     timing: bool,
     limit: usize,
@@ -5617,7 +5777,14 @@ pub async fn handle_status(
         anyhow::bail!("Cannot read workflow file as checkpoint");
     }
 
-    let checkpoint_path = checkpoint.unwrap_or_else(|| PathBuf::from(DEFAULT_CHECKPOINT));
+    // Issue #432(d): mirror `run --workdir` so users do not need to know the
+    // checkpoint's internal path — the run directory is enough. An explicit
+    // CHECKPOINT argument wins.
+    let checkpoint_path = match (&checkpoint, &workdir) {
+        (Some(p), _) => p.clone(),
+        (None, Some(dir)) => dir.join(".oxo-flow/checkpoint.json"),
+        (None, None) => PathBuf::from(DEFAULT_CHECKPOINT),
+    };
     let state = CheckpointState::load_from_file(&checkpoint_path).with_context(|| {
         format!(
             "failed to load checkpoint from '{}'.\n  \
@@ -5633,6 +5800,33 @@ pub async fn handle_status(
     let mut failed: Vec<&str> = state.failed_rules.iter().map(String::as_str).collect();
     failed.sort_unstable();
 
+    // ── Per-rule staleness reasons (issue #432(c)) ────────────────────────
+    // Reuse the dry-run preview's exact classification so "why will this
+    // rule re-run?" has the same answer in `status` and `dry-run -v`.
+    // Best-effort: needs the workflow file recorded in the checkpoint plus
+    // a current config; when either is missing the section degrades to the
+    // plain completed/failed listing below.
+    let staleness = compute_staleness_reasons(&state, &checkpoint_path);
+    let staleness_json: Option<serde_json::Map<String, serde_json::Value>> = if staleness.is_empty()
+    {
+        None
+    } else {
+        Some(
+            staleness
+                .iter()
+                .map(|(rule, (reason, detail))| {
+                    (
+                        rule.clone(),
+                        serde_json::json!({
+                            "status": reason,
+                            "detail": detail,
+                        }),
+                    )
+                })
+                .collect(),
+        )
+    };
+
     if json {
         let mut output = serde_json::json!({
             "command": "status",
@@ -5641,6 +5835,9 @@ pub async fn handle_status(
             "completed": completed,
             "failed": failed,
         });
+        if let Some(map) = staleness_json {
+            output["staleness"] = serde_json::Value::Object(map);
+        }
         if timing {
             let (timings, total) = rule_timings(&state);
             // serde_json::Map is a BTreeMap: keys stay deterministically sorted
@@ -5710,6 +5907,27 @@ pub async fn handle_status(
             }
         }
     } else {
+        if !staleness.is_empty() {
+            eprintln!("\n{}", "Staleness reasons (as of now):".bold().yellow());
+            eprintln!(
+                "  {}",
+                "why each completed rule would re-run under the current workflow+config".dimmed()
+            );
+            for rule in &completed {
+                match staleness.get(*rule) {
+                    Some((reason, detail)) => {
+                        eprintln!(
+                            "  {} {} — {} ({})",
+                            "✓".green(),
+                            rule,
+                            reason,
+                            detail.dimmed()
+                        );
+                    }
+                    None => eprintln!("  {} {} — up to date", "✓".green(), rule),
+                }
+            }
+        }
         if !completed.is_empty() {
             eprintln!("\n{}", "Completed rules:".bold().green());
             for rule in &completed {
@@ -6283,5 +6501,161 @@ mod tests {
             std::collections::HashMap::new();
         map.insert("qc".to_string(), vec!["qc".to_string()]);
         assert_eq!(known_modules_hint(&map), "qc");
+    }
+
+    // ── Issue #432: dry-run headline + status --workdir / staleness ──────
+
+    #[test]
+    fn dry_run_headline_reports_run_skip_completed_not_dag_size() {
+        // The headline must answer "what happens next" (issue #432b): the
+        // old `DAG: (dry-run) N rules would execute` read as "everything
+        // re-runs" while the checkpoint said most rules were up to date.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "headline"
+
+[[rules]]
+name = "step"
+input = []
+output = ["out.txt"]
+shell = "touch out.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["dry-run", wf.to_str().unwrap()])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+        assert!(
+            stderr.contains("Plan: would run: 1 | skip: 0 | completed: 0 (DAG size: 1)"),
+            "headline must lead with would-run/skip/completed, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("rules would execute"),
+            "the old misleading headline must be gone, got: {stderr}"
+        );
+    }
+
+    #[test]
+    fn status_accepts_workdir_like_run() {
+        // Issue #432(d): `status --workdir <dir>` must resolve the default
+        // checkpoint under that run directory, same as `run --workdir`.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "status-workdir"
+
+[[rules]]
+name = "step"
+input = []
+output = ["out.txt"]
+shell = "touch out.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let run_dir = dir.path().join("run1");
+
+        // A real run first: it records the checkpoint in the workdir.
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args([
+                "run",
+                wf.to_str().unwrap(),
+                "--workdir",
+                run_dir.to_str().unwrap(),
+                "-j",
+                "1",
+            ])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        // status --workdir finds the checkpoint without the internal path.
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["status", "--workdir", run_dir.to_str().unwrap(), "--json"])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("status --json must emit JSON");
+        assert_eq!(parsed["completed"], serde_json::json!(["step"]));
+    }
+
+    #[test]
+    fn status_reports_staleness_reasons_for_a_stale_completed_rule() {
+        // Issue #432(c): after a completed rule's output is deleted, status
+        // must say WHY it would re-run (outputs missing), not just list it.
+        use assert_cmd::Command;
+        let wf_toml = r#"
+[workflow]
+name = "stale-reasons"
+
+[[rules]]
+name = "producer"
+input = []
+output = ["stage1.txt"]
+shell = "printf 'v1' > stage1.txt"
+
+[[rules]]
+name = "consumer"
+input = ["stage1.txt"]
+output = ["stage2.txt"]
+shell = "cp stage1.txt stage2.txt"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let wf = dir.path().join("wf.oxoflow");
+        std::fs::write(&wf, wf_toml).unwrap();
+        let run_dir = dir.path().join("run1");
+
+        Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args([
+                "run",
+                wf.to_str().unwrap(),
+                "--workdir",
+                run_dir.to_str().unwrap(),
+                "-j",
+                "1",
+            ])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+
+        // Delete the producer's output → it is stale (outputs missing) and
+        // the consumer cascades behind it.
+        std::fs::remove_file(run_dir.join("stage1.txt")).unwrap();
+
+        let assert = Command::cargo_bin("oxo-flow")
+            .unwrap()
+            .args(["status", "--workdir", run_dir.to_str().unwrap(), "--json"])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let staleness = parsed["staleness"].as_object().expect("staleness map");
+        let producer = &staleness["producer"];
+        // stage1.txt was deleted: the producer's completion record survives
+        // but its output is gone, so it classifies as the lazy cascade-up
+        // producer (a downstream rule needs the intermediate).
+        assert_eq!(producer["status"], "missing input");
+        let consumer = &staleness["consumer"];
+        // stage1.txt no longer matches the recorded manifest (gone), so the
+        // consumer's own credit is input-invalidated before any cascade.
+        assert_eq!(consumer["status"], "input changed");
+        assert!(
+            consumer["detail"].as_str().unwrap().contains("manifest"),
+            "input-changed detail must explain the manifest mismatch, got: {consumer}"
+        );
     }
 }

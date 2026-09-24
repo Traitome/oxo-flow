@@ -60,7 +60,7 @@ $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
 ```bash
 $ oxo-flow dry-run examples/gallery/01_hello_world.oxoflow
 oxo-flow v0.20.0 — Rust-native bioinformatics pipeline engine
-DAG: (dry-run) 1 rules would execute
+Plan: would run: 1 | skip: 0 | completed: 0 (DAG size: 1)
   1. greet
      threads=1
      outputs: ["hello.txt"]
