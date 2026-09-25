@@ -95,7 +95,12 @@ success while both colliding rules executed), so downstream rules consume
 the wrong file. The repair is distinct output directories per writer —
 or a `when` gate when the two rules are mutually exclusive alternatives
 (the `wgs_coverage`/`wes_coverage` idiom). Multi-producer outputs remain
-a supported feature, so this is a warning, not an error. See
+a supported feature, so this is a warning, not an error. `{config.*}`
+placeholders are resolved against the parsed config before the templates
+are compared, so `{config.out_dir}/{sample}.vcf` collides with its literal
+counterpart `results/{sample}.vcf` when `out_dir = "results"` — and does
+not collide with `{config.alt_dir}/{sample}.vcf` when the values differ.
+See
 [Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
 W032 flags a `[config]` key whose *name* looks like a secret
 (`token`, `secret`, `passwd`, `password`, `credential`, `api_key`,

@@ -7,7 +7,7 @@
 //! matching the CLI's `Running: <rule>` lines in execution.log (valid only
 //! while the run is live). There is no web-side state to drift.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use oxo_flow_core::executor::CheckpointState;
@@ -309,7 +309,7 @@ mod aggregation_tests {
 /// the `actual` side of resource-bottleneck detection (issue #67 §4).
 pub fn load_benchmarks(
     run_dir: &Path,
-) -> HashMap<String, oxo_flow_core::executor::checkpoint::BenchmarkRecord> {
+) -> BTreeMap<String, oxo_flow_core::executor::checkpoint::BenchmarkRecord> {
     CheckpointState::load_from_file(&CheckpointState::default_path(run_dir))
         .map(|ck| ck.benchmarks)
         .unwrap_or_default()

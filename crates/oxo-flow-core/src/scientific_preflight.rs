@@ -143,57 +143,42 @@ static PLACEHOLDER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(\w+(?:\.\w+)?)\}").expect("valid placeholder regex"));
 
 /// Whether the rule takes one of the early paths in `expand_wildcards`
-/// that bypass pair/group fan-out entirely (issue #443 exclusion set).
-fn bypasses_group_pair_fanout(rule: &Rule, config: &WorkflowConfig) -> bool {
-    // input_groups rules never fan out on pair/group wildcards — the
-    // discovered group key is the instance's binding source.
-    if !rule.input_groups.is_empty() {
-        return true;
-    }
-    // output_pattern producers keep their fresh wildcard unbound and
-    // consumers are deferred until the producer's domain is known; both
-    // instantiate per discovered domain, not per declared sample, so a
-    // wildcard-free `output` list is expected there.
-    if rule.output_pattern.is_some() {
-        return true;
-    }
-    // A rule referencing another rule's fresh wildcard (`{name}` where
-    // `name` is some output_pattern producer's declared wildcard) defers
-    // the same way.
-    config
-        .rules
-        .iter()
-        .filter_map(|r| r.output_pattern.as_deref())
-        .filter_map(|op| crate::wildcard::extract_wildcards(op).into_iter().next())
-        .any(|fresh| {
-            rule.input
-                .iter()
-                .chain(rule.output.iter())
-                .chain(rule.shell.iter())
-                .chain(rule.when.iter())
-                .any(|t| t.contains(&format!("{{{fresh}}}")))
-        })
+/// that never multiply per fan-out dimension (issue #443 exclusion set).
+/// `input_groups` rules take the groupTuple-style path — the discovered
+/// group key is the instance's binding source and their outputs are keyed
+/// by it. `output_pattern` producers are distinguished by their own fresh
+/// wildcard: every instance's pattern instantiation writes a distinct path,
+/// so a wildcard-free `output` list is expected there. Fresh-wildcard
+/// *consumers* are deliberately NOT excluded: the deferral projects one
+/// instance per producer-domain element, so placeholder-free outputs race
+/// exactly like the bare-input shape (they trigger via `triggers_fresh`).
+fn bypasses_group_pair_fanout(rule: &Rule) -> bool {
+    !rule.input_groups.is_empty() || rule.output_pattern.is_some()
 }
 
-/// Issue #443: detect rules that fan out per sample (or pair) but declare
-/// sample-independent outputs — the shape of a MultiQC-style aggregation
-/// rule keyed by `{sample}` in its inputs. Expansion creates N instances
-/// writing identical output paths; run concurrently they race
-/// (FileExistsError / FileNotFoundError), sequentially they waste N−1
-/// duplicate runs and the winner is arbitrary.
+/// Issue #443: detect rules that fan out per sample (or pair, values combo,
+/// or producer-domain element) but declare instance-independent outputs —
+/// the shape of a MultiQC-style aggregation rule keyed by `{sample}` in its
+/// inputs. Expansion creates N instances writing identical output paths;
+/// run concurrently they race (FileExistsError / FileNotFoundError),
+/// sequentially they waste N−1 duplicate runs and the winner is arbitrary.
 ///
-/// Mirrors the fan-out trigger semantics of `expand_wildcards`: the
-/// trigger text is inputs + outputs + shell + `when` (an output pattern
-/// counts too — it is how the instances are distinguished), fan-out only
-/// happens when a sample domain exists (sample groups or pairs), and
-/// rules on the input_groups / output_paths bypass paths are excluded.
+/// Mirrors the fan-out trigger semantics of `expand_wildcards` exactly:
+///
+/// - pair/group fan-out keys on `all_text` (inputs + outputs + shell +
+///   `when`) and requires the respective domain to exist;
+/// - `[[values]]` activation scans the same texts PLUS the `expand_inputs`
+///   patterns (`active_value_tables_for_rule`) and fans out orthogonally —
+///   including values-only workflows with no sample domain;
+/// - a reference to an `output_pattern` producer's fresh wildcard (same
+///   expanded scan) defers the template and projects one instance per
+///   producer-domain element — a fan-out source in its own right, so no
+///   sample/values domain is required for the warning;
+/// - `{sample}` confined to an `expand_inputs` pattern is NOT a trigger —
+///   the pattern materializes into one instance (the aggregation idiom);
+/// - input_groups rules and output_pattern producers are excluded, and
+///   `when`-gated-off rules never run (issue #263).
 fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
-    // No sample domain → no fan-out, no race (the rule stays a single
-    // task and a wildcard-free output is perfectly fine).
-    if config.sample_groups.is_empty() && config.pairs.is_empty() {
-        return Vec::new();
-    }
-
     // Pair metadata keys are part of the fan-out vocabulary.
     let mut pair_wildcards: Vec<&str> = PAIR_WILDCARDS.to_vec();
     for pair in &config.pairs {
@@ -203,6 +188,15 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             }
         }
     }
+
+    // Fresh wildcards declared by output_pattern producers — the deferral
+    // registry expand.rs builds before scanning consumers.
+    let fresh_wildcards: Vec<String> = config
+        .rules
+        .iter()
+        .filter_map(|r| r.output_pattern.as_deref())
+        .filter_map(|op| crate::wildcard::extract_wildcards(op).into_iter().next())
+        .collect();
 
     let mut warnings = Vec::new();
     for rule in &config.rules {
@@ -217,33 +211,52 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         }) {
             continue;
         }
-        if bypasses_group_pair_fanout(rule, config) {
+        if bypasses_group_pair_fanout(rule) {
             continue;
         }
 
-        // Trigger text — must mirror expand.rs's `all_text` (inputs,
-        // outputs, shell, when): a wildcard anywhere in these starts a
-        // fan-out.
-        let mut trigger_texts: Vec<&str> = rule.input.iter().map(String::as_str).collect();
-        trigger_texts.extend(rule.output.iter().map(String::as_str));
-        if let Some(ref shell) = rule.shell {
-            trigger_texts.push(shell);
-        }
-        if let Some(ref when) = rule.when {
-            trigger_texts.push(when);
-        }
+        // Mirror expand.rs's trigger texts. Pair/group fan-out keys on
+        // `all_text` only; values-table activation and fresh-wildcard
+        // consumer deferral scan `all_text` PLUS the expand_inputs
+        // patterns. Group wildcards deliberately stay out of the
+        // expand_texts scan: `{sample}` confined to an expand_inputs
+        // pattern materializes into one instance, not per-sample fan-out.
+        let all_text: Vec<&str> = rule
+            .input
+            .iter()
+            .map(String::as_str)
+            .chain(rule.output.iter().map(String::as_str))
+            .chain(rule.shell.as_deref())
+            .chain(rule.when.as_deref())
+            .collect();
+        let expand_texts: Vec<&str> = all_text
+            .iter()
+            .copied()
+            .chain(rule.expand_inputs.iter().map(|e| e.pattern.as_str()))
+            .collect();
 
-        let triggers_fanout = trigger_texts.iter().any(|t| {
-            pair_wildcards
-                .iter()
-                .chain(GROUP_WILDCARDS.iter())
-                .any(|w| t.contains(&format!("{{{w}}}")))
-                || config.values.iter().any(|v| {
-                    t.contains(&format!("{{{}}}", v.name))
-                        || t.contains(&format!("{{values.{}}}", v.name))
-                })
+        let triggers_pair = !config.pairs.is_empty()
+            && all_text.iter().any(|t| {
+                pair_wildcards
+                    .iter()
+                    .any(|w| t.contains(&format!("{{{w}}}")))
+            });
+        let triggers_group = !config.sample_groups.is_empty()
+            && all_text.iter().any(|t| {
+                GROUP_WILDCARDS
+                    .iter()
+                    .any(|w| t.contains(&format!("{{{w}}}")))
+            });
+        let triggers_values = config.values.iter().any(|v| {
+            expand_texts.iter().any(|t| {
+                t.contains(&format!("{{{}}}", v.name))
+                    || t.contains(&format!("{{values.{}}}", v.name))
+            })
         });
-        if !triggers_fanout {
+        let triggers_fresh = fresh_wildcards
+            .iter()
+            .any(|w| expand_texts.iter().any(|t| t.contains(&format!("{{{w}}}"))));
+        if !(triggers_pair || triggers_group || triggers_values || triggers_fresh) {
             continue;
         }
 
@@ -257,18 +270,21 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         warnings.push(ScientificWarning {
             code: "SCI-AGG-RACE".into(),
             rule: rule.name.clone(),
-            message: format!(
-                "rule fans out per sample (a {{{}}} reference in inputs/shell/when) but its \
-                 declared outputs contain no wildcard — expansion creates one instance per \
-                 sample, all writing the same output path(s): run concurrently they race \
-                 (FileExistsError/missing-file crashes), sequentially they duplicate work N−1 \
-                 times and the surviving result depends on scheduling order.",
-                GROUP_WILDCARDS[1]
-            ),
+            message: "rule fans out per instance (a fan-out wildcard — {sample}/{group}, a pair \
+                      wildcard, a [[values]] table, or an output_pattern producer's fresh \
+                      wildcard — appears in its inputs/shell/when/expand_inputs) but its \
+                      declared outputs contain no wildcard — expansion creates one instance \
+                      per fan-out element, all writing the same output path(s): run \
+                      concurrently they race (FileExistsError/missing-file crashes), \
+                      sequentially they duplicate work N−1 times and the surviving result \
+                      depends on scheduling order."
+                .into(),
             suggestion: "remove the fan-out wildcard from this aggregation rule's inputs and \
-                         reference the per-sample files via expand_inputs (e.g. \
+                         reference the per-instance files via expand_inputs (e.g. \
                          expand_inputs = [{pattern = \"qc/{sample}/fastqc.html\"}]) or a \
-                         glob/grouped input — the rule then runs once over all samples"
+                         glob/grouped input — the rule then runs once over all elements, or \
+                         key its outputs by the wildcard so every instance writes a distinct \
+                         path"
                 .into(),
         });
     }
@@ -355,14 +371,17 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
         // (command-word position), not mentioned in an argument or path.
         // A config that already declares `strandedness = "unstranded"` is
         // honoring the default deliberately — the default IS `-s 0`, so
-        // warning would push a correct design toward a wrong one.
-        if config.config.get("strandedness").is_some_and(|v| {
+        // warning would push a correct design toward a wrong one. Gated by
+        // condition, not `continue`: this sits mid-loop and a `continue`
+        // would silently suppress every check appended after it.
+        let strandness_suppressed = config.config.get("strandedness").is_some_and(|v| {
             v.as_str()
                 .is_some_and(|s| s.eq_ignore_ascii_case("unstranded"))
-        }) {
-            continue;
-        }
-        if shell_lower.contains("featurecounts") && featurecounts_without_strand(shell) {
+        });
+        if shell_lower.contains("featurecounts")
+            && !strandness_suppressed
+            && featurecounts_without_strand(shell)
+        {
             warnings.push(ScientificWarning {
                 code: "SCI-FEATURECOUNTS-STRAND".into(),
                 rule: rule.name.clone(),
@@ -795,18 +814,15 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
     }
 
     #[test]
-    fn agg_race_silent_for_output_pattern_producer_and_consumer() {
+    fn agg_race_output_pattern_producer_silent_consumer_with_keyed_output_silent() {
         // output_pattern producers keep their fresh wildcard unbound and
-        // consumers are deferred until the domain is discovered — a
-        // wildcard-free `output` list is legitimate in both.
+        // are distinguished by it — no race. A consumer whose outputs
+        // carry the fresh wildcard writes a distinct path per projected
+        // instance — no race either.
         let toml = r#"
             [workflow]
             name = "t"
             version = "1.0"
-
-            [[sample_groups]]
-            name = "cohort"
-            samples = ["S1", "S2"]
 
             [[rules]]
             name = "discover"
@@ -815,16 +831,48 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
 
             [[rules]]
             name = "assemble"
-            input = ["{assembler}"]
-            output = ["assemblies/contigs.fa"]
-            shell = "spades.py -o assemblies"
+            input = ["placeholder.txt"]
+            expand_inputs = [{ pattern = "assemblies/{assembler}/contigs.fa" }]
+            output = ["assemblies/{assembler}/annotated.fa"]
+            shell = "annotate {input} > {output}"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let warnings = analyze_scientific_constraints(&config);
         assert!(
             warnings.iter().all(|w| w.code != "SCI-AGG-RACE"),
-            "output_pattern producer/consumer must not fire SCI-AGG-RACE: {warnings:?}"
+            "keyed output_pattern consumer must not fire SCI-AGG-RACE: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn agg_race_output_pattern_consumer_placeholder_free_outputs_warns() {
+        // The deferred consumer is projected one instance per
+        // producer-domain element (expand.rs instantiate_output_pattern_
+        // consumer); placeholder-free outputs make every projected
+        // instance write the same path — the same race as the bare-input
+        // shape, discovered-domain edition.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[rules]]
+            name = "discover"
+            output_pattern = "assemblies/{assembler}/contigs.fa"
+            shell = "echo discovering"
+
+            [[rules]]
+            name = "assemble"
+            input = ["placeholder.txt"]
+            expand_inputs = [{ pattern = "assemblies/{assembler}/contigs.fa" }]
+            output = ["assemblies/merged.fa"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+        assert_eq!(warnings[0].rule, "assemble");
     }
 
     #[test]
@@ -942,6 +990,84 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         let config = WorkflowConfig::parse(toml).unwrap();
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+    }
+
+    #[test]
+    fn agg_race_values_only_workflow_warns() {
+        // [[values]] fan-out works with no sample domain at all (the
+        // engine's value-only branch ignores pairs/groups): a rule fanned
+        // per assembler with wildcard-free outputs races exactly like the
+        // sample shape.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "assembly_report"
+            input = ["asm/{assembler}/stats.txt"]
+            output = ["report/asm.html"]
+            shell = "python quast_report.py asm/{assembler}/stats.txt report/asm.html"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+    }
+
+    #[test]
+    fn agg_race_silent_when_values_present_but_unreferenced() {
+        // A [[values]] table existing somewhere is not a trigger by
+        // itself: the rule must reference it.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "summary"
+            input = ["stats/all.txt"]
+            output = ["report/summary.html"]
+            shell = "python render.py stats/all.txt report/summary.html"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        assert!(analyze_scientific_constraints(&config).is_empty());
+    }
+
+    #[test]
+    fn agg_race_values_reference_confined_to_expand_inputs_warns() {
+        // The engine activates a [[values]] table from expand_inputs
+        // patterns too (active_value_tables_for_rule) and fans the rule
+        // per combo — with wildcard-free outputs every instance writes
+        // the same path. The bare-input scan must not miss it.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[rules]]
+            name = "assembly_report"
+            input = ["done.marker"]
+            expand_inputs = [{ pattern = "asm/{assembler}/stats.txt" }]
+            output = ["report/asm.html"]
+            shell = "python quast_report.py {input} report/asm.html"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].code, "SCI-AGG-RACE");
     }
 }

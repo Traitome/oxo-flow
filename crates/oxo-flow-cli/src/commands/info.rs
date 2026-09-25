@@ -9,11 +9,14 @@ use crate::commands::config_comments::extract_config_descriptions;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use oxo_flow_core::config::{IncludeDirective, WorkflowConfig};
+// Canonical `{config.*}` expander — a private copy drifted once already
+// (#460 cleanup). Aliased so call sites keep their old name.
+use oxo_flow_core::config::expand_config_vars_in_path as expand_config_in_path;
 use oxo_flow_core::config_impact::is_engine_injected_key;
 use oxo_flow_core::rule::{EnvironmentSpec, Rule};
 use oxo_flow_core::scheduler::parse_memory_mb;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Derive and print catalog metadata for a workflow file.
@@ -461,39 +464,6 @@ fn image_name(image: &str) -> String {
         .next()
         .unwrap_or(without_tag)
         .to_string()
-}
-
-/// Expand `{config.key}` placeholders in a path against `[config]`, so
-/// config-routed outputs like `{config.out_dir}/{sample}.txt` contribute
-/// their real top-level directory. Mirrors `expand_config_vars_in_path`
-/// (core, `pub(crate)`): stringify non-string values via their TOML display
-/// form, then expand to a fixed point so chained references resolve.
-fn expand_config_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
-    let stringified: HashMap<String, String> = config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect();
-    let mut result = path.to_string();
-    for _ in 0..16 {
-        let mut changed = false;
-        for (placeholder, rendered) in &stringified {
-            let needle = format!("{{{placeholder}}}");
-            if result.contains(&needle) {
-                result = result.replace(&needle, rendered);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    result
 }
 
 /// Top-level directory names of input/output patterns (deduped, sorted).

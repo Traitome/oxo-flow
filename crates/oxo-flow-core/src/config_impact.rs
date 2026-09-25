@@ -750,7 +750,7 @@ fn expand_inputs_refs_engine_injected(rule: &Rule) -> bool {
 fn build_config_snapshot(
     current: &HashMap<String, toml::Value>,
     sensitive_keys: &HashSet<String>,
-) -> HashMap<String, String> {
+) -> BTreeMap<String, String> {
     current
         .iter()
         .filter(|(key, _)| !is_engine_injected_key(key))

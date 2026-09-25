@@ -12,8 +12,7 @@ use crate::error::{OxoFlowError, Result};
 use crate::rule::{EnvironmentSpec, FilePatterns, Rule};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -2006,7 +2005,7 @@ pub struct WorkflowConfig {
     /// `expand_output_pattern_consumers` (idempotent: contributed values
     /// are never re-processed). Never serialized.
     #[serde(skip)]
-    pub discovered_output_patterns: HashMap<String, Vec<crate::wildcard::WildcardValues>>,
+    pub discovered_output_patterns: BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
 }
 
 /// The text fields of a rule that may reference wildcards — the scan set
@@ -2093,10 +2092,7 @@ impl<S> WorkflowState<S> {
 }
 
 /// Expand `{config.name}` placeholders in a path using provided config values.
-pub(crate) fn expand_config_vars_in_path(
-    path: &str,
-    config: &HashMap<String, toml::Value>,
-) -> String {
+pub fn expand_config_vars_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
     // Stringify every value once, then expand to a fixed point so nested
     // `{config.x}` references resolve regardless of map iteration order.
     let stringified: HashMap<String, String> = config

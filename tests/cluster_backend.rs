@@ -318,7 +318,7 @@ fn local_run_and_backend_run_produce_same_checkpoint_semantics() {
         CheckpointState::load_from_file(&dir_a.path().join(".oxo-flow/checkpoint.json")).unwrap();
     let ck_b =
         CheckpointState::load_from_file(&dir_b.path().join(".oxo-flow/checkpoint.json")).unwrap();
-    fn keys<T>(m: &HashMap<String, T>) -> Vec<String> {
+    fn keys<T>(m: &std::collections::BTreeMap<String, T>) -> Vec<String> {
         let mut v: Vec<String> = m.keys().cloned().collect();
         v.sort();
         v

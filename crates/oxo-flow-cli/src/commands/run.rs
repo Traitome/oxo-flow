@@ -269,7 +269,7 @@ fn print_truncated_list(label: &str, names: &[String]) {
 
 fn print_config_change_summary(
     report: &ConfigChangeReport,
-    old_snapshot: &HashMap<String, String>,
+    old_snapshot: &std::collections::BTreeMap<String, String>,
     config: &WorkflowConfig,
     sensitive_keys: &HashSet<String>,
     order: &[String],

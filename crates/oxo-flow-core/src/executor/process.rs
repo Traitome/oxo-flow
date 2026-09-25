@@ -5,7 +5,7 @@ use crate::scheduler::ResourcePool;
 use crate::storage::StorageResolver;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -1537,7 +1537,7 @@ impl LocalExecutor {
         // instead of deep-copying every recorded checksum per rule (#268
         // item 4). Consistency across the handful of queries below is all
         // that matters, and the small view is enough.
-        let freshness_checksums: Option<HashMap<String, String>> = match &self.config.checkpoint {
+        let freshness_checksums: Option<BTreeMap<String, String>> = match &self.config.checkpoint {
             Some(ck) => {
                 let guard = ck.lock().await;
                 let expanded: Vec<String> = rule

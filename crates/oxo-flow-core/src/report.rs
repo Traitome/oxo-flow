@@ -8,7 +8,7 @@ use crate::error::{OxoFlowError, Result};
 use crate::executor::JobRecord;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A section in a report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,7 +165,7 @@ pub struct Report {
 
     /// Report metadata (arbitrary key-value pairs).
     #[serde(default)]
-    pub metadata: HashMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
 
     /// Provenance: path of the checkpoint this report was built from
     /// (issue #83 WS2). Absent for template-only reports.
@@ -204,7 +204,7 @@ impl Report {
             workflow_name: workflow_name.to_string(),
             workflow_version: workflow_version.to_string(),
             sections: Vec::new(),
-            metadata: HashMap::new(),
+            metadata: BTreeMap::new(),
             checkpoint_path: None,
             workflow_path: None,
             workflow_git_sha: None,

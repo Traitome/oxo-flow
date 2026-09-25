@@ -20,7 +20,12 @@
 use crate::error::{OxoFlowError, Result};
 
 /// Top-level keys/sections of a `.oxoflow` file.
-const TOP_LEVEL_KEYS: &[&str] = &[
+///
+/// `pub(crate)` so the lint-side S006 list (`format.rs`) shares this single
+/// source of truth — two hand-maintained lists drifted once and `[[values]]`
+/// (a documented flagship section) was flagged "unknown" by S006 while
+/// parsing fine (E017 accepted it).
+pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
     "citation",
     "cluster",
     "config",
