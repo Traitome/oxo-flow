@@ -236,7 +236,6 @@ digraph {
 | `dependents(name)` | `Vec<String>` | Direct downstream dependents of a rule |
 | `critical_path()` | `Vec<String>` | Longest chain of sequential dependencies |
 | `metrics()` | `DagMetrics` | Structural metrics (depth, width, critical path length) |
-| `detect_output_collisions(rules)` | `Vec<String>` | Warnings for overlapping output patterns |
 
 ---
 
@@ -307,17 +306,18 @@ The `WorkflowDag` API has no orphan query, and no dedicated orphan lint exists. 
 
 ### Output Collision Detection
 
-```rust
-let warnings = WorkflowDag::detect_output_collisions(&rules);
+Output-collision checking is enforced by `oxo-flow lint` (warning
+**W033**): two rules writing the same output path — differently-named
+wildcards over one template (`variants/{smp}.vcf` vs
+`variants/{sample}.vcf`) and identical literal paths count too — trigger
+a warning, because the second to finish silently overwrites the first.
+
+```
+W033: rules 'caller_a' and 'caller_b' both write '{sample}.vcf'
 ```
 
-When multiple rules produce outputs with overlapping wildcard patterns (e.g., two rules both produce `{sample}.vcf`), this function emits warnings. Output collisions can cause non-deterministic behavior or data corruption:
-
-```
-Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf' with overlapping wildcards
-```
-
-Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`, `caller_b/{sample}.vcf`).
+Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`, `caller_b/{sample}.vcf`). See
+[Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
 
 ---
 
