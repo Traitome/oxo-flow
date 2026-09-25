@@ -214,7 +214,7 @@ pub struct EnvironmentSpec {
     pub mamba_prefix: Option<String>,
     pub venv_requirements: Option<String>,
     /// GPU passthrough for docker — `--gpus <value>` (e.g. `"all"`);
-    /// rejected at validate time unless a docker backend is set.
+    /// rejected at validate time unless a docker image is set.
     pub gpus: Option<String>,
 }
 ```
