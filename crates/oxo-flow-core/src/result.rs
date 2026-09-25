@@ -463,13 +463,32 @@ pub fn scan_run_outputs<P: AsRef<Path>>(
     run_id: &str,
     rules: &[crate::rule::Rule],
 ) -> Vec<OutputRecord> {
+    scan_run_outputs_with_config(run_dir, run_id, rules, &std::collections::HashMap::new())
+}
+
+/// [`scan_run_outputs`] with `{config.*}` resolution (issue #467 family):
+/// config-routed output templates (`{config.out_dir}/cohort.vcf`) resolve
+/// against `config` before the existence check, so a config-routed rule's
+/// real files are scannable. Engine wildcards (`{sample}`, …) stay
+/// unexpanded and keep such outputs skipped — they resolve per instance,
+/// not at scan time.
+pub fn scan_run_outputs_with_config<P: AsRef<Path>>(
+    run_dir: P,
+    run_id: &str,
+    rules: &[crate::rule::Rule],
+    config: &std::collections::HashMap<String, toml::Value>,
+) -> Vec<OutputRecord> {
     let registry = ResultExtractorRegistry::new();
     let run_dir = run_dir.as_ref();
     let mut records = Vec::new();
 
     for rule in rules {
         for output_path in &rule.output {
-            let full_path = run_dir.join(output_path);
+            let expanded = crate::config::expand_config_vars_in_path(output_path, config);
+            if expanded.contains('{') {
+                continue;
+            }
+            let full_path = run_dir.join(&expanded);
             if !full_path.exists() {
                 continue;
             }
@@ -484,11 +503,11 @@ pub fn scan_run_outputs<P: AsRef<Path>>(
                 None
             };
 
-            let sample = extract_sample_from_path(output_path, &rule.wildcard_names());
+            let sample = extract_sample_from_path(&expanded, &rule.wildcard_names());
 
             let metrics = registry.extract(&full_path.to_string_lossy(), &rule.name);
 
-            let record = OutputRecord::new(&rule.name, run_id, output_path)
+            let record = OutputRecord::new(&rule.name, run_id, &expanded)
                 .with_sample(sample.unwrap_or_else(|| format!("rule-{}", rule.name)))
                 .with_file_size(file_size)
                 .with_checksum(checksum.unwrap_or_default())
@@ -551,6 +570,54 @@ fn extract_sample_from_path(path: &str, wildcard_names: &[String]) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_resolves_config_routed_outputs() {
+        // Issue #467 family: `{config.out_dir}/cohort.vcf` was joined
+        // literally and never found. The config-aware variant finds the
+        // real file; the legacy signature keeps its behavior (empty map),
+        // and engine-wildcard outputs stay skipped.
+        let dir = tempfile::tempdir().unwrap();
+        let results = dir.path().join("results");
+        std::fs::create_dir_all(&results).unwrap();
+        std::fs::write(results.join("cohort.vcf"), b"VCF").unwrap();
+
+        let mk = |output: &str| crate::rule::Rule {
+            name: "genotype".into(),
+            output: vec![output.into()].into(),
+            ..Default::default()
+        };
+
+        let mut config = std::collections::HashMap::new();
+        config.insert(
+            "out_dir".to_string(),
+            toml::Value::String("results".to_string()),
+        );
+
+        let records = scan_run_outputs_with_config(
+            dir.path(),
+            "run-1",
+            &[mk("{config.out_dir}/cohort.vcf")],
+            &config,
+        );
+        assert_eq!(records.len(), 1, "config-routed output must be scanned");
+        assert_eq!(records[0].file_path, "results/cohort.vcf");
+
+        let records = scan_run_outputs(dir.path(), "run-1", &[mk("{config.out_dir}/cohort.vcf")]);
+        assert_eq!(
+            records.len(),
+            0,
+            "empty-config signature keeps legacy behavior"
+        );
+
+        let records = scan_run_outputs_with_config(
+            dir.path(),
+            "run-1",
+            &[mk("results/{sample}.vcf")],
+            &config,
+        );
+        assert_eq!(records.len(), 0, "engine-wildcard outputs stay skipped");
+    }
 
     #[test]
     fn output_record_new() {
