@@ -845,6 +845,9 @@ memory = "8G"
 name = "cohort"
 samples = ["S1", "S2", "S3"]
 
+[config]
+samples_list = ["S1", "S2", "S3"]
+
 [[rules]]
 name = "fastp_qc"
 description = "Trim and QC reads"
@@ -874,10 +877,13 @@ shell = "gatk HaplotypeCaller -R ref.fa -I {input[0]} -O {output[0]}"
 
 [[rules]]
 name = "vqsr_snps"
-input = ["variants/{sample}.g.vcf.gz"]
+input = []
+expand_inputs = [
+  { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples_list" } }
+]
 output = ["variants/recalibrated.vcf.gz"]
 depends_on = ["haplotype_call"]
-shell = "gatk VariantRecalibrator -V {input[0]} -O {output[0]}"
+shell = "gatk VariantRecalibrator -V {input} -O {output[0]}"
 "#;
         WorkflowConfig::parse(toml).unwrap()
     }
