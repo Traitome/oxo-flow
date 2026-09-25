@@ -187,17 +187,24 @@ output = [
     "variants/cohort.snps.tranches"
 ]
 description = "Variant Quality Score Recalibration (VQSR) for SNPs"
+# VariantRecalibrator hard-fails with "Found annotations with zero variance"
+# when any -an annotation is constant across the callset (live-tested: a
+# 20-variant mini-genome callset had MAPQ 60 everywhere -> MQ sd=0.00,
+# MQRankSum mean=0.00). Narrow targets can produce the same failure on real
+# data: drop the constant annotations, or switch to hard filtering
+# (gatk VariantFiltration) for small callsets. On a full WGS cohort the
+# full annotation set below is correct.
 shell = """
-gatk VariantRecalibrator \
-    -R {config.reference} \
-    -V {input[0]} \
-    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.hapmap} \
-    -resource:omni,known=false,training=true,truth=false,prior=12.0 {config.omni} \
-    -resource:1000G,known=false,training=true,truth=false,prior=10.0 {config.thousand_g} \
-    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \
-    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
-    -mode SNP \
-    -O {output[0]} \
+gatk VariantRecalibrator \\
+    -R {config.reference} \\
+    -V {input[0]} \\
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {config.hapmap} \\
+    -resource:omni,known=false,training=true,truth=false,prior=12.0 {config.omni} \\
+    -resource:1000G,known=false,training=true,truth=false,prior=10.0 {config.thousand_g} \\
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {config.known_sites} \\
+    -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \\
+    -mode SNP \\
+    -O {output[0]} \\
     --tranches-file {output[1]}
 """
 
@@ -244,6 +251,9 @@ output = [
     "variants/cohort.indels.tranches"
 ]
 description = "Variant Quality Score Recalibration (VQSR) for INDELs"
+# Same zero-variance hazard as vqsr_snps: on a narrow callset MQRankSum or
+# ReadPosRankSum can be constant; drop the offending -an flags if GATK
+# reports "Found annotations with zero variance".
 shell = """
 gatk VariantRecalibrator \
     -R {config.reference} \
