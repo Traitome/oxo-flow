@@ -212,7 +212,7 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 1. **DAG is naturally sequential**: Run `oxo-flow graph workflow.oxoflow` and check **Width** in the header. If width=1, every rule depends on the previous one — no parallelism is possible. Consider splitting large rules into independent sub-tasks.
 2. **Resource constraints**: If rules declare high thread/memory requirements (e.g., 32 threads each on a 64-thread machine), the resource pool may only allow 1-2 concurrent jobs. Either reduce declarations or increase `--max-threads`/`--max-memory`.
-3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two rules produce the same output file, the engine reports an `Output pattern collision` error and refuses to run.
+3. **Implicit file dependencies**: Check that intermediate output files use unique names — if two rules write the same output path, one silently overwrites the other (the engine does not refuse to run; `oxo-flow lint` flags it as [W033](../commands/lint.md)).
 
 ### Orphan rules (rules that never connect)
 
@@ -222,23 +222,31 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 **Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.
 
-### Output collisions
+### Output collisions (silent overwrite)
 
-**Symptom**: `Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf'`
+**Symptom**: Two rules declare outputs that resolve to the same file — e.g. both write `variants/sample.vcf` (possibly via differently-named wildcards like `{smp}` and `{sample}` over the same directory). `validate`, `graph`, and `run` all pass — the run reports success, but **the second rule to finish overwrote the first rule's output**, and downstream rules consumed the wrong file.
 
-**Solution**: Two rules produce files matching the same pattern. This is dangerous — the second rule to finish will overwrite the first rule's output. Give each rule distinct output directories:
+**Detection**: The engine treats multi-producer outputs as legitimate (shared staging directories, multi-tool fan-ins), so it does not refuse to run. `oxo-flow lint` flags every colliding pair instead:
+
+```console
+$ oxo-flow lint pipeline.oxoflow
+  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)
+    hint: if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory
+```
+
+**Solution**: Give each rule distinct output directories — or, when the two rules are alternative writers that must never both run (e.g. WGS vs WES mode), gate them with mutually exclusive `when` conditions:
 
 ```toml
-# Before (collision)
+# Before (collision — lint reports W033)
 [[rules]]
 name = "caller_a"
 output = ["variants/{sample}.vcf"]
 
 [[rules]]
 name = "caller_b"
-output = ["variants/{sample}.vcf"]  # ❌ Same pattern!
+output = ["variants/{sample}.vcf"]  # ❌ Same path!
 
-# After (fixed)
+# After (fixed — unique directories)
 [[rules]]
 name = "caller_a"
 output = ["variants/caller_a/{sample}.vcf"]  # ✅ Unique path
@@ -247,6 +255,12 @@ output = ["variants/caller_a/{sample}.vcf"]  # ✅ Unique path
 name = "caller_b"
 output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
 ```
+
+Alternative writers that must never both run can share a path safely when
+gated with mutually exclusive `when` conditions (see the
+`wgs_coverage`/`wes_coverage` idiom in the [conditional execution
+gallery](../../gallery/conditional-workflow.md)); `lint` still reports the
+pair so the intent stays visible.
 
 ### Deadlock detected
 

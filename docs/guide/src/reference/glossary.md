@@ -363,6 +363,7 @@ below cover the codes referenced across this documentation.
 | `W030` | Malformed `regex_extract` in a `when` condition |
 | `W031` | Producer is when-gated but its consumer expands the output unconditionally |
 | `W032` | A config key looks like a secret but is not declared `sensitive` |
+| `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
 
 The full, current list with suggestions is best read from the commands:
 `oxo-flow lint --json` prints every code with its message and suggestion
