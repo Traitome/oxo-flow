@@ -4776,11 +4776,6 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <td><code>DagMetrics</code></td>
 <td>Structural metrics (depth, width, critical path length)</td>
 </tr>
-<tr>
-<td><code>detect_output_collisions(rules)</code></td>
-<td><code>Vec&lt;String&gt;</code></td>
-<td>Warnings for overlapping output patterns</td>
-</tr>
 </tbody>
 </table>
 <hr />
@@ -4843,12 +4838,15 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 <h3 id="orphan-rules">Orphan Rules<a class="headerlink" href="#orphan-rules" title="Permanent link">#</a></h3>
 <p>The <code>WorkflowDag</code> API has no orphan query, and no dedicated orphan lint exists. The closest check is <code>oxo-flow validate</code>'s W020 warning: a concrete input that does not exist on disk and is not produced by any rule ("input file 'X' does not exist", E010 for absolute paths). Inputs that exist on disk but match no rule's output are not linted.</p>
 <h3 id="output-collision-detection">Output Collision Detection<a class="headerlink" href="#output-collision-detection" title="Permanent link">#</a></h3>
-<div class="language-rust highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">warnings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">WorkflowDag</span><span class="p">::</span><span class="n">detect_output_collisions</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rules</span><span class="p">);</span>
+<p>Output-collision checking is enforced by <code>oxo-flow lint</code> (warning
+<strong>W033</strong>): two rules writing the same output path — differently-named
+wildcards over one template (<code>variants/{smp}.vcf</code> vs
+<code>variants/{sample}.vcf</code>) and identical literal paths count too — trigger
+a warning, because the second to finish silently overwrites the first.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>W033: rules 'caller_a' and 'caller_b' both write '{sample}.vcf'
 </span></code></pre></div>
-<p>When multiple rules produce outputs with overlapping wildcard patterns (e.g., two rules both produce <code>{sample}.vcf</code>), this function emits warnings. Output collisions can cause non-deterministic behavior or data corruption:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Output pattern collision: rules 'caller_a' and 'caller_b' both produce '{sample}.vcf' with overlapping wildcards
-</span></code></pre></div>
-<p>Resolve by giving each rule distinct output paths (e.g., <code>caller_a/{sample}.vcf</code>, <code>caller_b/{sample}.vcf</code>).</p>
+<p>Resolve by giving each rule distinct output paths (e.g., <code>caller_a/{sample}.vcf</code>, <code>caller_b/{sample}.vcf</code>). See
+<a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.</p>
 <hr />
 <h2 id="error-conditions">Error Conditions<a class="headerlink" href="#error-conditions" title="Permanent link">#</a></h2>
 <table>
@@ -4929,7 +4927,7 @@ starvation <strong>impossible</strong>, not merely unlikely:</p>
 <li><strong>The wait is visible.</strong> After 60 seconds of waiting, the run log
    emits, for each waiting rule:</li>
 </ol>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>waiting for resources: group 'limit_merge': need 1, have 0 held by [merge_R1_data, merge_R2_data]; top thread holders: [...]
 </span></code></pre></div>
 <p>For workflows that still wait: remove the shared-group claim (give each
 rule set its own group), restore the missing <code>depends_on</code> edge so
