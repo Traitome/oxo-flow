@@ -32,6 +32,26 @@ cd variant-calling
 
 ---
 
+## Prepare the reference
+
+GATK tools require an **indexed reference**: a `.fai` FASTA index and a sequence dictionary `.dict` sitting next to the FASTA. `bwa` runs happily without them, but the first GATK rule fails with:
+
+```
+A USER ERROR has occurred: Fasta dict file file:///data/references/hg38/hg38.dict does not exist.
+```
+
+Prepare both once, next to the FASTA that `{config.reference}` points at:
+
+```bash
+cd /data/references/hg38
+samtools faidx hg38.fa
+samtools dict hg38.fa > hg38.dict          # or: gatk CreateSequenceDictionary -R hg38.fa -O hg38.dict
+```
+
+The known-sites VCFs (`dbsnp`, `Mills`, `gnomad`, `panel-of-normals`) should each ship with a `.tbi` index — the standard downloads from the GATK resource bundle do; if yours lacks one, create it with `tabix -p vcf <file>`.
+
+---
+
 ## Environment files
 
 Create separate environments for different toolsets:
@@ -167,7 +187,7 @@ gatk ApplyBQSR -I {config.results}/dedup/{control}.dedup.bam -R {config.referenc
 [[rules]]
 name = "mutect2"
 input = ["{config.results}/recal/{experiment}.recal.bam", "{config.results}/recal/{control}.recal.bam"]
-output = ["{config.results}/variants/{pair_id}.vcf.gz"]
+output = ["{config.results}/variants/{pair_id}.vcf.gz", "{config.results}/variants/{pair_id}.vcf.gz.tbi"]
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 gatk Mutect2 \
@@ -183,8 +203,8 @@ gatk Mutect2 \
 
 [[rules]]
 name = "filter_variants"
-input = ["{config.results}/variants/{pair_id}.vcf.gz"]
-output = ["{config.results}/filtered/{pair_id}.filtered.vcf.gz"]
+input = ["{config.results}/variants/{pair_id}.vcf.gz", "{config.results}/variants/{pair_id}.vcf.gz.tbi"]
+output = ["{config.results}/filtered/{pair_id}.filtered.vcf.gz", "{config.results}/filtered/{pair_id}.filtered.vcf.gz.tbi"]
 environment = { conda = "envs/gatk.yaml" }
 shell = """
 gatk FilterMutectCalls -R {config.reference} -V {config.results}/variants/{pair_id}.vcf.gz -O {config.results}/filtered/{pair_id}.filtered.vcf.gz
@@ -241,6 +261,7 @@ oxo-flow report variant-calling.oxoflow -f html -o report.html
 | **Resource scaling** | `align` overrides `[defaults]` with 16 threads / 32G; all other rules inherit 4 threads / 8G |
 | **Piped commands** | `bwa mem \| samtools sort` in the `align` rule |
 | **Config variables** | `{config.reference}`, `{config.results}` used across all rules |
+| **Side outputs declared** | Mutect2/FilterMutectCalls also emit a `.tbi` index — declare it so the engine tracks it for resume |
 | **Linear dependency chain** | Each rule's output is the next rule's input |
 | **Retry on failure** | `-r 1` flag retries failed jobs once |
 
