@@ -403,6 +403,26 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
     `SCI-VQSR-COHORT` for small-cohort VQSR runs, so a pilot never wastes
     compute failing at this step for scientific reasons.
 
+!!! warning "Live-tested: VariantRecalibrator also needs annotation *variance*, not just samples"
+    Even with training resources in place, VariantRecalibrator hard-fails
+    when any `-an` annotation has **zero variance across the callset**:
+
+    ```
+    A USER ERROR has occurred: Bad input: Found annotations with zero
+    variance. They must be excluded before proceeding.
+    ```
+
+    On the live-test fixture (20 variants from 3 samples called on a
+    mini-genome) the run died here: every variant aligned with MAPQ 60, so
+    `MQ` had `standard deviation = 0.00` and `MQRankSum` had
+    `mean = 0.00` — two of the six SNP annotations carried no information.
+    This is not a mini-genome artifact: any narrow target (small capture
+    region, single exon panel) can produce constant-annotation callsets.
+    If you hit it, either drop the offending annotations
+    (`-an QD -an FS -an SOR` only) or switch the whole chain to hard
+    filtering (`gatk VariantFiltration`), which is the documented
+    alternative for small callsets anyway.
+
 ## Running the Workflow
 
 ### Validate
