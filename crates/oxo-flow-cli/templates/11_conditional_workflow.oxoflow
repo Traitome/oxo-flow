@@ -28,8 +28,9 @@ input = [
 ]
 output = ["aligned/sample.sorted.bam"]
 shell = """
-rg=$(printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA' sample sample)
+rg="@RG\\tID:sample\\tSM:sample\\tPL:ILLUMINA"
 bwa mem -t {threads} -R "$rg" {config.reference} {input[0]} {input[1]} | samtools sort -o {output[0]}
+samtools index {output[0]}
 """
 
 [rules.resources]
