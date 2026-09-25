@@ -4694,6 +4694,16 @@ preflight flags this automatically: <code>oxo-flow dry-run</code> emits
 <code>SCI-VQSR-COHORT</code> for small-cohort VQSR runs, so a pilot never wastes
 compute failing at this step for scientific reasons.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">GATK writes index files the example does not declare</p>
+<p>GATK steps emit <code>.tbi</code> (and <code>.idx</code>) sidecar files next to their VCF
+outputs — <code>variants/call.vcf.gz</code> also produces <code>variants/call.vcf.gz.tbi</code>.
+This example's <code>output</code> lists declare only the data files (the
+variant-calling tutorial declares the <code>.tbi</code> counterparts for its
+Mutect2 chain). Declaring index outputs is optional, but undeclared
+sidecars escape freshness tracking and <code>oxo-flow clean</code>; declare them
+when incremental resume over these steps matters.</p>
+</div>
 <div class="admonition warning">
 <p class="admonition-title">Live-tested: VariantRecalibrator also needs annotation <em>variance</em>, not just samples</p>
 <p>Even with training resources in place, VariantRecalibrator hard-fails
