@@ -2075,7 +2075,10 @@ impl WorkflowState<Parsed> {
 impl WorkflowState<Validated> {
     /// Build the DAG and transition to Ready state.
     pub fn prepare(self) -> crate::Result<WorkflowState<Ready>> {
-        let _dag = crate::dag::WorkflowDag::from_rules(&self.config.rules)?;
+        let _dag = crate::dag::WorkflowDag::from_rules_with_config(
+            &self.config.rules,
+            &self.config.config_placeholder_values(),
+        )?;
         Ok(WorkflowState {
             config: self.config,
             _state: std::marker::PhantomData,

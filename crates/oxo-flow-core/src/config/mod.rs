@@ -29,6 +29,14 @@ impl WorkflowConfig {
         self.base_dir.as_deref()
     }
 
+    /// The `config.{key}` → stringified-value map template analysis
+    /// resolves `{config.*}` against — the same map `run` feeds
+    /// `WorkflowDag::from_rules_with_config`, so validate/lint edge
+    /// inference sees exactly the edges execution would build.
+    pub fn config_placeholder_values(&self) -> std::collections::HashMap<String, String> {
+        crate::config_impact::config_placeholder_map(&self.config)
+    }
+
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {

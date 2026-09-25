@@ -892,8 +892,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         }
     }
 
-    // E006: DAG cycle detection
-    match WorkflowDag::from_rules(&config.rules) {
+    // E006: DAG cycle detection — built with the parsed config values so
+    // config-routed templates infer the edges execution would (an
+    // empty-config build silently missed cycles routed through
+    // `{config.*}` outputs, issue #466).
+    match WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values()) {
         Ok(_) => {}
         Err(e) => {
             diagnostics.push(Diagnostic {
@@ -1026,8 +1029,12 @@ pub fn lint_format(
         });
     }
 
-    // Build DAG for dependency analysis
-    let dag = WorkflowDag::from_rules(&config.rules).ok();
+    // Build DAG for dependency analysis — with config values, so
+    // config-routed edges count for leaf/dependent lints (W007/W019) the
+    // same way they exist at run time (issue #466).
+    let dag =
+        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+            .ok();
 
     // Wildcard sources the engine can actually expand (W024): the same
     // trigger sets expand_wildcards fans out on (config.rs) plus group/pair
@@ -1846,18 +1853,20 @@ pub fn workflow_stats(config: &WorkflowConfig) -> WorkflowStats {
         }
     }
 
-    let (dependency_count, parallel_groups, max_depth) =
-        match WorkflowDag::from_rules(&config.rules) {
-            Ok(dag) => {
-                let groups = dag.parallel_groups().unwrap_or_default();
-                // Depth = level count, the same definition `DagMetrics`
-                // uses for "Depth"/"Critical path: N steps" — a
-                // single-node DAG is one level deep, not zero. The two
-                // disagreed by one before (dag.rs used `groups.len()`).
-                (dag.edge_count(), groups.len(), groups.len())
-            }
-            Err(_) => (0, 0, 0),
-        };
+    let (dependency_count, parallel_groups, max_depth) = match WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config.config_placeholder_values(),
+    ) {
+        Ok(dag) => {
+            let groups = dag.parallel_groups().unwrap_or_default();
+            // Depth = level count, the same definition `DagMetrics`
+            // uses for "Depth"/"Critical path: N steps" — a
+            // single-node DAG is one level deep, not zero. The two
+            // disagreed by one before (dag.rs used `groups.len()`).
+            (dag.edge_count(), groups.len(), groups.len())
+        }
+        Err(_) => (0, 0, 0),
+    };
 
     environments.sort();
     wildcard_names.sort();
@@ -4804,6 +4813,84 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         assert_eq!(
             script_edge_hits, 1,
             "the same script-edge violation must be reported exactly once: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn validate_flags_config_routed_cycle() {
+        // Issue #466: a cycle routed through `{config.*}` templates was
+        // invisible to E006 — the empty-config DAG build could not infer
+        // the edges, so validate passed a workflow that deadlocks at run
+        // time (run.rs builds the SAME dag with config values).
+        let cycle = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            out = "res"
+
+            [[rules]]
+            name = "a"
+            input = ["res/b.txt"]
+            output = ["res/a.txt"]
+            shell = "cp res/b.txt res/a.txt"
+
+            [[rules]]
+            name = "b"
+            input = ["res/a.txt"]
+            output = ["res/b.txt"]
+            shell = "cp res/a.txt res/b.txt"
+        "#;
+        let config = WorkflowConfig::parse(cycle).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.diagnostics.iter().any(|d| d.code == "E006"),
+            "a config-routed cycle must be detected: {result:?}"
+        );
+
+        // Same shape, acyclic — no E006 (no false positives from the new
+        // config-routed edges).
+        let chain = cycle
+            .replace("input = [\"res/b.txt\"]", "input = [\"raw.txt\"]")
+            .replace("cp res/b.txt res/a.txt", "cp raw.txt res/a.txt");
+        let config = WorkflowConfig::parse(&chain).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            !result.diagnostics.iter().any(|d| d.code == "E006"),
+            "an acyclic config-routed chain must stay clean: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lint_config_routed_consumer_suppresses_leaf_flag() {
+        // Issue #466: a producer whose only consumer reaches it through a
+        // config-routed input used to look like a leaf — W007 suggested
+        // marking it `target = true` even though it feeds downstream work.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            out = "res"
+
+            [[rules]]
+            name = "produce"
+            output = ["{config.out}/a.txt"]
+            shell = "echo data > {config.out}/a.txt"
+
+            [[rules]]
+            name = "consume"
+            input = ["res/a.txt"]
+            output = ["res/final.txt"]
+            shell = "cat res/a.txt > {config.out}/final.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.code == "W007" && d.rule.as_deref() == Some("produce")),
+            "a config-routed consumer must make the producer a non-leaf: {diagnostics:?}"
         );
     }
 

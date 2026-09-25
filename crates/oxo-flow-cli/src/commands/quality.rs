@@ -140,7 +140,10 @@ pub async fn validate_command(
             let (rules, dependencies) = if as_include {
                 (cfg.rules.len(), 0)
             } else {
-                match WorkflowDag::from_rules(&cfg.rules) {
+                match WorkflowDag::from_rules_with_config(
+                    &cfg.rules,
+                    &cfg.config_placeholder_values(),
+                ) {
                     Ok(dag) => (dag.node_count(), dag.edge_count()),
                     Err(e) => {
                         if json {
