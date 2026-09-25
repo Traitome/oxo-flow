@@ -3980,7 +3980,13 @@
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
-<li>The formatter ensures consistent indentation and key ordering</li>
+<li>The formatter ensures consistent indentation and key ordering: map-backed
+  sections (<code>[config]</code>, <code>[metadata]</code>, include <code>params</code>, …) are emitted with
+  keys in <strong>sorted</strong> order, so the same file always formats to the same
+  bytes — the property <code>--check</code> relies on</li>
+<li>Internal parse state is never emitted: declarative <code>[config]</code> entries
+  (<code>key = { default = …, … }</code>) roundtrip as themselves, not as a
+  <code>[config_meta]</code> section</li>
 <li>Using <code>--check</code> is recommended for CI/CD pipelines to enforce style consistency</li>
 <li>The file is re-serialized from the parsed configuration, so comments are not preserved</li>
 </ul>

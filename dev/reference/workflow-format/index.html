@@ -6579,6 +6579,13 @@ own run loop and does not fire these hooks yet. Placeholders: every
 <li><code>.R</code>, <code>.r</code> → <code>Rscript</code></li>
 <li><code>.sh</code>, <code>.bash</code> → <code>bash</code></li>
 <li><code>.jl</code> → <code>julia</code></li>
+<li><code>.pl</code> → <code>perl</code></li>
+<li><code>.rb</code> → <code>ruby</code></li>
+<li><code>.qmd</code>, <code>.Rmd</code>, <code>.rmd</code> → <code>quarto render</code></li>
+<li><code>.ipynb</code> → <code>jupyter nbconvert --to notebook --execute</code></li>
+<li><code>.smk</code> → <code>snakemake</code></li>
+<li><code>.nextflow</code> → <code>nextflow run</code></li>
+<li><code>.wdl</code> → <code>miniwdl run</code></li>
 </ul>
 <p>You can override or extend this mapping in the <code>[workflow]</code> section:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[workflow]</span>
@@ -7321,7 +7328,7 @@ disk space matters.</p>
 <td><code>input_function</code></td>
 <td>String</td>
 <td>No</td>
-<td>Dynamic input resolver function name</td>
+<td>Parsed but <strong>not yet called</strong> — no dynamic input resolution is performed today</td>
 </tr>
 <tr>
 <td><code>rule_metadata</code></td>
@@ -7357,7 +7364,7 @@ disk space matters.</p>
 <td><code>temp_output</code></td>
 <td>Array</td>
 <td>No</td>
-<td>Temporary outputs cleaned up after downstream rules complete</td>
+<td>Scratch artifacts the rule itself overwrites (e.g. <code>.tmp.bam</code>). Cleaned when the rule <strong>fails</strong> (so a stale partial never masquerades as a completed run); they persist on success — mark <code>temporary = true</code> for success-path deletion</td>
 </tr>
 <tr>
 <td><code>temporary</code></td>
@@ -7375,7 +7382,7 @@ disk space matters.</p>
 <td><code>protected_output</code></td>
 <td>Array</td>
 <td>No</td>
-<td>Outputs that must never be overwritten or deleted</td>
+<td>Outputs declared protected. Parsed and validated, but the current engine does not enforce protection at runtime — treat as advisory (file an issue if you need enforcement)</td>
 </tr>
 <tr>
 <td><code>tags</code></td>
@@ -7405,19 +7412,19 @@ disk space matters.</p>
 <td><code>format_hint</code></td>
 <td>Array</td>
 <td>No</td>
-<td>File format hints for I/O optimization (<code>"bam"</code>, <code>"vcf"</code>, <code>"fastq.gz"</code>)</td>
+<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization)</td>
 </tr>
 <tr>
 <td><code>pipe</code></td>
 <td>Boolean</td>
 <td>No</td>
-<td>Enable FIFO streaming mode for input/output</td>
+<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today)</td>
 </tr>
 <tr>
 <td><code>checksum</code></td>
 <td>String</td>
 <td>No</td>
-<td>Output integrity verification (<code>"md5"</code> or <code>"sha256"</code>)</td>
+<td>Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today</td>
 </tr>
 <tr>
 <td><code>resource_hint</code></td>
@@ -7683,7 +7690,7 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <p>oxo-flow automatically cleans up temporary outputs:</p>
 <p>| Scenario | Cleanup |
 |---|---|---|
-| Success + <code>temp_output</code> | Cleaned after successful completion |
+| Success + <code>temp_output</code> | Kept — no success-path cleanup runs; mark <code>temporary = true</code> instead if you want outputs deleted after the run |
 | Failure + <code>temp_output</code> | Cleaned to prevent stale partial files |
 | Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as <code>&lt;name&gt;.oxo-failed</code>; untouched pre-existing files are preserved |
 | Transform with <code>cleanup=true</code> | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
@@ -7706,9 +7713,15 @@ up-to-date. Note this covers failures the engine observes; a hard kill
 (<code>SIGKILL</code>) mid-rule can still leave outputs behind, since no cleanup code
 runs — the <code>--rerun</code> flag is the escape hatch for that case.</p>
 <h3 id="timeout-enforcement">Timeout Enforcement<a class="headerlink" href="#timeout-enforcement" title="Permanent link">#</a></h3>
-<p>On Unix systems (Linux, macOS), timeout kills the entire process group, ensuring child processes don't survive:</p>
+<p>On Unix systems (Linux, macOS), a timeout kill walks the rule's <strong>process
+subtree</strong> rather than a process group — rules deliberately run inside the
+run's process group ("one run = one process group"), so the engine snapshots
+parent→child links via sysinfo and signals each descendant individually,
+deepest first: SIGTERM to the whole subtree, a 10-second grace poll for
+survivors, a re-scan for descendants spawned during the window, then SIGKILL
+to whatever remains (issue #194):</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"4h"</span><span class="w">  </span><span class="c1"># SIGKILL sent to process group after 4 hours</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"4h"</span><span class="w">  </span><span class="c1"># SIGTERM → grace → SIGKILL escalation after 4 hours</span>
 </span></code></pre></div>
 <h3 id="gpu-specification">GPU Specification<a class="headerlink" href="#gpu-specification" title="Permanent link">#</a></h3>
 <p>For detailed GPU requirements:</p>
@@ -7853,12 +7866,12 @@ substitution, <code>$(( ))</code> arithmetic — work in rule shells.</p>
 <tr>
 <td><code>temp_output</code></td>
 <td>Array</td>
-<td>Temporary outputs cleaned after downstream rules complete</td>
+<td>Scratch artifacts cleaned when the rule fails; persist on success (see Cleanup Behavior)</td>
 </tr>
 <tr>
 <td><code>protected_output</code></td>
 <td>Array</td>
-<td>Protected outputs never overwritten or deleted</td>
+<td>Declared-protected outputs; parsed but not enforced at runtime (advisory)</td>
 </tr>
 <tr>
 <td><code>temporary</code></td>
@@ -7870,7 +7883,7 @@ substitution, <code>$(( ))</code> arithmetic — work in rule shells.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">,</span><span class="w"> </span><span class="s2">"aligned/{sample}.bam.bai"</span><span class="p">]</span>
-</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="n">temp_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.tmp.bam"</span><span class="p">]</span><span class="w">  </span><span class="c1"># Cleaned after downstream use</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="n">temp_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.tmp.bam"</span><span class="p">]</span><span class="w">  </span><span class="c1"># Cleaned if the rule fails; kept on success</span>
 </span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="n">temporary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">                             </span><span class="c1"># Delete aligned/*.bam once all callers finish</span>
 </span></code></pre></div>
 <h4 id="directory-outputs">Directory outputs<a class="headerlink" href="#directory-outputs" title="Permanent link">#</a></h4>
@@ -8114,17 +8127,17 @@ antibody is wanted:</p>
 <tr>
 <td><code>format_hint</code></td>
 <td>Array</td>
-<td>File format hints for I/O optimization (<code>"bam"</code>, <code>"vcf"</code>)</td>
+<td>Parsed but <strong>not yet used</strong> by the engine (planned for I/O optimization)</td>
 </tr>
 <tr>
 <td><code>pipe</code></td>
 <td>Boolean</td>
-<td>Enable FIFO streaming mode for inputs</td>
+<td>Parsed but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today)</td>
 </tr>
 <tr>
 <td><code>checksum</code></td>
 <td>String</td>
-<td>Output checksum algorithm (<code>"md5"</code>, <code>"sha256"</code>)</td>
+<td>Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless</td>
 </tr>
 </tbody>
 </table>
@@ -8132,8 +8145,7 @@ antibody is wanted:</p>
 </span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{sample}.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span>
 </span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a><span class="n">ancient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span><span class="w">  </span><span class="c1"># Reference never triggers rebuild</span>
-</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a><span class="n">format_hint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bam"</span><span class="p">]</span>
-</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6" href="#__codelineno-42-6"></a><span class="n">checksum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sha256"</span>
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a><span class="c1"># format_hint and checksum are accepted but currently have no effect</span>
 </span></code></pre></div>
 <h3 id="organization">Organization<a class="headerlink" href="#organization" title="Permanent link">#</a></h3>
 <table>
@@ -8307,7 +8319,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>input_function</code></td>
 <td>String</td>
-<td>Name of a dynamic input resolver function called at runtime</td>
+<td>Parsed and included in the rule fingerprint but <strong>not yet called</strong> — no dynamic input resolution is performed today (use <code>expand_inputs</code> or <code>output_pattern</code> for dynamic inputs)</td>
 </tr>
 </tbody>
 </table>
@@ -9247,8 +9259,8 @@ records:</p>
   gzip files (the record count is truncated — a trailing partial record
   does not round up); <code>wc_lines</code> streams lines of the <strong>decompressed</strong>
   content for plain or gzip files (same <code>.gz</code> detection as <code>reads_count</code>);
-  <code>file_size</code> returns the byte length. BAM/BGZF indexing is planned for
-  a future release.</li>
+  <code>file_size</code> returns the byte length. BAM/CRAM input to these functions
+  is out of scope for now (it needs a BGZF parser, not line arithmetic).</li>
 <li><strong>Regex extraction</strong> — <code>regex_extract(path, pattern, group?)</code> reads the
   whole file (plain or <code>.gz</code>, up to 16 MiB) and takes the <strong>first</strong> regex
   match; the captured text (group <code>0</code> = whole match by default, or an
@@ -9536,69 +9548,89 @@ literal. <code>n = "3"</code> alone does neither.</p>
 </span><span id="__span-94-4"><a id="__codelineno-94-4" name="__codelineno-94-4" href="#__codelineno-94-4"></a><span class="s2">  samtools sort -@ {threads} -o {output}</span>
 </span><span id="__span-94-5"><a id="__codelineno-94-5" name="__codelineno-94-5" href="#__codelineno-94-5"></a><span class="s2">"""</span>
 </span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Backslashes inside <code>\"\"\"</code> blocks are TOML escape sequences</p>
+<p><code>"""…"""</code> is a TOML <em>basic</em> string: escape sequences like <code>\n</code>, <code>\t</code>, and
+<code>\\</code> are decoded <strong>before</strong> the shell ever sees the text. Two consequences:</p>
+<ul>
+<li>The <code>\</code> line continuations above only work because TOML folds
+  backslash-newline into nothing. But an embedded heredoc or regex that
+  needs a <em>literal</em> <code>\n</code> breaks — the shell receives a real newline
+  instead.</li>
+<li>For scripts with literal backslashes (embedded <code>python3 &lt;&lt;'EOF'</code>
+  heredocs, <code>sed 's/\t/,/g'</code>, …), use a <strong>multi-line literal string</strong> with
+  triple <em>single</em> quotes — TOML passes its contents through byte-for-byte:</li>
+</ul>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-95-1"><a id="__codelineno-95-1" name="__codelineno-95-1" href="#__codelineno-95-1"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'''</span>
+</span><span id="__span-95-2"><a id="__codelineno-95-2" name="__codelineno-95-2" href="#__codelineno-95-2"></a><span class="s1">python3 - &lt;&lt;'PYEOF'</span>
+</span><span id="__span-95-3"><a id="__codelineno-95-3" name="__codelineno-95-3" href="#__codelineno-95-3"></a><span class="s1">print("a\nb")   # literal backslash-n reaches python intact</span>
+</span><span id="__span-95-4"><a id="__codelineno-95-4" name="__codelineno-95-4" href="#__codelineno-95-4"></a><span class="s1">PYEOF</span>
+</span><span id="__span-95-5"><a id="__codelineno-95-5" name="__codelineno-95-5" href="#__codelineno-95-5"></a><span class="s1">'''</span>
+</span></code></pre></div>
+</div>
 <hr />
 <h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">#</a></h2>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-95-1"><a id="__codelineno-95-1" name="__codelineno-95-1" href="#__codelineno-95-1"></a><span class="k">[workflow]</span>
-</span><span id="__span-95-2"><a id="__codelineno-95-2" name="__codelineno-95-2" href="#__codelineno-95-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ngs-pipeline"</span>
-</span><span id="__span-95-3"><a id="__codelineno-95-3" name="__codelineno-95-3" href="#__codelineno-95-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2.0.0"</span>
-</span><span id="__span-95-4"><a id="__codelineno-95-4" name="__codelineno-95-4" href="#__codelineno-95-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Complete NGS analysis pipeline"</span>
-</span><span id="__span-95-5"><a id="__codelineno-95-5" name="__codelineno-95-5" href="#__codelineno-95-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Shixiang Wang &lt;w_shixiang@163.com&gt;"</span>
-</span><span id="__span-95-6"><a id="__codelineno-95-6" name="__codelineno-95-6" href="#__codelineno-95-6"></a>
-</span><span id="__span-95-7"><a id="__codelineno-95-7" name="__codelineno-95-7" href="#__codelineno-95-7"></a><span class="k">[config]</span>
-</span><span id="__span-95-8"><a id="__codelineno-95-8" name="__codelineno-95-8" href="#__codelineno-95-8"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
-</span><span id="__span-95-9"><a id="__codelineno-95-9" name="__codelineno-95-9" href="#__codelineno-95-9"></a><span class="n">known_sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/known_sites.vcf.gz"</span>
-</span><span id="__span-95-10"><a id="__codelineno-95-10" name="__codelineno-95-10" href="#__codelineno-95-10"></a><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results"</span>
-</span><span id="__span-95-11"><a id="__codelineno-95-11" name="__codelineno-95-11" href="#__codelineno-95-11"></a>
-</span><span id="__span-95-12"><a id="__codelineno-95-12" name="__codelineno-95-12" href="#__codelineno-95-12"></a><span class="k">[defaults]</span>
-</span><span id="__span-95-13"><a id="__codelineno-95-13" name="__codelineno-95-13" href="#__codelineno-95-13"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-95-14"><a id="__codelineno-95-14" name="__codelineno-95-14" href="#__codelineno-95-14"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
-</span><span id="__span-95-15"><a id="__codelineno-95-15" name="__codelineno-95-15" href="#__codelineno-95-15"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/base.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-95-16"><a id="__codelineno-95-16" name="__codelineno-95-16" href="#__codelineno-95-16"></a>
-</span><span id="__span-95-17"><a id="__codelineno-95-17" name="__codelineno-95-17" href="#__codelineno-95-17"></a><span class="k">[report]</span>
-</span><span id="__span-95-18"><a id="__codelineno-95-18" name="__codelineno-95-18" href="#__codelineno-95-18"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">]</span>
-</span><span id="__span-95-19"><a id="__codelineno-95-19" name="__codelineno-95-19" href="#__codelineno-95-19"></a>
-</span><span id="__span-95-20"><a id="__codelineno-95-20" name="__codelineno-95-20" href="#__codelineno-95-20"></a><span class="k">[[rules]]</span>
-</span><span id="__span-95-21"><a id="__codelineno-95-21" name="__codelineno-95-21" href="#__codelineno-95-21"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
-</span><span id="__span-95-22"><a id="__codelineno-95-22" name="__codelineno-95-22" href="#__codelineno-95-22"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-95-23"><a id="__codelineno-95-23" name="__codelineno-95-23" href="#__codelineno-95-23"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/qc/{sample}_R1_fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-95-24"><a id="__codelineno-95-24" name="__codelineno-95-24" href="#__codelineno-95-24"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {config.results}/qc/ -t {threads}"</span>
-</span><span id="__span-95-25"><a id="__codelineno-95-25" name="__codelineno-95-25" href="#__codelineno-95-25"></a>
-</span><span id="__span-95-26"><a id="__codelineno-95-26" name="__codelineno-95-26" href="#__codelineno-95-26"></a><span class="k">[[rules]]</span>
-</span><span id="__span-95-27"><a id="__codelineno-95-27" name="__codelineno-95-27" href="#__codelineno-95-27"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
-</span><span id="__span-95-28"><a id="__codelineno-95-28" name="__codelineno-95-28" href="#__codelineno-95-28"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-95-29"><a id="__codelineno-95-29" name="__codelineno-95-29" href="#__codelineno-95-29"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-95-30"><a id="__codelineno-95-30" name="__codelineno-95-30" href="#__codelineno-95-30"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
-</span><span id="__span-95-31"><a id="__codelineno-95-31" name="__codelineno-95-31" href="#__codelineno-95-31"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
-</span><span id="__span-95-32"><a id="__codelineno-95-32" name="__codelineno-95-32" href="#__codelineno-95-32"></a><span class="p">]</span>
-</span><span id="__span-95-33"><a id="__codelineno-95-33" name="__codelineno-95-33" href="#__codelineno-95-33"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/fastp:0.23.4"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-95-34"><a id="__codelineno-95-34" name="__codelineno-95-34" href="#__codelineno-95-34"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --out2 {output[1]} --thread {threads}"</span>
-</span><span id="__span-95-35"><a id="__codelineno-95-35" name="__codelineno-95-35" href="#__codelineno-95-35"></a>
-</span><span id="__span-95-36"><a id="__codelineno-95-36" name="__codelineno-95-36" href="#__codelineno-95-36"></a><span class="k">[[rules]]</span>
-</span><span id="__span-95-37"><a id="__codelineno-95-37" name="__codelineno-95-37" href="#__codelineno-95-37"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-95-38"><a id="__codelineno-95-38" name="__codelineno-95-38" href="#__codelineno-95-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-95-39"><a id="__codelineno-95-39" name="__codelineno-95-39" href="#__codelineno-95-39"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
-</span><span id="__span-95-40"><a id="__codelineno-95-40" name="__codelineno-95-40" href="#__codelineno-95-40"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
-</span><span id="__span-95-41"><a id="__codelineno-95-41" name="__codelineno-95-41" href="#__codelineno-95-41"></a><span class="p">]</span>
-</span><span id="__span-95-42"><a id="__codelineno-95-42" name="__codelineno-95-42" href="#__codelineno-95-42"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-95-43"><a id="__codelineno-95-43" name="__codelineno-95-43" href="#__codelineno-95-43"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/alignment.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-95-44"><a id="__codelineno-95-44" name="__codelineno-95-44" href="#__codelineno-95-44"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} -R '@RG</span><span class="se">\\</span><span class="s2">tID:{sample}</span><span class="se">\\</span><span class="s2">tSM:{sample}' {config.reference} {input[0]} {input[1]} | samtools sort -o {output}"</span>
-</span><span id="__span-95-45"><a id="__codelineno-95-45" name="__codelineno-95-45" href="#__codelineno-95-45"></a>
-</span><span id="__span-95-46"><a id="__codelineno-95-46" name="__codelineno-95-46" href="#__codelineno-95-46"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-95-47"><a id="__codelineno-95-47" name="__codelineno-95-47" href="#__codelineno-95-47"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
-</span><span id="__span-95-48"><a id="__codelineno-95-48" name="__codelineno-95-48" href="#__codelineno-95-48"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1" href="#__codelineno-96-1"></a><span class="k">[workflow]</span>
+</span><span id="__span-96-2"><a id="__codelineno-96-2" name="__codelineno-96-2" href="#__codelineno-96-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ngs-pipeline"</span>
+</span><span id="__span-96-3"><a id="__codelineno-96-3" name="__codelineno-96-3" href="#__codelineno-96-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"2.0.0"</span>
+</span><span id="__span-96-4"><a id="__codelineno-96-4" name="__codelineno-96-4" href="#__codelineno-96-4"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Complete NGS analysis pipeline"</span>
+</span><span id="__span-96-5"><a id="__codelineno-96-5" name="__codelineno-96-5" href="#__codelineno-96-5"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Shixiang Wang &lt;w_shixiang@163.com&gt;"</span>
+</span><span id="__span-96-6"><a id="__codelineno-96-6" name="__codelineno-96-6" href="#__codelineno-96-6"></a>
+</span><span id="__span-96-7"><a id="__codelineno-96-7" name="__codelineno-96-7" href="#__codelineno-96-7"></a><span class="k">[config]</span>
+</span><span id="__span-96-8"><a id="__codelineno-96-8" name="__codelineno-96-8" href="#__codelineno-96-8"></a><span class="n">reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/hg38.fa"</span>
+</span><span id="__span-96-9"><a id="__codelineno-96-9" name="__codelineno-96-9" href="#__codelineno-96-9"></a><span class="n">known_sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data/ref/known_sites.vcf.gz"</span>
+</span><span id="__span-96-10"><a id="__codelineno-96-10" name="__codelineno-96-10" href="#__codelineno-96-10"></a><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results"</span>
+</span><span id="__span-96-11"><a id="__codelineno-96-11" name="__codelineno-96-11" href="#__codelineno-96-11"></a>
+</span><span id="__span-96-12"><a id="__codelineno-96-12" name="__codelineno-96-12" href="#__codelineno-96-12"></a><span class="k">[defaults]</span>
+</span><span id="__span-96-13"><a id="__codelineno-96-13" name="__codelineno-96-13" href="#__codelineno-96-13"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span><span id="__span-96-14"><a id="__codelineno-96-14" name="__codelineno-96-14" href="#__codelineno-96-14"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"8G"</span>
+</span><span id="__span-96-15"><a id="__codelineno-96-15" name="__codelineno-96-15" href="#__codelineno-96-15"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/base.yaml"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-96-16"><a id="__codelineno-96-16" name="__codelineno-96-16" href="#__codelineno-96-16"></a>
+</span><span id="__span-96-17"><a id="__codelineno-96-17" name="__codelineno-96-17" href="#__codelineno-96-17"></a><span class="k">[report]</span>
+</span><span id="__span-96-18"><a id="__codelineno-96-18" name="__codelineno-96-18" href="#__codelineno-96-18"></a><span class="n">format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"html"</span><span class="p">]</span>
+</span><span id="__span-96-19"><a id="__codelineno-96-19" name="__codelineno-96-19" href="#__codelineno-96-19"></a>
+</span><span id="__span-96-20"><a id="__codelineno-96-20" name="__codelineno-96-20" href="#__codelineno-96-20"></a><span class="k">[[rules]]</span>
+</span><span id="__span-96-21"><a id="__codelineno-96-21" name="__codelineno-96-21" href="#__codelineno-96-21"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc"</span>
+</span><span id="__span-96-22"><a id="__codelineno-96-22" name="__codelineno-96-22" href="#__codelineno-96-22"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-96-23"><a id="__codelineno-96-23" name="__codelineno-96-23" href="#__codelineno-96-23"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/qc/{sample}_R1_fastqc.html"</span><span class="p">]</span>
+</span><span id="__span-96-24"><a id="__codelineno-96-24" name="__codelineno-96-24" href="#__codelineno-96-24"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc {input} -o {config.results}/qc/ -t {threads}"</span>
+</span><span id="__span-96-25"><a id="__codelineno-96-25" name="__codelineno-96-25" href="#__codelineno-96-25"></a>
+</span><span id="__span-96-26"><a id="__codelineno-96-26" name="__codelineno-96-26" href="#__codelineno-96-26"></a><span class="k">[[rules]]</span>
+</span><span id="__span-96-27"><a id="__codelineno-96-27" name="__codelineno-96-27" href="#__codelineno-96-27"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"trim"</span>
+</span><span id="__span-96-28"><a id="__codelineno-96-28" name="__codelineno-96-28" href="#__codelineno-96-28"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-96-29"><a id="__codelineno-96-29" name="__codelineno-96-29" href="#__codelineno-96-29"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-96-30"><a id="__codelineno-96-30" name="__codelineno-96-30" href="#__codelineno-96-30"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
+</span><span id="__span-96-31"><a id="__codelineno-96-31" name="__codelineno-96-31" href="#__codelineno-96-31"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
+</span><span id="__span-96-32"><a id="__codelineno-96-32" name="__codelineno-96-32" href="#__codelineno-96-32"></a><span class="p">]</span>
+</span><span id="__span-96-33"><a id="__codelineno-96-33" name="__codelineno-96-33" href="#__codelineno-96-33"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">docker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"biocontainers/fastp:0.23.4"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-96-34"><a id="__codelineno-96-34" name="__codelineno-96-34" href="#__codelineno-96-34"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastp --in1 {input[0]} --in2 {input[1]} --out1 {output[0]} --out2 {output[1]} --thread {threads}"</span>
+</span><span id="__span-96-35"><a id="__codelineno-96-35" name="__codelineno-96-35" href="#__codelineno-96-35"></a>
+</span><span id="__span-96-36"><a id="__codelineno-96-36" name="__codelineno-96-36" href="#__codelineno-96-36"></a><span class="k">[[rules]]</span>
+</span><span id="__span-96-37"><a id="__codelineno-96-37" name="__codelineno-96-37" href="#__codelineno-96-37"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-96-38"><a id="__codelineno-96-38" name="__codelineno-96-38" href="#__codelineno-96-38"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-96-39"><a id="__codelineno-96-39" name="__codelineno-96-39" href="#__codelineno-96-39"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R1.fastq.gz"</span><span class="p">,</span>
+</span><span id="__span-96-40"><a id="__codelineno-96-40" name="__codelineno-96-40" href="#__codelineno-96-40"></a><span class="w">    </span><span class="s2">"{config.results}/trimmed/{sample}_R2.fastq.gz"</span>
+</span><span id="__span-96-41"><a id="__codelineno-96-41" name="__codelineno-96-41" href="#__codelineno-96-41"></a><span class="p">]</span>
+</span><span id="__span-96-42"><a id="__codelineno-96-42" name="__codelineno-96-42" href="#__codelineno-96-42"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{config.results}/aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-96-43"><a id="__codelineno-96-43" name="__codelineno-96-43" href="#__codelineno-96-43"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/alignment.yaml"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-96-44"><a id="__codelineno-96-44" name="__codelineno-96-44" href="#__codelineno-96-44"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} -R '@RG</span><span class="se">\\</span><span class="s2">tID:{sample}</span><span class="se">\\</span><span class="s2">tSM:{sample}' {config.reference} {input[0]} {input[1]} | samtools sort -o {output}"</span>
+</span><span id="__span-96-45"><a id="__codelineno-96-45" name="__codelineno-96-45" href="#__codelineno-96-45"></a>
+</span><span id="__span-96-46"><a id="__codelineno-96-46" name="__codelineno-96-46" href="#__codelineno-96-46"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-96-47"><a id="__codelineno-96-47" name="__codelineno-96-47" href="#__codelineno-96-47"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
+</span><span id="__span-96-48"><a id="__codelineno-96-48" name="__codelineno-96-48" href="#__codelineno-96-48"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
 </span></code></pre></div>
 <hr />
 <h2 id="json-schema">JSON Schema<a class="headerlink" href="#json-schema" title="Permanent link">#</a></h2>
 <p>oxo-flow ships a JSON Schema for the <code>.oxoflow</code> format. Use it for automated validation in your CI/CD pipelines or for real-time autocompletion and error checking in your IDE (like VS Code or IntelliJ).</p>
 <h3 id="getting-the-schema">Getting the Schema<a class="headerlink" href="#getting-the-schema" title="Permanent link">#</a></h3>
 <p>You can output the schema directly from the CLI:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1" href="#__codelineno-96-1"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>oxoflow.schema.json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-97-1"><a id="__codelineno-97-1" name="__codelineno-97-1" href="#__codelineno-97-1"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>oxoflow.schema.json
 </span></code></pre></div>
 <h3 id="ide-configuration-vs-code">IDE Configuration (VS Code)<a class="headerlink" href="#ide-configuration-vs-code" title="Permanent link">#</a></h3>
 <p>To enable validation in VS Code, add the following to your <code>settings.json</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-97-1"><a id="__codelineno-97-1" name="__codelineno-97-1" href="#__codelineno-97-1"></a><span class="nt">"yaml.schemas"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-97-2"><a id="__codelineno-97-2" name="__codelineno-97-2" href="#__codelineno-97-2"></a><span class="w">    </span><span class="nt">"https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json"</span><span class="p">:</span><span class="w"> </span><span class="s2">"*.oxoflow"</span>
-</span><span id="__span-97-3"><a id="__codelineno-97-3" name="__codelineno-97-3" href="#__codelineno-97-3"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-98-1"><a id="__codelineno-98-1" name="__codelineno-98-1" href="#__codelineno-98-1"></a><span class="nt">"yaml.schemas"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-98-2"><a id="__codelineno-98-2" name="__codelineno-98-2" href="#__codelineno-98-2"></a><span class="w">    </span><span class="nt">"https://traitome.github.io/oxo-flow/schema/oxoflow-v1.schema.json"</span><span class="p">:</span><span class="w"> </span><span class="s2">"*.oxoflow"</span>
+</span><span id="__span-98-3"><a id="__codelineno-98-3" name="__codelineno-98-3" href="#__codelineno-98-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>(Note: Although <code>.oxoflow</code> is TOML, many VS Code extensions can apply JSON schemas to multiple formats).</p>
 <hr />
@@ -9608,21 +9640,21 @@ checkpoint re-entry): after it completes, the engine reads its
 <code>checkpoint_manifest</code> — a TOML file the rule itself wrote — and re-expands
 the workflow with the new values. Every round is still a static plan, so
 previews stay deterministic and resumes reconstruct the same plan.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-98-1"><a id="__codelineno-98-1" name="__codelineno-98-1" href="#__codelineno-98-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-98-2"><a id="__codelineno-98-2" name="__codelineno-98-2" href="#__codelineno-98-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover"</span>
-</span><span id="__span-98-3"><a id="__codelineno-98-3" name="__codelineno-98-3" href="#__codelineno-98-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"discover.toml"</span><span class="p">]</span>
-</span><span id="__span-98-4"><a id="__codelineno-98-4" name="__codelineno-98-4" href="#__codelineno-98-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python discover.py &gt; discover.toml"</span>
-</span><span id="__span-98-5"><a id="__codelineno-98-5" name="__codelineno-98-5" href="#__codelineno-98-5"></a><span class="n">checkpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-98-6"><a id="__codelineno-98-6" name="__codelineno-98-6" href="#__codelineno-98-6"></a><span class="n">checkpoint_manifest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover.toml"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-99-1"><a id="__codelineno-99-1" name="__codelineno-99-1" href="#__codelineno-99-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-99-2"><a id="__codelineno-99-2" name="__codelineno-99-2" href="#__codelineno-99-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover"</span>
+</span><span id="__span-99-3"><a id="__codelineno-99-3" name="__codelineno-99-3" href="#__codelineno-99-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"discover.toml"</span><span class="p">]</span>
+</span><span id="__span-99-4"><a id="__codelineno-99-4" name="__codelineno-99-4" href="#__codelineno-99-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python discover.py &gt; discover.toml"</span>
+</span><span id="__span-99-5"><a id="__codelineno-99-5" name="__codelineno-99-5" href="#__codelineno-99-5"></a><span class="n">checkpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-99-6"><a id="__codelineno-99-6" name="__codelineno-99-6" href="#__codelineno-99-6"></a><span class="n">checkpoint_manifest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"discover.toml"</span>
 </span></code></pre></div>
 <p>The manifest declares new wildcard values — new samples and/or new
 experiment-control pairs in the same round:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-99-1"><a id="__codelineno-99-1" name="__codelineno-99-1" href="#__codelineno-99-1"></a><span class="k">[reentry]</span>
-</span><span id="__span-99-2"><a id="__codelineno-99-2" name="__codelineno-99-2" href="#__codelineno-99-2"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"batch"</span><span class="w">            </span><span class="c1"># optional; defaults to the workflow's first sample group</span>
-</span><span id="__span-99-3"><a id="__codelineno-99-3" name="__codelineno-99-3" href="#__codelineno-99-3"></a><span class="n">sample</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">]</span><span class="w">      </span><span class="c1"># appended (dedup) to that group</span>
-</span><span id="__span-99-4"><a id="__codelineno-99-4" name="__codelineno-99-4" href="#__codelineno-99-4"></a><span class="n">pairs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w">                  </span><span class="c1"># optional; appended (dedup by pair_id) to [[pairs]]</span>
-</span><span id="__span-99-5"><a id="__codelineno-99-5" name="__codelineno-99-5" href="#__codelineno-99-5"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pair_id</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"CASE_007"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"T7"</span><span class="p">,</span><span class="w"> </span><span class="n">normal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"N7"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor_type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"tumor"</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-99-6"><a id="__codelineno-99-6" name="__codelineno-99-6" href="#__codelineno-99-6"></a><span class="p">]</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-100-1"><a id="__codelineno-100-1" name="__codelineno-100-1" href="#__codelineno-100-1"></a><span class="k">[reentry]</span>
+</span><span id="__span-100-2"><a id="__codelineno-100-2" name="__codelineno-100-2" href="#__codelineno-100-2"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"batch"</span><span class="w">            </span><span class="c1"># optional; defaults to the workflow's first sample group</span>
+</span><span id="__span-100-3"><a id="__codelineno-100-3" name="__codelineno-100-3" href="#__codelineno-100-3"></a><span class="n">sample</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">]</span><span class="w">      </span><span class="c1"># appended (dedup) to that group</span>
+</span><span id="__span-100-4"><a id="__codelineno-100-4" name="__codelineno-100-4" href="#__codelineno-100-4"></a><span class="n">pairs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="w">                  </span><span class="c1"># optional; appended (dedup by pair_id) to [[pairs]]</span>
+</span><span id="__span-100-5"><a id="__codelineno-100-5" name="__codelineno-100-5" href="#__codelineno-100-5"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">pair_id</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"CASE_007"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"T7"</span><span class="p">,</span><span class="w"> </span><span class="n">normal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"N7"</span><span class="p">,</span><span class="w"> </span><span class="n">tumor_type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"tumor"</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-100-6"><a id="__codelineno-100-6" name="__codelineno-100-6" href="#__codelineno-100-6"></a><span class="p">]</span>
 </span></code></pre></div>
 <p>Pair entries mirror <code>[[pairs]]</code> fields: <code>pair_id</code> (required), <code>experiment</code>
 (required, alias <code>tumor</code>), <code>control</code> (alias <code>normal</code>), <code>experiment_type</code>
@@ -9652,8 +9684,10 @@ experiment-control pairs in the same round:</p>
 <li>Bounds: checkpoint rules are never re-expanded themselves (no
   <code>{sample}</code>/<code>{group}</code>/<code>{pair_id}</code>/<code>{experiment}</code> — validation error E014)
   and re-entry is capped at 32 rounds — a rule that keeps discovering values
-  past that is a workflow bug, not an engine feature. Validation error E013
-  requires <code>checkpoint_manifest</code> on every checkpoint rule.</li>
+  past that is a workflow bug, not an engine feature. Diagnostic E013
+  (emitted at warning severity — <code>checkpoint = true</code> predates the manifest
+  field) flags a checkpoint rule that does not declare
+  <code>checkpoint_manifest</code>.</li>
 <li><code>dry-run</code> previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; <code>--json</code> includes a <code>reentry</code> section.</li>
@@ -9667,16 +9701,16 @@ discovered value. This is the "checkpoint-lite" variant of re-entry — the
 discovered values come from the file system, not from a manifest the rule
 wrote (which is what makes it work for rules whose file counts are unknown
 ahead of time, e.g. interval scatters or contig-aware variant calling).</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-100-1"><a id="__codelineno-100-1" name="__codelineno-100-1" href="#__codelineno-100-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-100-2"><a id="__codelineno-100-2" name="__codelineno-100-2" href="#__codelineno-100-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"split"</span>
-</span><span id="__span-100-3"><a id="__codelineno-100-3" name="__codelineno-100-3" href="#__codelineno-100-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/chunks/{i}.txt"</span>
-</span><span id="__span-100-4"><a id="__codelineno-100-4" name="__codelineno-100-4" href="#__codelineno-100-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"for i in 1 2 3; do echo $i &gt; results/chunks/$i.txt; done"</span>
-</span><span id="__span-100-5"><a id="__codelineno-100-5" name="__codelineno-100-5" href="#__codelineno-100-5"></a>
-</span><span id="__span-100-6"><a id="__codelineno-100-6" name="__codelineno-100-6" href="#__codelineno-100-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-100-7"><a id="__codelineno-100-7" name="__codelineno-100-7" href="#__codelineno-100-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"collect"</span><span class="w">                       </span><span class="c1"># deferred: no {i} instances at plan time</span>
-</span><span id="__span-100-8"><a id="__codelineno-100-8" name="__codelineno-100-8" href="#__codelineno-100-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/chunks/{i}.txt"</span><span class="p">]</span>
-</span><span id="__span-100-9"><a id="__codelineno-100-9" name="__codelineno-100-9" href="#__codelineno-100-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/merged/{i}.txt"</span><span class="p">]</span>
-</span><span id="__span-100-10"><a id="__codelineno-100-10" name="__codelineno-100-10" href="#__codelineno-100-10"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cat {input} &gt; {output}"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-101-1"><a id="__codelineno-101-1" name="__codelineno-101-1" href="#__codelineno-101-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-101-2"><a id="__codelineno-101-2" name="__codelineno-101-2" href="#__codelineno-101-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"split"</span>
+</span><span id="__span-101-3"><a id="__codelineno-101-3" name="__codelineno-101-3" href="#__codelineno-101-3"></a><span class="n">output_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"results/chunks/{i}.txt"</span>
+</span><span id="__span-101-4"><a id="__codelineno-101-4" name="__codelineno-101-4" href="#__codelineno-101-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"for i in 1 2 3; do echo $i &gt; results/chunks/$i.txt; done"</span>
+</span><span id="__span-101-5"><a id="__codelineno-101-5" name="__codelineno-101-5" href="#__codelineno-101-5"></a>
+</span><span id="__span-101-6"><a id="__codelineno-101-6" name="__codelineno-101-6" href="#__codelineno-101-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-101-7"><a id="__codelineno-101-7" name="__codelineno-101-7" href="#__codelineno-101-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"collect"</span><span class="w">                       </span><span class="c1"># deferred: no {i} instances at plan time</span>
+</span><span id="__span-101-8"><a id="__codelineno-101-8" name="__codelineno-101-8" href="#__codelineno-101-8"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/chunks/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-101-9"><a id="__codelineno-101-9" name="__codelineno-101-9" href="#__codelineno-101-9"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"results/merged/{i}.txt"</span><span class="p">]</span>
+</span><span id="__span-101-10"><a id="__codelineno-101-10" name="__codelineno-101-10" href="#__codelineno-101-10"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cat {input} &gt; {output}"</span>
 </span></code></pre></div>
 <p><code>split</code> produces <code>results/chunks/1.txt</code>, <code>results/chunks/2.txt</code>,
 <code>results/chunks/3.txt</code>; the engine instantiates <code>collect_1</code>, <code>collect_2</code>,
@@ -9743,15 +9777,15 @@ domain per sample instance, and consumers instantiate over the union.</p>
 <p>Post <code>workflow_started</code> / <code>workflow_completed</code> / <code>workflow_failed</code> events
 to an HTTP endpoint when a run starts and finishes (issue #227 item 1) —
 the transport counterpart of the <code>on_complete</code> / <code>on_error</code> shell hooks.</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-101-1"><a id="__codelineno-101-1" name="__codelineno-101-1" href="#__codelineno-101-1"></a><span class="k">[webhook]</span>
-</span><span id="__span-101-2"><a id="__codelineno-101-2" name="__codelineno-101-2" href="#__codelineno-101-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
-</span><span id="__span-101-3"><a id="__codelineno-101-3" name="__codelineno-101-3" href="#__codelineno-101-3"></a><span class="c1"># method = "POST"                  # POST (default) | PUT | GET</span>
-</span><span id="__span-101-4"><a id="__codelineno-101-4" name="__codelineno-101-4" href="#__codelineno-101-4"></a><span class="c1"># events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed</span>
-</span><span id="__span-101-5"><a id="__codelineno-101-5" name="__codelineno-101-5" href="#__codelineno-101-5"></a><span class="c1"># headers = { Authorization = "Bearer …" }</span>
-</span><span id="__span-101-6"><a id="__codelineno-101-6" name="__codelineno-101-6" href="#__codelineno-101-6"></a><span class="c1"># secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)</span>
-</span><span id="__span-101-7"><a id="__codelineno-101-7" name="__codelineno-101-7" href="#__codelineno-101-7"></a><span class="c1"># signature_scheme = "hmac-sha256"</span>
-</span><span id="__span-101-8"><a id="__codelineno-101-8" name="__codelineno-101-8" href="#__codelineno-101-8"></a><span class="c1"># timeout_secs = 30</span>
-</span><span id="__span-101-9"><a id="__codelineno-101-9" name="__codelineno-101-9" href="#__codelineno-101-9"></a><span class="c1"># max_retries = 3</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-102-1"><a id="__codelineno-102-1" name="__codelineno-102-1" href="#__codelineno-102-1"></a><span class="k">[webhook]</span>
+</span><span id="__span-102-2"><a id="__codelineno-102-2" name="__codelineno-102-2" href="#__codelineno-102-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"https://hooks.example.com/oxo"</span>
+</span><span id="__span-102-3"><a id="__codelineno-102-3" name="__codelineno-102-3" href="#__codelineno-102-3"></a><span class="c1"># method = "POST"                  # POST (default) | PUT | GET</span>
+</span><span id="__span-102-4"><a id="__codelineno-102-4" name="__codelineno-102-4" href="#__codelineno-102-4"></a><span class="c1"># events = ["workflow_completed", "workflow_failed"]  # default: workflow_completed</span>
+</span><span id="__span-102-5"><a id="__codelineno-102-5" name="__codelineno-102-5" href="#__codelineno-102-5"></a><span class="c1"># headers = { Authorization = "Bearer …" }</span>
+</span><span id="__span-102-6"><a id="__codelineno-102-6" name="__codelineno-102-6" href="#__codelineno-102-6"></a><span class="c1"># secret = "…HMAC key…"            # X-OxoFlow-Signature header (HMAC-SHA256)</span>
+</span><span id="__span-102-7"><a id="__codelineno-102-7" name="__codelineno-102-7" href="#__codelineno-102-7"></a><span class="c1"># signature_scheme = "hmac-sha256"</span>
+</span><span id="__span-102-8"><a id="__codelineno-102-8" name="__codelineno-102-8" href="#__codelineno-102-8"></a><span class="c1"># timeout_secs = 30</span>
+</span><span id="__span-102-9"><a id="__codelineno-102-9" name="__codelineno-102-9" href="#__codelineno-102-9"></a><span class="c1"># max_retries = 3</span>
 </span></code></pre></div>
 <table>
 <thead>

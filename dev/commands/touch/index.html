@@ -3907,7 +3907,7 @@
 </tr>
 <tr>
 <td><code>[KEY=VALUE]...</code></td>
-<td>Direct config overrides as trailing positionals — the same forms <code>run</code> accepts (<code>KEY=VALUE</code>, <code>--KEY=VALUE</code>, and the declared-key-only <code>--KEY VALUE</code>; see <a href="../run/">run</a>). Needed when outputs or wildcard expansion branch on <code>{config.*}</code> (issue #432). Command flags must come <strong>before</strong> the overrides.</td>
+<td>Direct config overrides as trailing positionals — the two forms <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> (the bare space form <code>--KEY VALUE</code> that <code>run</code> accepts is <strong>not</strong> available here; it is rejected as an unknown argument). Needed when outputs or wildcard expansion branch on <code>{config.*}</code> (issue #432). Command flags must come <strong>before</strong> the overrides.</td>
 </tr>
 </tbody>
 </table>

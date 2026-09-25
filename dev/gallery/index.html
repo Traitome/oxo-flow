@@ -3878,6 +3878,18 @@ instances and their concrete dependencies. For gallery workflows with
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>$ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>✓ examples/gallery/08_multiomics_integration.oxoflow — 8 rules, 7 dependencies
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Validation vs live execution</p>
+<p>CI <em>validates</em> every gallery workflow (parse, DAG construction, lint).
+A growing subset is additionally <strong>executed live</strong> on real/simulated
+data with documented results — see each page's "live-run verified"
+notes (e.g. <a href="16s-qiime2/">16S Amplicon</a>, <a href="wgs-germline/">WGS Germline</a>,
+<a href="scatter-gather/">Scatter-Gather</a>). Where a live run surfaced
+environment- or data-dependent caveats (sklearn classifier gates,
+VQSR variance requirements, metadata format rules), those pages
+document the exact errors and remediations so the same pitfalls are
+self-diagnosable.</p>
+</div>
 
 
 

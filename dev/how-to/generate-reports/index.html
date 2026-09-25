@@ -4120,7 +4120,10 @@ stdout.</p>
 <p>Sections adapt to available execution data — for example, <strong>Execution
 Status</strong> and <strong>Failure Diagnosis</strong> only appear with a checkpoint — and
 every section, including <strong>Task Summary</strong>, can be filtered via
-<code>[report].sections</code>. List them all with <code>oxo-flow report WF --list-sections</code>.</p>
+<code>[report].sections</code>. List them all with <code>oxo-flow report WF --list-sections</code>
+(15 sections; <strong>Resource Accounting</strong> is not listed there because it is
+appended by the <code>--acct</code> import after the standard build and cannot be
+filtered by <code>[report].sections</code>).</p>
 <hr />
 <h2 id="report-configuration-in-oxoflow">Report Configuration in <code>.oxoflow</code><a class="headerlink" href="#report-configuration-in-oxoflow" title="Permanent link">#</a></h2>
 <p>Add a <code>[report]</code> section to your workflow file to filter report sections:</p>

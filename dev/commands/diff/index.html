@@ -3852,19 +3852,19 @@
 </span></code></pre></div>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  • [rules] rule "bwa_align": shell command changed
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  • [config] config variable changed: "threads"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  • [rules] rule "bwa_align": shell command changed
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  • [config] config variable changed: "threads"
 </span></code></pre></div>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
 <li>Performs a semantic comparison of workflow structures, not just a line-by-line diff</li>
-<li>Detects changes in rules, configuration variables, and metadata</li>
+<li>Detects changes in workflow metadata (name, version, description), added/removed rules, per-rule inputs/outputs/shell/threads/memory/environment, config variables, and defaults</li>
 <li>Useful for tracking changes during pipeline development</li>
-<li>All output goes to <strong>stderr</strong> and the exit code is always 0 — CI jobs
-  must capture stderr (not the exit code) to detect differences</li>
+<li>Output goes to <strong>stdout</strong>; like <code>diff(1)</code>, the exit code is <code>0</code> when the
+  workflows are identical and <code>1</code> when differences are found (printed as
+  <code>✓ Workflows are identical</code>), so scripts can branch on either</li>
 </ul>
 
 

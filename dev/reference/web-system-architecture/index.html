@@ -4230,8 +4230,9 @@
   checks, no background task).</li>
 <li><code>/api/events</code> relies solely on axum's 15-second <code>KeepAlive</code> comment ping.
   If a subscriber falls behind the 100-slot broadcast buffer, the server
-  emits a synthetic <code>{"type":"lagged","data":{"missed":N}}</code> event so the
-  client can refetch instead of silently missing run state transitions.</li>
+  emits a synthetic <code>{"type":"lagged","time":"…","data":{"missed":N}}</code>
+  event so the client can refetch instead of silently missing run state
+  transitions.</li>
 </ul>
 <hr />
 <h2 id="domain-driven-module-structure">Domain-Driven Module Structure<a class="headerlink" href="#domain-driven-module-structure" title="Permanent link">#</a></h2>
@@ -4305,8 +4306,8 @@
 <td>Real-time SSE broadcast channel for execution events</td>
 </tr>
 <tr>
-<td><strong>infra/hpc</strong></td>
-<td><code>infra/hpc.rs</code></td>
+<td><strong>hpc</strong></td>
+<td><code>src/hpc.rs</code> (crate root)</td>
 <td>Slurm script generation, scheduler detection</td>
 </tr>
 </tbody>

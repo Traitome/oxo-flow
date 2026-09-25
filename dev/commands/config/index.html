@@ -3959,7 +3959,7 @@
 <tbody>
 <tr>
 <td><code>show</code></td>
-<td>Show all configuration variables from a workflow</td>
+<td>Show workflow metadata and configuration variables</td>
 </tr>
 <tr>
 <td><code>stats</code></td>
@@ -4059,7 +4059,7 @@
 <li>Total edges = 1 + 1 + 1 + 2 = 5 dependencies</li>
 </ul>
 <p><strong>Why can dependencies exceed rules?</strong></p>
-<p>Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file that exactly matches another rule's output string creates an edge in the DAG (wildcard patterns like <code>{sample}</code> are matched literally and do not match other rules' patterns).</p>
+<p>Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file that exactly matches another rule's output string creates an edge in the DAG. Beyond exact matches, the DAG builder also connects: concrete inputs against producer outputs containing wildcards (e.g., input <code>mapped/A.bam</code> matches producer output <code>mapped/{sample}.bam</code>), glob inputs (<code>mapped/*.bam</code>) against any producer output the glob matches, and directory inputs against outputs under that directory — all best-effort; unmatched inputs are simply treated as source files.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

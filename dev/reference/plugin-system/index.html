@@ -3968,8 +3968,15 @@
 are Rust crates implementing standard traits, registered via TOML configuration
 files. Plugin manifests are integrity-checked using keyed SHA-256 signatures
 (<code>SHA256(key ‖ message)</code>). Note: this is not a true HMAC (RFC 2104) and does
-not provide cryptographic authentication.</p>
+not provide cryptographic authentication — it protects against accidental
+corruption only.</p>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">#</a></h2>
+<blockquote>
+<p><strong>Inert as of v0.20.1</strong>: the <code>[plugins]</code> section, registry API, and
+manifest discovery are parsed but nothing is executed from them yet —
+see the warning at the end of this page. The API below is the
+compile-time contract for engine-side wiring.</p>
+</blockquote>
 <h3 id="1-implement-a-plugin-trait">1. Implement a plugin trait<a class="headerlink" href="#1-implement-a-plugin-trait" title="Permanent link">#</a></h3>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">plugin</span><span class="p">::</span><span class="n">RulePlugin</span><span class="p">;</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">rule</span><span class="p">::</span><span class="n">Rule</span><span class="p">;</span>
@@ -4039,10 +4046,11 @@ not provide cryptographic authentication.</p>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Custom rule for specialized analysis"</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">author</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Your Name"</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">command_template</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"custom_tool {input} &gt; {output}"</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="k">[signature]</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">key_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"key-001"</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"a1b2c3d4..."</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bioconda::custom-tool=1.0"</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="k">[signature]</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">key_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"key-001"</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"a1b2c3d4..."</span>
 </span></code></pre></div>
 <h2 id="signature-verification">Signature Verification<a class="headerlink" href="#signature-verification" title="Permanent link">#</a></h2>
 <p>Each plugin manifest can include a <code>[signature]</code> section with a keyed
@@ -4053,6 +4061,12 @@ configured trusted keys are loaded with a warning:</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">registry</span><span class="p">.</span><span class="n">trusted_keys</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="s">"key-001"</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span><span class="w"> </span><span class="s">"shared-secret-key"</span><span class="p">.</span><span class="n">into</span><span class="p">());</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">registry</span><span class="p">.</span><span class="n">discover</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">project_dir</span><span class="p">))</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// invalid signatures are skipped</span>
 </span></code></pre></div>
+<p>The signature covers <strong>all</strong> manifest fields except <code>[signature]</code> itself —
+name, version, plugin_type, description, author, command_template, and
+environment — encoded as a length-prefixed payload (<code>&lt;len&gt;:&lt;value&gt;</code> per
+field) so a tampered <code>command_template</code> (the field a rule plugin would
+execute) can never keep a valid signature. Older manifests signed with the
+previous <code>name:version:type:description</code> payload no longer verify.</p>
 <h2 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">#</a></h2>
 <h3 id="pluginregistry"><code>PluginRegistry</code><a class="headerlink" href="#pluginregistry" title="Permanent link">#</a></h3>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">impl</span><span class="w"> </span><span class="n">PluginRegistry</span><span class="w"> </span><span class="p">{</span>
@@ -4098,10 +4112,12 @@ plugins written in any language can produce it:</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">plugin</span><span class="p">::</span><span class="n">PluginOutput</span><span class="p">;</span>
 </span></code></pre></div>
 <p><code>success</code> and <code>command</code> are the fields the engine would act on; <code>errors</code>,
-<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.20.1 this
-contract is defined but not yet wired into rule execution — declared rule
-plugins today go through <code>command_template</code> in the manifest instead, and
-there is no engine-side runner that invokes plugin executables yet.</p>
+<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.20.1 the
+whole plugin surface is defined but inert: a workflow <code>[plugins]</code> section
+is parsed and logs a one-time warning ("parsed but not executed by this
+version"), and there is no engine-side runner that invokes plugin
+executables or consumes <code>command_template</code> yet — the registry API is
+compile-time only.</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="https://github.com/Traitome/oxo-flow/blob/main/crates/oxo-flow-core/src/plugin.rs">Plugin module source</a></li>

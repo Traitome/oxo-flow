@@ -4313,12 +4313,14 @@ working directory (the checkpoint-recorded workdir, else the workflow
 file's directory), not fabricated from templates. A recursive scanner
 (1 MiB per-file cap, depth 8, no symlinks, dot-directories skipped,
 deterministic order) classifies filenames by suffix and dispatches to one
-of six adapters in <code>report_metrics</code>:</p>
+of seven adapters in <code>report_metrics</code>:</p>
 <ul>
 <li><code>fastp</code> (<code>*.fastp.json</code>), <code>flagstat</code> (<code>*.flagstat</code>,
   <code>*.flagstat.txt</code>), <code>STAR</code> (<code>*Log.final.out</code>), <code>featureCounts</code>
   (<code>*.summary</code>), <code>bcftools</code> (<code>*.bcftools.stats</code>), <code>kraken2</code>
-  (<code>*.kraken2.report</code>, <code>*.kraken.report</code>)</li>
+  (<code>*.kraken2.report</code>, <code>*.kraken.report</code>), <code>mqc</code> (<code>*_mqc.json</code> —
+  MultiQC custom content; only the JSON form is parsed, <code>*_mqc.yml</code>
+  files are counted as skipped with a note in Scan Notes)</li>
 </ul>
 <p>Every adapter returns metrics in a stable order; each metric carries an
 optional QC flag from fixed thresholds (e.g. fastp <code>q30_rate</code> Pass ≥ 0.85 /
@@ -4340,7 +4342,8 @@ source ran the rule, and the two differ:</p>
   allocations, so they are documented — here and in the <code>report</code> command
   reference — as sampled rather than exact.</li>
 <li><strong>Cluster runs</strong> report what the scheduler's own accounting store
-  recorded (<code>sacct</code>/<code>qstat -f</code>/<code>qacct</code>), read once as each job settles.
+  recorded (<code>sacct</code>/<code>qstat -x -f</code>/<code>qacct</code>/<code>bacct</code>), read once as each job
+  settles.
   That figure spans every step of the job rather than one sampled process.</li>
 </ul>
 <p><code>-</code> means neither source reported a number: very short local rules the

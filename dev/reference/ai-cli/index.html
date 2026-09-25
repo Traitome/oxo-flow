@@ -4946,7 +4946,7 @@ repository.</p>
 <p>The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):</p>
 <ol>
 <li><strong>Tool Reference Table</strong>: 40 curated bioinformatics tools with resource allocations (threads, memory)</li>
-<li><strong>Bioconda Tool Database</strong>: 6,487 curated CLI tools with current versions and descriptions (filtered from 12,679 raw registry entries; see <code>knowledge_meta.json</code>) — queried on demand via <code>lookup_tool</code></li>
+<li><strong>Bioconda Tool Database</strong>: 6,525 curated CLI tools with current versions and descriptions (filtered from 12,725 raw registry entries; see <code>knowledge_meta.json</code>) — queried on demand via <code>lookup_tool</code></li>
 <li><strong>bioSkills Library</strong>: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via <code>lookup_skill</code></li>
 <li><strong>Pipeline Knowledge Graph</strong>: 78 workflow skills and 465 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
 </ol>
@@ -4996,14 +4996,14 @@ prompt. See <a href="../custom-skills/">Custom Skills</a>.</p>
 <tr>
 <td>DeepSeek</td>
 <td>DeepSeek v4-pro, DeepSeek v4-flash</td>
-<td>~$0.14–$2.50 in</td>
+<td>~$0.14–$0.28 in, ~$0.55–$1.10 out</td>
 <td>High</td>
 <td>API key (<code>DEEPSEEK_API_KEY</code>)</td>
 </tr>
 <tr>
 <td>OpenAI-compatible</td>
 <td>Groq LLaMA, Together, Azure</td>
-<td>Varies ($0.14–$2.50 in)</td>
+<td>Varies</td>
 <td>High</td>
 <td>API key</td>
 </tr>
@@ -5218,15 +5218,15 @@ whether it is auto-updated or manually curated:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span>
 </span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span><span class="nt">"sources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">    </span><span class="nt">"bioconda_tools"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">      </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">6487</span><span class="p">,</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">      </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">6525</span><span class="p">,</span>
 </span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">      </span><span class="nt">"url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://conda.anaconda.org/bioconda/channeldata.json"</span><span class="p">,</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">      </span><span class="nt">"excluded"</span><span class="p">:</span><span class="w"> </span><span class="mi">6192</span><span class="p">,</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">      </span><span class="nt">"excluded"</span><span class="p">:</span><span class="w"> </span><span class="mi">6200</span><span class="p">,</span>
 </span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="w">      </span><span class="nt">"data_file"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bioconda_tools.jsonl"</span><span class="p">,</span>
-</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="w">      </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-01T08:23:27Z"</span><span class="p">,</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="w">      </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span><span class="p">,</span>
 </span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="w">      </span><span class="nt">"auto"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 </span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-01T08:23:27Z"</span>
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a><span class="w">  </span><span class="nt">"generated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-16T08:21:13Z"</span>
 </span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>count</code> always equals the number of records in <code>data_file</code> — a drift-guard

@@ -2560,6 +2560,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#checkpoint-file-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint File Format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3794,6 +3816,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#checkpoint-file-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint File Format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3915,10 +3959,12 @@ and total runtime.</p>
 </span></code></pre></div>
 <h3 id="staleness-reasons">Staleness reasons<a class="headerlink" href="#staleness-reasons" title="Permanent link">#</a></h3>
 <p>When the checkpoint's workflow file is still present and parseable, <code>status</code>
-also classifies every completed rule exactly the way <code>run</code> would (issue</p>
-<h1 id="432-and-explains-why-each-rule-would-re-run-right-now-output">432) and explains <strong>why each rule would re-run right now</strong> — output<a class="headerlink" href="#432-and-explains-why-each-rule-would-re-run-right-now-output" title="Permanent link">#</a></h1>
-<p>deleted, input manifest mismatch, config change, or a cascade from an
-upstream rule:</p>
+classifies every completed rule exactly the way <code>run</code> would (issue #432) and
+explains <strong>why each rule would re-run right now</strong> — output deleted, input
+manifest mismatch, config change, or a cascade from an upstream rule. The
+section (and the <code>staleness</code> JSON key) appears only when <strong>at least one
+completed rule would re-run</strong> — an all-up-to-date checkpoint shows just the
+plain completed/failed listing:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Staleness reasons (as of now):
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  why each completed rule would re-run under the current workflow+config
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  ✓ align — input changed (recorded input manifest (paths/size/mtime) no longer matches disk)
@@ -3973,8 +4019,9 @@ first):</p>
 </span></code></pre></div>
 <p><code>timings</code>, <code>total_time_secs</code>, and <code>memory</code> are only present with
 <code>--timing</code>; <code>memory</code> only lists rules with a sampled peak-RSS
-measurement. <code>staleness</code> is present whenever the workflow file can be
-loaded for classification (see <a href="#staleness-reasons">Staleness reasons</a>).</p>
+measurement. <code>staleness</code> appears whenever the workflow file can be
+loaded for classification <strong>and</strong> at least one completed rule would
+re-run (see <a href="#staleness-reasons">Staleness reasons</a>).</p>
 <hr />
 <h2 id="checkpoint-file-format">Checkpoint File Format<a class="headerlink" href="#checkpoint-file-format" title="Permanent link">#</a></h2>
 <p>The checkpoint file is JSON with the following structure:</p>
@@ -3999,29 +4046,42 @@ loaded for classification (see <a href="#staleness-reasons">Staleness reasons</a
 </span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">    </span><span class="nt">"trim_reads"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:1a2b3c…"</span><span class="p">,</span>
 </span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:4d5e6f…"</span>
 </span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">  </span><span class="nt">"tombstones"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/S1.bam"</span><span class="p">]</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="w">  </span><span class="nt">"reentries"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="w">      </span><span class="nt">"round"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="w">      </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"discover"</span><span class="p">,</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="w">      </span><span class="nt">"group"</span><span class="p">:</span><span class="w"> </span><span class="s2">"batch"</span><span class="p">,</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="w">      </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">],</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="w">      </span><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a><span class="p">}</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">  </span><span class="nt">"input_manifests"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">      </span><span class="p">{</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"trimmed/S1.fq.gz"</span><span class="p">,</span><span class="w"> </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">48213</span><span class="p">,</span><span class="w"> </span><span class="nt">"mtime_nanos"</span><span class="p">:</span><span class="w"> </span><span class="mi">1790300000000000000</span><span class="p">,</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="w">        </span><span class="nt">"hash"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:9f2a…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"remote"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="w">  </span><span class="nt">"tombstones"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/S1.bam"</span><span class="p">]</span>
+</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="w">  </span><span class="nt">"reentries"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="w">      </span><span class="nt">"round"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a><span class="w">      </span><span class="nt">"rule"</span><span class="p">:</span><span class="w"> </span><span class="s2">"discover"</span><span class="p">,</span>
+</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35" href="#__codelineno-7-35"></a><span class="w">      </span><span class="nt">"group"</span><span class="p">:</span><span class="w"> </span><span class="s2">"batch"</span><span class="p">,</span>
+</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36" href="#__codelineno-7-36"></a><span class="w">      </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"S4"</span><span class="p">,</span><span class="w"> </span><span class="s2">"S5"</span><span class="p">],</span>
+</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37" href="#__codelineno-7-37"></a><span class="w">      </span><span class="nt">"pairs"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38" href="#__codelineno-7-38"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39" href="#__codelineno-7-39"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40" href="#__codelineno-7-40"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>config_snapshot</code> records the effective config values (sensitive keys stored
 as SHA-256 digests) and <code>rule_fingerprints</code> the structural fingerprints that
 drive <a href="../run/#config-changes-and-precise-invalidation">precise invalidation</a>.
-<code>tombstones</code> lists outputs of <a href="../run/#temporary-rules-temporary-true"><code>temporary</code></a>
+<code>input_manifests</code> records, per completed rule, every resolved input file
+(path, size, mtime in nanoseconds, and a content hash for files up to
+64 MiB) so later runs detect changed inputs (issue #72). <code>tombstones</code> lists
+outputs of <a href="../run/#temporary-rules-temporary-true"><code>temporary</code></a>
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. <code>reentries</code> records checkpoint
 re-entry contributions (round, checkpoint rule, group, samples, pairs) so resumes
 replay them deterministically and revoke them when the rule is invalidated
 (see <a href="../../reference/workflow-format/#checkpoint-re-entry">Checkpoint re-entry</a>).</p>
+<p>Every key above is omitted from the JSON when empty — a minimal workflow
+with no <code>[config]</code> section, no temporaries, and no re-entries writes a
+much smaller checkpoint containing only <code>completed_rules</code>, <code>failed_rules</code>,
+<code>benchmarks</code>, and <code>workflow_path</code>.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

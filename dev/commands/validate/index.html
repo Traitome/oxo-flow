@@ -3977,7 +3977,12 @@
 <tr>
 <td><code>--as-include</code></td>
 <td>—</td>
-<td>Validate as a sub-workflow fragment (skips DAG and input-existence checks)</td>
+<td>Validate as a sub-workflow fragment (skips input-existence checks and DAG construction; <strong>cycle detection still applies</strong>)</td>
+</tr>
+<tr>
+<td><code>--json</code></td>
+<td>—</td>
+<td>Output machine-readable JSON to stdout</td>
 </tr>
 <tr>
 <td><code>--ai</code></td>
@@ -4000,12 +4005,28 @@
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <h3 id="valid-workflow">Valid workflow<a class="headerlink" href="#valid-workflow" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>✓ pipeline.oxoflow — 5 rules, 4 dependencies
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  ⚠ Warning: The following input files do not exist:
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    - refs/genome.fa
+</span></code></pre></div>
+<p><code>--json</code> prints the full result object (stdout):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"validate"</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">"valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">"dependencies"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"refs/genome.fa"</span><span class="p">]</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="invalid-toml-syntax">Invalid TOML syntax<a class="headerlink" href="#invalid-toml-syntax" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>✗ pipeline.oxoflow — parse error in pipeline.oxoflow: TOML parse error at line 15, column 1
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>✗ pipeline.oxoflow — parse error in pipeline.oxoflow: TOML parse error at line 15, column 1
 </span></code></pre></div>
 <h3 id="circular-dependency">Circular dependency<a class="headerlink" href="#circular-dependency" title="Permanent link">#</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: cycle detected: align → sort_bam → align
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>  error [E006]: DAG error: cycle detected in workflow DAG: align → sort_bam → align
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    hint: check for circular dependencies between rules
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>✗ pipeline.oxoflow — 1 validation error(s)
 </span></code></pre></div>
 <h3 id="wildcard-input-without-a-sample-domain">Wildcard input without a sample domain<a class="headerlink" href="#wildcard-input-without-a-sample-domain" title="Permanent link">#</a></h3>
 <p>An input containing a sample placeholder (<code>{sample}</code>, <code>{group}</code>, <code>{pair_id}</code>, …)
@@ -4013,8 +4034,10 @@ resolves only when the workflow declares a sample domain
 (<code>[[sample_groups]]</code>, <code>[[pairs]]</code>, or <code>sample_pattern</code>). Without one the
 run fails mid-flight with a literal brace token, so <code>validate</code> reports
 the path as missing instead of approving it:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>⚠ Warning: The following input files do not exist:
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  - missing/{sample}.txt (no sample groups/pairs/sample_pattern declared)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>✓ wildin.oxoflow — 1 rule, 0 dependencies
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  ⚠ Warning: The following input files do not exist:
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    - {sample}.txt (no sample groups/pairs/sample_pattern declared)
 </span></code></pre></div>
 <p><code>--json</code> includes the same entry in <code>missing_inputs</code>. That field is a
 free-text diagnostic list, not a stable machine interface: entries mix
@@ -4025,8 +4048,8 @@ or split on whitespace — match on the path prefix instead.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
 <li>Exits with code <code>0</code> on success, <code>1</code> on failure</li>
-<li>Validates both TOML parsing and DAG construction</li>
-<li>Missing input files are reported as warnings (not errors); <code>--as-include</code> skips DAG validation and input-existence checks</li>
+<li>Validates TOML parsing, rule semantics, and DAG construction</li>
+<li>Missing input files are reported as warnings (not errors); <code>--as-include</code> skips input-existence checks and DAG construction but cycle detection still applies (cycles are semantic errors, not missing files)</li>
 <li>Relative paths resolve against the workflow file's directory — the same base rules run from — so warnings are accurate even when invoked from another directory</li>
 <li>Environments and tools are not verified here — use
   <a href="../test/#deep-checks-deep"><code>oxo-flow test --deep</code></a> (checks environment

@@ -5026,7 +5026,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>E010</code></td>
-<td>A rule references an undefined <code>env_group</code></td>
+<td>A rule references an undefined <code>env_group</code>. The same code also flags an <strong>absolute</strong> input file that does not exist (a missing <em>relative</em> input gets <code>W020</code> instead — see the lint table)</td>
 </tr>
 <tr>
 <td><code>E011</code></td>
@@ -5034,7 +5034,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>E013</code></td>
-<td>A <code>checkpoint = true</code> rule lacks <code>checkpoint_manifest</code></td>
+<td>A <code>checkpoint = true</code> rule lacks <code>checkpoint_manifest</code>. Emitted at warning severity — <code>checkpoint = true</code> predates the manifest field, so legacy workflows keep validating (it appears in <code>--json</code> warnings, not errors)</td>
 </tr>
 <tr>
 <td><code>E014</code></td>
@@ -5081,7 +5081,11 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>W007</code></td>
-<td>Rule declares no environment — runs in the bare system shell</td>
+<td><em>(info)</em> Leaf rule (no dependents) that could be marked <code>target = true</code></td>
+</tr>
+<tr>
+<td><code>W008</code></td>
+<td><em>(info)</em> Rule declares no environment — runs in the bare system shell</td>
 </tr>
 <tr>
 <td><code>W011</code></td>
@@ -5113,7 +5117,7 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 <tr>
 <td><code>W020</code>/<code>W021</code>/<code>W022</code></td>
-<td><code>pre_exec</code>/<code>on_success</code>/<code>on_failure</code> contain a risky pattern</td>
+<td>A missing relative input file (<code>W020</code>), or a <code>pre_exec</code>/<code>on_success</code>/<code>on_failure</code> hook containing a dangerous pattern. <code>W021</code> also labels a <code>script</code> that references another rule's output without an ordering edge (<code>depends_on</code>)</td>
 </tr>
 <tr>
 <td><code>W023</code></td>
@@ -5150,6 +5154,10 @@ below cover the codes referenced across this documentation.</p>
 <tr>
 <td><code>W032</code></td>
 <td>A config key looks like a secret but is not declared <code>sensitive</code></td>
+</tr>
+<tr>
+<td><code>W033</code></td>
+<td>Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first</td>
 </tr>
 </tbody>
 </table>

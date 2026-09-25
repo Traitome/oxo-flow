@@ -4218,23 +4218,23 @@
 <tbody>
 <tr>
 <td>Conda</td>
-<td><code>conda env create -f &lt;yaml_file&gt;</code></td>
+<td><code>conda env create -n &lt;env&gt; -f &lt;yaml_file&gt;</code> (falls back to <code>conda env update -n &lt;env&gt; -f &lt;yaml_file&gt;</code> if the env already exists)</td>
 </tr>
 <tr>
 <td>Mamba</td>
-<td><code>mamba env create -f &lt;yaml_file&gt;</code> (auto-detects mamba, micromamba, or conda)</td>
+<td><code>&lt;mamba\|micromamba\|conda&gt; env create -n &lt;env&gt; -f &lt;yaml_file&gt;</code> (falls back to <code>env update</code>; auto-detects mamba, micromamba, or conda)</td>
 </tr>
 <tr>
 <td>Pixi</td>
-<td><code>pixi install</code> (if pixi.toml exists)</td>
+<td><code>pixi install --manifest-path &lt;pixi.toml&gt;</code> (manifest must exist — validated upfront)</td>
 </tr>
 <tr>
 <td>Docker</td>
-<td><code>docker pull &lt;image&gt;</code></td>
+<td><code>docker image inspect &lt;image&gt; \|\| docker pull &lt;image&gt;</code> — pull only when absent; bare names that 404 on Docker Hub get one quay.io/biocontainers retry re-tagged to the original name</td>
 </tr>
 <tr>
 <td>Singularity</td>
-<td><code>singularity pull &lt;image&gt;</code></td>
+<td>Pull when needed: a URI (<code>docker://…</code>) is pulled to a derived <code>.sif</code> name; a local <code>.sif</code> path is used as-is</td>
 </tr>
 <tr>
 <td>Venv</td>
@@ -4363,8 +4363,10 @@ only ever be lost.</p>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">conda_prefix</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">mamba_prefix</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
 </span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">venv_requirements</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">gpus</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">}</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="sd">/// GPU passthrough for docker — `--gpus &lt;value&gt;` (e.g. `"all"`);</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="sd">/// rejected at validate time unless a docker backend is set.</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">gpus</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>In TOML:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Only one backend per rule — uncomment the one you need:</span>

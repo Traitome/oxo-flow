@@ -4066,7 +4066,7 @@ available in <code>when</code> strings:</p>
 <tr>
 <td><code>file_exists(path)</code></td>
 <td>—</td>
-<td>1/0 existence probe</td>
+<td>truth probe — <code>true</code> only when the path exists (don't write <code>== 1</code>)</td>
 </tr>
 </tbody>
 </table>
@@ -4098,8 +4098,9 @@ not written yet, the two phases behave differently:</p>
 verdict actually flipped are invalidated (see "Resume &amp; checkpoints").</p>
 <p><strong>Scope limits.</strong> These functions are intentionally restricted to pure
 file reads — no shell, no globbing beyond <code>{wildcard}</code> expansion, and
-<code>reads_count</code> assumes 4-line FASTQ records (BAM/BGZF support is planned
-for a future release). Only <code>when</code> strings may call them; <code>shell</code>, <code>input</code>,
+<code>reads_count</code> assumes 4-line FASTQ records (BAM/CRAM input is out of
+scope for now — it needs a BGZF parser, not line arithmetic). Only
+<code>when</code> strings may call them; <code>shell</code>, <code>input</code>,
 and <code>output</code> still cannot read the filesystem at plan time.</p>
 <h3 id="wildcard-scoped-conditions-wildcardkey">Wildcard-scoped conditions (<code>wildcard.&lt;key&gt;</code>)<a class="headerlink" href="#wildcard-scoped-conditions-wildcardkey" title="Permanent link">#</a></h3>
 <p>Conditions can reference the pair/group expansion context through the

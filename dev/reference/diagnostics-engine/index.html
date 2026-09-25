@@ -3897,8 +3897,15 @@ Every diagnosis is reproducible given the same inputs.</p>
 - <strong>Fix suggestions</strong> (auto-fixable or manual)
 - <strong>Relevant log lines</strong> for context</p>
 <p>It does NOT use AI. It matches error signatures (log keywords, exit codes)
-against a curated library of 30 error patterns.</p>
+against a curated library of 30 error patterns (tool, resource, data,
+system, and config classes — see
+<code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code> for the full
+list).</p>
 <h2 id="error-pattern-library">Error Pattern Library<a class="headerlink" href="#error-pattern-library" title="Permanent link">#</a></h2>
+<p>30 patterns total across five categories — Tool (5), Resource (5), Data (7),
+System (6), Config (7). The tables below cover the most common; the
+authoritative list is
+<code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code>.</p>
 <h3 id="tool-errors">Tool Errors<a class="headerlink" href="#tool-errors" title="Permanent link">#</a></h3>
 <table>
 <thead>
@@ -3916,18 +3923,23 @@ against a curated library of 30 error patterns.</p>
 </tr>
 <tr>
 <td>Version incompatibility</td>
-<td>"version X required, found Y"</td>
+<td>"version", "incompatible", "unsupported"</td>
 <td>❌ Suggest version switch</td>
 </tr>
 <tr>
 <td>Tool crash (SIGSEGV)</td>
-<td>exit 139, "Segmentation fault"</td>
+<td>exit 139, "segmentation fault"</td>
 <td>❌ Suggest tool update</td>
 </tr>
 <tr>
 <td>Tool crash (SIGILL)</td>
-<td>exit 132, "Illegal instruction"</td>
+<td>exit 132, "illegal instruction"</td>
 <td>❌ Check CPU compatibility</td>
+</tr>
+<tr>
+<td>Tool crash (SIGBUS)</td>
+<td>exit 138, "bus error"</td>
+<td>❌ Check filesystem integrity</td>
 </tr>
 </tbody>
 </table>
@@ -3953,13 +3965,18 @@ against a curated library of 30 error patterns.</p>
 </tr>
 <tr>
 <td>Disk full</td>
-<td>ENOSPC, "No space left"</td>
+<td>ENOSPC, "no space left on device"</td>
 <td>❌ Suggest cleanup</td>
 </tr>
 <tr>
 <td>Too many open files</td>
-<td>EMFILE, "Too many open files"</td>
-<td>✅ Run <code>ulimit -n 65536</code> before starting</td>
+<td>"too many open files", EMFILE</td>
+<td>✅ Raise <code>ulimit -n</code> before starting</td>
+</tr>
+<tr>
+<td>CPU limit exceeded</td>
+<td>"cpu time", "cpu limit", EAGAIN</td>
+<td>✅ Increase thread/CPU allocation</td>
 </tr>
 </tbody>
 </table>
@@ -3975,28 +3992,38 @@ against a curated library of 30 error patterns.</p>
 <tbody>
 <tr>
 <td>Input file missing</td>
-<td>"No such file", exit 1</td>
+<td>"no such file or directory", "cannot open", exit 1</td>
 <td>❌ Point to missing path</td>
 </tr>
 <tr>
 <td>File truncated</td>
-<td>"truncated", "unexpected end"</td>
+<td>"truncated", "unexpected end", "premature"</td>
 <td>❌ Suggest re-download</td>
 </tr>
 <tr>
 <td>Corrupt gzip file</td>
-<td>"not in gzip format", "corrupt input"</td>
+<td>"not in gzip format", "corrupt input", exit 1</td>
 <td>❌ Verify file is valid gzip</td>
 </tr>
 <tr>
 <td>FASTQ quality low</td>
-<td>"low quality", "poor quality"</td>
+<td>"per base sequence quality.*fail", "low quality", "poor quality"</td>
 <td>✅ Suggest fastp insertion</td>
 </tr>
 <tr>
 <td>Empty file</td>
-<td>"empty file", "zero length"</td>
+<td>"empty file", "zero length", "no data"</td>
 <td>❌ Check upstream rule</td>
+</tr>
+<tr>
+<td>BAM truncated / index</td>
+<td>"truncated file", "bam index", "EOF marker", exit 1</td>
+<td>✅ Suggest <code>samtools index</code></td>
+</tr>
+<tr>
+<td>BAM index missing</td>
+<td>"failed to open index", "no index available", exit 1</td>
+<td>✅ Suggest <code>samtools index</code></td>
 </tr>
 </tbody>
 </table>
@@ -4012,18 +4039,33 @@ against a curated library of 30 error patterns.</p>
 <tbody>
 <tr>
 <td>Permission denied</td>
-<td>exit 126, "Permission denied"</td>
+<td>exit 126/13, "permission denied", EACCES</td>
 <td>❌ Fix file permissions</td>
 </tr>
 <tr>
 <td>Network error</td>
-<td>"Connection refused", timeout</td>
+<td>"connection refused", "cannot resolve", "timeout"</td>
 <td>❌ Check network</td>
 </tr>
 <tr>
 <td>Shared library missing</td>
-<td>"error while loading shared libraries", "cannot open shared object"</td>
+<td>"error while loading shared libraries", "cannot open shared object" (exit 127/1)</td>
 <td>✅ Suggest conda install</td>
+</tr>
+<tr>
+<td>Broken pipe (SIGPIPE)</td>
+<td>exit 141/13, "broken pipe"</td>
+<td>❌ Check pipeline commands</td>
+</tr>
+<tr>
+<td>Signal kill (SIGTERM)</td>
+<td>exit 143/15, "terminated", "killed"</td>
+<td>❌ Check system logs</td>
+</tr>
+<tr>
+<td>Signal interrupt (SIGINT)</td>
+<td>exit 130/2, "interrupt", "cancelled"</td>
+<td>❌ Re-run when ready</td>
 </tr>
 </tbody>
 </table>
@@ -4039,23 +4081,38 @@ against a curated library of 30 error patterns.</p>
 <tbody>
 <tr>
 <td>Invalid parameter</td>
-<td>"invalid option", "unknown option"</td>
+<td>"invalid option", "unrecognized", "unknown option", exit 1</td>
 <td>❌ Check tool documentation</td>
 </tr>
 <tr>
 <td>Missing required parameter</td>
-<td>"required", "must specify"</td>
+<td>"required", "must specify", "missing", exit 1</td>
 <td>❌ Add the missing parameter</td>
 </tr>
 <tr>
 <td>Wildcard expanded empty</td>
-<td>"no matches", "no files", "empty"</td>
+<td>"no matches", "no files", "wildcard", "empty"</td>
 <td>❌ Check naming</td>
 </tr>
 <tr>
 <td>Conda environment failed</td>
-<td>"conda", "environment", "create failed"</td>
+<td>"conda", "environment", "create failed", exit 1</td>
 <td>❌ Verify conda env name</td>
+</tr>
+<tr>
+<td>Docker failed</td>
+<td>exit 125/126, "docker", "cannot connect", "daemon"</td>
+<td>❌ Check Docker daemon</td>
+</tr>
+<tr>
+<td>Singularity/Apptainer failed</td>
+<td>exit 255, "singularity", "apptainer", "image not found"</td>
+<td>❌ Pull the image</td>
+</tr>
+<tr>
+<td>Shell syntax error</td>
+<td>exit 2, "syntax error", "unexpected token", "parse error"</td>
+<td>❌ Review the command</td>
 </tr>
 </tbody>
 </table>

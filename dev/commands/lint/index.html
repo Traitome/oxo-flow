@@ -3963,9 +3963,9 @@ when <code>oxo-flow run</code> is invoked without an explicit <code>-t</code>, s
 final leaf rules (like <code>fastqc</code> above) makes them part of the default
 run — see <a href="../../reference/workflow-format/#priority-and-targeting">Workflow Format: Priority and Targeting</a>.
 W025 flags the deprecated rule-level <code>threads = N</code> / <code>memory = "8G"</code>
-fields (removed in v0.20.1 in favor of <code>[rules.resources]</code>) so old
-workflows surface the migration instead of silently keeping their old
-settings — see <a href="../../reference/workflow-format/#resources-extended">Workflow Format: Rule resources</a>.
+fields (superseded by <code>[rules.resources]</code> in v0.4) so old workflows
+surface the migration instead of silently keeping their old settings —
+see <a href="../../reference/workflow-format/#resources-extended">Workflow Format: Rule resources</a>.
 W031 flags a consumer rule that reads the output of a <code>when</code>-gated
 producer without a <code>when</code> gate of its own: when the producer's gate is
 off, its files never appear and the consumer's inputs cannot be resolved
@@ -3978,9 +3978,20 @@ on the consumer or splitting it into <code>when</code>-gated variants (the
 tolerance for a missing producer are not flagged: <code>optional = true</code> /
 <code>"any"</code> rules, <code>input_groups</code> disk-discovery fallbacks, and consumers
 that already carry any <code>when</code> gate.
+W033 flags two rules that write the same output path — including
+differently-named wildcards over the same template (<code>variants/{smp}.vcf</code>
+vs <code>variants/{sample}.vcf</code>) and identical literal paths. The engine does
+not refuse to run: both rules execute and the second to finish silently
+overwrites the first (verified live in v0.20.1 with a run reporting
+success while both colliding rules executed), so downstream rules consume
+the wrong file. The repair is distinct output directories per writer —
+or a <code>when</code> gate when the two rules are mutually exclusive alternatives
+(the <code>wgs_coverage</code>/<code>wes_coverage</code> idiom). Multi-producer outputs remain
+a supported feature, so this is a warning, not an error. See
+<a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.
 W032 flags a <code>[config]</code> key whose <em>name</em> looks like a secret
-(<code>token</code>, <code>secret</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
-<code>access_key</code>, <code>private_key</code>, <code>ssh_key</code> — matched at word/segment
+(<code>token</code>, <code>secret</code>, <code>passwd</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
+<code>access_key</code>, <code>private_key</code>, <code>ssh_key</code>, <code>key</code> — matched at word/segment
 boundaries, so names that merely contain these as a substring, like
 <code>tokenize</code> or <code>password_length_hint</code>, are not flagged) but is not
 declared <code>sensitive</code>: its value then lands in plaintext in command

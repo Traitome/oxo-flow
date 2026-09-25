@@ -3918,8 +3918,9 @@ human confirmation.</p>
 analyses into validated <code>.oxoflow</code> pipelines. It calls the deterministic Core API
 endpoints — it does not bypass them.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Intent (NL) → AI Translator → /api/pipelines/validate → Validated .oxoflow
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                  │                    │
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                  └─ Template match ───┘ (fallback if AI unavailable)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                  │
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                  └─ Template keyword match → prompt hints + failure suggestion
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                     (deterministic, zero AI cost — never produces a pipeline)
 </span></code></pre></div>
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">#</a></h2>
 <h3 id="post-apiaitranslate">POST /api/ai/translate<a class="headerlink" href="#post-apiaitranslate" title="Permanent link">#</a></h3>
@@ -3933,11 +3934,12 @@ endpoints — it does not bypass them.</p>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>     env-discovered Claude → OpenAI → Ollama)
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>     no provider is usable
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  3. Template names enter the prompt as hints; keyword matching remains a
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>     deterministic fallback when all providers fail
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  4. Every draft is validated by the engine via the web workflow service;
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>     validation errors feed the orchestrator's correction loop (bounded)
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  3. Template names enter the prompt as hints; keyword matching also
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>     shapes the structured failure message when AI generation fails
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>     ("Try the '{name}' template") — it never produces a pipeline
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  4. Every draft is validated by the engine via the web workflow service;
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>     validation errors feed the orchestrator's correction loop (bounded)
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
 </span></code></pre></div>
 <h3 id="post-apiaiexplain">POST /api/ai/explain<a class="headerlink" href="#post-apiaiexplain" title="Permanent link">#</a></h3>
 <p>Explain why a run failed and suggest fixes.</p>
@@ -3960,13 +3962,19 @@ explanation.</p>
 </span></code></pre></div>
 <h2 id="provider-architecture">Provider Architecture<a class="headerlink" href="#provider-architecture" title="Permanent link">#</a></h2>
 <p>The AI layer uses an enum-based dispatch system:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>DeepSeek (default) → Claude (Anthropic) → OpenAI → Ollama (local) → Template keyword match
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>caller's own provider → configured provider → env-discovered Claude →
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>env-discovered OpenAI → Ollama (only when OLLAMA_HOST is set)
 </span></code></pre></div>
-<p><strong>Fallback chain</strong>: DeepSeek is the default provider. If the primary provider
-is unavailable, falls back to Claude. If Claude is unavailable, falls back to
-OpenAI. If OpenAI is unavailable, falls back to local Ollama. If all AI
-providers are unavailable, the request fails with an error suggesting the
-best-matching template name — no pipeline is produced without AI.</p>
+<p><strong>Fallback chain</strong>: DeepSeek is the default provider. Candidates only enter
+the chain when they are actually usable — the caller's provider if usable,
+the runtime-configured provider if configured, Claude/OpenAI only when
+discoverable from the environment, and Ollama only when the operator opted
+in via <code>OLLAMA_HOST</code> (it is the only credential-free backend, so admitting
+it unconditionally would turn "nothing configured" into a doomed
+localhost connection attempt). If the candidate chain is empty, the request
+fails fast with a structured <code>AI_NOT_CONFIGURED</code> error. If every candidate
+fails, the request fails with an error suggesting the best-matching
+template name — no pipeline is produced without AI.</p>
 <p><strong>Request dedup</strong>: Same intent + same data characteristics → cached result,
 avoiding redundant API calls.</p>
 <h2 id="trust-boundary-hard-constraint">Trust Boundary (Hard Constraint)<a class="headerlink" href="#trust-boundary-hard-constraint" title="Permanent link">#</a></h2>
@@ -4049,7 +4057,7 @@ the deterministic core API implements after human confirmation.</p>
 <tr>
 <td>Pipeline template matching</td>
 <td>Keyword scoring</td>
-<td>Reproducible</td>
+<td>Reproducible — used for prompt hints and failure suggestions</td>
 </tr>
 <tr>
 <td>Failure classification</td>
