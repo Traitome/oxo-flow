@@ -209,24 +209,32 @@ pub fn validate_pipeline(
         .iter()
         .map(|r| r.depends_on.len())
         .sum::<usize>();
-    let produced: std::collections::HashSet<&str> = config
+    // `{config.*}` resolves before matching (issue #467): a concrete input
+    // whose producer declares the same path through a config-routed output
+    // template must not surface as missing, and a config-routed input is
+    // existence-checked against its real path. Engine wildcards keep the
+    // skip. Same semantics as the CLI validate pass (quality.rs).
+    let produced: std::collections::HashSet<String> = config
         .rules
         .iter()
         .flat_map(|r| r.output.iter())
-        .map(|p| p.as_str())
+        .map(|p| oxo_flow_core::config::expand_config_vars_in_path(p, &config.config))
         .collect();
     let mut missing_inputs: Vec<String> = Vec::new();
     for rule in &config.rules {
         for input in &rule.input {
-            if input.contains('{') || produced.contains(input.as_str()) {
+            let expanded = oxo_flow_core::config::expand_config_vars_in_path(input, &config.config);
+            if expanded.contains('{') || produced.contains(&expanded) {
                 continue;
             }
             // base_dir comes from the caller; default to the server cwd.
             // Existence is the same check the CLI runs against the
             // workflow's directory.
-            let exists = base_dir.map(|b| b.join(&*input).exists()).unwrap_or(false);
+            let exists = base_dir
+                .map(|b| b.join(&*expanded).exists())
+                .unwrap_or(false);
             if !exists {
-                missing_inputs.push(input.to_string());
+                missing_inputs.push(expanded);
             }
         }
     }
@@ -653,6 +661,48 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    /// Issue #467: a concrete input whose producer declares the same path
+    /// through a config-routed output template must NOT surface in
+    /// `missing_inputs` (the AI translate loop treats it as a generation
+    /// failure), and a genuinely missing file still must.
+    #[test]
+    fn validate_pipeline_missing_inputs_resolve_config_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("ref.fa");
+        std::fs::write(&real, b"ACGT").unwrap();
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+
+[config]
+out = "{}"
+reference = "{}"
+
+[[rules]]
+name = "produce"
+output = ["{{config.out}}/x.txt"]
+shell = "echo x > {{config.out}}/x.txt"
+
+[[rules]]
+name = "consume"
+input = ["{}/x.txt", "{{config.reference}}", "definitely-missing.txt"]
+output = ["final.txt"]
+shell = "cat {{config.reference}} > final.txt"
+"#,
+            dir.path().display(),
+            real.display(),
+            dir.path().display()
+        );
+        let resp = validate_pipeline(&toml, Some(dir.path())).unwrap();
+        assert_eq!(
+            resp.missing_inputs,
+            vec!["definitely-missing.txt".to_string()],
+            "config-routed generated and existing inputs must pass: {:?}",
+            resp.missing_inputs
+        );
     }
 
     /// The ownership-filtered pipelines the handler already loaded must be

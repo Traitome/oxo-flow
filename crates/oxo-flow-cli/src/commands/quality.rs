@@ -92,48 +92,7 @@ pub async fn validate_command(
             let workflow_dir = oxo_flow_core::parent_dir(&workflow);
             let mut missing_inputs = Vec::new();
             if !as_include {
-                // Sample placeholders need a declared sample domain to
-                // resolve at run time (issue #324 F-3): without any of
-                // sample_groups / pairs / sample_pattern the wildcard can
-                // never bind, and the run fails mid-flight with a literal
-                // brace token. validate must flag it here — the approve
-                // layer previously reported "valid": true for these.
-                let sample_domain_declared = !cfg.sample_groups.is_empty()
-                    || !cfg.pairs.is_empty()
-                    || cfg.workflow.sample_pattern.is_some();
-                const SAMPLE_PLACEHOLDERS: &[&str] = &[
-                    "{sample}",
-                    "{group}",
-                    "{pair_id}",
-                    "{experiment}",
-                    "{control}",
-                    "{tumor}",
-                    "{normal}",
-                    "{log}",
-                ];
-                for rule in &cfg.rules {
-                    for input in &rule.input {
-                        // Only check if it's not a wildcard path and doesn't exist
-                        if !input.contains('{') && !input.contains('}') {
-                            if !workflow_dir.join(input).exists() {
-                                // Also check if it's an output of another rule
-                                let is_generated =
-                                    cfg.rules.iter().any(|r| r.output.to_vec().contains(input));
-
-                                if !is_generated {
-                                    missing_inputs.push(input.clone());
-                                }
-                            }
-                        } else if !sample_domain_declared
-                            && SAMPLE_PLACEHOLDERS.iter().any(|ph| input.contains(ph))
-                        {
-                            // Wildcard input with no sample domain to bind it.
-                            missing_inputs.push(format!(
-                                "{input} (no sample groups/pairs/sample_pattern declared)"
-                            ));
-                        }
-                    }
-                }
+                missing_inputs = collect_missing_inputs(&cfg, workflow_dir);
             }
 
             // Validate DAG construction (skip for --as-include)
@@ -749,6 +708,67 @@ pub fn touch_command(
     }
 
     Ok(())
+}
+
+/// Inputs that resolve to no file and no producer — the CLI validate /
+/// doctor missing-input pass (issue #467).
+///
+/// `{config.*}` placeholders expand against the parsed config before the
+/// concrete checks so a config-routed input is existence-checked against
+/// its real path, and a concrete input whose producer declares the same
+/// path through a config-routed output template is recognized as
+/// generated instead of "missing". Engine wildcards (`{sample}`, …) keep
+/// their raw-token handling: they need a declared sample domain to ever
+/// bind (issue #324 F-3), and without one the run fails mid-flight with
+/// a literal brace token — validate must flag that here.
+fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) -> Vec<String> {
+    // Sample placeholders need a declared sample domain to resolve at
+    // run time: without any of sample_groups / pairs / sample_pattern the
+    // wildcard can never bind.
+    let sample_domain_declared = !cfg.sample_groups.is_empty()
+        || !cfg.pairs.is_empty()
+        || cfg.workflow.sample_pattern.is_some();
+    const SAMPLE_PLACEHOLDERS: &[&str] = &[
+        "{sample}",
+        "{group}",
+        "{pair_id}",
+        "{experiment}",
+        "{control}",
+        "{tumor}",
+        "{normal}",
+        "{log}",
+    ];
+    let expand = |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &cfg.config);
+    let mut missing = Vec::new();
+    for rule in &cfg.rules {
+        for input in &rule.input {
+            let expanded = expand(input);
+            if expanded.contains('{') {
+                if !sample_domain_declared
+                    && SAMPLE_PLACEHOLDERS.iter().any(|ph| input.contains(ph))
+                {
+                    // Wildcard input with no sample domain to bind it.
+                    missing.push(format!(
+                        "{input} (no sample groups/pairs/sample_pattern declared)"
+                    ));
+                }
+                continue;
+            }
+            if !workflow_dir.join(&expanded).exists() {
+                // Also check if it's an output of another rule — outputs
+                // expand with the same map so a concrete input matches its
+                // config-routed producer template.
+                let is_generated = cfg
+                    .rules
+                    .iter()
+                    .any(|r| r.output.iter().any(|o| expand(o) == expanded));
+                if !is_generated {
+                    missing.push(expanded);
+                }
+            }
+        }
+    }
+    missing
 }
 
 #[cfg(test)]
