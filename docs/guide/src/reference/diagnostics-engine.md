@@ -19,7 +19,7 @@ list).
 
 ## Error Pattern Library
 
-30 patterns total across five categories — Tool (6), Resource (5), Data (8),
+30 patterns total across five categories — Tool (5), Resource (5), Data (7),
 System (6), Config (7). The tables below cover the most common; the
 authoritative list is
 `crates/oxo-flow-web/src/domains/execution/diagnostics.rs`.
