@@ -403,6 +403,15 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
     `SCI-VQSR-COHORT` for small-cohort VQSR runs, so a pilot never wastes
     compute failing at this step for scientific reasons.
 
+!!! note "GATK writes index files the example does not declare"
+    GATK steps emit `.tbi` (and `.idx`) sidecar files next to their VCF
+    outputs — `variants/call.vcf.gz` also produces `variants/call.vcf.gz.tbi`.
+    This example's `output` lists declare only the data files (the
+    variant-calling tutorial declares the `.tbi` counterparts for its
+    Mutect2 chain). Declaring index outputs is optional, but undeclared
+    sidecars escape freshness tracking and `oxo-flow clean`; declare them
+    when incremental resume over these steps matters.
+
 !!! warning "Live-tested: VariantRecalibrator also needs annotation *variance*, not just samples"
     Even with training resources in place, VariantRecalibrator hard-fails
     when any `-an` annotation has **zero variance across the callset**:
