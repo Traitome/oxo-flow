@@ -5702,7 +5702,10 @@ fn run_workdir_check(workdir: Option<&std::path::Path>, path: &str) -> bool {
     if p.is_absolute() {
         p.exists()
     } else {
-        workdir.unwrap_or_else(|| std::path::Path::new(".")).join(p).exists()
+        workdir
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(p)
+            .exists()
     }
 }
 

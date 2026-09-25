@@ -577,11 +577,7 @@ impl WorkflowDag {
         // existence check in; keep the historic semantics (pure producer
         // propagation) and only the workdir-anchored callers pass a real
         // predicate.
-        self.execution_order_for_targets_skipping_with_source_check(
-            targets,
-            skip,
-            &|_| false,
-        )
+        self.execution_order_for_targets_skipping_with_source_check(targets, skip, &|_| false)
     }
 
     /// [`Self::execution_order_for_targets_skipping`] with an
@@ -2646,13 +2642,17 @@ mod tests {
             "refs/genome/bwa/index".to_string(),
         )]);
         let rules = vec![
-            make_rule("bwa_index", vec![], vec![
-                "{config.bwa_index}.amb",
-                "{config.bwa_index}.ann",
-                "{config.bwa_index}.bwt",
-                "{config.bwa_index}.pac",
-                "{config.bwa_index}.sa",
-            ]),
+            make_rule(
+                "bwa_index",
+                vec![],
+                vec![
+                    "{config.bwa_index}.amb",
+                    "{config.bwa_index}.ann",
+                    "{config.bwa_index}.bwt",
+                    "{config.bwa_index}.pac",
+                    "{config.bwa_index}.sa",
+                ],
+            ),
             make_rule(
                 "bwa_mem",
                 vec![
@@ -2685,11 +2685,9 @@ mod tests {
         // disk, so the consumer stays in the plan. The pruned producer's own
         // upstream is not pulled in (bwa_index has none here anyway).
         let (order, skipped) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &["bwa_mem"],
-                &skip,
-                &|path| path.starts_with("refs/"),
-            )
+            .execution_order_for_targets_skipping_with_source_check(&["bwa_mem"], &skip, &|path| {
+                path.starts_with("refs/")
+            })
             .unwrap();
         assert!(skipped.is_empty(), "{skipped:?}");
         assert!(order.contains(&"bwa_mem".to_string()), "{order:?}");
@@ -2698,11 +2696,7 @@ mod tests {
         // Missing pre-built files: the kill returns (the executor would
         // indeed fail on the missing file).
         let (order, skipped) = dag
-            .execution_order_for_targets_skipping_with_source_check(
-                &["bwa_mem"],
-                &skip,
-                &|_| false,
-            )
+            .execution_order_for_targets_skipping_with_source_check(&["bwa_mem"], &skip, &|_| false)
             .unwrap();
         assert_eq!(skipped, vec!["bwa_mem".to_string()]);
         assert!(order.is_empty());
