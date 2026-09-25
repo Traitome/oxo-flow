@@ -1261,19 +1261,18 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transform: Option<TransformConfig>,
 
-    /// Temporary output files that should be cleaned up after downstream
-    /// rules complete.
+    /// Scratch output files that are cleaned up only when the rule **fails**.
     ///
     /// # Failure-only cleanup
     ///
-    /// `temp_output` entries are removed only when the rule **fails**
-    /// (issue #456): a failed attempt's stale partial files are deleted so
-    /// they can never masquerade as fresh outputs on the next run. On
-    /// success the files persist — because on success they are the
-    /// declared outputs, which downstream rules and freshness checks need
-    /// on disk. To have intermediate files deleted after downstream rules
-    /// complete on the success path, use `temporary = true` instead,
-    /// which persists the declaration to a tombstone before deletion.
+    /// `temp_output` entries are removed when the rule fails (issue #456):
+    /// a failed attempt's stale partial files are deleted so they can never
+    /// masquerade as fresh outputs on the next run. On success the files
+    /// persist — on success they are (or accompany) the declared outputs,
+    /// which downstream rules and freshness checks need on disk. To have
+    /// intermediate files deleted after downstream rules complete on the
+    /// success path, use `temporary = true` instead, which persists the
+    /// declaration to a tombstone before deletion.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub temp_output: Vec<String>,
