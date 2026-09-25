@@ -320,7 +320,7 @@ repository.
 The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):
 
 1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
-2. **Bioconda Tool Database**: 6,487 curated CLI tools with current versions and descriptions (filtered from 12,679 raw registry entries; see `knowledge_meta.json`) — queried on demand via `lookup_tool`
+2. **Bioconda Tool Database**: 6,525 curated CLI tools with current versions and descriptions (filtered from 12,725 raw registry entries; see `knowledge_meta.json`) — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
 4. **Pipeline Knowledge Graph**: 78 workflow skills and 465 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
 
@@ -483,15 +483,15 @@ whether it is auto-updated or manually curated:
 {
   "sources": {
     "bioconda_tools": {
-      "count": 6487,
+      "count": 6525,
       "url": "https://conda.anaconda.org/bioconda/channeldata.json",
-      "excluded": 6192,
+      "excluded": 6200,
       "data_file": "bioconda_tools.jsonl",
-      "generated_at": "2026-09-01T08:23:27Z",
+      "generated_at": "2026-09-16T08:21:13Z",
       "auto": true
     }
   },
-  "generated_at": "2026-09-01T08:23:27Z"
+  "generated_at": "2026-09-16T08:21:13Z"
 }
 ```
 
