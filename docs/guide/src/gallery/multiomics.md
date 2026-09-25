@@ -79,6 +79,10 @@ The three branches (WGS, RNA-seq, Methylation) are entirely independent and exec
 oxo-flow run examples/gallery/08_multiomics_integration.oxoflow -j 2
 ```
 
+### Strandedness
+
+The RNA-seq branch quantifies with `featureCounts -s 2` (reverse-strand), appropriate for Illumina dUTP-style library preparations. Adjust based on your actual library protocol — see [Strandedness in RNA-seq Quantification](rnaseq.md#strandedness).
+
 ## Running the Workflow
 
 ### Validate
