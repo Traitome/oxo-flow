@@ -56,6 +56,34 @@ fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))
 }
 
+/// AI provider env vars the engine legitimately auto-detects (issue #465's
+/// zero-config discovery) — "no provider configured" tests must strip them
+/// or a dev shell that exports `ANTHROPIC_AUTH_TOKEN` (et al.) turns the
+/// degraded-mode premise false and the suite fails off-CI.
+const AI_ENV_VARS: &[&str] = &[
+    "OXO_FLOW_AI_PROVIDER",
+    "OXO_FLOW_AI_API_KEY",
+    "OXO_FLOW_AI_API_URL",
+    "OXO_FLOW_AI_MODEL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "DEEPSEEK_API_KEY",
+    "OLLAMA_HOST",
+];
+
+fn oxo_flow_cmd_without_ai_env() -> Command {
+    let mut cmd = oxo_flow_cmd();
+    for var in AI_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 fn oxo_flow_web_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow-web"))
 }
@@ -602,9 +630,10 @@ fn cli_ai_explain_requires_workflow() {
 #[test]
 fn cli_ai_explain_unknown_step_fails_fast_without_provider() {
     // Step validation is deterministic and must not need a configured
-    // provider — isolate HOME so no saved config can be found.
+    // provider — isolate HOME so no saved config can be found and strip
+    // provider env vars so an exported key cannot supply one either.
     let dir = tempfile::tempdir().unwrap();
-    oxo_flow_cmd()
+    oxo_flow_cmd_without_ai_env()
         .env("HOME", dir.path())
         .args([
             "ai",
@@ -621,7 +650,7 @@ fn cli_ai_explain_unknown_step_fails_fast_without_provider() {
 #[test]
 fn cli_ai_explain_without_provider_degrades_to_skeleton() {
     let dir = tempfile::tempdir().unwrap();
-    oxo_flow_cmd()
+    oxo_flow_cmd_without_ai_env()
         .env("HOME", dir.path())
         .args([
             "ai",
@@ -1615,12 +1644,13 @@ fn cli_report_ai_without_provider_degrades() {
     // No provider configured: warn and produce the standard report instead
     // of aborting (issue #83 P1-2). HOME is redirected so a user-level
     // ai_config.json cannot leak into the test.
-    let output = oxo_flow_cmd()
+    // HOME is redirected so a user-level ai_config.json cannot leak into
+    // the test; the helper strips the provider env vars it cannot know
+    // about (previously missed ANTHROPIC_AUTH_TOKEN — issue #465 made the
+    // bare Claude key chain discoverable).
+    let output = oxo_flow_cmd_without_ai_env()
         .args(["report", wf.to_str().unwrap(), "--ai", "-f", "json"])
         .env("HOME", dir.path())
-        .env_remove("OXO_FLOW_AI_PROVIDER")
-        .env_remove("DEEPSEEK_API_KEY")
-        .env_remove("OPENAI_API_KEY")
         .output()
         .unwrap();
     assert!(output.status.success(), "must degrade, not fail");

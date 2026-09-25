@@ -3380,6 +3380,11 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             );
             let result = verify_schema(&toml);
             assert!(
+                !result.diagnostics.iter().any(|d| d.code == "S001"),
+                "test fixture for [{section}] must be valid TOML or the S006 assert below is vacuous: {result:?}",
+                section = section
+            );
+            assert!(
                 !result.diagnostics.iter().any(|d| d.code == "S006"),
                 "documented section [{section}] must not be flagged unknown: {result:?}"
             );
