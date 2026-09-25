@@ -41,6 +41,11 @@ export ANTHROPIC_AUTH_TOKEN="<YOUR-KEY>"
 export OXO_FLOW_AI_PROVIDER=ollama
 export OXO_FLOW_AI_API_URL="http://localhost:11434"
 export OXO_FLOW_AI_MODEL="llama3"
+
+# Zero-config: if OXO_FLOW_AI_PROVIDER is unset and you already export
+# ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL (gateway) or OPENAI_API_KEY
+# (openai-compatible), oxo-flow auto-detects the provider — no extra
+# variables needed. See "Environment Variables" below for the exact rules.
 ```
 
 Configuration persists to `~/.oxo-flow/ai_config.json` after first use.
@@ -304,14 +309,17 @@ repository.
 | `OXO_FLOW_AI_TIMEOUT_SECS` | Per-request timeout for AI provider calls. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise together with `OXO_FLOW_AI_MAX_TOKENS` on slower endpoints | `300` |
 | `DEEPSEEK_API_KEY` | DeepSeek (OpenAI-compatible) | — |
 | `DEEPSEEK_BASE_URL` | Custom DeepSeek endpoint | `https://api.deepseek.com/v1/chat/completions` |
-| `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key | — |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic-compatible API key (the variable Anthropic SDKs and gateway deployments export) | — |
+| `ANTHROPIC_API_KEY` | Alias for `ANTHROPIC_AUTH_TOKEN` | — |
 | `CLAUDE_API_KEY` | Alias for `ANTHROPIC_AUTH_TOKEN` | — |
 | `ANTHROPIC_MODEL` | Claude model override | `claude-sonnet-4-20250514` |
 | `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint | `https://api.anthropic.com/v1/messages` |
 | `OPENAI_API_KEY` | OpenAI-compatible API key | — |
 | `OPENAI_MODEL` | OpenAI model override | `gpt-4o` |
 | `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1/chat/completions` |
-| `OLLAMA_HOST` | Ollama server address (web service only; the CLI reads `OXO_FLOW_AI_API_URL`) | `http://localhost:11434` |
+| `OLLAMA_HOST` | Ollama server address (explicit opt-in — no key needed) | `http://localhost:11434` |
+
+**Zero-config auto-detection**: when `OXO_FLOW_AI_PROVIDER` is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY` → claude, `OPENAI_API_KEY` → openai, `DEEPSEEK_API_KEY` → deepseek, `OLLAMA_HOST` → ollama. Gateway setups that only export `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` therefore work without any oxo-flow-specific configuration. An explicit `OXO_FLOW_AI_PROVIDER` (including `disabled`) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests.
 
 ---
 
@@ -541,7 +549,9 @@ echo $OXO_FLOW_AI_PROVIDER     # Should not be empty or "disabled"
 
 # Set up any provider
 export OXO_FLOW_AI_PROVIDER=<provider>
-export <PROVIDER>_API_KEY="sk-<YOUR-KEY>"
+# then the matching credential:
+#   deepseek → DEEPSEEK_API_KEY, openai → OPENAI_API_KEY,
+#   claude → ANTHROPIC_AUTH_TOKEN, ollama → OLLAMA_HOST (no key)
 ```
 
 ### "AI response did not contain valid TOML"
