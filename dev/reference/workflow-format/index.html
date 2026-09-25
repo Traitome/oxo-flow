@@ -7382,7 +7382,7 @@ disk space matters.</p>
 <td><code>protected_output</code></td>
 <td>Array</td>
 <td>No</td>
-<td>Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to <code>&lt;name&gt;.oxo-failed</code>) and <code>oxo-flow clean</code> refuses them with a <code>(protected — skipped)</code> diagnostic, even with <code>--force</code>. Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun</td>
+<td>Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to <code>&lt;name&gt;.oxo-failed</code>) and <code>oxo-flow clean</code> refuses them with a <code>(protected — skipped)</code> diagnostic, even with <code>--force</code>. Three pattern forms are honored: exact paths, <code>{wildcard}</code> patterns (<code>results/{sample}.bam</code>), and shell globs (<code>results/*.bam</code> — <code>*</code> does not cross <code>/</code>). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun</td>
 </tr>
 <tr>
 <td><code>tags</code></td>
@@ -7871,7 +7871,7 @@ substitution, <code>$(( ))</code> arithmetic — work in rule shells.</p>
 <tr>
 <td><code>protected_output</code></td>
 <td>Array</td>
-<td>Outputs the engine never deletes or moves aside on failure; <code>clean</code> also refuses them (see the rule-field table above)</td>
+<td>Outputs the engine never deletes or moves aside on failure; <code>clean</code> also refuses them. Exact paths, <code>{wildcard}</code> patterns, and shell globs are all honored (see the rule-field table above)</td>
 </tr>
 <tr>
 <td><code>temporary</code></td>
