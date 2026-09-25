@@ -85,3 +85,14 @@ $ oxo-flow validate examples/gallery/01_hello_world.oxoflow
 $ oxo-flow validate examples/gallery/08_multiomics_integration.oxoflow
 ✓ examples/gallery/08_multiomics_integration.oxoflow — 8 rules, 7 dependencies
 ```
+
+!!! note "Validation vs live execution"
+    CI *validates* every gallery workflow (parse, DAG construction, lint).
+    A growing subset is additionally **executed live** on real/simulated
+    data with documented results — see each page's "live-run verified"
+    notes (e.g. [16S Amplicon](16s-qiime2.md), [WGS Germline](wgs-germline.md),
+    [Scatter-Gather](scatter-gather.md)). Where a live run surfaced
+    environment- or data-dependent caveats (sklearn classifier gates,
+    VQSR variance requirements, metadata format rules), those pages
+    document the exact errors and remediations so the same pitfalls are
+    self-diagnosable.
