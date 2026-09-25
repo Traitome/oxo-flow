@@ -470,6 +470,16 @@ impl CheckpointState {
         self.benchmarks.insert(rule.to_string(), benchmark);
     }
 
+    /// Mark a rule as completed without touching its benchmark.
+    ///
+    /// Used when a skip verdict ("outputs up-to-date") re-completes a rule
+    /// that already has a measured benchmark — the placeholder must not
+    /// overwrite real wall-time history.
+    pub fn mark_completed_quiet(&mut self, rule: &str) {
+        self.completed_rules.insert(rule.to_string());
+        self.failed_rules.remove(rule);
+    }
+
     /// Mark a rule as failed.
     pub fn mark_failed(&mut self, rule: &str) {
         self.failed_rules.insert(rule.to_string());
@@ -1307,6 +1317,49 @@ mod tests {
     use crate::storage::{RemoteStat, StorageBackend, StoragePath, StorageResolver, StorageScheme};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn mark_completed_quiet_preserves_measured_benchmark() {
+        // The "outputs up-to-date" skip path re-completes a rule with a
+        // synthetic 0.0s placeholder; that must not overwrite the real
+        // benchmark (Dashboard Total Runtime and Prometheus duration gauges
+        // sum these records).
+        let mut ck = CheckpointState::default();
+        ck.mark_completed(
+            "fastqc",
+            BenchmarkRecord {
+                rule: "fastqc".into(),
+                wall_time_secs: 2.75,
+                max_memory_mb: Some(512),
+                memory_limit_mb: None,
+                cpu_seconds: Some(2.1),
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        ck.mark_completed_quiet("fastqc");
+        assert!(ck.completed_rules.contains("fastqc"));
+        assert_eq!(ck.benchmarks["fastqc"].wall_time_secs, 2.75);
+        assert_eq!(ck.benchmarks["fastqc"].recorded_as, None);
+        // And mark_completed still overwrites when a caller genuinely wants
+        // to insert a new record (unchanged contract).
+        ck.mark_completed(
+            "fastqc",
+            BenchmarkRecord {
+                rule: "fastqc".into(),
+                wall_time_secs: 0.0,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+                recorded_as: Some("outputs up-to-date".into()),
+            },
+        );
+        assert_eq!(
+            ck.benchmarks["fastqc"].recorded_as.as_deref(),
+            Some("outputs up-to-date")
+        );
+    }
 
     #[test]
     fn checkpoint_json_is_insertion_order_independent() {
