@@ -92,7 +92,7 @@ pub async fn validate_command(
             let workflow_dir = oxo_flow_core::parent_dir(&workflow);
             let mut missing_inputs = Vec::new();
             if !as_include {
-                missing_inputs = collect_missing_inputs(&cfg, &workflow_dir);
+                missing_inputs = collect_missing_inputs(&cfg, workflow_dir);
             }
 
             // Validate DAG construction (skip for --as-include)
