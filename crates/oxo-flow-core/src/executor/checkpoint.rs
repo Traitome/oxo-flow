@@ -2,7 +2,7 @@ use crate::error::{OxoFlowError, Result};
 use crate::executor::JobRecord;
 use crate::rule::{FilePatterns, Rule};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 /// One file in an input manifest: part of the file set a rule's inputs
@@ -196,11 +196,11 @@ pub struct RuleRunRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointState {
     /// Rules that completed successfully.
-    pub completed_rules: HashSet<String>,
+    pub completed_rules: BTreeSet<String>,
     /// Rules that failed during execution.
-    pub failed_rules: HashSet<String>,
+    pub failed_rules: BTreeSet<String>,
     /// Benchmark records keyed by rule name.
-    pub benchmarks: HashMap<String, BenchmarkRecord>,
+    pub benchmarks: BTreeMap<String, BenchmarkRecord>,
     /// Path to the workflow file that generated this checkpoint.
     /// Enables the `resume` command to locate the original workflow.
     #[serde(default)]
@@ -222,31 +222,31 @@ pub struct CheckpointState {
     /// Output file checksums for provenance verification.
     /// Maps relative output file path → `sha256:<hex>`.
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub checksums: HashMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub checksums: BTreeMap<String, String>,
     /// Checksums of outputs the engine deletes by design at the end of a
     /// successful run (transform chunk intermediates with `cleanup = true`,
     /// issue #315 F2). Preserved for the audit trail; `provenance verify`
     /// reports them as "cleaned", never "missing". Absent in legacy
     /// checkpoints, which keep the old behavior (empty = nothing cleaned).
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub cleaned_checksums: HashMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub cleaned_checksums: BTreeMap<String, String>,
     /// Config value snapshot at the time rules completed.
     /// Maps config key → canonical value string (sensitive keys store a
     /// SHA-256 digest instead of the plaintext value). Compared against the
     /// current config on every run to drive precise invalidation (issue #62).
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub config_snapshot: HashMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_snapshot: BTreeMap<String, String>,
     /// Per-rule structural fingerprints at completion time.
     /// Maps rule name → `sha256:<hex>` of the fields that determine rule
     /// output content (shell, script, inputs, outputs, envvars, params,
     /// conditions, environment). A mismatch invalidates the rule and its
     /// downstream (issue #62).
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub rule_fingerprints: HashMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub rule_fingerprints: BTreeMap<String, String>,
     /// Per-rule fingerprints with the input field EXCLUDED (issue #142 M1).
     /// Distinguishes a genuine rule edit from a pure `--samples` selection
     /// change: expand_inputs-over-injected-key rules bake the selection into
@@ -254,15 +254,15 @@ pub struct CheckpointState {
     /// run while this one stays identical. Absent for checkpoints written by
     /// older binaries — those keep invalidating (safe default).
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub rule_fingerprints_no_input: HashMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub rule_fingerprints_no_input: BTreeMap<String, String>,
     /// Per-rule input manifests at completion time (issue #72).
     /// Maps rule name → sorted list of (relative path, size, mtime) for every
     /// file the rule's inputs resolved to. A mismatch with the current file
     /// set invalidates the rule and its downstream.
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub input_manifests: HashMap<String, InputManifest>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_manifests: BTreeMap<String, InputManifest>,
     /// Per-rule `when`-condition verdicts under the run's config (issue
     /// #198). Maps rule name → the boolean the gate evaluated to at config-
     /// change detection time. A completed rule whose gate references changed
@@ -270,16 +270,16 @@ pub struct CheckpointState {
     /// flipped verdict invalidates it. Absent in checkpoints written by
     /// older binaries — referencing rules keep invalidating until adopted.
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub when_verdicts: HashMap<String, bool>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub when_verdicts: BTreeMap<String, bool>,
 
     /// Tombstones for `temporary = true` rules whose outputs were deleted
     /// after a fully successful run. Maps rule name → deleted output paths;
     /// a future run regenerates them via cascade-up (the completed producer
     /// is re-executed when a dependent needs the missing inputs).
     #[serde(default)]
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub tombstones: HashMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tombstones: BTreeMap<String, Vec<String>>,
 
     /// Checkpoint re-entries (issue #78 P3): the values each checkpoint rule
     /// contributed to the plan, so resumes replay them deterministically and
@@ -292,16 +292,16 @@ pub struct CheckpointState {
     /// expanded command, and stderr excerpt. Legacy checkpoints load with an
     /// empty map; the report falls back to declared workflow templates for
     /// rules without a record.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub rule_runs: HashMap<String, RuleRunRecord>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rule_runs: BTreeMap<String, RuleRunRecord>,
 
     /// Runtime-discovered output_pattern domains (issue #227 item 5):
     /// producer template → the wildcard combos discovered after its
     /// instances completed. Persisted so `resume` re-instantiates the
     /// deferred consumers WITHOUT re-running the producer. Legacy
     /// checkpoints load with an empty map.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub output_pattern_domains: HashMap<String, Vec<crate::wildcard::WildcardValues>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_pattern_domains: BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
 }
 
 /// Bound on the stderr excerpt persisted per rule (issue #83 WS2). Full
@@ -324,23 +324,23 @@ impl CheckpointState {
     /// Create a new, empty checkpoint state.
     pub fn new() -> Self {
         Self {
-            completed_rules: HashSet::new(),
-            failed_rules: HashSet::new(),
-            benchmarks: HashMap::new(),
+            completed_rules: BTreeSet::new(),
+            failed_rules: BTreeSet::new(),
+            benchmarks: BTreeMap::new(),
             workflow_path: None,
             workflow_git_sha: None,
             workdir: None,
-            checksums: HashMap::new(),
-            cleaned_checksums: HashMap::new(),
-            config_snapshot: HashMap::new(),
-            rule_fingerprints: HashMap::new(),
-            rule_fingerprints_no_input: HashMap::new(),
-            input_manifests: HashMap::new(),
-            when_verdicts: HashMap::new(),
-            tombstones: HashMap::new(),
+            checksums: BTreeMap::new(),
+            cleaned_checksums: BTreeMap::new(),
+            config_snapshot: BTreeMap::new(),
+            rule_fingerprints: BTreeMap::new(),
+            rule_fingerprints_no_input: BTreeMap::new(),
+            input_manifests: BTreeMap::new(),
+            when_verdicts: BTreeMap::new(),
+            tombstones: BTreeMap::new(),
             reentries: Vec::new(),
-            rule_runs: HashMap::new(),
-            output_pattern_domains: HashMap::new(),
+            rule_runs: BTreeMap::new(),
+            output_pattern_domains: BTreeMap::new(),
         }
     }
 
@@ -1090,7 +1090,7 @@ pub fn should_skip_rule_with_checksums(
     rule: &Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-    checksums: Option<&HashMap<String, String>>,
+    checksums: Option<&BTreeMap<String, String>>,
 ) -> bool {
     if rule.output.is_empty() {
         return false;
@@ -1309,6 +1309,34 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn checkpoint_json_is_insertion_order_independent() {
+        // checkpoint.json is the provenance/audit artifact (resume,
+        // `provenance verify`): identical state must serialize to identical
+        // bytes regardless of the order keys were inserted in — which with
+        // HashMap/HashSet fields used to vary per process and defeat
+        // byte-level diffs between runs. BTreeMap/BTreeSet fields pin the
+        // order to sorted.
+        let build = |order: &[&str]| -> CheckpointState {
+            let mut ck = CheckpointState::default();
+            for rule in order {
+                ck.completed_rules.insert(rule.to_string());
+                ck.checksums
+                    .insert(format!("out/{rule}.txt"), format!("sha256:{rule}"));
+                ck.config_snapshot
+                    .insert(format!("k_{rule}"), rule.to_string());
+            }
+            ck
+        };
+        let forward = build(&["r1", "r2", "r3"]);
+        let backward = build(&["r3", "r2", "r1"]);
+        assert_eq!(
+            forward.to_json().unwrap(),
+            backward.to_json().unwrap(),
+            "identical checkpoint state must serialize identically regardless of insertion order"
+        );
+    }
+
+    #[test]
     fn checkpoint_save_is_atomic_and_leaves_no_tmp() {
         // issue #194 A1: the save goes through a sibling tmp + rename, so a
         // failed save never leaves a partial tmp behind and a successful one
@@ -1357,7 +1385,7 @@ mod tests {
             output: vec!["out.txt".to_string()].into(),
             ..Default::default()
         };
-        let recorded: HashMap<String, String> = [(
+        let recorded: BTreeMap<String, String> = [(
             "out.txt".to_string(),
             format!("sha256:{}", sha256_hex(b"content-v1")),
         )]

@@ -1104,7 +1104,7 @@ fn write_r_data(
 
 /// Sorted, deduplicated union of checkpoint rule-name sets — the iteration
 /// order for every diff axis (deterministic output).
-fn sorted_union(sets: &[&HashSet<String>]) -> Vec<String> {
+fn sorted_union(sets: &[&std::collections::BTreeSet<String>]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for set in sets {
         names.extend(set.iter().cloned());
@@ -1116,7 +1116,7 @@ fn sorted_union(sets: &[&HashSet<String>]) -> Vec<String> {
 
 /// Sorted, deduplicated union of map keys — the iteration order for the
 /// checksum diff axis (deterministic output).
-fn sorted_map_keys(maps: &[&HashMap<String, String>]) -> Vec<String> {
+fn sorted_map_keys(maps: &[&std::collections::BTreeMap<String, String>]) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
     for map in maps {
         keys.extend(map.keys().cloned());

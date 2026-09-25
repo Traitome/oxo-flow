@@ -28,8 +28,9 @@ output = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
 description = "scRNA-seq quantification with CellRanger"
 shell = """
 mkdir -p counts && cd counts
-# Backslash line continuations inside TOML triple-quoted strings are unescaped
-# to real newlines before the shell runs, so they cannot be used here.
+# TOML decodes escape sequences inside triple-quoted basic strings before the
+# shell runs: line-ending backslashes fold into nothing and a literal \n
+# becomes a real newline. Keep multi-token commands on one line here.
 cellranger count --id={sample} --fastqs=../raw/ --sample={sample} --transcriptome={config.reference} --localcores={threads} --localmem=60  # keep in sync with memory = "64G" (leave headroom)
 """
 

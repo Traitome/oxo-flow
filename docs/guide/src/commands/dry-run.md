@@ -65,6 +65,20 @@ its advice is evidence-driven: determine strandedness with RSeQC
 `infer_experiment.py` or the samplesheet's strandedness column before
 setting `-s 1`/`-s 2`.
 
+The `SCI-AGG-RACE` check flags an aggregation rule whose inputs/shell/when
+(or `expand_inputs` patterns) reference a fan-out wildcard — `{sample}` /
+`{group}`, a pair wildcard, a `[[values]]` table name, or an
+`output_pattern` producer's fresh wildcard — while its declared outputs
+contain **no** wildcard (issue #443). Expansion then creates one instance
+per fan-out element with every instance writing the same output path:
+concurrently they race, sequentially they duplicate work N−1 times. The
+remedy is the documented aggregation idiom: reference the per-sample files
+via `expand_inputs` (or key the outputs by the wildcard). The detector
+mirrors the engine's fan-out semantics, so rules whose outputs do carry
+the wildcard, `input_groups` rules, `output_pattern` producers, consumers
+keyed by the producer's fresh wildcard, and `when`-gated-off rules stay
+silent.
+
 ```bash
 # A 2-sample pilot of a VQSR workflow fails for scientific reasons —
 # the preflight says so before any compute is spent

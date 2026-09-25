@@ -8,6 +8,7 @@
 //! canonical formatting, and format version management.
 
 use crate::config::WorkflowConfig;
+use crate::config::expand_config_vars_in_path;
 use crate::dag::WorkflowDag;
 use crate::rule::{EnvironmentSpec, Rule};
 use regex::Regex;
@@ -1618,14 +1619,14 @@ pub fn lint_format(
         for output in producer.output.iter() {
             gated_producer_templates.push((
                 &producer.name,
-                canonical_template(output),
+                canonical_template(&expand_config_vars_in_path(output, &config.config)),
                 output.as_str(),
             ));
         }
         if let Some(ref pattern) = producer.output_pattern {
             gated_producer_templates.push((
                 &producer.name,
-                canonical_template(pattern),
+                canonical_template(&expand_config_vars_in_path(pattern, &config.config)),
                 pattern.as_str(),
             ));
         }
@@ -1649,7 +1650,8 @@ pub fn lint_format(
                 .map(|expand| expand.pattern.as_str()),
         );
         for consumer_input in consumer_templates {
-            let consumer_template = canonical_template(consumer_input);
+            let consumer_template =
+                canonical_template(&expand_config_vars_in_path(consumer_input, &config.config));
             for (producer_name, producer_template, producer_output) in &gated_producer_templates {
                 if *producer_name == consumer.name
                     || consumer_template != *producer_template
@@ -1695,10 +1697,25 @@ pub fn lint_format(
     let mut writers: Vec<(&str, String, &str)> = Vec::new();
     for rule in &config.rules {
         for output in rule.output.iter() {
-            writers.push((&rule.name, canonical_template(output), output.as_str()));
+            // `{config.*}` placeholders are resolved against the parsed
+            // config before canonicalization so config-routed outputs
+            // collide with their literal-shape counterparts (the same
+            // fix info's dir extraction got): `{config.out_dir}/x` with
+            // out_dir = "results" must collide with `results/x`, and
+            // `{config.a}/x` vs `{config.b}/x` must not collide when the
+            // values differ.
+            writers.push((
+                &rule.name,
+                canonical_template(&expand_config_vars_in_path(output, &config.config)),
+                output.as_str(),
+            ));
         }
         if let Some(ref pattern) = rule.output_pattern {
-            writers.push((&rule.name, canonical_template(pattern), pattern.as_str()));
+            writers.push((
+                &rule.name,
+                canonical_template(&expand_config_vars_in_path(pattern, &config.config)),
+                pattern.as_str(),
+            ));
         }
     }
 
@@ -1944,26 +1961,12 @@ pub fn verify_schema(toml_content: &str) -> ValidationResult {
         }
     }
 
-    // S006: unknown top-level keys
-    let known_keys = [
-        "workflow",
-        "config",
-        "defaults",
-        "rules",
-        "report",
-        "include",
-        "execution_group",
-        "citation",
-        "cluster",
-        "resource_budget",
-        "pairs",
-        "sample_groups",
-        "plugins",
-        "env_groups",
-        "resource_groups",
-        "reference_db",
-        "wildcard_constraints",
-    ];
+    // S006: unknown top-level keys. The list is the parser's own E017
+    // whitelist (`config::known_keys::TOP_LEVEL_KEYS`) — keeping one source
+    // of truth: a hand-copied lint list drifted and flagged the documented
+    // `[[values]]` / `metadata` / `references` / `reference_dir` / `webhook`
+    // sections as unknown while they parsed fine.
+    let known_keys = crate::config::TOP_LEVEL_KEYS;
     for key in table.keys() {
         if !known_keys.contains(&key.as_str()) {
             diagnostics.push(Diagnostic {
@@ -3355,6 +3358,32 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let result = verify_schema(toml);
         assert!(result.valid);
         assert!(!result.diagnostics.iter().any(|d| d.code == "S006"));
+    }
+
+    #[test]
+    fn verify_schema_s006_matches_parser_whitelist() {
+        // The S006 list IS the parser's E017 whitelist
+        // (`config::TOP_LEVEL_KEYS`) — a hand-copied lint list once drifted
+        // and flagged the documented `[[values]]` section (and `metadata`,
+        // `references`, `reference_dir`, `webhook`) as unknown while they
+        // parsed fine. Every whitelisted section must lint clean.
+        let bodies: &[(&str, &str)] = &[
+            ("values", "[[values]]\nname = \"v\"\nvalues = [\"a\"]"),
+            ("metadata", "[metadata]\nS1 = { tissue = \"tumor\" }"),
+            ("references", "[references]\ngenome = \"hg38\""),
+            ("reference_dir", "[reference_dir]\npath = \"refs\""),
+            ("webhook", "[webhook]\nurl = \"https://example.com\""),
+        ];
+        for (section, body) in bodies {
+            let toml = format!(
+                "[workflow]\nname = \"test\"\n\n{body}\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo hi\"\n"
+            );
+            let result = verify_schema(&toml);
+            assert!(
+                !result.diagnostics.iter().any(|d| d.code == "S006"),
+                "documented section [{section}] must not be flagged unknown: {result:?}"
+            );
+        }
     }
 
     // -- check_format_version tests ------------------------------------------
@@ -5211,6 +5240,62 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         assert!(
             diagnostics.iter().any(|d| d.code == "W033"),
             "output_pattern must be matched against plain outputs: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_resolves_config_routed_outputs_before_comparing() {
+        // `{config.*}` placeholders resolve against the parsed config
+        // before canonicalization: a config-routed output and its
+        // literal-shape counterpart collide when the values make them the
+        // same path, and stay distinct when they do not.
+        let collide = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            out_dir = "results"
+
+            [[rules]]
+            name = "routed_writer"
+            output = ["{config.out_dir}/{sample}.txt"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "literal_writer"
+            output = ["results/{sample}.txt"]
+            shell = "b > {output}"
+        "#;
+        let config = WorkflowConfig::parse(collide).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W033"),
+            "config-routed vs literal outputs over the same path must collide: {diagnostics:?}"
+        );
+
+        let distinct = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            out_dir = "results"
+            alt_dir = "other"
+
+            [[rules]]
+            name = "routed_writer"
+            output = ["{config.out_dir}/{sample}.txt"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "other_writer"
+            output = ["{config.alt_dir}/{sample}.txt"]
+            shell = "b > {output}"
+        "#;
+        let config = WorkflowConfig::parse(distinct).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W033"),
+            "differently-valued config routes are distinct paths: {diagnostics:?}"
         );
     }
 

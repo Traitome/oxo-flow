@@ -152,7 +152,7 @@ const MEMORY_BOTTLENECK_THRESHOLD_PCT: u64 = 80;
 pub fn diagnose_run(
     run_nodes: &[NodeStatusItem],
     log_output: &str,
-    benchmarks: &std::collections::HashMap<
+    benchmarks: &std::collections::BTreeMap<
         String,
         oxo_flow_core::executor::checkpoint::BenchmarkRecord,
     >,
@@ -508,7 +508,7 @@ mod file_listing_tests {
     #[test]
     fn diagnose_flags_memory_bottleneck_at_or_above_80pct() {
         use oxo_flow_core::executor::checkpoint::BenchmarkRecord;
-        let mut benchmarks = std::collections::HashMap::new();
+        let mut benchmarks = std::collections::BTreeMap::new();
         benchmarks.insert(
             "tight_rule".to_string(),
             BenchmarkRecord {
@@ -547,7 +547,7 @@ mod file_listing_tests {
         let resp = diagnose_run(&[], "", &Default::default());
         assert!(resp.resource_bottlenecks.is_empty());
         // A measured peak without a declared limit is not a bottleneck.
-        let mut benchmarks = std::collections::HashMap::new();
+        let mut benchmarks = std::collections::BTreeMap::new();
         benchmarks.insert(
             "no_limit".to_string(),
             oxo_flow_core::executor::checkpoint::BenchmarkRecord {

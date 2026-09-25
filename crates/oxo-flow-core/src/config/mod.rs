@@ -10,10 +10,10 @@ mod samples;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use known_keys::TOP_LEVEL_KEYS;
 pub use model::*;
 pub(crate) use model::{
-    expand_command_text_fields, expand_config_vars_in_path, expand_rule_patterns,
-    expand_rule_shell, value_instance_suffix,
+    expand_command_text_fields, expand_rule_patterns, expand_rule_shell, value_instance_suffix,
 };
 pub use parse::resolve_rule_templates;
 

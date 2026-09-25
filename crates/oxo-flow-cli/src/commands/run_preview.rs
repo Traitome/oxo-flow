@@ -105,7 +105,7 @@ fn rule_outputs_exist_fresh(
     rule: &oxo_flow_core::rule::Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-    checksums: Option<&HashMap<String, String>>,
+    checksums: Option<&std::collections::BTreeMap<String, String>>,
 ) -> bool {
     oxo_flow_core::executor::checkpoint::should_skip_rule_with_checksums(
         rule,
@@ -156,7 +156,7 @@ pub fn preview_run_plan(
     rerun: bool,
     resume_failed: bool,
 ) -> RunPreview {
-    let completed_original: HashSet<String> = ck.completed_rules.clone();
+    let completed_original: std::collections::BTreeSet<String> = ck.completed_rules.clone();
     let mut clone = ck.clone();
     // `--resume-failed` re-executes failed rules: `run` clears the failed
     // set from its in-memory checkpoint before scheduling; the preview
