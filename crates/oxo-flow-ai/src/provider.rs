@@ -50,6 +50,8 @@ const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-pro";
 const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
 const OLLAMA_DEFAULT_MODEL: &str = "llama3";
+/// Default local daemon endpoint; overridden by an explicit OXO_FLOW_AI_API_URL
+/// or by OLLAMA_HOST when it is set (the standard Ollama endpoint variable).
 const OLLAMA_API_URL: &str = "http://localhost:11434/api/chat";
 
 /// Shared HTTP client for all provider backends. Without explicit timeouts a
@@ -1485,6 +1487,11 @@ fn create_provider_in(
             // Ollama is keyless by design; OLLAMA_HOST is its opt-in signal
             // (mirrors the web fallback chain's phantom-localhost guard —
             // never auto-select a localhost daemon that may not exist).
+            // OLLAMA_HOST also carries the endpoint when the user set it
+            // (e.g. a remote daemon); without this fallback a remote host
+            // was detected but requests still went to localhost:11434
+            // (live-observed).
+            let url = url.or_else(|| env.ollama_host.clone());
             AiProvider::Ollama(OllamaBackend::new(mdl, url))
         }
     }
@@ -2369,6 +2376,36 @@ mod tests {
             resolve_provider("", None, &EnvSnapshot::default()),
             AiProvider::Noop
         ));
+    }
+
+    #[test]
+    fn ollama_host_used_as_endpoint_url() {
+        // OLLAMA_HOST must not merely gate *detection* — it is the
+        // endpoint variable. A user pointing it at a remote daemon used to
+        // be detected as ollama while requests still went to
+        // localhost:11434 (live-observed).
+        let env = EnvSnapshot {
+            ollama_host: Some("http://10.1.2.3:11434".into()),
+            ..EnvSnapshot::default()
+        };
+        // OllamaBackend::new normalizes a bare host to {host}/chat (its
+        // chat endpoint); the key property is the HOST, not the path.
+        let provider = resolve_provider("ollama", None, &env);
+        let url = provider.api_url().expect("ollama always has a url");
+        assert!(url.starts_with("http://10.1.2.3:11434"), "got: {url}");
+        // Detection tier gets the same treatment.
+        let detected = detect_provider_from_env(&env).expect("detected");
+        let url = detected.api_url().expect("url");
+        assert!(url.starts_with("http://10.1.2.3:11434"), "got: {url}");
+        // Sanity: with no OLLAMA_HOST and no explicit URL, the default
+        // localhost daemon endpoint applies.
+        let fallback = resolve_provider("ollama", None, &EnvSnapshot::default());
+        assert!(
+            fallback
+                .api_url()
+                .expect("url")
+                .starts_with("http://localhost:11434")
+        );
     }
 
     #[test]
