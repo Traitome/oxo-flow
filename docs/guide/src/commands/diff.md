@@ -34,7 +34,6 @@ oxo-flow diff v1.oxoflow v2.oxoflow
 ## Output
 
 ```
-oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
 Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
   • [rules] rule "bwa_align": shell command changed
   • [config] config variable changed: "threads"
@@ -45,7 +44,8 @@ Diff: 2 difference(s) between v1.oxoflow and v2.oxoflow:
 ## Notes
 
 - Performs a semantic comparison of workflow structures, not just a line-by-line diff
-- Detects changes in rules, configuration variables, and metadata
+- Detects changes in workflow metadata (name, version, description), added/removed rules, per-rule inputs/outputs/shell/threads/memory/environment, config variables, and defaults
 - Useful for tracking changes during pipeline development
-- All output goes to **stderr** and the exit code is always 0 — CI jobs
-  must capture stderr (not the exit code) to detect differences
+- Output goes to **stdout**; like `diff(1)`, the exit code is `0` when the
+  workflows are identical and `1` when differences are found (printed as
+  `✓ Workflows are identical`), so scripts can branch on either

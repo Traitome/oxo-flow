@@ -228,6 +228,13 @@ By default, oxo-flow auto-detects interpreters based on file extensions:
 - `.R`, `.r` → `Rscript`
 - `.sh`, `.bash` → `bash`
 - `.jl` → `julia`
+- `.pl` → `perl`
+- `.rb` → `ruby`
+- `.qmd`, `.Rmd`, `.rmd` → `quarto render`
+- `.ipynb` → `jupyter nbconvert --to notebook --execute`
+- `.smk` → `snakemake`
+- `.nextflow` → `nextflow run`
+- `.wdl` → `miniwdl run`
 
 You can override or extend this mapping in the `[workflow]` section:
 
@@ -634,10 +641,10 @@ memory = "32G"
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
 | `extends` | String | No | Inherit settings from a base rule |
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
-| `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
+| `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
-| `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
+| `protected_output` | Array | No | Outputs declared protected. Parsed and validated, but the current engine does not enforce protection at runtime — treat as advisory (file an issue if you need enforcement) |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
 | `ancient` | Array | No | Inputs that never trigger re-execution (e.g., reference files) |
@@ -899,7 +906,7 @@ oxo-flow automatically cleans up temporary outputs:
 
 | Scenario | Cleanup |
 |---|---|---|
-| Success + `temp_output` | Cleaned after successful completion |
+| Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as `<name>.oxo-failed`; untouched pre-existing files are preserved |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
@@ -926,11 +933,17 @@ runs — the `--rerun` flag is the escape hatch for that case.
 
 ### Timeout Enforcement
 
-On Unix systems (Linux, macOS), timeout kills the entire process group, ensuring child processes don't survive:
+On Unix systems (Linux, macOS), a timeout kill walks the rule's **process
+subtree** rather than a process group — rules deliberately run inside the
+run's process group ("one run = one process group"), so the engine snapshots
+parent→child links via sysinfo and signals each descendant individually,
+deepest first: SIGTERM to the whole subtree, a 10-second grace poll for
+survivors, a re-scan for descendants spawned during the window, then SIGKILL
+to whatever remains (issue #194):
 
 ```toml
 [rules.resources]
-time_limit = "4h"  # SIGKILL sent to process group after 4 hours
+time_limit = "4h"  # SIGTERM → grace → SIGKILL escalation after 4 hours
 ```
 
 ### GPU Specification
@@ -1043,15 +1056,15 @@ name = "pipeline"
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `temp_output` | Array | Temporary outputs cleaned after downstream rules complete |
-| `protected_output` | Array | Protected outputs never overwritten or deleted |
+| `temp_output` | Array | Scratch artifacts cleaned when the rule fails; persist on success (see Cleanup Behavior) |
+| `protected_output` | Array | Declared-protected outputs; parsed but not enforced at runtime (advisory) |
 | `temporary` | Boolean | Delete the rule's outputs after a fully successful run once every dependent has completed (tombstone + lazy regeneration; leaf rules keep outputs) |
 
 ```toml
 [[rules]]
 name = "align"
 output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
-temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
+temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned if the rule fails; kept on success
 temporary = true                             # Delete aligned/*.bam once all callers finish
 ```
 
@@ -2602,8 +2615,10 @@ Semantics:
 - Bounds: checkpoint rules are never re-expanded themselves (no
   `{sample}`/`{group}`/`{pair_id}`/`{experiment}` — validation error E014)
   and re-entry is capped at 32 rounds — a rule that keeps discovering values
-  past that is a workflow bug, not an engine feature. Validation error E013
-  requires `checkpoint_manifest` on every checkpoint rule.
+  past that is a workflow bug, not an engine feature. Diagnostic E013
+  (emitted at warning severity — `checkpoint = true` predates the manifest
+  field) flags a checkpoint rule that does not declare
+  `checkpoint_manifest`.
 - `dry-run` previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; `--json` includes a `reentry` section.
