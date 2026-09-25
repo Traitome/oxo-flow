@@ -1393,35 +1393,85 @@ pub fn create_provider(
     api_url: Option<String>,
     model: Option<String>,
 ) -> AiProvider {
-    let key = api_key.or_else(|| std::env::var("OXO_FLOW_AI_API_KEY").ok());
-    let url = api_url.or_else(|| std::env::var("OXO_FLOW_AI_API_URL").ok());
-    let mdl = model.or_else(|| std::env::var("OXO_FLOW_AI_MODEL").ok());
+    create_provider_in(
+        kind,
+        api_key,
+        api_url,
+        model,
+        &EnvSnapshot::from_process_env(),
+    )
+}
+
+/// `create_provider` against an explicit env snapshot — the testable core.
+/// All environment lookups (generic `OXO_FLOW_AI_*` plus per-provider
+/// variables) read from `env` instead of the process, so resolution
+/// behaves identically in tests and in production.
+fn create_provider_in(
+    kind: ProviderKind,
+    api_key: Option<String>,
+    api_url: Option<String>,
+    model: Option<String>,
+    env: &EnvSnapshot,
+) -> AiProvider {
+    let key = api_key.or_else(|| env.oxo_flow_api_key.clone());
+    let url = api_url.or_else(|| env.oxo_flow_api_url.clone());
+    let mdl = model.or_else(|| env.oxo_flow_model.clone());
 
     match kind {
         ProviderKind::Claude => {
             let api_key = key
-                .or_else(|| std::env::var("ANTHROPIC_AUTH_TOKEN").ok())
+                .or_else(|| env.anthropic_auth_token.clone())
+                .or_else(|| env.anthropic_api_key.clone())
+                .or_else(|| env.claude_api_key.clone())
                 .unwrap_or_default();
+            // An env-tier provider with no credential is an unfinished
+            // setup, not a working backend — same rule as the saved-config
+            // tier. Returning Noop keeps status probes and fallback chains
+            // from firing real (guaranteed-401) network calls on an empty
+            // key.
+            if api_key.is_empty() {
+                tracing::info!(
+                    "claude provider selected but no API key found (set ANTHROPIC_AUTH_TOKEN) — treated as unconfigured"
+                );
+                return AiProvider::Noop;
+            }
             let api_url = url
-                .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
+                .or_else(|| env.anthropic_base_url.clone())
                 .unwrap_or_else(|| CLAUDE_API_URL.to_string());
-            let model_name = mdl.or_else(|| std::env::var("ANTHROPIC_MODEL").ok());
+            let model_name = mdl.or_else(|| env.anthropic_model.clone());
             AiProvider::Claude(ClaudeBackend::new(api_key, model_name, Some(api_url)))
         }
         ProviderKind::OpenAi => {
             let api_key = key
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .or_else(|| env.openai_api_key.clone())
                 .unwrap_or_default();
-            let api_url = url.or_else(|| std::env::var("OPENAI_BASE_URL").ok());
-            let model_name = mdl.or_else(|| std::env::var("OPENAI_MODEL").ok());
+            // Same no-credential guard as the claude tier (above) and the
+            // saved-config tier (below): an empty key means unfinished
+            // setup, not a working backend.
+            if api_key.is_empty() {
+                tracing::info!(
+                    "openai provider selected but no API key found (set OPENAI_API_KEY) — treated as unconfigured"
+                );
+                return AiProvider::Noop;
+            }
+            let api_url = url.or_else(|| env.openai_base_url.clone());
+            let model_name = mdl.or_else(|| env.openai_model.clone());
             AiProvider::OpenAi(OpenAiBackend::new(api_key, model_name, api_url))
         }
         ProviderKind::DeepSeek => {
             let api_key = key
-                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
+                .or_else(|| env.deepseek_api_key.clone())
                 .unwrap_or_default();
+            // Same no-credential guard as the claude/openai tiers: an
+            // empty key means unfinished setup, not a working backend.
+            if api_key.is_empty() {
+                tracing::info!(
+                    "deepseek provider selected but no API key found (set DEEPSEEK_API_KEY) — treated as unconfigured"
+                );
+                return AiProvider::Noop;
+            }
             let api_url = url
-                .or_else(|| std::env::var("DEEPSEEK_BASE_URL").ok())
+                .or_else(|| env.deepseek_base_url.clone())
                 .unwrap_or_else(|| DEEPSEEK_API_URL.to_string());
             let model_name = mdl.or_else(|| Some(DEEPSEEK_DEFAULT_MODEL.to_string()));
             AiProvider::DeepSeek(OpenAiBackend::new_labeled(
@@ -1431,7 +1481,12 @@ pub fn create_provider(
                 "deepseek",
             ))
         }
-        ProviderKind::Ollama => AiProvider::Ollama(OllamaBackend::new(mdl, url)),
+        ProviderKind::Ollama => {
+            // Ollama is keyless by design; OLLAMA_HOST is its opt-in signal
+            // (mirrors the web fallback chain's phantom-localhost guard —
+            // never auto-select a localhost daemon that may not exist).
+            AiProvider::Ollama(OllamaBackend::new(mdl, url))
+        }
     }
 }
 
@@ -1443,20 +1498,35 @@ pub fn create_provider_from_env() -> AiProvider {
         load_ai_config()
             .as_ref()
             .map(|(a, b, c, d)| (a.as_str(), b.as_str(), c.as_str(), d.as_str())),
+        &EnvSnapshot::from_process_env(),
     )
 }
 
-/// Pure provider-resolution core: the env provider string plus an optional
-/// persisted config.
+/// Pure provider-resolution core: the env provider string, an optional
+/// persisted config, and an environment-variable snapshot.
 ///
 /// Split from the env/file I/O so the precedence contract is unit-testable
 /// without process-global env mutation (this crate forbids unsafe, and
-/// edition-2024 env mutation requires it). Precedence: env > persisted —
-/// and `OXO_FLOW_AI_PROVIDER=disabled` is an explicit opt-out that must
-/// win over a saved config (issue #142 M10): previously the "disabled"
-/// spelling skipped the env branch and fell through to the persisted
-/// provider, so the override silently did nothing.
-fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>) -> AiProvider {
+/// edition-2024 env mutation requires it). Precedence:
+///
+/// 1. `OXO_FLOW_AI_PROVIDER=disabled` — explicit opt-out, wins over
+///    everything (issue #142 M10).
+/// 2. Non-empty `OXO_FLOW_AI_PROVIDER` naming a known provider.
+/// 3. Persisted config (`ai_config.json`) with a stored key.
+/// 4. **Auto-detection** from the standard per-provider credential
+///    variables — zero-config setup for users whose shell already exports
+///    e.g. `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` (gateway
+///    deployments) or `OPENAI_API_KEY` + `OPENAI_BASE_URL`
+///    (openai-compatible endpoints).
+/// 5. Noop — nothing usable found.
+///
+/// Claude wins detection ties because Anthropic-shaped gateways
+/// (`ANTHROPIC_BASE_URL`) are the dominant oxo-flow deployment shape.
+fn resolve_provider(
+    provider_env: &str,
+    saved: Option<(&str, &str, &str, &str)>,
+    env: &EnvSnapshot,
+) -> AiProvider {
     if provider_env.eq_ignore_ascii_case("disabled") {
         tracing::info!("AI provider disabled via OXO_FLOW_AI_PROVIDER=disabled");
         return AiProvider::Noop;
@@ -1465,7 +1535,7 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
     if !provider_env.is_empty()
         && let Ok(kind) = provider_env.parse::<ProviderKind>()
     {
-        let provider = create_provider(kind, None, None, None);
+        let provider = create_provider_in(kind, None, None, None, env);
         tracing::info!(
             "AI provider from env: {} (model: {})",
             provider.name(),
@@ -1482,31 +1552,128 @@ fn resolve_provider(provider_env: &str, saved: Option<(&str, &str, &str, &str)>)
     {
         // A saved config with no key is an unfinished setup, not a working
         // provider: treat it as unconfigured so status probes do not fire
-        // real (and guaranteed-failing) network calls on an empty key.
+        // real (and guaranteed-failing) network calls on an empty key. The
+        // env-detection tier below still gets a chance, so a half-saved
+        // Settings experiment does not bury a working shell credential.
         if api_key.is_empty() {
             tracing::info!(
-                "AI provider {} saved without an API key — treated as unconfigured",
+                "AI provider {} saved without an API key — checking environment credentials",
                 kind_str
             );
-            return AiProvider::Noop;
+        } else {
+            let url = if api_url.is_empty() {
+                None
+            } else {
+                Some(api_url.to_string())
+            };
+            let mdl = if model.is_empty() {
+                None
+            } else {
+                Some(model.to_string())
+            };
+            let provider = create_provider(kind, Some(api_key.to_string()), url, mdl);
+            tracing::info!("AI provider from saved config: {}", provider.name());
+            return provider;
         }
-        let url = if api_url.is_empty() {
-            None
-        } else {
-            Some(api_url.to_string())
-        };
-        let mdl = if model.is_empty() {
-            None
-        } else {
-            Some(model.to_string())
-        };
-        let provider = create_provider(kind, Some(api_key.to_string()), url, mdl);
-        tracing::info!("AI provider from saved config: {}", provider.name());
+    }
+
+    if let Some(provider) = detect_provider_from_env(env) {
         return provider;
     }
 
     tracing::info!("AI provider disabled (set OXO_FLOW_AI_PROVIDER or configure via Settings)");
     AiProvider::Noop
+}
+
+/// Zero-config detection tier: derive a provider from the standard
+/// credential variables users (and gateway setups) already export in
+/// their shell. Mirrors the web fallback chain's philosophy — never
+/// invent a configuration the user did not signal (no phantom
+/// localhost:11434 unless OLLAMA_HOST says otherwise).
+fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
+    if env.anthropic_auth_token.is_some()
+        || env.anthropic_api_key.is_some()
+        || env.claude_api_key.is_some()
+    {
+        let provider = create_provider_in(ProviderKind::Claude, None, None, None, env);
+        tracing::info!(
+            "AI provider auto-detected from ANTHROPIC_* env: {} (endpoint: {})",
+            provider.name(),
+            provider.api_url().unwrap_or_default()
+        );
+        return Some(provider);
+    }
+    if env.openai_api_key.is_some() {
+        let provider = create_provider_in(ProviderKind::OpenAi, None, None, None, env);
+        tracing::info!(
+            "AI provider auto-detected from OPENAI_API_KEY: {} (endpoint: {})",
+            provider.name(),
+            provider.api_url().unwrap_or_default()
+        );
+        return Some(provider);
+    }
+    if env.deepseek_api_key.is_some() {
+        let provider = create_provider_in(ProviderKind::DeepSeek, None, None, None, env);
+        tracing::info!(
+            "AI provider auto-detected from DEEPSEEK_API_KEY: {}",
+            provider.name()
+        );
+        return Some(provider);
+    }
+    if env.ollama_host.is_some() {
+        let provider = create_provider_in(ProviderKind::Ollama, None, None, None, env);
+        tracing::info!(
+            "AI provider auto-detected from OLLAMA_HOST: {} (endpoint: {})",
+            provider.name(),
+            provider.api_url().unwrap_or_default()
+        );
+        return Some(provider);
+    }
+    None
+}
+
+/// Snapshot of every environment variable the resolution tiers read.
+/// Built once by `create_provider_from_env` so tests can drive the pure
+/// `resolve_provider` without touching process-global state.
+#[derive(Debug, Default, Clone)]
+struct EnvSnapshot {
+    anthropic_auth_token: Option<String>,
+    anthropic_api_key: Option<String>,
+    claude_api_key: Option<String>,
+    anthropic_base_url: Option<String>,
+    anthropic_model: Option<String>,
+    openai_api_key: Option<String>,
+    openai_base_url: Option<String>,
+    openai_model: Option<String>,
+    deepseek_api_key: Option<String>,
+    deepseek_base_url: Option<String>,
+    ollama_host: Option<String>,
+    oxo_flow_api_key: Option<String>,
+    oxo_flow_api_url: Option<String>,
+    oxo_flow_model: Option<String>,
+}
+
+impl EnvSnapshot {
+    /// Read the live process environment.
+    fn from_process_env() -> Self {
+        let get = |k: &str| std::env::var(k).ok();
+        Self {
+            anthropic_auth_token: get("ANTHROPIC_AUTH_TOKEN"),
+            anthropic_api_key: get("ANTHROPIC_API_KEY"),
+            claude_api_key: get("CLAUDE_API_KEY"),
+            anthropic_base_url: get("ANTHROPIC_BASE_URL"),
+            anthropic_model: get("ANTHROPIC_MODEL"),
+            openai_api_key: get("OPENAI_API_KEY"),
+            openai_base_url: get("OPENAI_BASE_URL"),
+            openai_model: get("OPENAI_MODEL"),
+            deepseek_api_key: get("DEEPSEEK_API_KEY"),
+            deepseek_base_url: get("DEEPSEEK_BASE_URL"),
+            ollama_host: get("OLLAMA_HOST"),
+            oxo_flow_api_key: get("OXO_FLOW_AI_API_KEY"),
+            oxo_flow_api_url: get("OXO_FLOW_AI_API_URL"),
+            oxo_flow_model: get("OXO_FLOW_AI_MODEL"),
+        }
+    }
 }
 
 // ── Config persistence ─────────────────────────────────────────────────────
@@ -2035,24 +2202,225 @@ mod tests {
         // tier is the highest-precedence tier, so it must be able to turn
         // AI off even when a saved config exists.
         let saved = ("deepseek", "sk-test", "", "");
+        let env = EnvSnapshot::default();
         assert!(
-            matches!(resolve_provider("disabled", Some(saved)), AiProvider::Noop),
+            matches!(
+                resolve_provider("disabled", Some(saved), &env),
+                AiProvider::Noop
+            ),
             "OXO_FLOW_AI_PROVIDER=disabled must win over a saved config"
         );
         // Case-insensitive, like the ProviderKind parse.
         assert!(
-            matches!(resolve_provider("DISABLED", Some(saved)), AiProvider::Noop),
+            matches!(
+                resolve_provider("DISABLED", Some(saved), &env),
+                AiProvider::Noop
+            ),
             "the disabled spelling must be case-insensitive"
+        );
+        // ...and over shell credentials too: an explicit opt-out must not
+        // be resurrected by the auto-detection tier.
+        let env_with_anthropic = EnvSnapshot {
+            anthropic_auth_token: Some("sk-anon".into()),
+            anthropic_base_url: Some("https://gw.example.com".into()),
+            ..EnvSnapshot::default()
+        };
+        assert!(
+            matches!(
+                resolve_provider("disabled", None, &env_with_anthropic),
+                AiProvider::Noop
+            ),
+            "disabled must win over auto-detectable credentials"
         );
     }
 
     #[test]
     fn env_absent_falls_back_to_saved_config() {
         let saved = ("deepseek", "sk-test", "", "");
-        let provider = resolve_provider("", Some(saved));
+        let env = EnvSnapshot::default();
+        let provider = resolve_provider("", Some(saved), &env);
         assert_eq!(provider.name(), "deepseek");
         // No env, no config → Noop.
-        assert!(matches!(resolve_provider("", None), AiProvider::Noop));
+        assert!(matches!(resolve_provider("", None, &env), AiProvider::Noop));
+    }
+
+    #[test]
+    fn empty_env_provider_still_names_provider_tier() {
+        // `OXO_FLOW_AI_PROVIDER=""` (exported but empty — the common zshrc
+        // leftover) must behave exactly like an unset variable.
+        let saved = ("deepseek", "sk-test", "", "");
+        let env = EnvSnapshot::default();
+        assert_eq!(resolve_provider("", Some(saved), &env).name(), "deepseek");
+    }
+
+    #[test]
+    fn autodetect_claude_from_anthropic_gateway_shape() {
+        // The canonical gateway deployment: shell exports ANTHROPIC_AUTH_TOKEN
+        // + ANTHROPIC_BASE_URL (+ optional ANTHROPIC_MODEL). No
+        // OXO_FLOW_AI_PROVIDER, no saved config — oxo-flow used to silently
+        // disable AI here; it must now auto-detect claude with the gateway
+        // URL and model.
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("sk-gw".into()),
+            anthropic_base_url: Some("https://api.chat.example.edu.cn".into()),
+            anthropic_model: Some("glm-4".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", None, &env);
+        assert_eq!(provider.name(), "claude");
+        assert_eq!(provider.model().as_deref(), Some("glm-4"));
+        let url = provider.api_url().expect("claude always has a url");
+        // ClaudeBackend::new normalizes the bare gateway host to the
+        // /v1/messages path.
+        assert!(url.starts_with("https://api.chat.example.edu.cn"));
+        assert!(url.ends_with("/v1/messages"));
+    }
+
+    #[test]
+    fn autodetect_claude_key_var_fallback_chain() {
+        // ANTHROPIC_API_KEY and CLAUDE_API_KEY also count as credentials
+        // (parity with the web surface and the config loader).
+        for (var, val) in [("anthropic_api_key", "sk-a"), ("claude_api_key", "sk-c")] {
+            let env = EnvSnapshot {
+                anthropic_api_key: (var == "anthropic_api_key").then(|| val.to_string()),
+                claude_api_key: (var == "claude_api_key").then(|| val.to_string()),
+                ..EnvSnapshot::default()
+            };
+            assert_eq!(
+                resolve_provider("", None, &env).name(),
+                "claude",
+                "{var} must trigger claude auto-detection"
+            );
+        }
+    }
+
+    #[test]
+    fn autodetect_openai_with_compatible_base_url() {
+        let env = EnvSnapshot {
+            openai_api_key: Some("sk-o".into()),
+            openai_base_url: Some("https://gateway.example.com/v1".into()),
+            openai_model: Some("qwen-max".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", None, &env);
+        assert_eq!(provider.name(), "openai");
+        assert_eq!(provider.model().as_deref(), Some("qwen-max"));
+        let url = provider.api_url().expect("openai url");
+        assert!(url.ends_with("/chat/completions"), "got {url}");
+    }
+
+    #[test]
+    fn autodetect_deepseek_and_ollama() {
+        let deepseek = EnvSnapshot {
+            deepseek_api_key: Some("sk-ds".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", None, &deepseek);
+        assert_eq!(provider.name(), "deepseek");
+        assert_eq!(provider.model().as_deref(), Some(DEEPSEEK_DEFAULT_MODEL));
+
+        // Ollama is keyless; OLLAMA_HOST is the explicit opt-in signal.
+        let ollama = EnvSnapshot {
+            ollama_host: Some("http://localhost:11434".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", None, &ollama);
+        assert_eq!(provider.name(), "ollama");
+        let url = provider.api_url().expect("ollama url");
+        assert!(url.ends_with("/chat"), "got {url}");
+
+        // No OLLAMA_HOST → no phantom localhost daemon.
+        assert!(matches!(
+            resolve_provider("", None, &EnvSnapshot::default()),
+            AiProvider::Noop
+        ));
+    }
+
+    #[test]
+    fn detection_precedence_claude_over_openai_over_deepseek() {
+        // Multiple credentials exported at once: deterministic tie-break in
+        // claude > openai > deepseek > ollama order.
+        let both = EnvSnapshot {
+            anthropic_api_key: Some("sk-a".into()),
+            openai_api_key: Some("sk-o".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(resolve_provider("", None, &both).name(), "claude");
+
+        let openai_and_deepseek = EnvSnapshot {
+            openai_api_key: Some("sk-o".into()),
+            deepseek_api_key: Some("sk-d".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("", None, &openai_and_deepseek).name(),
+            "openai"
+        );
+    }
+
+    #[test]
+    fn saved_config_beats_autodetection() {
+        // A working saved config wins over shell credentials (Settings is
+        // the more explicit intent).
+        let saved = ("openai", "sk-saved", "", "");
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("sk-shell".into()),
+            anthropic_base_url: Some("https://api.chat.example.edu.cn".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", Some(saved), &env);
+        assert_eq!(provider.name(), "openai");
+    }
+
+    #[test]
+    fn saved_config_without_key_falls_through_to_autodetection() {
+        // A half-finished Settings save must not bury a working shell
+        // credential: empty stored key → keep looking, env tier answers.
+        let saved = ("deepseek", "", "", "");
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("sk-shell".into()),
+            anthropic_base_url: Some("https://api.chat.example.edu.cn".into()),
+            ..EnvSnapshot::default()
+        };
+        let provider = resolve_provider("", Some(saved), &env);
+        assert_eq!(provider.name(), "claude");
+        // ...and with no shell credentials either, still Noop.
+        assert!(matches!(
+            resolve_provider("", Some(saved), &EnvSnapshot::default()),
+            AiProvider::Noop
+        ));
+    }
+
+    #[test]
+    fn explicit_provider_with_missing_key_is_unconfigured() {
+        // Regression (gap b): `OXO_FLOW_AI_PROVIDER=claude` with no
+        // ANTHROPIC_AUTH_TOKEN used to build a ClaudeBackend with an empty
+        // key — passing is_usable() and firing guaranteed-401 probes. It
+        // must resolve to Noop instead. Ollama is the keyless exception.
+        let env = EnvSnapshot::default();
+        assert!(
+            matches!(resolve_provider("claude", None, &env), AiProvider::Noop),
+            "explicit claude without a key must be unconfigured"
+        );
+        assert!(matches!(
+            resolve_provider("openai", None, &env),
+            AiProvider::Noop
+        ));
+        assert!(matches!(
+            resolve_provider("deepseek", None, &env),
+            AiProvider::Noop
+        ));
+        // ...but with a credential present the provider comes alive.
+        let env_with_key = EnvSnapshot {
+            anthropic_auth_token: Some("sk-gw".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("claude", None, &env_with_key).name(),
+            "claude"
+        );
+        // Ollama never needs a key.
+        assert_eq!(resolve_provider("ollama", None, &env).name(), "ollama");
     }
 
     #[tokio::test]

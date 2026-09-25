@@ -121,8 +121,13 @@ pub async fn ai_status_command() -> Result<()> {
         println!("    {}", "oxo-flow ai setup".bold().cyan());
         println!();
         println!("  Or manually set environment variables:");
-        println!("    export OXO_FLOW_AI_PROVIDER=<provider>");
-        println!("    export <PROVIDER>_API_KEY=sk-...");
+        println!("    export OXO_FLOW_AI_PROVIDER=<deepseek|openai|claude|ollama>");
+        println!("  then set the matching credential for that provider:");
+        println!("    deepseek: export DEEPSEEK_API_KEY=sk-...");
+        println!("    openai:   export OPENAI_API_KEY=sk-...");
+        println!("    claude:   export ANTHROPIC_AUTH_TOKEN=sk-...");
+        println!("              (ANTHROPIC_BASE_URL / ANTHROPIC_MODEL are honored)");
+        println!("    ollama:   export OLLAMA_HOST=http://localhost:11434 (no key needed)");
         return Ok(());
     }
 

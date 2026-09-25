@@ -177,9 +177,13 @@ impl AiProviderRegistry {
     }
 
     pub fn create_claude_from_env() -> Result<AiProvider, anyhow::Error> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
+        // Same credential chain as the CLI provider factory: AUTH_TOKEN is
+        // what Anthropic SDKs and gateway deployments actually export;
+        // API_KEY spellings are accepted for parity.
+        let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
             .or_else(|_| std::env::var("CLAUDE_API_KEY"))
-            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
+            .map_err(|_| anyhow::anyhow!("ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) not set"))?;
         let model = std::env::var("ANTHROPIC_MODEL").ok();
         let api_url = std::env::var("ANTHROPIC_BASE_URL").ok();
         Ok(create_provider(

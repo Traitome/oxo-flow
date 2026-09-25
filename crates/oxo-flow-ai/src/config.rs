@@ -341,6 +341,7 @@ impl std::str::FromStr for AutoFixMode {
 fn resolve_api_key_from_env(provider: ProviderKind) -> Option<String> {
     match provider {
         ProviderKind::Claude => std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
             .or_else(|_| std::env::var("CLAUDE_API_KEY"))
             .or_else(|_| std::env::var("OXO_FLOW_AI_API_KEY"))
             .ok(),
