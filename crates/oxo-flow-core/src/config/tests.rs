@@ -2363,6 +2363,73 @@ fn expansion_templates_track_the_fan_out_source() {
 }
 
 #[test]
+fn module_closure_wires_config_routed_contract_producers() {
+    // Issue #468: the contract declares the input concretely while the
+    // host producer declares it through a config-routed template — the
+    // same wiring. Raw-string producer maps silently dropped the producer
+    // from the `--module` closure, so a partial run executed the module
+    // without its upstream.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.oxoflow"),
+        r#"[workflow]
+name = "m"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+input = ["raw.fq"]
+output = ["out.bam"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[config]
+raw_dir = "data"
+
+[[include]]
+path = "m.oxoflow"
+name = "mapper"
+inputs = ["data/raw.fq"]
+outputs = ["out.bam"]
+
+[[rules]]
+name = "fetch"
+output = ["{config.raw_dir}/raw.fq"]
+shell = "true"
+
+[[rules]]
+name = "unrelated"
+output = ["u.txt"]
+shell = "true"
+"#;
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    let closure = config.module_closure("mapper").expect("module exists");
+    assert!(
+        closure.contains(&"fetch".to_string()),
+        "the config-routed declared-input producer must join the closure: {closure:?}"
+    );
+
+    // The contract validation must accept the same wiring: the declared
+    // concrete input IS produced (by the config-routed host rule), and the
+    // module output declared concretely while produced through a
+    // config-routed module template is not an error.
+    let (errors, _warnings) = config.check_include_contracts();
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.contains("not produced by any rule")),
+        "config-routed producer wiring must satisfy the contract: {errors:?}"
+    );
+}
+
+#[test]
 fn module_closure_includes_contract_input_producers() {
     // Issue #112 elasticity: `--module` must include the host rules
     // producing the module's declared concrete inputs, so a partial
