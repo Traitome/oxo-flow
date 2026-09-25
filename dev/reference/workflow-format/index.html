@@ -7382,7 +7382,7 @@ disk space matters.</p>
 <td><code>protected_output</code></td>
 <td>Array</td>
 <td>No</td>
-<td>Outputs declared protected. Parsed and validated, but the current engine does not enforce protection at runtime — treat as advisory (file an issue if you need enforcement)</td>
+<td>Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to <code>&lt;name&gt;.oxo-failed</code>) and <code>oxo-flow clean</code> refuses them with a <code>(protected — skipped)</code> diagnostic, even with <code>--force</code>. Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun</td>
 </tr>
 <tr>
 <td><code>tags</code></td>
@@ -7871,7 +7871,7 @@ substitution, <code>$(( ))</code> arithmetic — work in rule shells.</p>
 <tr>
 <td><code>protected_output</code></td>
 <td>Array</td>
-<td>Declared-protected outputs; parsed but not enforced at runtime (advisory)</td>
+<td>Outputs the engine never deletes or moves aside on failure; <code>clean</code> also refuses them (see the rule-field table above)</td>
 </tr>
 <tr>
 <td><code>temporary</code></td>
