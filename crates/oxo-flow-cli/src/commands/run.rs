@@ -34,21 +34,42 @@ type SharedRunLog = Arc<std::sync::Mutex<Option<crate::logging::RunLogGuard>>>;
 ///
 /// Background runs hold no run log (their stderr already lands in it), so
 /// only the console copy is written.
+/// Append one plain-text line to the active run log (the shared guard slot).
+/// Failures degrade to a debug trace — the log is best-effort and the console
+/// copy has already gone out.
+fn write_run_log_line(run_log: &SharedRunLog, text: &str) {
+    let mut slot = run_log
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(log) = slot.as_mut() {
+        let line = format!("{}\n", text.trim_start());
+        if let Err(e) = log.write_all(line.as_bytes()) {
+            tracing::debug!(error = %e, "narrative line could not be written to the run log");
+        }
+    }
+}
+
 fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
     // --quiet silences the console copy only: the run log is an artifact the
     // report/web UI reads, not terminal noise.
     if !crate::commands::is_quiet() {
         eprintln!("{msg}");
     }
-    let mut slot = run_log
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(log) = slot.as_mut() {
-        let text = strip_ansi(&msg.to_string());
-        let line = format!("{}\n", text.trim_start());
-        if let Err(e) = log.write_all(line.as_bytes()) {
-            tracing::debug!(error = %e, "progress line could not be written to the run log");
-        }
+    write_run_log_line(run_log, &strip_ansi(&msg.to_string()));
+}
+
+/// Emit one audit-trail diagnostic line to stderr AND the run log: adoption
+/// notes, config-change summaries, and invalidation cascades explain WHY
+/// checkpoint credit was lost, and nohup/CI users only keep the run-log file
+/// (issue #484). Unlike [`progress_narrate`] the console copy is NOT gated on
+/// --quiet — these lines print unconditionally today and operators parse them.
+/// Callers outside the run path (dry-run, status) pass `None` and keep the
+/// historic stderr-only behavior; background runs also pass a file-less slot
+/// (their stderr already lands in the log), so nothing is written twice.
+fn diagnostic_narrate(msg: std::fmt::Arguments<'_>, run_log: Option<&SharedRunLog>) {
+    eprintln!("{msg}");
+    if let Some(run_log) = run_log {
+        write_run_log_line(run_log, &strip_ansi(&msg.to_string()));
     }
 }
 
@@ -225,13 +246,20 @@ fn sensitive_values_of(config: &WorkflowConfig) -> Vec<String> {
 /// recorded under a different workflow path therefore has its reuse records
 /// dropped (every rule re-executes), and one that predates workflow tracking
 /// keeps the historical behavior with a note.
-fn adopt_checkpoint_for_workflow(ck: &mut CheckpointState, workflow: &Path) {
+fn adopt_checkpoint_for_workflow(
+    ck: &mut CheckpointState,
+    workflow: &Path,
+    run_log: Option<&SharedRunLog>,
+) {
     match ck.foreign_workflow(workflow) {
         Some(true) => {
-            eprintln!(
-                "  {} checkpoint belongs to a different workflow — ignoring its \
-                 completed/failed records so nothing is reused (every rule re-executes)",
-                "Note:".yellow()
+            diagnostic_narrate(
+                format_args!(
+                    "  {} checkpoint belongs to a different workflow — ignoring its \
+                     completed/failed records so nothing is reused (every rule re-executes)",
+                    "Note:".yellow()
+                ),
+                run_log,
             );
             ck.invalidate_reuse_records();
         }
@@ -245,7 +273,7 @@ fn adopt_checkpoint_for_workflow(ck: &mut CheckpointState, workflow: &Path) {
     }
 }
 
-fn print_truncated_list(label: &str, names: &[String]) {
+fn print_truncated_list(label: &str, names: &[String]) -> String {
     // Truncate the list — a cohort-wide shell edit can mismatch hundreds of
     // expanded rule instances (e.g. step5 × 100 samples).
     let shown: Vec<&str> = names.iter().take(3).map(String::as_str).collect();
@@ -255,9 +283,10 @@ fn print_truncated_list(label: &str, names: &[String]) {
     } else {
         String::new()
     };
-    eprintln!("  {label} {}{}", shown.join(", "), suffix);
+    format!("  {label} {}{}", shown.join(", "), suffix)
 }
 
+#[allow(clippy::too_many_arguments)] // report + snapshot + config + log plumbing; all needed
 fn print_config_change_summary(
     report: &ConfigChangeReport,
     old_snapshot: &std::collections::BTreeMap<String, String>,
@@ -266,15 +295,19 @@ fn print_config_change_summary(
     order: &[String],
     completed_in_run: usize,
     rerun: bool,
+    run_log: Option<&SharedRunLog>,
 ) {
     if rerun {
         return;
     }
     if report.is_legacy {
-        eprintln!(
-            "  {} checkpoint predates config tracking: recorded a baseline snapshot; \
-             future config changes will invalidate affected rules automatically",
-            "Note:".yellow()
+        diagnostic_narrate(
+            format_args!(
+                "  {} checkpoint predates config tracking: recorded a baseline snapshot; \
+                 future config changes will invalidate affected rules automatically",
+                "Note:".yellow()
+            ),
+            run_log,
         );
         return;
     }
@@ -287,10 +320,10 @@ fn print_config_change_summary(
         return;
     }
 
-    eprintln!("{}", "Config change:".bold().cyan());
+    let mut lines: Vec<String> = vec!["Config change:".bold().cyan().to_string()];
     for key in &report.changed_keys {
         if sensitive_keys.contains(key) {
-            eprintln!("  {key}: **** → ****");
+            lines.push(format!("  {key}: **** → ****"));
         } else {
             let old = old_snapshot.get(key).map(String::as_str).unwrap_or("?");
             let new = config
@@ -298,31 +331,37 @@ fn print_config_change_summary(
                 .get(key)
                 .map(config_value_string)
                 .unwrap_or_else(|| "?".to_string());
-            eprintln!("  {key}: {old} → {new}");
+            lines.push(format!("  {key}: {old} → {new}"));
         }
     }
     for key in &report.added_keys {
-        eprintln!("  {key}: (new key)");
+        lines.push(format!("  {key}: (new key)"));
     }
     for key in &report.removed_keys {
-        eprintln!("  {key}: (removed)");
+        lines.push(format!("  {key}: (removed)"));
     }
     if !report.fingerprint_mismatches.is_empty() {
-        print_truncated_list("rule definition changed:", &report.fingerprint_mismatches);
+        lines.push(print_truncated_list(
+            "rule definition changed:",
+            &report.fingerprint_mismatches,
+        ));
     }
 
     if !report.when_flip_invalidated.is_empty() {
         // Truncate like fingerprint lists — flips can cascade across many
         // expanded instances.
-        print_truncated_list("when-condition flipped:", &report.when_flip_invalidated);
+        lines.push(print_truncated_list(
+            "when-condition flipped:",
+            &report.when_flip_invalidated,
+        ));
     }
     if !report.when_gate_exempt.is_empty() {
         // Issue #198: gates whose truth value survived the toggle keep their
         // checkpoint entries — say so, or the reuse looks like a bug.
-        print_truncated_list(
+        lines.push(print_truncated_list(
             "when-condition unchanged, reused:",
             &report.when_gate_exempt,
-        );
+        ));
     }
 
     let order_set: HashSet<&str> = order.iter().map(String::as_str).collect();
@@ -331,14 +370,17 @@ fn print_config_change_summary(
         .iter()
         .filter(|name| order_set.contains(name.as_str()))
         .count();
-    eprintln!(
+    lines.push(format!(
         "  → invalidated {} ({} directly affected), re-running {}/{} this run, skipping {}",
         report.invalidated.len(),
         report.directly_affected.len(),
         rerun_this_run,
         order.len(),
         completed_in_run,
-    );
+    ));
+    // The summary is multi-line; narrate it as one block so the run log keeps
+    // the same grouping the console shows.
+    diagnostic_narrate(format_args!("{}", lines.join("\n")), run_log);
 }
 
 /// Resolve a possibly-relative path against the current directory without
@@ -1260,7 +1302,7 @@ pub async fn run_command(
             )
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
-            print_target_skipped_note(skipped, &when_false_rules);
+            print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
         }
         if filtered_order.is_empty() {
             json_summary.emit("failed", &RunCounts::default(), vec![]);
@@ -1336,7 +1378,7 @@ pub async fn run_command(
     } else {
         CheckpointState::default()
     };
-    adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs);
+    adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs, Some(&run_log));
     let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
 
     // Sensitive keys are needed by the snapshot-drift warning below and by
@@ -1472,6 +1514,7 @@ pub async fn run_command(
         &order,
         completed_in_run,
         rerun,
+        Some(&run_log),
     );
 
     // Issue #142 M1: rules whose fingerprint differed only in the
@@ -1480,11 +1523,14 @@ pub async fn run_command(
     // input-manifest check re-verifies set + content below, so a genuine
     // input edit still invalidates there.
     if !change_report.sample_selection_exempt.is_empty() {
-        eprintln!(
-            "  {} skipped {} rule(s) whose definition only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
-            "⚠".yellow(),
-            change_report.sample_selection_exempt.len(),
-            change_report.sample_selection_exempt.join(", ")
+        diagnostic_narrate(
+            format_args!(
+                "  {} skipped {} rule(s) whose definition only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                "⚠".yellow(),
+                change_report.sample_selection_exempt.len(),
+                change_report.sample_selection_exempt.join(", ")
+            ),
+            Some(&run_log),
         );
     }
 
@@ -1543,11 +1589,14 @@ pub async fn run_command(
         // sample-selection-only.
         if !sample_selection_driven.is_empty() {
             let names: Vec<&str> = sample_selection_driven.iter().map(String::as_str).collect();
-            eprintln!(
-                "  {} skipped {} rule(s) whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
-                "⚠".yellow(),
-                names.len(),
-                names.join(", ")
+            diagnostic_narrate(
+                format_args!(
+                    "  {} skipped {} rule(s) whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                    "⚠".yellow(),
+                    names.len(),
+                    names.join(", ")
+                ),
+                Some(&run_log),
             );
         }
         // Cascade-up: missing inputs (tombstoned temporaries) re-run their
@@ -1555,11 +1604,14 @@ pub async fn run_command(
         if !missing_inputs.is_empty() {
             let upstream = crate::commands::run_preview::cascade_up(&mut ck, &dag, &missing_inputs);
             force_rules.extend(upstream.iter().cloned());
-            eprintln!(
-                "  {} missing intermediate inputs — re-running {} producer rule(s): {}",
-                "↻".yellow(),
-                upstream.len(),
-                upstream.join(", ")
+            diagnostic_narrate(
+                format_args!(
+                    "  {} missing intermediate inputs — re-running {} producer rule(s): {}",
+                    "↻".yellow(),
+                    upstream.len(),
+                    upstream.join(", ")
+                ),
+                Some(&run_log),
             );
         }
         if !mismatched.is_empty() {
@@ -1575,22 +1627,28 @@ pub async fn run_command(
             // is deterministic invalidation (shared-dir side effects shift
             // glob/dir input sets, which cascades downstream).
             let prior_failures = !ck.failed_rules.is_empty();
-            eprintln!(
-                "  {} input changes invalidated {} rule(s): {}{}",
-                "↻".yellow(),
-                invalidated.len(),
-                invalidated.join(", "),
-                if prior_failures {
-                    " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
-                } else {
-                    ""
-                }
+            diagnostic_narrate(
+                format_args!(
+                    "  {} input changes invalidated {} rule(s): {}{}",
+                    "↻".yellow(),
+                    invalidated.len(),
+                    invalidated.join(", "),
+                    if prior_failures {
+                        " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
+                    } else {
+                        ""
+                    }
+                ),
+                Some(&run_log),
             );
         }
         if baselined > 0 {
-            eprintln!(
-                "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed rule(s); future input changes will invalidate them automatically",
-                baselined
+            diagnostic_narrate(
+                format_args!(
+                    "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed rule(s); future input changes will invalidate them automatically",
+                    baselined
+                ),
+                Some(&run_log),
             );
         }
         if (!mismatched.is_empty() || baselined > 0)
@@ -1652,11 +1710,14 @@ pub async fn run_command(
         };
         if !upstream.is_empty() {
             force_rules.extend(upstream.iter().cloned());
-            eprintln!(
-                "  {} temporary outputs needed again — re-running {} producer rule(s): {}",
-                "↻".yellow(),
-                upstream.len(),
-                upstream.join(", ")
+            diagnostic_narrate(
+                format_args!(
+                    "  {} temporary outputs needed again — re-running {} producer rule(s): {}",
+                    "↻".yellow(),
+                    upstream.len(),
+                    upstream.join(", ")
+                ),
+                Some(&run_log),
             );
         }
     }
@@ -2440,7 +2501,7 @@ pub async fn run_command(
                     )
                     .with_context(|| "failed to resolve target rules")?;
                 for skipped in &skipped_targets {
-                    print_target_skipped_note(skipped, &when_false_rules);
+                    print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
                 }
                 filtered
             };
@@ -2509,7 +2570,7 @@ pub async fn run_command(
                         )
                         .with_context(|| "failed to resolve target rules")?;
                     for skipped in &skipped_targets {
-                        print_target_skipped_note(skipped, &when_false_rules);
+                        print_target_skipped_note(skipped, &when_false_rules, Some(&run_log));
                     }
                     filtered
                 };
@@ -2578,7 +2639,10 @@ pub async fn run_command(
                     });
                     skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if !is_tty {
-                        eprintln!("  {} {} (already completed)", "⊝".dimmed(), rule_name);
+                        diagnostic_narrate(
+                            format_args!("  {} {} (already completed)", "⊝".dimmed(), rule_name),
+                            Some(&run_log),
+                        );
                     }
                     progress.inc(1);
                 }
@@ -4657,7 +4721,7 @@ pub async fn dry_run_command(
             )
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
-            print_target_skipped_note(skipped, &when_false_rules);
+            print_target_skipped_note(skipped, &when_false_rules, None);
         }
         filtered
     };
@@ -4695,7 +4759,7 @@ pub async fn dry_run_command(
         };
     // Same identity gate `run` applies (audit B8): another workflow's
     // artifacts must not be reported as up to date in the plan either.
-    adopt_checkpoint_for_workflow(&mut checkpoint_state, &workflow);
+    adopt_checkpoint_for_workflow(&mut checkpoint_state, &workflow, None);
     let sensitive_keys: std::collections::HashSet<String> = config
         .config_meta
         .iter()
@@ -5678,7 +5742,11 @@ fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
 /// cascade-pruned because an UPSTREAM gate is false — the old single message
 /// claimed both were "when-gated false", which read as nonsense for gate-less
 /// rules (issue #299).
-fn print_target_skipped_note(skipped: &str, when_false_rules: &std::collections::HashSet<String>) {
+fn print_target_skipped_note(
+    skipped: &str,
+    when_false_rules: &std::collections::HashSet<String>,
+    run_log: Option<&SharedRunLog>,
+) {
     let detail = if when_false_rules.contains(skipped) {
         format!(
             "target '{skipped}' is when-gated false — it never runs; \
@@ -5690,7 +5758,7 @@ fn print_target_skipped_note(skipped: &str, when_false_rules: &std::collections:
              false; removed from the execution set"
         )
     };
-    eprintln!("{} {detail}", "Note:".yellow());
+    diagnostic_narrate(format_args!("{} {detail}", "Note:".yellow()), run_log);
 }
 
 /// Existence predicate for the target closure: an input path (config-
@@ -5783,7 +5851,7 @@ fn compute_staleness_reasons(
     // it was saved under), so adoption is a no-op — but run it anyway to keep
     // the classification path byte-identical with run's.
     let mut adopted = state.clone();
-    crate::commands::run::adopt_checkpoint_for_workflow(&mut adopted, &workflow);
+    crate::commands::run::adopt_checkpoint_for_workflow(&mut adopted, &workflow, None);
     let preview = crate::commands::run_preview::preview_run_plan(
         &adopted,
         &config,
