@@ -236,13 +236,22 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
     let validation = oxo_flow_core::format::validate_format(&config);
     let lint_diags = oxo_flow_core::format::lint_format(&config, workflow.parent());
 
-    // Read the raw file content for secret scanning
+    // Read the raw file content: secret scanning and the schema pass both
+    // need it. verify_schema (S001–S006) is wired here because the parsed
+    // config cannot retain unknown top-level keys — this is the only place
+    // S006 "unknown section" warnings can ever reach a user (issue #470).
+    // S001–S005 are unreachable post-parse; their checks stay in
+    // verify_schema as the schema-check contract.
     let raw_content = std::fs::read_to_string(&workflow).ok();
-    let secret_diags = if let Some(content) = raw_content {
-        oxo_flow_core::format::scan_for_secrets(&content)
-    } else {
-        Vec::new()
-    };
+    let schema_diags = raw_content
+        .as_deref()
+        .map(oxo_flow_core::format::verify_schema)
+        .map(|v| v.diagnostics)
+        .unwrap_or_default();
+    let secret_diags = raw_content
+        .as_deref()
+        .map(oxo_flow_core::format::scan_for_secrets)
+        .unwrap_or_default();
 
     let mut error_count = 0usize;
     let mut warning_count = 0usize;
@@ -252,6 +261,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         .diagnostics
         .iter()
         .chain(lint_diags.iter())
+        .chain(schema_diags.iter())
         .chain(secret_diags.iter())
     {
         let prefix = match d.severity {
@@ -295,6 +305,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
             .diagnostics
             .iter()
             .chain(lint_diags.iter())
+            .chain(schema_diags.iter())
             .chain(secret_diags.iter())
             .map(|d| {
                 serde_json::json!({

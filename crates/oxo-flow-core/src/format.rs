@@ -1901,7 +1901,10 @@ pub fn workflow_stats(config: &WorkflowConfig) -> WorkflowStats {
 ///
 /// This is a lighter-weight check than full parsing — it verifies the
 /// presence of required sections and correct types without constructing
-/// a full WorkflowConfig.
+/// a full WorkflowConfig. `oxo-flow validate` runs it on the raw file
+/// text: S006 (unknown top-level section, checked against the parser's
+/// own E017 whitelist) is only reachable through this pass, because the
+/// parsed config cannot retain unknown keys (issue #470).
 pub fn verify_schema(toml_content: &str) -> ValidationResult {
     let mut diagnostics = Vec::new();
 

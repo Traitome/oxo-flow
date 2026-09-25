@@ -366,6 +366,13 @@ below cover the codes referenced across this documentation.
 | `W032` | A config key looks like a secret but is not declared `sensitive` |
 | `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
 
+Schema-check codes (`S001`–`S006`) come from the raw-file schema pass
+`oxo-flow validate` runs before parsing: `S001` invalid TOML syntax,
+`S002` missing `[workflow]`, `S003` missing workflow name, `S004`
+malformed `[[rules]]`, `S005` a rule entry that is not a table, and
+`S006` an unknown top-level section (checked against the parser's own
+E017 whitelist — the documented sections are never flagged).
+
 The full, current list with suggestions is best read from the commands:
 `oxo-flow lint --json` prints every code with its message and suggestion
 (see [lint](../commands/lint.md)). AI-generated drafts that fail a gate
