@@ -63,6 +63,20 @@ pub fn config_value_string(value: &toml::Value) -> String {
     }
 }
 
+/// The `config.{key}` → stringified-value needle map every `{config.*}`
+/// expansion site resolves against (`expand_to_fixed_point`,
+/// `WorkflowDag::from_rules_with_config`). Same stringification as
+/// [`config_value_string`]: strings verbatim, other values via their TOML
+/// display form.
+pub fn config_placeholder_map(
+    config: &std::collections::HashMap<String, toml::Value>,
+) -> std::collections::HashMap<String, String> {
+    config
+        .iter()
+        .map(|(key, value)| (format!("config.{key}"), config_value_string(value)))
+        .collect()
+}
+
 /// Canonical snapshot form of a config value.
 ///
 /// Sensitive values (declared via `config_meta`) are stored as a SHA-256

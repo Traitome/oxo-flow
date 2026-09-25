@@ -109,8 +109,9 @@ pub struct ExplainPlan {
 /// `step` limits the plan to one rule (scientific findings are filtered
 /// to it as well).
 pub fn build_explain_plan(config: &WorkflowConfig, step: Option<&str>) -> Result<ExplainPlan> {
-    let dag = WorkflowDag::from_rules(&config.rules)
-        .context("failed to build workflow DAG — is the workflow valid?")?;
+    let dag =
+        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+            .context("failed to build workflow DAG — is the workflow valid?")?;
     let order = dag.execution_order()?;
 
     if let Some(name) = step

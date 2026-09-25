@@ -17,16 +17,7 @@ use tokio::sync::Mutex;
 pub(crate) fn config_placeholder_values(
     config: &HashMap<String, toml::Value>,
 ) -> HashMap<String, String> {
-    config
-        .iter()
-        .map(|(key, value)| {
-            let string_val = match value {
-                toml::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (format!("config.{key}"), string_val)
-        })
-        .collect()
+    oxo_flow_core::config_impact::config_placeholder_map(config)
 }
 
 /// The active run log, shared so spawned rule tasks can write their own
