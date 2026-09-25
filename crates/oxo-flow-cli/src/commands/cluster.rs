@@ -401,7 +401,21 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                 let (filtered, skipped_targets) = dag
-                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &target_refs,
+                        &when_false_rules,
+                        // Pre-built inputs (atacseq bwa_mem finding): the
+                        // generated scripts run in the workflow's own
+                        // directory, so existence anchors there.
+                        &|path| {
+                            let p = Path::new(path);
+                            if p.is_absolute() {
+                                p.exists()
+                            } else {
+                                workflow.parent().unwrap_or(Path::new(".")).join(p).exists()
+                            }
+                        },
+                    )
                     .with_context(|| "failed to resolve target rules")?;
                 for skipped in &skipped_targets {
                     eprintln!(

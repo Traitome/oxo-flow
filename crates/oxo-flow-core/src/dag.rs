@@ -545,6 +545,18 @@ impl WorkflowDag {
     /// `depends_on` edges record nothing and therefore never gate a
     /// consumer's dataflow. Propagation runs to a fixpoint.
     ///
+    /// Pre-built inputs (existence-aware propagation): an input group whose
+    /// concrete path already exists on disk at plan time is satisfiable
+    /// without any surviving producer — the executor would find the file.
+    /// Without this, a when-false reference-build variant that happens to
+    /// declare the same output paths as the pre-built files consumes
+    /// (exact-template match makes it the sole recorded producer) killed
+    /// every downstream rule under `-t`, even though the run itself would
+    /// succeed reading the pre-built files (live evidence: atacseq's
+    /// `ref::bwa_index` vs `bwa_mem`). `source_exists` receives the
+    /// config-expanded input path; the DAG is deliberately workdir-free, so
+    /// callers anchor the check in their own run workdir.
+    ///
     /// - A when-false node that is also an explicit target is REPORTED via
     ///   the returned `Vec` of skipped target names (the caller warns) and
     ///   excluded from the order: `-t <name>` on a never-executing variant
@@ -560,6 +572,24 @@ impl WorkflowDag {
         &self,
         targets: &[&str],
         skip: &HashSet<String>,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        // The plain constructor and most tests have no workdir to anchor an
+        // existence check in; keep the historic semantics (pure producer
+        // propagation) and only the workdir-anchored callers pass a real
+        // predicate.
+        self.execution_order_for_targets_skipping_with_source_check(targets, skip, &|_| false)
+    }
+
+    /// [`Self::execution_order_for_targets_skipping`] with an
+    /// existence predicate: an input group whose concrete path satisfies
+    /// `source_exists` (already on disk at plan time) is considered
+    /// satisfiable regardless of producer survival — see the base method's
+    /// "Pre-built inputs" note.
+    pub fn execution_order_for_targets_skipping_with_source_check(
+        &self,
+        targets: &[&str],
+        skip: &HashSet<String>,
+        source_exists: &dyn Fn(&str) -> bool,
     ) -> Result<(Vec<String>, Vec<String>)> {
         if targets.is_empty() {
             return Ok((self.execution_order()?, Vec::new()));
@@ -607,7 +637,13 @@ impl WorkflowDag {
                     continue;
                 }
                 if let Some(groups) = self.input_producers.get(name) {
-                    let is_unrunnable = groups.values().any(|producers| {
+                    let is_unrunnable = groups.iter().any(|(input_path, producers)| {
+                        // Pre-built input: the file is already on disk — the
+                        // group is satisfiable even with every producer
+                        // pruned (existence-aware propagation).
+                        if source_exists(input_path) {
+                            return false;
+                        }
                         !producers.is_empty() && producers.iter().all(|p| pruned.contains(p))
                     });
                     if is_unrunnable && pruned.insert(name.clone()) {
@@ -2588,6 +2624,82 @@ mod tests {
         );
         assert!(order.contains(&"bwa_aln".to_string()), "{order:?}");
         assert!(order.contains(&"filter".to_string()), "{order:?}");
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_prebuilt_inputs_survive_when_false_producer() {
+        // Pre-built inputs (atacseq `ref::bwa_index` shape, live finding):
+        // a when-false reference-build rule declares outputs
+        // `{config.bwa_index}.amb/.ann/...` which config-expand to exactly
+        // the paths of the pre-built index files bwa_mem reads. Exact-
+        // template match records the when-false rule as the SOLE producer,
+        // so the old propagation killed bwa_mem and everything downstream —
+        // even though the run reads the pre-built files from disk and would
+        // succeed. With an existence predicate anchored in the run workdir,
+        // the group is satisfiable and the consumer survives.
+        let config_values: HashMap<String, String> = HashMap::from([(
+            "config.bwa_index".to_string(),
+            "refs/genome/bwa/index".to_string(),
+        )]);
+        let rules = vec![
+            make_rule(
+                "bwa_index",
+                vec![],
+                vec![
+                    "{config.bwa_index}.amb",
+                    "{config.bwa_index}.ann",
+                    "{config.bwa_index}.bwt",
+                    "{config.bwa_index}.pac",
+                    "{config.bwa_index}.sa",
+                ],
+            ),
+            make_rule(
+                "bwa_mem",
+                vec![
+                    "{config.bwa_index}.amb",
+                    "{config.bwa_index}.ann",
+                    "{config.bwa_index}.bwt",
+                    "{config.bwa_index}.pac",
+                    "{config.bwa_index}.sa",
+                    "sample.r1.fq.gz",
+                ],
+                vec!["sample.bam"],
+            ),
+            make_rule("qcer", vec!["sample.r1.fq.gz"], vec!["qc.html"]),
+        ];
+        let dag = WorkflowDag::from_rules_with_config(&rules, &config_values).unwrap();
+
+        let skip = std::collections::HashSet::from(["bwa_index".to_string()]);
+
+        // Without an existence check (the plain method): bwa_mem is pruned —
+        // the historic semantics are preserved.
+        let (order, _) = dag
+            .execution_order_for_targets_skipping(&["bwa_mem"], &skip)
+            .unwrap();
+        assert!(
+            !order.contains(&"bwa_mem".to_string()),
+            "plain method must keep the kill: {order:?}"
+        );
+
+        // With a workdir-anchored existence check: the index files exist on
+        // disk, so the consumer stays in the plan. The pruned producer's own
+        // upstream is not pulled in (bwa_index has none here anyway).
+        let (order, skipped) = dag
+            .execution_order_for_targets_skipping_with_source_check(&["bwa_mem"], &skip, &|path| {
+                path.starts_with("refs/")
+            })
+            .unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert!(order.contains(&"bwa_mem".to_string()), "{order:?}");
+        assert!(!order.contains(&"bwa_index".to_string()), "{order:?}");
+
+        // Missing pre-built files: the kill returns (the executor would
+        // indeed fail on the missing file).
+        let (order, skipped) = dag
+            .execution_order_for_targets_skipping_with_source_check(&["bwa_mem"], &skip, &|_| false)
+            .unwrap();
+        assert_eq!(skipped, vec!["bwa_mem".to_string()]);
+        assert!(order.is_empty());
     }
 
     #[test]

@@ -1259,7 +1259,14 @@ pub async fn run_command(
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
         let (filtered_order, skipped_targets) = dag
-            .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+            .execution_order_for_targets_skipping_with_source_check(
+                &target_refs,
+                &when_false_rules,
+                // Pre-built inputs (atacseq bwa_mem finding): an input whose
+                // concrete file already exists in the run workdir is
+                // satisfiable — a when-false producer must not gate it.
+                &|path| run_workdir_check(Some(workdir.as_ref().unwrap_or(&workdir_default)), path),
+            )
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
             print_target_skipped_note(skipped, &when_false_rules);
@@ -2430,7 +2437,16 @@ pub async fn run_command(
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                 let (filtered, skipped_targets) = dag
-                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &target_refs,
+                        &when_false_rules,
+                        &|path| {
+                            run_workdir_check(
+                                Some(workdir.as_ref().unwrap_or(&workdir_default)),
+                                path,
+                            )
+                        },
+                    )
                     .with_context(|| "failed to resolve target rules")?;
                 for skipped in &skipped_targets {
                     print_target_skipped_note(skipped, &when_false_rules);
@@ -2490,7 +2506,16 @@ pub async fn run_command(
                 } else {
                     let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                     let (filtered, skipped_targets) = dag
-                        .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                        .execution_order_for_targets_skipping_with_source_check(
+                            &target_refs,
+                            &when_false_rules,
+                            &|path| {
+                                run_workdir_check(
+                                    Some(workdir.as_ref().unwrap_or(&workdir_default)),
+                                    path,
+                                )
+                            },
+                        )
                         .with_context(|| "failed to resolve target rules")?;
                     for skipped in &skipped_targets {
                         print_target_skipped_note(skipped, &when_false_rules);
@@ -4619,7 +4644,14 @@ pub async fn dry_run_command(
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
         let (filtered, skipped_targets) = dag
-            .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+            .execution_order_for_targets_skipping_with_source_check(
+                &target_refs,
+                &when_false_rules,
+                // Pre-built inputs (atacseq bwa_mem finding): see the main
+                // target-closure call — existence in the dry-run base dir
+                // keeps the consumer plannable.
+                &|path| run_workdir_check(Some(base_dir), path),
+            )
             .with_context(|| "failed to resolve target rules")?;
         for skipped in &skipped_targets {
             print_target_skipped_note(skipped, &when_false_rules);
@@ -4727,7 +4759,11 @@ pub async fn dry_run_command(
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                 let (filtered, _) = dag
-                    .execution_order_for_targets_skipping(&target_refs, &when_false_rules)
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &target_refs,
+                        &when_false_rules,
+                        &|path| run_workdir_check(Some(base_dir), path),
+                    )
                     .with_context(|| "failed to resolve target rules")?;
                 filtered
             };
@@ -5652,6 +5688,25 @@ fn print_target_skipped_note(skipped: &str, when_false_rules: &std::collections:
         )
     };
     eprintln!("{} {detail}", "Note:".yellow());
+}
+
+/// Existence predicate for the target closure: an input path (config-
+/// expanded, relative to the workflow DAG) that already exists in the run
+/// workdir is a pre-built input — the executor will find it, so a pruned
+/// when-false producer must not gate the consumer. Absolute paths resolve
+/// as-is; the run_workdir-check exists so every call site stays anchored in
+/// ITS effective workdir (`run` uses the run workdir, dry-run the plan base
+/// dir).
+fn run_workdir_check(workdir: Option<&std::path::Path>, path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        p.exists()
+    } else {
+        workdir
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(p)
+            .exists()
+    }
 }
 
 /// Per-rule staleness reasons for `status` (issue #432(c)).
