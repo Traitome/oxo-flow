@@ -8,9 +8,14 @@
 #   - demultiplexed, gzipped paired-end FASTQs in raw/ named with the
 #     Casava 1.8 convention the import format below requires:
 #     {sample}_S1_L001_R1_001.fastq.gz / {sample}_S1_L001_R2_001.fastq.gz
-#   - a metadata.tsv with sample-id + barcode columns (diversity analysis)
-#   - optionally a pre-trained classifier for the target 16S region
-#     (e.g. silva-138-99-515-806-nb-classifier.qza)
+#   - a metadata.tsv in QIIME2 metadata format listing every sample
+#     (first column `sample-id`; the optional `#q2:types` directive row
+#     must come immediately after the header row) — used by the feature
+#     table summary and the diversity analysis
+#   - a pre-trained classifier for the target 16S region for the
+#     classify_taxonomy rule (e.g. silva-138-99-515-806-nb-classifier.qza);
+#     it must be trained under the same scikit-learn version as your
+#     QIIME2 env — classifiers from other QIIME2 releases are refused
 
 [workflow]
 name = "16s_qiime2_amplicon"
@@ -30,8 +35,13 @@ trunc_len_r = 250
 sampling_depth = 1000
 # Optional: pre-trained classifier for the target 16S region
 # (e.g. silva-138-99-515-806-nb-classifier.qza). Set via
-# `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`;
-# without it, skip the classify step or train a classifier first.
+# `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`.
+# The classifier artifact must have been trained under the scikit-learn
+# version of your QIIME2 env (classify-sklearn hard-fails otherwise, so
+# download the classifier matching your release or train one with
+# `qiime feature-classifier fit-classifier-naive-bayes`). Leaving it
+# empty makes classify_taxonomy fail with "--i-classifier option
+# requires an argument" — pass a path or skip the rule.
 classifier = ""
 
 [[rules]]
