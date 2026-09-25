@@ -4903,6 +4903,9 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
                 .iter()
                 .any(|d| d.code == "W007" && d.rule.as_deref() == Some("produce")),
             "a config-routed consumer must make the producer a non-leaf: {diagnostics:?}"
+        );
+    }
+
     #[test]
     fn validate_config_routed_producer_satisfies_concrete_input() {
         // Issue #467: the producer writes `{config.out}/x.txt`; the
