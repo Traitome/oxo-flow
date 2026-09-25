@@ -259,7 +259,7 @@ output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
 Alternative writers that must never both run can share a path safely when
 gated with mutually exclusive `when` conditions (see the
 `wgs_coverage`/`wes_coverage` idiom in the [conditional execution
-gallery](../../gallery/conditional-workflow.md)); `lint` still reports the
+gallery](../gallery/conditional-workflow.md)); `lint` still reports the
 pair so the intent stays visible.
 
 ### Deadlock detected
