@@ -13,7 +13,7 @@ use oxo_flow_core::config_impact::is_engine_injected_key;
 use oxo_flow_core::rule::{EnvironmentSpec, Rule};
 use oxo_flow_core::scheduler::parse_memory_mb;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Derive and print catalog metadata for a workflow file.
@@ -195,8 +195,18 @@ fn derive_meta(
         "sample_groups": sample_groups,
         "pairs": pairs,
         "references": references,
-        "input_dirs": top_level_dirs(cfg.rules.iter().flat_map(|rule| rule.input.to_vec())),
-        "output_dirs": top_level_dirs(cfg.rules.iter().flat_map(|rule| rule.output.to_vec())),
+        "input_dirs": top_level_dirs(
+            cfg.rules
+                .iter()
+                .flat_map(|rule| rule.input.to_vec())
+                .map(|path| expand_config_in_path(&path, &cfg.config)),
+        ),
+        "output_dirs": top_level_dirs(
+            cfg.rules
+                .iter()
+                .flat_map(|rule| rule.output.to_vec())
+                .map(|path| expand_config_in_path(&path, &cfg.config)),
+        ),
     });
     // Git provenance (issue #124 pillar 3): a workflow inside a git
     // repository is uniquely addressable as repo + git ref. Keys are
@@ -453,8 +463,43 @@ fn image_name(image: &str) -> String {
         .to_string()
 }
 
+/// Expand `{config.key}` placeholders in a path against `[config]`, so
+/// config-routed outputs like `{config.out_dir}/{sample}.txt` contribute
+/// their real top-level directory. Mirrors `expand_config_vars_in_path`
+/// (core, `pub(crate)`): stringify non-string values via their TOML display
+/// form, then expand to a fixed point so chained references resolve.
+fn expand_config_in_path(path: &str, config: &HashMap<String, toml::Value>) -> String {
+    let stringified: HashMap<String, String> = config
+        .iter()
+        .map(|(key, value)| {
+            let string_val = match value {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (format!("config.{key}"), string_val)
+        })
+        .collect();
+    let mut result = path.to_string();
+    for _ in 0..16 {
+        let mut changed = false;
+        for (placeholder, rendered) in &stringified {
+            let needle = format!("{{{placeholder}}}");
+            if result.contains(&needle) {
+                result = result.replace(&needle, rendered);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    result
+}
+
 /// Top-level directory names of input/output patterns (deduped, sorted).
-/// Wildcard components like `{config.x}` are placeholders, not directories.
+/// `{config.x}` placeholders are resolved by the caller against `[config]`
+/// before this filter runs; any `{sample}`-style wildcards that remain are
+/// placeholders, not directories.
 fn top_level_dirs<I>(paths: I) -> Vec<String>
 where
     I: IntoIterator<Item = String>,
@@ -621,6 +666,65 @@ mod tests {
         assert_eq!(conda_stem("envs/samtools.yml"), "samtools");
         assert_eq!(conda_stem("qc.yaml"), "qc");
         assert_eq!(conda_stem(""), "");
+    }
+
+    #[test]
+    fn derive_meta_output_dirs_resolve_config_placeholders() {
+        let dir = std::env::temp_dir().join("of-info-cfg-dirs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cfg-dirs.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+[workflow]
+name = "cfg-dirs"
+version = "1.0.0"
+
+[config]
+out_dir = "results"
+
+[[rules]]
+name = "step1"
+input = ["raw/{sample}.fastq"]
+output = ["{config.out_dir}/{sample}.txt"]
+shell = "cp {input} {output}"
+"#,
+        )
+        .unwrap();
+
+        let meta = meta("cfg-dirs.oxoflow", path.to_str().unwrap());
+        assert_eq!(meta["output_dirs"], json!(["results"]));
+        assert_eq!(meta["input_dirs"], json!(["raw"]));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn derive_meta_output_dirs_keep_sample_wildcards_out() {
+        let dir = std::env::temp_dir().join("of-info-wildcard-dirs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wildcard-dirs.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+[workflow]
+name = "wildcard-dirs"
+version = "1.0.0"
+
+[[rules]]
+name = "step1"
+input = ["raw/{sample}.fastq"]
+output = ["{sample}/out.txt"]
+shell = "cp {input} {output}"
+"#,
+        )
+        .unwrap();
+
+        // `{sample}` resolves per-sample at run time, so its first segment
+        // is a wildcard value, not a static directory.
+        let meta = meta("wildcard-dirs.oxoflow", path.to_str().unwrap());
+        assert_eq!(meta["output_dirs"], json!([]));
+        assert_eq!(meta["input_dirs"], json!(["raw"]));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

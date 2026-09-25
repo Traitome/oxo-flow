@@ -35,8 +35,8 @@ oxo-flow info [OPTIONS] <WORKFLOW>
 ```json
 {
   "name": "simple-variant-calling",
-  "version": "0.20.1",
-  "rule_count": 6,
+  "version": "1.0.0",
+  "rule_count": 7,
   "tools": ["alignment", "fastp", "gatk", "qc"],
   "resources": { "max_threads": 16, "max_memory": "32G" },
   "environments": { "conda": 3, "singularity": 4 },
@@ -46,20 +46,15 @@ oxo-flow info [OPTIONS] <WORKFLOW>
       "default": "/data/reference/GRCh38.fa",
       "value_type": "string",
       "used_by": ["apply_bqsr", "base_recalibrator", "bwa_align", "haplotype_caller"]
-    },
-    {
-      "key": "out_dir",
-      "default": "results",
-      "value_type": "string",
-      "used_by": [],
-      "description": "Output directory (upstream: --outdir)."
     }
   ],
-  "sample_groups": [],
+  "sample_groups": [
+    { "name": "samples", "samples": ["NA12878", "NA12891", "NA12892"] }
+  ],
   "pairs": [],
   "references": [],
-  "input_dirs": ["raw"],
-  "output_dirs": ["aligned", "qc", "variants"],
+  "input_dirs": ["aligned", "dedup", "raw", "recal", "trimmed"],
+  "output_dirs": ["aligned", "dedup", "qc", "recal", "trimmed", "variants"],
   "git_sha": "8f005dab60a0ce024acc5048885d88e246119b5c",
   "git_remote": "https://github.com/example/simple-variant-calling.git",
   "git_describe": "v0.20.1"
@@ -102,6 +97,11 @@ oxo-flow info [OPTIONS] <WORKFLOW>
 - **`resources`** — max threads/memory across rules on the defaults-applied
   view (the same value the engine uses at run time), in the winning rule's
   original string format.
+- **`input_dirs` / `output_dirs`** — the top-level directory of every rule
+  input/output pattern, deduped and sorted. `{config.key}` placeholders are
+  resolved against `[config]` first, so a config-routed output like
+  `{config.out_dir}/{sample}.txt` reports `out_dir`'s value. `{sample}`
+  -style wildcards resolve per-sample at run time and are excluded.
 
 ---
 
@@ -118,6 +118,10 @@ Workflow: rnaseq v0.20.1
 Rules: 44
 Config keys: fasta = refs/genome.fa, reads_dir = test/fixtures/raw, ...
 ```
+
+The `text` format prints the same derived fields as the JSON, one per line
+(`Input dirs: …`, `Output dirs: …`, …) — it is a rendering of the identical
+metadata, not a separate source.
 
 ### Feed the catalog pipeline
 
