@@ -871,8 +871,13 @@ mod tests {
             classifier["description"],
             "Optional: pre-trained classifier for the target 16S region\n\
              (e.g. silva-138-99-515-806-nb-classifier.qza). Set via\n\
-             `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`;\n\
-             without it, skip the classify step or train a classifier first."
+             `oxo-flow run wf.oxoflow classifier=/path/to/classifier.qza`.\n\
+             The classifier artifact must have been trained under the scikit-learn\n\
+             version of your QIIME2 env (classify-sklearn hard-fails otherwise, so\n\
+             download the classifier matching your release or train one with\n\
+             `qiime feature-classifier fit-classifier-naive-bayes`). Leaving it\n\
+             empty makes classify_taxonomy fail with \"--i-classifier option\n\
+             requires an argument\" — pass a path or skip the rule."
         );
 
         // Uncommented keys omit the field entirely. Example 11 has a bare
