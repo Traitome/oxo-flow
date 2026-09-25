@@ -4,7 +4,9 @@
 //! managers (conda, pixi, docker, singularity, venv) and a resolver that
 //! selects the appropriate backend for each rule.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+    BTreeSet, {HashMap, HashSet},
+};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -1499,7 +1501,10 @@ fi
 /// setup work can be avoided across rules sharing the same environment.
 #[derive(Debug, Default)]
 pub struct EnvironmentCache {
-    ready: HashSet<String>,
+    /// BTreeSet: the cache file is persisted, and HashSet element order is
+    /// process-random — the on-disk file must not shuffle across restarts
+    /// (issue #471).
+    ready: BTreeSet<String>,
     /// Path to the cache file for persistence (optional).
     cache_file: Option<std::path::PathBuf>,
 }
@@ -1514,7 +1519,7 @@ impl EnvironmentCache {
     pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
         let cache_file = cache_dir.join("environment_cache.json");
         let mut cache = Self {
-            ready: HashSet::new(),
+            ready: BTreeSet::new(),
             cache_file: Some(cache_file.clone()),
         };
 
