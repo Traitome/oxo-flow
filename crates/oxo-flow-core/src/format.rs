@@ -1703,7 +1703,7 @@ pub fn lint_format(
     // `variants/{sample}.vcf` passed validate/lint/graph and both executed,
     // the second overwriting the first — while troubleshooting.md promised
     // the engine "reports an `Output pattern collision` error and refuses
-    // to run". That dormant check (`WorkflowDag::detect_output_collisions`)
+    // to run". That dormant check was removed (W033 supersedes it): it
     // required BOTH outputs to contain wildcards and compared raw
     // templates, so differently-named wildcards never matched.
     //

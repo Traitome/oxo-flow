@@ -1956,36 +1956,6 @@ impl std::fmt::Display for DagMetrics {
 }
 
 impl WorkflowDag {
-    /// Detect output pattern collisions between rules.
-    ///
-    /// Returns a list of warnings when multiple rules produce outputs that
-    /// match the same pattern.
-    #[must_use]
-    pub fn detect_output_collisions(rules: &[crate::rule::Rule]) -> Vec<String> {
-        let mut warnings = Vec::new();
-        for (i, r1) in rules.iter().enumerate() {
-            for r2 in rules.iter().skip(i + 1) {
-                for o1 in &r1.output {
-                    for o2 in &r2.output {
-                        // Strip wildcards for pattern comparison
-                        let p1 = crate::wildcard::extract_wildcards(o1);
-                        let p2 = crate::wildcard::extract_wildcards(o2);
-                        // If same wildcards produce same template
-                        let t1 = o1.replace(['{', '}'], "");
-                        let t2 = o2.replace(['{', '}'], "");
-                        if t1 == t2 && !p1.is_empty() && !p2.is_empty() {
-                            warnings.push(format!(
-                                "Output pattern collision: rules '{}' and '{}' both produce '{}' with overlapping wildcards",
-                                r1.name, r2.name, o1
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        warnings
-    }
-
     /// Compute complexity metrics for the DAG.
     #[must_use = "computing metrics returns a Result that must be used"]
     pub fn metrics(&self) -> Result<DagMetrics> {
@@ -2812,38 +2782,6 @@ mod tests {
         let groups = dag.parallel_groups().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], vec!["only"]);
-    }
-
-    #[test]
-    fn detect_output_collisions_none() {
-        let r1 = crate::rule::Rule {
-            name: "align".to_string(),
-            output: vec!["aligned/{sample}.bam".to_string()].into(),
-            ..Default::default()
-        };
-        let r2 = crate::rule::Rule {
-            name: "sort".to_string(),
-            output: vec!["sorted/{sample}.bam".to_string()].into(),
-            ..Default::default()
-        };
-        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn detect_output_collisions_found() {
-        let r1 = crate::rule::Rule {
-            name: "caller_a".to_string(),
-            output: vec!["{sample}.vcf".to_string()].into(),
-            ..Default::default()
-        };
-        let r2 = crate::rule::Rule {
-            name: "caller_b".to_string(),
-            output: vec!["{sample}.vcf".to_string()].into(),
-            ..Default::default()
-        };
-        let warnings = WorkflowDag::detect_output_collisions(&[r1, r2]);
-        assert!(!warnings.is_empty());
     }
 
     #[test]
