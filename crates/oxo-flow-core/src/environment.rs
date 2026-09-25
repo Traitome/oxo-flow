@@ -563,14 +563,18 @@ const SHELL_WORD_BREAKS: &[char] = &[
 /// Whether a host path may be bind-mounted read-only into a container.
 ///
 /// Refuses the workdir itself (already mounted read-write), the protected
-/// toolchain prefixes, and paths that do not exist on the host — docker
+/// toolchain prefixes, paths that do not exist on the host — docker
 /// silently creates a directory for a missing `-v` source, which would
-/// paper over a typo as an empty mount.
+/// paper over a typo as an empty mount — and root-normalized paths (`/`,
+/// `//`, `///`): a token like the `//` produced by `sed 's/^prefix //'`
+/// is shell syntax residue, not a real host path, and mounting it fails
+/// with "destination can't be '/'".
 fn is_bindable_host_path(path: &std::path::Path, workdir: &str) -> bool {
-    let Some(text) = path.to_str() else {
-        return false;
-    };
-    if !path.is_absolute() || text == "/" {
+    let is_only_root = path.is_absolute()
+        && path
+            .components()
+            .all(|c| matches!(c, std::path::Component::RootDir));
+    if is_only_root {
         return false;
     }
     let workdir = std::path::Path::new(workdir);
@@ -2623,6 +2627,28 @@ mod tests {
             wrapped.matches(&format!("-v '{db}':'{db}':ro")).count(),
             1,
             "one mount per distinct path: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn docker_wrap_does_not_mount_shell_syntax_residue_as_root() {
+        // The chipseq workflow's engine-version probe uses the sed idiom
+        // `sed 's/^oxo-flow //'`; word-splitting the raw command yields a
+        // standalone `//` token that stat()s as root and used to be
+        // bind-mounted as `-v '//':'//':ro`, which the daemon rejects
+        // ("destination can't be '/'") and so killed the whole rule.
+        let workdir = mountable_scratch_dir();
+        let wrapped = DockerBackend
+            .wrap_command(
+                "oxo-flow --version | sed 's/^oxo-flow //' > ver.txt",
+                "ubuntu:24.04",
+                None,
+                workdir.path(),
+            )
+            .unwrap();
+        assert!(
+            !wrapped.contains("'//'"),
+            "shell-residue tokens must not become mounts: {wrapped}"
         );
     }
 
