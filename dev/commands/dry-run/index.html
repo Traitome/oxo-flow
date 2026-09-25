@@ -4146,6 +4146,19 @@ stays silent (issue #441). It also stays silent when the config declares
 its advice is evidence-driven: determine strandedness with RSeQC
 <code>infer_experiment.py</code> or the samplesheet's strandedness column before
 setting <code>-s 1</code>/<code>-s 2</code>.</p>
+<p>The <code>SCI-AGG-RACE</code> check flags an aggregation rule whose inputs/shell/when
+(or <code>expand_inputs</code> patterns) reference a fan-out wildcard — <code>{sample}</code> /
+<code>{group}</code>, a pair wildcard, a <code>[[values]]</code> table name, or an
+<code>output_pattern</code> producer's fresh wildcard — while its declared outputs
+contain <strong>no</strong> wildcard (issue #443). Expansion then creates one instance
+per fan-out element with every instance writing the same output path:
+concurrently they race, sequentially they duplicate work N−1 times. The
+remedy is the documented aggregation idiom: reference the per-sample files
+via <code>expand_inputs</code> (or key the outputs by the wildcard). The detector
+mirrors the engine's fan-out semantics, so rules whose outputs do carry
+the wildcard, <code>input_groups</code> rules, <code>output_pattern</code> producers, consumers
+keyed by the producer's fresh wildcard, and <code>when</code>-gated-off rules stay
+silent.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># A 2-sample pilot of a VQSR workflow fails for scientific reasons —</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># the preflight says so before any compute is spent</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--samples<span class="w"> </span>first:2

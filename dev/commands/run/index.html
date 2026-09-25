@@ -4579,7 +4579,7 @@
 </tr>
 <tr>
 <td><code>[KEY=VALUE]...</code></td>
-<td>Direct config overrides: <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> work for any key; the <code>--KEY VALUE</code> space form requires the key to be <strong>declared</strong> in <code>[config]</code> (<code>key = { default = …, help = … }</code>) — an undeclared <code>--KEY VALUE</code> is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd <code>--key=val</code> after the workflow still sets a config var, so prefer the <code>=</code> forms for undeclared keys)</td>
+<td>Direct config overrides: <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> work for any key; the <code>--KEY VALUE</code> space form also works for any key present in <code>[config]</code> (plain <code>key = "value"</code> entries included) — a key absent from <code>[config]</code> is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd <code>--key=val</code> after the workflow still sets a config var, so prefer the <code>=</code> forms for undeclared keys)</td>
 </tr>
 </tbody>
 </table>
