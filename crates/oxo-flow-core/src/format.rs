@@ -2136,13 +2136,33 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
     // This preserves ALL sections (pairs, sample_groups, includes, env_groups,
     // resource_budget, plugins, citation, etc.) and correctly escapes
     // strings containing special characters (quotes, newlines).
-    toml::to_string_pretty(config).unwrap_or_else(|e| {
-        format!(
-            "# Serialization error: {}\n# Falling back to inline format\n{}",
-            e,
-            toml::to_string(config).unwrap_or_default()
-        )
-    })
+    //
+    // Determinism: `WorkflowConfig` contains HashMap fields (config,
+    // metadata, interpreter_map, …) whose iteration order is process-random,
+    // so serializing the struct directly yields a different key order on
+    // every run. Roundtripping through `toml::Value` first sorts every map
+    // (toml's Map is BTreeMap-backed), making the output — and the `format
+    // --check` gate built on it — stable across processes. This mirrors
+    // `canonical_toml_map` in config_impact.rs, which sorts maps for the
+    // same reason when hashing fingerprints.
+    match toml::Value::try_from(config) {
+        Ok(value) => toml::to_string_pretty(&value).unwrap_or_else(|e| {
+            format!(
+                "# Serialization error: {}\n# Falling back to inline format\n{}",
+                e,
+                toml::to_string(&value).unwrap_or_default()
+            )
+        }),
+        // Value conversion only fails if the struct itself is not
+        // serializable (should not happen); fall back to direct serialization.
+        Err(_) => toml::to_string_pretty(config).unwrap_or_else(|e| {
+            format!(
+                "# Serialization error: {}\n# Falling back to inline format\n{}",
+                e,
+                toml::to_string(config).unwrap_or_default()
+            )
+        }),
+    }
 }
 
 /// A single difference between two workflow configurations.
@@ -3111,6 +3131,91 @@ mod tests {
         let reparsed = WorkflowConfig::parse(&formatted).unwrap();
         assert_eq!(reparsed.workflow.name, config.workflow.name);
         assert_eq!(reparsed.rules.len(), config.rules.len());
+    }
+
+    /// Declarative `[config]` entries (`key = { default = … }`) populate the
+    /// internal `config_meta` map. That map must never leak into formatted
+    /// output: `config_meta` is not a .oxoflow top-level key, so a formatted
+    /// workflow that emitted it would fail reparse with E017.
+    #[test]
+    fn format_omits_config_meta_and_output_reparses() {
+        let src = r#"
+[workflow]
+name = "declarative"
+version = "1.0.0"
+
+[config]
+threads = { default = 4, description = "thread count" }
+results = "out"
+
+[[rules]]
+name = "step1"
+output = ["{config.results}/done.txt"]
+shell = "echo done > {config.results}/done.txt"
+"#;
+        let config = WorkflowConfig::parse(src).unwrap();
+        assert!(
+            !config.config_meta.is_empty(),
+            "precondition: declarative entry populates config_meta"
+        );
+        let formatted = format_workflow(&config);
+        assert!(
+            !formatted.contains("config_meta"),
+            "config_meta leaked into formatted output:\n{formatted}"
+        );
+        // The default survives as the runtime value for `{config.threads}`.
+        assert!(formatted.contains("threads = \"4\""), "{formatted}");
+        WorkflowConfig::parse(&formatted)
+            .unwrap_or_else(|e| panic!("formatted declarative workflow must reparse: {e}"));
+    }
+
+    /// `format` output must be byte-identical across runs: WorkflowConfig has
+    /// HashMap fields whose iteration order is process-random, and a flaky
+    /// ordering makes the `--check` gate fail nondeterministically (it would
+    /// flag formatted files as dirty and pass unformatted ones by luck).
+    /// Mirrors `fingerprint_deterministic_regardless_of_hashmap_order` in
+    /// config_impact.rs.
+    #[test]
+    fn format_output_deterministic_regardless_of_hashmap_order() {
+        // ≥2 config keys is the minimum for observable shuffling.
+        let src = r#"
+[workflow]
+name = "multi-config"
+version = "1.0.0"
+
+[config]
+alpha = "a"
+bravo = "b"
+charlie = "c"
+delta = "d"
+echo = "e"
+foxtrot = "f"
+
+[defaults]
+threads = 4
+
+[[rules]]
+name = "step1"
+output = ["{config.results}/done.txt"]
+shell = "echo {config.alpha} > {config.results}/done.txt"
+"#;
+        // A single process serializes the same HashMap iteration order every
+        // time, so compare against the Value-sorted canonical form instead of
+        // a second in-process run: the assertion is that direct struct
+        // serialization and the canonical roundtrip agree byte-for-byte,
+        // i.e. the HashMap order reached the output unchanged.
+        let config = WorkflowConfig::parse(src).unwrap();
+        let formatted = format_workflow(&config);
+        let value = toml::Value::try_from(&config).unwrap();
+        let canonical = toml::to_string_pretty(&value).unwrap();
+        assert_eq!(
+            formatted, canonical,
+            "format output must equal the Value-sorted canonical form"
+        );
+        // And the canonical form must itself reparse to the same workflow.
+        let reparsed = WorkflowConfig::parse(&canonical).unwrap();
+        assert_eq!(reparsed.config.len(), 6);
+        assert_eq!(reparsed.rules.len(), 1);
     }
 
     #[test]
