@@ -1263,11 +1263,39 @@ pub struct Rule {
 
     /// Temporary output files that should be cleaned up after downstream
     /// rules complete.
+    ///
+    /// # Failure-only cleanup
+    ///
+    /// `temp_output` entries are removed only when the rule **fails**
+    /// (issue #456): a failed attempt's stale partial files are deleted so
+    /// they can never masquerade as fresh outputs on the next run. On
+    /// success the files persist — because on success they are the
+    /// declared outputs, which downstream rules and freshness checks need
+    /// on disk. To have intermediate files deleted after downstream rules
+    /// complete on the success path, use `temporary = true` instead,
+    /// which persists the declaration to a tombstone before deletion.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub temp_output: Vec<String>,
 
-    /// Protected output files that should never be overwritten or deleted.
+    /// Protected output files that must never be deleted or moved aside by
+    /// engine-managed cleanup paths.
+    ///
+    /// # Enforcement
+    ///
+    /// Two paths honor this (issue #457):
+    ///
+    /// - **Failure invalidation** — when a rule fails after writing into a
+    ///   pre-existing file, the engine normally moves that file aside to
+    ///   `<name>.oxo-failed`. Protected paths are skipped entirely, left
+    ///   exactly as the failed attempt left them.
+    /// - **`oxo-flow clean`** — protected paths are excluded from deletion
+    ///   with a `(protected — skipped)` diagnostic, even with `--force`.
+    ///
+    /// Protection is advisory in the remaining sense: the rule's own
+    /// command can still overwrite the file on a rerun. Use it to mark
+    /// outputs that are expensive or impossible to regenerate and must
+    /// survive failure cleanup.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protected_output: Vec<String>,

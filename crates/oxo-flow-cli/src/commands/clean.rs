@@ -171,6 +171,7 @@ pub fn clean_command(
 
     // Collect unique output paths, expanding config variable placeholders
     let mut outputs: Vec<String> = Vec::new();
+    let mut protected_patterns: Vec<String> = Vec::new();
     for rule in &config.rules {
         for output in &rule.output {
             let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
@@ -181,7 +182,45 @@ pub fn clean_command(
                 outputs.push(expanded);
             }
         }
+        // `protected_output` paths are expanded the same way so patterns
+        // like "results/{sample}.bam" line up with declared outputs
+        // (issue #457) — clean must refuse to delete them.
+        for p in &rule.protected_output {
+            let expanded =
+                oxo_flow_core::executor::checkpoint::expand_config_in_path(p, &wildcard_values);
+            if !protected_patterns.contains(&expanded) {
+                protected_patterns.push(expanded);
+            }
+        }
     }
+
+    // A resolved path is protected when it is the expanded pattern itself,
+    // or when a wildcarded protected pattern globs onto it.
+    let is_protected = |path: &Path| -> bool {
+        protected_patterns.iter().any(|pattern| {
+            if pattern.contains('{') && pattern.contains('}') {
+                let glob_pattern = replace_oxoflow_wildcards_with_glob(pattern);
+                let full_glob = if Path::new(&glob_pattern).is_absolute() {
+                    glob_pattern.clone()
+                } else {
+                    workdir.join(&glob_pattern).to_string_lossy().to_string()
+                };
+                glob::glob(&full_glob)
+                    .map(|paths| {
+                        paths.flatten().any(|m| {
+                            m.canonicalize().unwrap_or(m)
+                                == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                        })
+                    })
+                    .unwrap_or(false)
+            } else {
+                resolve_output_path(&workdir, pattern)
+                    .canonicalize()
+                    .unwrap_or_else(|_| resolve_output_path(&workdir, pattern))
+                    == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+            }
+        })
+    };
 
     // Resolve wildcard patterns to actual files via glob.
     //
@@ -229,7 +268,12 @@ pub fn clean_command(
     if is_dry_run {
         eprintln!("{}", "Would clean (dry-run):".bold().yellow());
         for (_, path) in &resolved {
-            if path.exists() {
+            if is_protected(path) {
+                eprintln!(
+                    "  {} (protected — skipped)",
+                    path.display().to_string().dimmed()
+                );
+            } else if path.exists() {
                 eprintln!("  {} (exists)", path.display().to_string().dimmed());
             } else {
                 eprintln!("  {} (not found)", path.display().to_string().dimmed());
@@ -265,6 +309,7 @@ pub fn clean_command(
         let skipped_wildcard = unresolved_wildcards.len();
         let mut not_found = 0usize;
         let mut rejected = 0usize;
+        let mut protected = 0usize;
 
         for (declared, path) in &resolved {
             if declared.contains("..") || declared.starts_with('/') || declared.starts_with('~') {
@@ -274,6 +319,17 @@ pub fn clean_command(
                     declared
                 );
                 rejected += 1;
+            } else if is_protected(path) {
+                // `protected_output` is never deletable via `clean` (issue
+                // #457) — not in dry-run listing as deletable, not with
+                // --force, not with confirmation. The file may still be
+                // managed manually by the user.
+                eprintln!(
+                    "  {} {} (protected — skipped)",
+                    "⊘".yellow(),
+                    path.display()
+                );
+                protected += 1;
             } else if path.exists() {
                 deletable.push(path.clone());
             } else {
@@ -283,11 +339,12 @@ pub fn clean_command(
 
         if deletable.is_empty() {
             eprintln!(
-                "{} Nothing to delete ({} not found, {} wildcard skipped, {} rejected)",
+                "{} Nothing to delete ({} not found, {} wildcard skipped, {} rejected, {} protected)",
                 "Clean:".bold(),
                 not_found,
                 skipped_wildcard,
-                rejected
+                rejected,
+                protected
             );
         } else {
             // Confirmation prompt before destructive action (interactive only)
@@ -322,13 +379,14 @@ pub fn clean_command(
             }
 
             eprintln!(
-                "\n{} {} deleted, {} failed, {} not found, {} wildcard skipped, {} rejected",
+                "\n{} {} deleted, {} failed, {} not found, {} wildcard skipped, {} rejected, {} protected",
                 "Done:".bold(),
                 deleted,
                 failed,
                 not_found,
                 skipped_wildcard,
-                rejected
+                rejected,
+                protected
             );
         }
     }

@@ -644,7 +644,7 @@ memory = "32G"
 | `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
-| `protected_output` | Array | No | Outputs declared protected. Parsed and validated, but the current engine does not enforce protection at runtime — treat as advisory (file an issue if you need enforcement) |
+| `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
 | `ancient` | Array | No | Inputs that never trigger re-execution (e.g., reference files) |
@@ -1057,7 +1057,7 @@ name = "pipeline"
 | Field | Type | Description |
 |-------|------|-------------|
 | `temp_output` | Array | Scratch artifacts cleaned when the rule fails; persist on success (see Cleanup Behavior) |
-| `protected_output` | Array | Declared-protected outputs; parsed but not enforced at runtime (advisory) |
+| `protected_output` | Array | Outputs the engine never deletes or moves aside on failure; `clean` also refuses them (see the rule-field table above) |
 | `temporary` | Boolean | Delete the rule's outputs after a fully successful run once every dependent has completed (tombstone + lazy regeneration; leaf rules keep outputs) |
 
 ```toml
