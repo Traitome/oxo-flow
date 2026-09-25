@@ -186,10 +186,8 @@ pub fn clean_command(
         // like "results/{sample}.bam" line up with declared outputs
         // (issue #457) — clean must refuse to delete them.
         for p in &rule.protected_output {
-            let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
-                p,
-                &wildcard_values,
-            );
+            let expanded =
+                oxo_flow_core::executor::checkpoint::expand_config_in_path(p, &wildcard_values);
             if !protected_patterns.contains(&expanded) {
                 protected_patterns.push(expanded);
             }
@@ -209,9 +207,10 @@ pub fn clean_command(
                 };
                 glob::glob(&full_glob)
                     .map(|paths| {
-                        paths
-                            .flatten()
-                            .any(|m| m.canonicalize().unwrap_or(m) == path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+                        paths.flatten().any(|m| {
+                            m.canonicalize().unwrap_or(m)
+                                == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                        })
                     })
                     .unwrap_or(false)
             } else {
