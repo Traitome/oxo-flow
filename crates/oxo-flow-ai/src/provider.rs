@@ -1544,6 +1544,20 @@ fn resolve_provider(
         return provider;
     }
 
+    // A non-empty value that did not parse is almost certainly a typo
+    // (`cluade`, `open-ai2`): say so instead of silently running the
+    // detection/auto tiers as if the variable were unset (live-observed
+    // confusion: an invalid name produced no signal at all).
+    if !provider_env.is_empty()
+        && !provider_env.eq_ignore_ascii_case("disabled")
+        && provider_env.parse::<ProviderKind>().is_err()
+    {
+        tracing::warn!(
+            "OXO_FLOW_AI_PROVIDER='{}' is not a known provider (expected claude, openai, deepseek, or ollama) — ignoring it and falling back to detection/config",
+            provider_env
+        );
+    }
+
     // Fall back to persisted config
     if let Some((kind_str, api_key, api_url, model)) = saved
         && !kind_str.is_empty()
@@ -2251,6 +2265,27 @@ mod tests {
         let saved = ("deepseek", "sk-test", "", "");
         let env = EnvSnapshot::default();
         assert_eq!(resolve_provider("", Some(saved), &env).name(), "deepseek");
+    }
+
+    #[test]
+    fn invalid_env_provider_falls_through_to_detection() {
+        // A non-empty but unparseable OXO_FLOW_AI_PROVIDER (a typo like
+        // `cluade`) must not select the env tier: it falls through to
+        // detection exactly as if unset. Behavior is unchanged; a WARN is
+        // now logged so the misconfiguration is visible.
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("sk-gw".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("nonsenseprovider", None, &env).name(),
+            "claude"
+        );
+        // "disabled" stays special-cased (Noop), not flagged as invalid.
+        assert!(matches!(
+            resolve_provider("disabled", None, &env),
+            AiProvider::Noop
+        ));
     }
 
     #[test]
