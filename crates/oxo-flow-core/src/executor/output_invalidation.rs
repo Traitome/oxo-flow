@@ -27,6 +27,9 @@ pub struct OutputSnapshot {
     existed: bool,
     mtime: Option<std::time::SystemTime>,
     size: Option<u64>,
+    /// Declared via `protected_output` — a failed attempt must never delete
+    /// or move this file aside (issue #457); protection wins over cleanup.
+    protected: bool,
 }
 
 /// Snapshot a rule's declared outputs (config placeholders expanded using
@@ -38,6 +41,14 @@ pub fn snapshot_outputs(
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> Vec<OutputSnapshot> {
+    // Protected declarations are expanded the same way as outputs so
+    // `protected_output = ["results/{sample}.bam"]` matches the concrete
+    // snapshot path of a per-sample instance.
+    let protected: Vec<String> = rule
+        .protected_output
+        .iter()
+        .map(|p| super::checkpoint::expand_config_in_path(p, wildcard_values))
+        .collect();
     rule.output
         .iter()
         .filter_map(|output| {
@@ -45,7 +56,7 @@ pub fn snapshot_outputs(
             if expanded.contains('{') {
                 return None;
             }
-            let path = workdir.join(expanded);
+            let path = workdir.join(&expanded);
             let meta = std::fs::metadata(&path).ok();
             let existed = meta.is_some();
             let mtime = meta.as_ref().and_then(|m| m.modified().ok());
@@ -55,6 +66,7 @@ pub fn snapshot_outputs(
                 existed,
                 mtime,
                 size,
+                protected: protected.iter().any(|p| *p == expanded),
             })
         })
         .collect()
@@ -67,11 +79,23 @@ pub fn snapshot_outputs(
 /// recoverable and the freshness gate no longer sees a "fresh" output.
 /// A pre-existing file is considered modified when its mtime or its size
 /// differs from the snapshot — the size check catches rewrites that
-/// restore the old timestamp. Files matching both are left alone. Every
-/// step is best-effort with a warning — cleanup must never mask the rule's
-/// own failure.
+/// restore the old timestamp. Files matching both are left alone.
+/// Outputs declared `protected_output` are skipped entirely (issue #457).
+/// Every step is best-effort with a warning — cleanup must never mask the
+/// rule's own failure.
 pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
     for snapshot in snapshots {
+        // Protected outputs are never deleted or moved aside by failure
+        // cleanup (issue #457) — the user declared them irreplaceable, and
+        // destroying the original would be worse than a stale-but-intact
+        // file the freshness gate may re-run over. Left exactly as-is.
+        if snapshot.protected {
+            tracing::info!(
+                file = %snapshot.path.display(),
+                "protected_output: skipped failure invalidation — file left in place"
+            );
+            continue;
+        }
         let current_meta = match tokio::fs::metadata(&snapshot.path).await {
             Ok(meta) => meta,
             Err(_) => continue, // gone already — nothing to invalidate
@@ -252,6 +276,71 @@ mod tests {
         std::fs::write(dir.path().join("out.txt"), b"partial").unwrap();
         invalidate_failed_outputs(&snapshots).await;
         assert!(!dir.path().join("out.txt").exists());
+    }
+
+    /// A rule that also declares `protected_output` (issue #457).
+    fn rule_with_protected(outputs: &[&str], protected: &[&str]) -> Rule {
+        Rule {
+            name: "r".to_string(),
+            output: outputs.iter().map(|o| o.to_string()).collect(),
+            protected_output: protected.iter().map(|o| o.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_created_output_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let rule = rule_with_protected(&["out.txt"], &["out.txt"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        assert!(snapshots[0].protected, "declared path must be flagged");
+        // The failed attempt "writes" the protected output — invalidation
+        // must leave it in place instead of deleting it.
+        std::fs::write(dir.path().join("out.txt"), b"partial").unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "partial",
+            "protected_output must survive failure cleanup even when the attempt created it"
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_modified_output_is_never_moved_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), b"user-data").unwrap();
+        let rule = rule_with_protected(&["out.txt"], &["out.txt"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        // The attempt overwrites the pre-existing protected file.
+        std::fs::write(dir.path().join("out.txt"), b"corrupt").unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert!(
+            !dir.path().join("out.txt.oxo-failed").exists(),
+            "protected_output must never be moved aside"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "corrupt",
+            "the file itself is left exactly as the attempt wrote it"
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_output_with_wildcard_expansion_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        // Per-sample instance: `{sample}` in both output and protected_output
+        // must expand to the same concrete path to match.
+        let rule = rule_with_protected(&["results/S1.bam"], &["results/{sample}.bam"]);
+        let mut values = HashMap::new();
+        values.insert("sample".to_string(), "S1".to_string());
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        assert_eq!(snapshots.len(), 1);
+        assert!(
+            snapshots[0].protected,
+            "expanded protected pattern must match the concrete output"
+        );
     }
 
     #[tokio::test]
