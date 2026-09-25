@@ -1291,6 +1291,11 @@ pub struct Rule {
     /// - **`oxo-flow clean`** — protected paths are excluded from deletion
     ///   with a `(protected — skipped)` diagnostic, even with `--force`.
     ///
+    /// Three pattern forms are honored (issue #473): exact paths,
+    /// `{wildcard}` patterns (`results/{sample}.bam` — expanded against the
+    /// instance's wildcard values, or glob-matched by `clean`), and shell
+    /// globs (`results/*.bam` — `*` does not cross `/`).
+    ///
     /// Protection is advisory in the remaining sense: the rule's own
     /// command can still overwrite the file on a rerun. Use it to mark
     /// outputs that are expensive or impossible to regenerate and must

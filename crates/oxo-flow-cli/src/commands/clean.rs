@@ -40,6 +40,42 @@ fn resolve_output_path(workdir: &Path, output: &str) -> PathBuf {
     }
 }
 
+/// Whether one (config-expanded) `protected_output` pattern covers `path`.
+///
+/// Three honored forms (issue #473): exact literal paths; `{wildcard}`
+/// patterns (`results/{sample}.bam`, each `{…}` matches any single path
+/// segment chunk); and shell-glob patterns (`results/*.bam`). The glob forms
+/// go through the filesystem-walking `glob::glob` — a `clean` candidate path
+/// is an existing-or-listed file, so that is fine here (unlike the failure
+/// invalidation snapshot, which must match before anything exists).
+fn protected_pattern_matches(pattern: &str, workdir: &Path, path: &Path) -> bool {
+    if pattern.contains('{') && pattern.contains('}')
+        || pattern.contains('*')
+        || pattern.contains('?')
+        || pattern.contains('[')
+    {
+        let glob_pattern = replace_oxoflow_wildcards_with_glob(pattern);
+        let full_glob = if Path::new(&glob_pattern).is_absolute() {
+            glob_pattern.clone()
+        } else {
+            workdir.join(&glob_pattern).to_string_lossy().to_string()
+        };
+        glob::glob(&full_glob)
+            .map(|paths| {
+                paths.flatten().any(|m| {
+                    m.canonicalize().unwrap_or(m)
+                        == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                })
+            })
+            .unwrap_or(false)
+    } else {
+        resolve_output_path(workdir, pattern)
+            .canonicalize()
+            .unwrap_or_else(|_| resolve_output_path(workdir, pattern))
+            == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 pub fn clean_command(
     workflow: PathBuf,
     dry_run: bool,
@@ -197,29 +233,9 @@ pub fn clean_command(
     // A resolved path is protected when it is the expanded pattern itself,
     // or when a wildcarded protected pattern globs onto it.
     let is_protected = |path: &Path| -> bool {
-        protected_patterns.iter().any(|pattern| {
-            if pattern.contains('{') && pattern.contains('}') {
-                let glob_pattern = replace_oxoflow_wildcards_with_glob(pattern);
-                let full_glob = if Path::new(&glob_pattern).is_absolute() {
-                    glob_pattern.clone()
-                } else {
-                    workdir.join(&glob_pattern).to_string_lossy().to_string()
-                };
-                glob::glob(&full_glob)
-                    .map(|paths| {
-                        paths.flatten().any(|m| {
-                            m.canonicalize().unwrap_or(m)
-                                == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-                        })
-                    })
-                    .unwrap_or(false)
-            } else {
-                resolve_output_path(&workdir, pattern)
-                    .canonicalize()
-                    .unwrap_or_else(|_| resolve_output_path(&workdir, pattern))
-                    == path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-            }
-        })
+        protected_patterns
+            .iter()
+            .any(|pattern| protected_pattern_matches(pattern, &workdir, path))
     };
 
     // Resolve wildcard patterns to actual files via glob.
@@ -391,4 +407,51 @@ pub fn clean_command(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protected_pattern_honors_all_three_forms() {
+        // Issue #473: the shell-glob form (`results/*.bam`) used to fall
+        // through to the literal compare and NEVER match — protection
+        // silently lost. All three documented forms must cover the file.
+        let dir = tempfile::tempdir().unwrap();
+        let results = dir.path().join("results");
+        std::fs::create_dir_all(&results).unwrap();
+        let bam = results.join("S1.bam");
+        std::fs::write(&bam, b"data").unwrap();
+
+        let path = bam.as_path();
+        assert!(protected_pattern_matches(
+            "results/S1.bam",
+            dir.path(),
+            path
+        ));
+        assert!(protected_pattern_matches(
+            "results/{sample}.bam",
+            dir.path(),
+            path
+        ));
+        assert!(
+            protected_pattern_matches("results/*.bam", dir.path(), path),
+            "shell-glob protected patterns must match (issue #473)"
+        );
+
+        // Negatives: another sample, another extension, another directory
+        // (glob `*` does not cross `/`).
+        assert!(!protected_pattern_matches(
+            "results/S2.bam",
+            dir.path(),
+            path
+        ));
+        assert!(!protected_pattern_matches(
+            "results/*.txt",
+            dir.path(),
+            path
+        ));
+        assert!(!protected_pattern_matches("other/*.bam", dir.path(), path));
+    }
 }

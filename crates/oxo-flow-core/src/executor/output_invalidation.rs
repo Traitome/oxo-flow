@@ -43,12 +43,32 @@ pub fn snapshot_outputs(
 ) -> Vec<OutputSnapshot> {
     // Protected declarations are expanded the same way as outputs so
     // `protected_output = ["results/{sample}.bam"]` matches the concrete
-    // snapshot path of a per-sample instance.
+    // snapshot path of a per-sample instance. Shell-glob patterns
+    // (`results/*.bam`, issue #473) match through `glob::Pattern` — a pure
+    // string match: the snapshot may run before any output exists, so the
+    // filesystem-walking `glob::glob` is not usable here.
     let protected: Vec<String> = rule
         .protected_output
         .iter()
         .map(|p| super::checkpoint::expand_config_in_path(p, wildcard_values))
         .collect();
+    let is_protected_path = |expanded: &str| -> bool {
+        // `require_literal_separator` pins `*` to a single path component —
+        // the same semantics the filesystem-walking `glob::glob` (clean
+        // path) applies, so a pattern cannot protect more in one destroy
+        // path than in the other.
+        let opts = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+        };
+        protected.iter().any(|pattern| {
+            pattern == expanded
+                || glob::Pattern::new(pattern)
+                    .map(|pat| pat.matches_with(expanded, opts))
+                    .unwrap_or(false)
+        })
+    };
     rule.output
         .iter()
         .filter_map(|output| {
@@ -66,7 +86,7 @@ pub fn snapshot_outputs(
                 existed,
                 mtime,
                 size,
-                protected: protected.contains(&expanded),
+                protected: is_protected_path(&expanded),
             })
         })
         .collect()
@@ -325,6 +345,40 @@ mod tests {
             "corrupt",
             "the file itself is left exactly as the attempt wrote it"
         );
+    }
+
+    #[tokio::test]
+    async fn protected_shell_glob_pattern_is_honored() {
+        // Issue #473: `results/*.bam` used to fall through the exact-string
+        // compare and the file was destroyed despite the declaration. The
+        // glob form must flag (and spare) the concrete output, and `*` must
+        // not cross a `/`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("results")).unwrap();
+        std::fs::write(dir.path().join("results/S1.bam"), b"user-data").unwrap();
+        let rule = rule_with_protected(&["results/S1.bam"], &["results/*.bam"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        assert!(
+            snapshots[0].protected,
+            "shell-glob protected patterns must flag the concrete output"
+        );
+        std::fs::write(dir.path().join("results/S1.bam"), b"corrupt").unwrap();
+        invalidate_failed_outputs(&snapshots).await;
+        assert!(!dir.path().join("results/S1.bam.oxo-failed").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("results/S1.bam")).unwrap(),
+            "corrupt",
+            "the file itself is left exactly as the attempt wrote it"
+        );
+
+        // Negatives: different extension, and a deeper path glob `*` must
+        // not reach (`*` does not cross `/`).
+        let other = rule_with_protected(&["results/S1.txt"], &["results/*.bam"]);
+        assert!(!snapshot_outputs(&other, dir.path(), &values)[0].protected);
+        std::fs::create_dir_all(dir.path().join("results/deep")).unwrap();
+        let deep = rule_with_protected(&["results/deep/S1.bam"], &["results/*.bam"]);
+        assert!(!snapshot_outputs(&deep, dir.path(), &values)[0].protected);
     }
 
     #[tokio::test]
