@@ -44,6 +44,17 @@ make ci
 - **Errors:** Return `Result` early; use context where helpful.
 - **Markdown lists:** Always insert a blank line between a text paragraph and a list (`-`/`*`). A paragraph followed immediately by `-` on the next line will NOT render as a list in many Markdown engines — the `-` is shown as literal text. Do NOT insert blank lines between items within the same list; only between a preceding paragraph and the list start.
 
+## Engineering Invariants
+
+General rules against the classic failure mode "new feature works, but breaks something else". All of them have already been violated in shipped bugs; apply them while writing code, not in review:
+
+- **Reuse, never retype.** If a list, whitelist, or transformation already exists somewhere, export and call it. Hand-copied logic always drifts from its origin.
+- **Don't mirror semantics — share them.** Code that must match another module's behavior either calls the same function or tests every branch of the original against the source code, never against an example.
+- **Collectors never short-circuit.** In loops that accumulate findings, gate each check by its own condition; a `continue` or early return silently disables every check after it.
+- **Persisted artifacts are order-independent.** Anything serialized for comparison or provenance uses key-ordered structures (BTreeMap/BTreeSet) — HashMap iteration order is not stable.
+- **Expand before deriving.** Resolve variable/config expansion before deriving canonical forms (templates, fingerprints, paths); reversing the order silently breaks matching.
+- **A diagnostic ships with its docs.** A new warning or check without a corresponding docs entry is an incomplete change.
+
 ## Documentation System
 - `docs/guide/` — MkDocs-based user guide (run `mkdocs serve` in `docs/guide/` to preview)
 - `docs/guide/src/reference/web-api.md` — REST API reference (structured errors, endpoints)
