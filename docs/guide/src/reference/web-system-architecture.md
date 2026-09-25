@@ -130,8 +130,9 @@ Rate limiting and SSE:
   checks, no background task).
 - `/api/events` relies solely on axum's 15-second `KeepAlive` comment ping.
   If a subscriber falls behind the 100-slot broadcast buffer, the server
-  emits a synthetic `{"type":"lagged","data":{"missed":N}}` event so the
-  client can refetch instead of silently missing run state transitions.
+  emits a synthetic `{"type":"lagged","time":"…","data":{"missed":N}}`
+  event so the client can refetch instead of silently missing run state
+  transitions.
 
 ---
 
@@ -151,7 +152,7 @@ Rate limiting and SSE:
 | **infra/db** | `infra/db/` | StorageBackend trait with SQLite and PostgreSQL implementations |
 | **infra/license** | `infra/license.rs` | License notice text, banner, X-OxoFlow-License header middleware (the web UI footer label lives in the SPA, `frontend/src/components/Layout.tsx`) |
 | **infra/sse** | `infra/sse.rs` | Real-time SSE broadcast channel for execution events |
-| **infra/hpc** | `infra/hpc.rs` | Slurm script generation, scheduler detection |
+| **hpc** | `src/hpc.rs` (crate root) | Slurm script generation, scheduler detection |
 
 ---
 

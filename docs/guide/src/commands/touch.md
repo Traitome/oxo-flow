@@ -17,7 +17,7 @@ oxo-flow touch [OPTIONS] <WORKFLOW> [KEY=VALUE]...
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
-| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the same forms `run` accepts (`KEY=VALUE`, `--KEY=VALUE`, and the declared-key-only `--KEY VALUE`; see [run](run.md)). Needed when outputs or wildcard expansion branch on `{config.*}` (issue #432). Command flags must come **before** the overrides. |
+| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the two forms `KEY=VALUE` and `--KEY=VALUE` (the bare space form `--KEY VALUE` that `run` accepts is **not** available here; it is rejected as an unknown argument). Needed when outputs or wildcard expansion branch on `{config.*}` (issue #432). Command flags must come **before** the overrides. |
 
 ---
 

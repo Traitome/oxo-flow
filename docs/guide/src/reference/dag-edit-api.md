@@ -12,9 +12,13 @@ The DAG Edit domain (`crates/oxo-flow-web/src/domains/dag/service.rs`) provides 
 2. **Applied** — the command mutates the `toml_edit` document in place, preserving comments and formatting
 3. **Validated** — the edited document is re-parsed and validated through the workflow validation pipeline
 
-Edits that produce invalid workflows are still applied and returned — the
-response reports `success: false` with the `validation_errors` populated, so the
-problematic state can be inspected and fixed with a follow-up edit.
+Edits that fail *validation* — error-severity findings such as a
+`depends_on` reference to an unknown rule — are still applied and returned:
+the response reports `success: false` with `validation_errors` populated, so
+the problematic state can be inspected and fixed with a follow-up edit. Edits
+that break *parsing* of the edited document — invalid TOML syntax, unknown
+fields, or duplicate rule names — are rejected instead: they return HTTP
+`400` (`DAG_EDIT_ERROR`) and the previous state is kept.
 
 ## Endpoint
 
@@ -266,14 +270,14 @@ All edit commands return a `DagEditResponse`:
 
 If validation fails, `success` is `false` and the edit is **still applied** to the returned TOML (so the user can see the problematic state), with `validation_errors` populated.
 
-Malformed commands (unknown operation, missing required payload fields such as the rule `name`, or a `connect`/`disconnect`/`update_params` target rule that does not exist) are rejected with HTTP `400` and code `DAG_EDIT_ERROR`; the edit is not applied.
+Malformed commands (unknown operation, missing required payload fields such as the rule `name`, an `update_rule` target rule that does not exist, or a `connect`/`disconnect`/`update_params` target rule that does not exist) are rejected with HTTP `400` and code `DAG_EDIT_ERROR`; the edit is not applied. The same applies to edits whose resulting document no longer parses as a workflow (invalid TOML syntax, unknown fields, duplicate rule names).
 
 ---
 
 ## Important Notes
 
 - **File-based edges are immutable via the edit API.** The `connect`/`disconnect` commands only manage `depends_on` entries. File-based dependencies (inferred from input/output matching) are controlled by the `input` and `output` fields of rules, which the edit API cannot currently modify.
-- **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Edits that introduce cycles, duplicate names, or invalid syntax are flagged in `validation_errors`.
+- **All edits are validated.** The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a `depends_on` entry naming an unknown rule) are returned in `validation_errors` with `success: false`, while the edit is still applied. Edits that break parsing — invalid TOML syntax, unknown fields, or duplicate rule names — are rejected with HTTP `400` instead. Cycle detection is not part of the edit validation path: a cycle introduced via `depends_on` edits is accepted here and only surfaces later when the DAG is built (see [DAG Engine](./dag-engine.md)).
 - **TOML round-tripping preserves formatting.** Edits mutate the parsed TOML document in place (`toml_edit`), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical `format::format_workflow`.
 - **Undo/redo is in-memory.** Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.
 

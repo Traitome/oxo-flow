@@ -128,16 +128,40 @@ Estimated memory: 100GB × 2.5 = 250GB
 
 ## Resource Budgets
 
-Limit total concurrent resource usage:
-
 ```toml
 [resource_budget]
-max_threads = 64        # Don't exceed 64 threads total
-max_memory = "256G"     # Don't exceed 256GB total
-max_jobs = 10           # Max 10 concurrent jobs
+max_threads = 64        # Reject any rule that declares more than 64 threads
+max_memory = "256G"     # Reject any rule that declares more than 256GB
+max_jobs = 10           # Parsed, but not yet enforced by any command
 ```
 
-Useful for shared servers or when running multiple workflows.
+!!! warning "`[resource_budget]` is enforced only on the cluster path"
+    A per-rule breach check runs where jobs leave for a scheduler —
+    `oxo-flow run --profile <name>` with a `[cluster]` profile present. A
+    rule whose declared `memory`/`threads` exceeds the cap aborts the run
+    **before anything is submitted**, naming every offender:
+
+    ```
+    Error: 1 rule(s) exceed the workflow's [resource_budget] — nothing was submitted:
+      rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
+    ```
+
+    Two consequences worth knowing:
+
+    - A plain local `oxo-flow run` **does not read** `[resource_budget]` —
+      a 64G rule runs under a 32G cap. To cap a local run, use the CLI
+      flags instead: `--max-threads <N>` and `--max-memory <MB>` (integer
+      megabytes, e.g. `--max-memory 32768`; they fail fast the same way
+      before any rule executes).
+    - `oxo-flow cluster submit` currently generates scripts without the
+      budget check — only the `run --profile` cluster path enforces it.
+
+    `max_jobs` is accepted by the parser but no command consumes it yet.
+
+The cap is per-rule, not a running total: it rejects a workflow in which a
+*single* rule cannot fit under the declared ceiling (which the scheduler
+would otherwise reject — or run into swap — long after the submit). It is
+not a meter of concurrent usage across jobs.
 
 ## HPC vs Local Best Practices
 

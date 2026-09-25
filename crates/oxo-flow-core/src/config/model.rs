@@ -1748,7 +1748,13 @@ pub struct WorkflowConfig {
     /// Metadata for declarative `[config]` entries — parsed from inline-table values.
     /// Only populated for keys using the `key = { default, required, … }` form.
     /// Simple `key = "value"` entries do NOT appear here.
-    #[serde(default, skip_deserializing, skip_serializing_if = "HashMap::is_empty")]
+    ///
+    /// Never serialized: `config_meta` is derived state that `WorkflowConfig`
+    /// deserialization does not accept (no `config_meta` top-level key exists
+    /// in the .oxoflow format), so emitting it would produce output that
+    /// fails reparse with E017. The `config` entry itself remains the source
+    /// of truth for roundtrips.
+    #[serde(default, skip_deserializing, skip_serializing)]
     pub config_meta: HashMap<String, ConfigDef>,
 
     /// Config keys injected by the engine rather than written by the user:

@@ -85,7 +85,7 @@ Returns paginated structured audit entries:
   "total": 128
 }
 ```
-`page` defaults to 1 and `per_page` defaults to 50 (max 500). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
+`page` defaults to 1 and `per_page` defaults to 50 (max 200). **Team/hpc modes: admin-only** (the trail spans every user's actions; personal mode keeps the localhost trust model).
 
 ### Server-Sent Events
 ```

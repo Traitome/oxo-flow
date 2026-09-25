@@ -71,9 +71,9 @@ when `oxo-flow run` is invoked without an explicit `-t`, so marking the
 final leaf rules (like `fastqc` above) makes them part of the default
 run — see [Workflow Format: Priority and Targeting](../reference/workflow-format.md#priority-and-targeting).
 W025 flags the deprecated rule-level `threads = N` / `memory = "8G"`
-fields (removed in v0.20.1 in favor of `[rules.resources]`) so old
-workflows surface the migration instead of silently keeping their old
-settings — see [Workflow Format: Rule resources](../reference/workflow-format.md#resources-extended).
+fields (superseded by `[rules.resources]` in v0.4) so old workflows
+surface the migration instead of silently keeping their old settings —
+see [Workflow Format: Rule resources](../reference/workflow-format.md#resources-extended).
 W031 flags a consumer rule that reads the output of a `when`-gated
 producer without a `when` gate of its own: when the producer's gate is
 off, its files never appear and the consumer's inputs cannot be resolved
@@ -86,9 +86,20 @@ on the consumer or splitting it into `when`-gated variants (the
 tolerance for a missing producer are not flagged: `optional = true` /
 `"any"` rules, `input_groups` disk-discovery fallbacks, and consumers
 that already carry any `when` gate.
+W033 flags two rules that write the same output path — including
+differently-named wildcards over the same template (`variants/{smp}.vcf`
+vs `variants/{sample}.vcf`) and identical literal paths. The engine does
+not refuse to run: both rules execute and the second to finish silently
+overwrites the first (verified live in v0.20.1 with a run reporting
+success while both colliding rules executed), so downstream rules consume
+the wrong file. The repair is distinct output directories per writer —
+or a `when` gate when the two rules are mutually exclusive alternatives
+(the `wgs_coverage`/`wes_coverage` idiom). Multi-producer outputs remain
+a supported feature, so this is a warning, not an error. See
+[Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
 W032 flags a `[config]` key whose *name* looks like a secret
-(`token`, `secret`, `password`, `credential`, `api_key`,
-`access_key`, `private_key`, `ssh_key` — matched at word/segment
+(`token`, `secret`, `passwd`, `password`, `credential`, `api_key`,
+`access_key`, `private_key`, `ssh_key`, `key` — matched at word/segment
 boundaries, so names that merely contain these as a substring, like
 `tokenize` or `password_length_hint`, are not flagged) but is not
 declared `sensitive`: its value then lands in plaintext in command

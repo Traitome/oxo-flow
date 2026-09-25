@@ -28,12 +28,9 @@ output = ["counts/{sample}/outs/filtered_feature_bc_matrix.h5"]
 description = "scRNA-seq quantification with CellRanger"
 shell = """
 mkdir -p counts && cd counts
-cellranger count --id={sample} \
-                 --fastqs=../raw/ \
-                 --sample={sample} \
-                 --transcriptome={config.reference} \
-                 --localcores={threads} \
-                 --localmem=60  # keep in sync with memory = "64G" (leave headroom)
+# Backslash line continuations inside TOML triple-quoted strings are unescaped
+# to real newlines before the shell runs, so they cannot be used here.
+cellranger count --id={sample} --fastqs=../raw/ --sample={sample} --transcriptome={config.reference} --localcores={threads} --localmem=60  # keep in sync with memory = "64G" (leave headroom)
 """
 
 [rules.resources]
@@ -67,7 +64,10 @@ output = ["results/{sample}.sc_report.html"]
 description = "Generate single-cell analysis report"
 shell = """
 mkdir -p results
-Rscript -e "rmarkdown::render('templates/sc_report.Rmd', output_file='{output[0]}', params=list(sample='{sample}', analysis_dir='analysis/{sample}/'))"
+# rmarkdown::render resolves output_file relative to the Rmd's directory and
+# runs knitr chunks with CWD set to that directory, so pass WFDIR-anchored
+# absolute paths and pin knit_root_dir to the workflow root.
+WFDIR=$(pwd) Rscript -e "rmarkdown::render('templates/sc_report.Rmd', output_file=file.path(Sys.getenv('WFDIR'), '{output[0]}'), params=list(sample='{sample}', analysis_dir=file.path(Sys.getenv('WFDIR'), 'analysis/{sample}/')), knit_root_dir=Sys.getenv('WFDIR'))"
 """
 
 [rules.environment]

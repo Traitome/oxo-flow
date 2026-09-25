@@ -75,6 +75,12 @@ shell = "cat input.txt > output.txt"
 
 ## Notes
 
-- The formatter ensures consistent indentation and key ordering
+- The formatter ensures consistent indentation and key ordering: map-backed
+  sections (`[config]`, `[metadata]`, include `params`, …) are emitted with
+  keys in **sorted** order, so the same file always formats to the same
+  bytes — the property `--check` relies on
+- Internal parse state is never emitted: declarative `[config]` entries
+  (`key = { default = …, … }`) roundtrip as themselves, not as a
+  `[config_meta]` section
 - Using `--check` is recommended for CI/CD pipelines to enforce style consistency
 - The file is re-serialized from the parsed configuration, so comments are not preserved

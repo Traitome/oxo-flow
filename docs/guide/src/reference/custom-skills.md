@@ -18,8 +18,8 @@ The security model has two strictly separated steps:
 
 1. **Discovery** — `oxo-flow` scans `~/.oxo-flow/skills/` (user level) and
    `<project>/.oxo-flow/skills/` (project level) for `*.skill.toml` files.
-   This is **read-only**: discovered skills are listed by `oxo-flow ai
-   status`, but nothing is loaded or executed.
+   This is **read-only**: discovered skills are listed by `oxo-flow ai`
+   (quick status), but nothing is loaded or executed.
 2. **Activation** — a skill only takes effect when its name is explicitly
    declared in the workflow's `[ai]` section. This is the trust boundary:
    the same explicit-approval model used by MCP clients.

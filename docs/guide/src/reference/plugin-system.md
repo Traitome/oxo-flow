@@ -4,9 +4,15 @@ oxo-flow supports a compile-time + config-based plugin architecture. Plugins
 are Rust crates implementing standard traits, registered via TOML configuration
 files. Plugin manifests are integrity-checked using keyed SHA-256 signatures
 (`SHA256(key ‖ message)`). Note: this is not a true HMAC (RFC 2104) and does
-not provide cryptographic authentication.
+not provide cryptographic authentication — it protects against accidental
+corruption only.
 
 ## Quick Start
+
+> **Inert as of v0.20.1**: the `[plugins]` section, registry API, and
+> manifest discovery are parsed but nothing is executed from them yet —
+> see the warning at the end of this page. The API below is the
+> compile-time contract for engine-side wiring.
 
 ### 1. Implement a plugin trait
 
@@ -69,6 +75,7 @@ plugin_type = "rule"
 description = "Custom rule for specialized analysis"
 author = "Your Name"
 command_template = "custom_tool {input} > {output}"
+environment = "bioconda::custom-tool=1.0"
 
 [signature]
 key_id = "key-001"
@@ -87,6 +94,13 @@ configured trusted keys are loaded with a warning:
 registry.trusted_keys.insert("key-001".into(), "shared-secret-key".into());
 registry.discover(Some(project_dir))?; // invalid signatures are skipped
 ```
+
+The signature covers **all** manifest fields except `[signature]` itself —
+name, version, plugin_type, description, author, command_template, and
+environment — encoded as a length-prefixed payload (`<len>:<value>` per
+field) so a tampered `command_template` (the field a rule plugin would
+execute) can never keep a valid signature. Older manifests signed with the
+previous `name:version:type:description` payload no longer verify.
 
 ## API Reference
 
@@ -147,10 +161,12 @@ use oxo_flow_core::plugin::PluginOutput;
 ```
 
 `success` and `command` are the fields the engine would act on; `errors`,
-`logs`, and `exit_code` carry diagnostics. Note that as of v0.20.1 this
-contract is defined but not yet wired into rule execution — declared rule
-plugins today go through `command_template` in the manifest instead, and
-there is no engine-side runner that invokes plugin executables yet.
+`logs`, and `exit_code` carry diagnostics. Note that as of v0.20.1 the
+whole plugin surface is defined but inert: a workflow `[plugins]` section
+is parsed and logs a one-time warning ("parsed but not executed by this
+version"), and there is no engine-side runner that invokes plugin
+executables or consumes `command_template` yet — the registry API is
+compile-time only.
 
 
 ## See Also

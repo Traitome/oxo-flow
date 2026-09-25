@@ -1557,6 +1557,27 @@ pub fn lint_format(
         }
     }
 
+    // Shared helpers for the cross-rule passes (W031/W033).
+
+    /// Canonical form of a dataflow template: every `{...}`
+    /// placeholder replaced with `{}` so differently-named wildcards
+    /// still unify. Literal paths canonicalize to themselves.
+    fn canonical_template(pattern: &str) -> String {
+        static PLACEHOLDER_RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
+        PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned()
+    }
+
+    /// A `when` gate that can actually disable the rule. `None`,
+    /// empty, and the literal `true` leave the rule always-on;
+    /// `false` keeps the gate meaningful (the producer's files can
+    /// never exist — consumers still break, and a gated consumer
+    /// never runs — nothing breaks).
+    fn meaningful_gate(when: Option<&str>) -> bool {
+        when.map(str::trim)
+            .is_some_and(|w| !w.is_empty() && !w.eq_ignore_ascii_case("true"))
+    }
+
     // W031: consumer reads the output of a when-gated producer without a
     // when gate of its own (issue #319). When the
     // producer's gate is off, the producer writes nothing, and the
@@ -1588,89 +1609,121 @@ pub fn lint_format(
     //   fallback idiom (atacseq baseline fallback) tolerates absence.
     // depends_on-only relationships never reach this check: they match no
     // input template against an output template.
-    {
-        /// Canonical form of a dataflow template: every `{...}`
-        /// placeholder replaced with `{}` so differently-named wildcards
-        /// still unify. Literal paths canonicalize to themselves.
-        fn canonical_template(pattern: &str) -> String {
-            static PLACEHOLDER_RE: LazyLock<Regex> =
-                LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
-            PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned()
-        }
 
-        /// A `when` gate that can actually disable the rule. `None`,
-        /// empty, and the literal `true` leave the rule always-on;
-        /// `false` keeps the gate meaningful (the producer's files can
-        /// never exist — consumers still break, and a gated consumer
-        /// never runs — nothing breaks).
-        fn meaningful_gate(when: Option<&str>) -> bool {
-            when.map(str::trim)
-                .is_some_and(|w| !w.is_empty() && !w.eq_ignore_ascii_case("true"))
+    let mut gated_producer_templates: Vec<(&str, String, &str)> = Vec::new();
+    for producer in &config.rules {
+        if !meaningful_gate(producer.when.as_deref()) {
+            continue;
         }
+        for output in producer.output.iter() {
+            gated_producer_templates.push((
+                &producer.name,
+                canonical_template(output),
+                output.as_str(),
+            ));
+        }
+        if let Some(ref pattern) = producer.output_pattern {
+            gated_producer_templates.push((
+                &producer.name,
+                canonical_template(pattern),
+                pattern.as_str(),
+            ));
+        }
+    }
 
-        let mut gated_producer_templates: Vec<(&str, String, &str)> = Vec::new();
-        for producer in &config.rules {
-            if !meaningful_gate(producer.when.as_deref()) {
-                continue;
-            }
-            for output in producer.output.iter() {
-                gated_producer_templates.push((
-                    &producer.name,
-                    canonical_template(output),
-                    output.as_str(),
-                ));
-            }
-            if let Some(ref pattern) = producer.output_pattern {
-                gated_producer_templates.push((
-                    &producer.name,
-                    canonical_template(pattern),
-                    pattern.as_str(),
-                ));
+    let mut flagged_pairs: std::collections::HashSet<(&str, &str)> =
+        std::collections::HashSet::new();
+    for consumer in &config.rules {
+        if meaningful_gate(consumer.when.as_deref())
+            || consumer.optional.is_optional()
+            || !consumer.input_groups.is_empty()
+        {
+            continue;
+        }
+        let mut consumer_templates: Vec<&str> = Vec::new();
+        consumer_templates.extend(consumer.input.iter().map(String::as_str));
+        consumer_templates.extend(
+            consumer
+                .expand_inputs
+                .iter()
+                .map(|expand| expand.pattern.as_str()),
+        );
+        for consumer_input in consumer_templates {
+            let consumer_template = canonical_template(consumer_input);
+            for (producer_name, producer_template, producer_output) in &gated_producer_templates {
+                if *producer_name == consumer.name
+                    || consumer_template != *producer_template
+                    || !flagged_pairs.insert((producer_name, consumer.name.as_str()))
+                {
+                    continue;
+                }
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "producer '{producer_name}' is when-gated, but consumer '{}' expands its output '{producer_output}' unconditionally",
+                        consumer.name
+                    ),
+                    rule: Some(consumer.name.clone()),
+                    code: "W031".to_string(),
+                    suggestion: Some(format!(
+                        "split '{}' into when-gated variants (see the multiqc/multiqc_pseudo idiom) or add a when gate matching '{producer_name}'",
+                        consumer.name
+                    )),
+                });
             }
         }
+    }
 
-        let mut flagged_pairs: std::collections::HashSet<(&str, &str)> =
-            std::collections::HashSet::new();
-        for consumer in &config.rules {
-            if meaningful_gate(consumer.when.as_deref())
-                || consumer.optional.is_optional()
-                || !consumer.input_groups.is_empty()
+    // W033: two rules declare outputs that canonicalize to the same
+    // template. Every writer of a path writes ALL instances of it (both
+    // rules are scheduled for every matching expansion and race on the same
+    // file), so the last writer wins and provenance is silently wrong.
+    // Live proof (v0.20.1): two rules writing `variants/{smp}.vcf` and
+    // `variants/{sample}.vcf` passed validate/lint/graph and both executed,
+    // the second overwriting the first — while troubleshooting.md promised
+    // the engine "reports an `Output pattern collision` error and refuses
+    // to run". That dormant check (`WorkflowDag::detect_output_collisions`)
+    // required BOTH outputs to contain wildcards and compared raw
+    // templates, so differently-named wildcards never matched.
+    //
+    // Deliberately a WARNING, not an error: multi-producer outputs are a
+    // supported feature (shared staging directories, multi-tool fan-ins —
+    // the DAG's `output_to_node` map keeps every producer by design).
+    // Identical literals also flag (two rules writing the same literal
+    // path); a literal whose canonical shape differs from a wildcard
+    // template is a distinct path and stays unflagged.
+    let mut writers: Vec<(&str, String, &str)> = Vec::new();
+    for rule in &config.rules {
+        for output in rule.output.iter() {
+            writers.push((&rule.name, canonical_template(output), output.as_str()));
+        }
+        if let Some(ref pattern) = rule.output_pattern {
+            writers.push((&rule.name, canonical_template(pattern), pattern.as_str()));
+        }
+    }
+
+    let mut flagged_pairs: std::collections::HashSet<(&str, &str)> =
+        std::collections::HashSet::new();
+    for (idx, (rule_a, template_a, raw_a)) in writers.iter().enumerate() {
+        for (rule_b, template_b, raw_b) in writers.iter().skip(idx + 1) {
+            if rule_a == rule_b
+                || template_a != template_b
+                || !flagged_pairs.insert((rule_a, rule_b))
             {
                 continue;
             }
-            let mut consumer_templates: Vec<&str> = Vec::new();
-            consumer_templates.extend(consumer.input.iter().map(String::as_str));
-            consumer_templates.extend(
-                consumer
-                    .expand_inputs
-                    .iter()
-                    .map(|expand| expand.pattern.as_str()),
-            );
-            for consumer_input in consumer_templates {
-                let consumer_template = canonical_template(consumer_input);
-                for (producer_name, producer_template, producer_output) in &gated_producer_templates
-                {
-                    if *producer_name == consumer.name
-                        || consumer_template != *producer_template
-                        || !flagged_pairs.insert((producer_name, consumer.name.as_str()))
-                    {
-                        continue;
-                    }
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Warning,
-                        message: format!(
-                            "producer '{producer_name}' is when-gated, but consumer '{}' expands its output '{producer_output}' unconditionally",
-                            consumer.name
-                        ),
-                        rule: Some(consumer.name.clone()),
-                        code: "W031".to_string(),
-                        suggestion: Some(format!(
-                            "split '{}' into when-gated variants (see the multiqc/multiqc_pseudo idiom) or add a when gate matching '{producer_name}'",
-                            consumer.name
-                        )),
-                    });
-                }
-            }
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "output collision: rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s)"
+                ),
+                rule: Some((*rule_a).to_string()),
+                code: "W033".to_string(),
+                suggestion: Some(
+                    "if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory"
+                        .to_string(),
+                ),
+            });
         }
     }
 
@@ -2083,13 +2136,33 @@ pub fn format_workflow(config: &WorkflowConfig) -> String {
     // This preserves ALL sections (pairs, sample_groups, includes, env_groups,
     // resource_budget, plugins, citation, etc.) and correctly escapes
     // strings containing special characters (quotes, newlines).
-    toml::to_string_pretty(config).unwrap_or_else(|e| {
-        format!(
-            "# Serialization error: {}\n# Falling back to inline format\n{}",
-            e,
-            toml::to_string(config).unwrap_or_default()
-        )
-    })
+    //
+    // Determinism: `WorkflowConfig` contains HashMap fields (config,
+    // metadata, interpreter_map, …) whose iteration order is process-random,
+    // so serializing the struct directly yields a different key order on
+    // every run. Roundtripping through `toml::Value` first sorts every map
+    // (toml's Map is BTreeMap-backed), making the output — and the `format
+    // --check` gate built on it — stable across processes. This mirrors
+    // `canonical_toml_map` in config_impact.rs, which sorts maps for the
+    // same reason when hashing fingerprints.
+    match toml::Value::try_from(config) {
+        Ok(value) => toml::to_string_pretty(&value).unwrap_or_else(|e| {
+            format!(
+                "# Serialization error: {}\n# Falling back to inline format\n{}",
+                e,
+                toml::to_string(&value).unwrap_or_default()
+            )
+        }),
+        // Value conversion only fails if the struct itself is not
+        // serializable (should not happen); fall back to direct serialization.
+        Err(_) => toml::to_string_pretty(config).unwrap_or_else(|e| {
+            format!(
+                "# Serialization error: {}\n# Falling back to inline format\n{}",
+                e,
+                toml::to_string(config).unwrap_or_default()
+            )
+        }),
+    }
 }
 
 /// A single difference between two workflow configurations.
@@ -3058,6 +3131,91 @@ mod tests {
         let reparsed = WorkflowConfig::parse(&formatted).unwrap();
         assert_eq!(reparsed.workflow.name, config.workflow.name);
         assert_eq!(reparsed.rules.len(), config.rules.len());
+    }
+
+    /// Declarative `[config]` entries (`key = { default = … }`) populate the
+    /// internal `config_meta` map. That map must never leak into formatted
+    /// output: `config_meta` is not a .oxoflow top-level key, so a formatted
+    /// workflow that emitted it would fail reparse with E017.
+    #[test]
+    fn format_omits_config_meta_and_output_reparses() {
+        let src = r#"
+[workflow]
+name = "declarative"
+version = "1.0.0"
+
+[config]
+threads = { default = 4, description = "thread count" }
+results = "out"
+
+[[rules]]
+name = "step1"
+output = ["{config.results}/done.txt"]
+shell = "echo done > {config.results}/done.txt"
+"#;
+        let config = WorkflowConfig::parse(src).unwrap();
+        assert!(
+            !config.config_meta.is_empty(),
+            "precondition: declarative entry populates config_meta"
+        );
+        let formatted = format_workflow(&config);
+        assert!(
+            !formatted.contains("config_meta"),
+            "config_meta leaked into formatted output:\n{formatted}"
+        );
+        // The default survives as the runtime value for `{config.threads}`.
+        assert!(formatted.contains("threads = \"4\""), "{formatted}");
+        WorkflowConfig::parse(&formatted)
+            .unwrap_or_else(|e| panic!("formatted declarative workflow must reparse: {e}"));
+    }
+
+    /// `format` output must be byte-identical across runs: WorkflowConfig has
+    /// HashMap fields whose iteration order is process-random, and a flaky
+    /// ordering makes the `--check` gate fail nondeterministically (it would
+    /// flag formatted files as dirty and pass unformatted ones by luck).
+    /// Mirrors `fingerprint_deterministic_regardless_of_hashmap_order` in
+    /// config_impact.rs.
+    #[test]
+    fn format_output_deterministic_regardless_of_hashmap_order() {
+        // ≥2 config keys is the minimum for observable shuffling.
+        let src = r#"
+[workflow]
+name = "multi-config"
+version = "1.0.0"
+
+[config]
+alpha = "a"
+bravo = "b"
+charlie = "c"
+delta = "d"
+echo = "e"
+foxtrot = "f"
+
+[defaults]
+threads = 4
+
+[[rules]]
+name = "step1"
+output = ["{config.results}/done.txt"]
+shell = "echo {config.alpha} > {config.results}/done.txt"
+"#;
+        // A single process serializes the same HashMap iteration order every
+        // time, so compare against the Value-sorted canonical form instead of
+        // a second in-process run: the assertion is that direct struct
+        // serialization and the canonical roundtrip agree byte-for-byte,
+        // i.e. the HashMap order reached the output unchanged.
+        let config = WorkflowConfig::parse(src).unwrap();
+        let formatted = format_workflow(&config);
+        let value = toml::Value::try_from(&config).unwrap();
+        let canonical = toml::to_string_pretty(&value).unwrap();
+        assert_eq!(
+            formatted, canonical,
+            "format output must equal the Value-sorted canonical form"
+        );
+        // And the canonical form must itself reparse to the same workflow.
+        let reparsed = WorkflowConfig::parse(&canonical).unwrap();
+        assert_eq!(reparsed.config.len(), 6);
+        assert_eq!(reparsed.rules.len(), 1);
     }
 
     #[test]
@@ -4895,6 +5053,164 @@ mod tests {
             w031_count(&diagnostics),
             1,
             "a when-gated producer's output_pattern must warn unmatched consumers: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_flags_output_collision_between_rules() {
+        // Wildcards with different names over the same template must
+        // collide (the dormant DAG check missed this pair).
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller_a"
+            output = ["variants/{smp}.vcf"]
+            shell = "call_a {smp} > {output}"
+
+            [[rules]]
+            name = "caller_b"
+            output = ["variants/{sample}.vcf"]
+            shell = "call_b {sample} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w033: Vec<_> = diagnostics.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(
+            w033.len(),
+            1,
+            "differently-named wildcards over the same template must collide: {diagnostics:?}"
+        );
+        let msg = &w033[0].message;
+        assert!(
+            msg.contains("'caller_a'") && msg.contains("'caller_b'"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_flags_literal_vs_wildcard_collision() {
+        // A literal whose canonical shape differs from the wildcard
+        // template (`results/report.txt` vs `results/{}.txt`) is a
+        // distinct path — no flag. Identical canonical shapes still flag,
+        // whether writers are gated or not.
+        let distinct = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "staging"
+            output = ["results/report.txt"]
+            shell = "stage > {output}"
+
+            [[rules]]
+            name = "per_sample"
+            output = ["results/{sample}.txt"]
+            shell = "process {sample} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(distinct).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W033"),
+            "distinct canonical shapes are distinct paths: {diagnostics:?}"
+        );
+
+        let same_template = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "staging"
+            output = ["results/{name}.txt"]
+            shell = "stage > {output}"
+
+            [[rules]]
+            name = "per_sample"
+            output = ["results/{sample}.txt"]
+            shell = "process {sample} > {output}"
+        "#;
+        let config2 = WorkflowConfig::parse(same_template).unwrap();
+        let diagnostics2 = lint_format(&config2, None);
+        assert!(
+            diagnostics2.iter().any(|d| d.code == "W033"),
+            "two wildcard writers over one template must collide: {diagnostics2:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_flags_two_literal_writers() {
+        // Literal vs wildcard with the same canonical shape is
+        // impossible (a literal has no placeholders); the real literal
+        // hazard is two rules writing the IDENTICAL literal path.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "writer_a"
+            output = ["cohort.vcf"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "writer_b"
+            output = ["cohort.vcf"]
+            shell = "b > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W033"),
+            "two literal writers of one path must collide: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_does_not_flag_distinct_or_same_rule_templates() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            output = ["variants/{sample}.vcf", "qc/{sample}.txt"]
+            shell = "call > {output}"
+
+            [[rules]]
+            name = "annotate"
+            input = ["variants/{sample}.vcf"]
+            output = ["annotated/{sample}.vcf"]
+            shell = "annotate {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W033"),
+            "distinct templates and one-rule outputs must not collide: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_output_pattern_participates() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "scatter_writer"
+            output_pattern = "chunks/{chunk}.txt"
+            shell = "split > {output}"
+
+            [[rules]]
+            name = "legacy_writer"
+            output = ["chunks/{chunk_id}.txt"]
+            shell = "write > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            diagnostics.iter().any(|d| d.code == "W033"),
+            "output_pattern must be matched against plain outputs: {diagnostics:?}"
         );
     }
 

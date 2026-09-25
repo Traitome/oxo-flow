@@ -55,6 +55,14 @@ Sample expansion is driven by `[[sample_groups]]` (see [Parallel Samples](parall
 
 ## Running the Workflow
 
+### Run
+
+Samples come from the `[[sample_groups]]` block in the workflow file (edit the list to match your data, or pass `--samples` on the CLI). Each sample needs a paired FASTQ under `raw/`, named `{sample}_R1.fastq.gz` / `{sample}_R2.fastq.gz`. The `[config]` block points `{config.gene_annotation}` at a GTF matching your genome build, `{config.reference_genome}` at the reference FASTA, and `{config.star_index}` at the STAR genome index directory (generate it once with `STAR --runMode genomeGenerate`).
+
+```bash
+oxo-flow run examples/gallery/06_rnaseq_quantification.oxoflow -j 2
+```
+
 ### Validate
 
 ```bash

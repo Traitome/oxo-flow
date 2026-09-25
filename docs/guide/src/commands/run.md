@@ -270,9 +270,11 @@ oxo-flow run pipeline.oxoflow --gene_bed ""
 
     ```console
     oxo-flow run pipeline.oxoflow min_quality=30 --json
-    '--json' is a run flag, not a config override.
-      Run flags must come before KEY=VALUE overrides, e.g.:
+    '--json' is a command flag, not a config override.
+      Command flags must come before KEY=VALUE overrides, e.g.:
       oxo-flow run <workflow.oxoflow> --json min_quality=30
+      For a config key that itself starts with dashes, use --arg KEY=VALUE
+      (also placed before positional overrides).
     ```
 
 ### Execution profiles
@@ -671,8 +673,8 @@ Notes:
   directory is created per-process, so it cannot be predicted from the
   foreground invocation) and `--yes` — a detached child cannot prompt.
 - `--background` is a launcher flag, not a workflow setting: the child
-  re-parses the remaining argv, so flag ordering rules (run flags before
-  `KEY=VALUE` overrides) apply to the whole command line as usual.
+  re-parses the remaining argv, so flag ordering rules (command flags
+  before `KEY=VALUE` overrides) apply to the whole command line as usual.
 
 ---
 

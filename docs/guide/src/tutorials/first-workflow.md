@@ -128,8 +128,8 @@ fastqc {input} -o {config.results_dir}/fastqc_trimmed -t {threads}
 [[rules]]
 name = "multiqc"
 input = [
-    "{config.results_dir}/fastqc/{sample}_R1_fastqc.html",
-    "{config.results_dir}/fastqc_trimmed/{sample}_R1_fastqc.html"
+    "{config.results_dir}/fastqc/sample1_R1_fastqc.html",
+    "{config.results_dir}/fastqc_trimmed/sample1_R1_fastqc.html"
 ]
 output = [
     "{config.results_dir}/multiqc/multiqc_report.html"
@@ -157,7 +157,7 @@ graph TD
 
 - `fastqc_raw` and `fastp_trim` can run in parallel (no dependency between them)
 - `fastqc_trimmed` depends on `fastp_trim`'s output — inferred automatically because its `input` files match `fastp_trim`'s `output` files
-- `multiqc` aggregates the two QC rounds — its two inputs are the report files produced by `fastqc_raw` and `fastqc_trimmed`. Note that `fastp_trim` has **no direct edge** to `multiqc`: the trimmed data itself is not a multiqc input; multiqc implicitly waits for it via `fastqc_trimmed`'s transitive dependency.
+- `multiqc` aggregates the two QC rounds — its two inputs are the `sample1` report files produced by `fastqc_raw` and `fastqc_trimmed`. Note that `fastp_trim` has **no direct edge** to `multiqc`: the trimmed data itself is not a multiqc input; multiqc implicitly waits for it via `fastqc_trimmed`'s transitive dependency. Because neither the inputs nor the output of `multiqc` contain `{sample}`, it stays a **single task** and waits for both per-sample QC branches.
 
 !!! tip "Parallel scheduling"
     The engine does not serialize the whole pipeline. `fastqc_raw` starts **immediately, in parallel with `fastp_trim`** — it never waits for trimmed data. Only `fastqc_trimmed` waits for `fastp_trim` to finish, and `multiqc` waits for both QC rounds. On a multi-core machine, raw QC and trimming run simultaneously.
@@ -236,7 +236,7 @@ oxo-flow dry-run qc-pipeline.oxoflow
 ```
 oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
 INFO Auto-discovered 2 samples from pattern 'raw_data/{sample}_R1.fastq.gz'
-Plan: would run: 8 | skip: 0 | completed: 0 (DAG size: 8)
+Plan: would run: 7 | skip: 0 | completed: 0 (DAG size: 7)
   1. fastp_trim_auto-discovered_sample1
      threads=4
      env=conda
@@ -275,7 +275,7 @@ fastp --in1 raw_data/sample1_R1.fastq.gz --in2 raw_data/sample1_R2.fastq.gz --ou
      memory=8G
      outputs: ["results/fastqc_trimmed/sample2_R1_fastqc.html", ...]
 
-  7. multiqc_auto-discovered_sample1
+  7. multiqc
      threads=1
      env=conda
      memory=8G
@@ -283,20 +283,14 @@ fastp --in1 raw_data/sample1_R1.fastq.gz --in2 raw_data/sample1_R2.fastq.gz --ou
      command: mkdir -p results/multiqc
 multiqc results -o results/multiqc --force
 
-  8. multiqc_auto-discovered_sample2
-     threads=1
-     env=conda
-     memory=8G
-     outputs: ["results/multiqc/multiqc_report.html"]
-
-Summary: 8 rules, total 26 threads declared, max 4 threads/rule
-         8 rule(s) with memory requirements
+Summary: 7 rules, total 25 threads declared, max 4 threads/rule
+         7 rule(s) with memory requirements
          1 sample group(s), 0 pair(s)
 
 To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
-The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of the 4 template rules became one task per discovered sample (`_auto-discovered_sample1`, `_auto-discovered_sample2`), for 8 tasks in total. (The transcript above is abridged — real output also prints a checkpoint line, per-task `input ✓/✗` status for concrete paths, and a `command:` line for every task.) Missing inputs do not fail dry-run — it exits 0; `run` is what fails.
+The dry-run has expanded the `{sample}` wildcard into per-sample tasks: the three per-sample rules became one task per discovered sample (`_auto-discovered_sample1`, `_auto-discovered_sample2`), while `multiqc` — whose inputs and outputs contain no `{sample}` — stays a single task: 7 tasks in total. (The transcript above is abridged — real output also prints a checkpoint line, per-task `input ✓/✗` status for concrete paths, and a `command:` line for every task.) Missing inputs do not fail dry-run — it exits 0; `run` is what fails.
 
 !!! warning "`validate` warns; it does not gate"
 
@@ -308,8 +302,22 @@ The dry-run has expanded the `{sample}` wildcard into per-sample tasks: each of 
     line. Read them: `run` is what fails — it exits non-zero when a rule's
     input is absent or its wildcards cannot be bound.
 
-!!! note "Aggregation rules are expanded per sample too"
-    `multiqc` became two tasks, but both aggregate the same `results` directory and write the same `results/multiqc/multiqc_report.html` — the second run overwrites the first. This duplication is harmless here (MultiQC re-scans the whole directory), but for truly single-shot aggregation steps you may want to run them separately or via `depends_on` without a sample wildcard in the inputs.
+!!! warning "Aggregation rules are expanded per sample too — and the duplicates race"
+    `multiqc` became two tasks, but both aggregate the same `results` directory and write the same `results/multiqc/` outputs. Because they sit at the same DAG level they run **concurrently**, and two MultiQC processes wiping/writing `results/multiqc/multiqc_data` at the same time fail with `FileExistsError`/`FileNotFoundError` — the tutorial workflow as written above fails on rerun. Never leave a `{sample}` in an aggregation rule's inputs when its outputs contain no per-sample path.
+
+    The fix is to key the aggregation to one sample's output and let MultiQC itself re-scan the whole `results/` tree (it picks up every sample's reports):
+
+    ```toml
+    [[rules]]
+    name = "multiqc"
+    input = [
+        "{config.results_dir}/fastqc/sample1_R1_fastqc.html",
+        "{config.results_dir}/fastqc_trimmed/sample1_R1_fastqc.html"
+    ]
+    output = [ "{config.results_dir}/multiqc/multiqc_report.html" ]
+    ```
+
+    The rule no longer contains `{sample}`, so it becomes a single task that waits for `fastqc_raw`/`fastqc_trimmed` through file matching, and the finished report covers all samples. (The tutorial workflow above has been updated to this form; a general engine-level guard against duplicate-output task races is tracked in issue [#443](https://github.com/Traitome/oxo-flow/issues/443).)
 
 The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 / 4 → 2, rounded down) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
 
@@ -332,7 +340,7 @@ oxo-flow graph qc-pipeline.oxoflow
 oxo-flow run qc-pipeline.oxoflow -j 2
 ```
 
-The `-j 2` flag allows up to 2 jobs to run concurrently — matching the suggestion from dry-run (machine threads ÷ per-rule threads). oxo-flow will execute the four independent level-0 tasks (two `fastp_trim`, two `fastqc_raw`) two at a time, then the two `fastqc_trimmed` tasks, then the two `multiqc` tasks.
+The `-j 2` flag allows up to 2 jobs to run concurrently — matching the suggestion from dry-run (machine threads ÷ per-rule threads). oxo-flow will execute the four independent level-0 tasks (two `fastp_trim`, two `fastqc_raw`) two at a time, then the two `fastqc_trimmed` tasks, then the single `multiqc` task (which re-scans the whole `results/` tree, so its report covers both samples).
 
 !!! note "The QC numbers themselves are meaningless"
     The reads are synthetic 60 bp sequences, so FastQC/fastp run to

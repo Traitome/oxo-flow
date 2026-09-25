@@ -228,6 +228,13 @@ By default, oxo-flow auto-detects interpreters based on file extensions:
 - `.R`, `.r` → `Rscript`
 - `.sh`, `.bash` → `bash`
 - `.jl` → `julia`
+- `.pl` → `perl`
+- `.rb` → `ruby`
+- `.qmd`, `.Rmd`, `.rmd` → `quarto render`
+- `.ipynb` → `jupyter nbconvert --to notebook --execute`
+- `.smk` → `snakemake`
+- `.nextflow` → `nextflow run`
+- `.wdl` → `miniwdl run`
 
 You can override or extend this mapping in the `[workflow]` section:
 
@@ -628,23 +635,23 @@ memory = "32G"
 | `log` | String | No | Log file path for rule execution output |
 | `group` | String | No | Job group label for cluster submission grouping |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
-| `input_function` | String | No | Dynamic input resolver function name |
+| `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
 | `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
 | `extends` | String | No | Inherit settings from a base rule |
 | `retry_delay` | String | No | Delay between retries (e.g., `"5s"`, `"30s"`, `"2m"`) |
-| `temp_output` | Array | No | Temporary outputs cleaned up after downstream rules complete |
+| `temp_output` | Array | No | Scratch artifacts the rule itself overwrites (e.g. `.tmp.bam`). Cleaned when the rule **fails** (so a stale partial never masquerades as a completed run); they persist on success — mark `temporary = true` for success-path deletion |
 | `temporary` | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
-| `protected_output` | Array | No | Outputs that must never be overwritten or deleted |
+| `protected_output` | Array | No | Outputs declared protected. Parsed and validated, but the current engine does not enforce protection at runtime — treat as advisory (file an issue if you need enforcement) |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
 | `shadow` | String | No | Shadow directory mode: `"minimal"`, `"shallow"`, or `"full"` |
 | `ancient` | Array | No | Inputs that never trigger re-execution (e.g., reference files) |
 | `localrule` | Boolean | No | Always run locally — never submit to a cluster scheduler |
-| `format_hint` | Array | No | File format hints for I/O optimization (`"bam"`, `"vcf"`, `"fastq.gz"`) |
-| `pipe` | Boolean | No | Enable FIFO streaming mode for input/output |
-| `checksum` | String | No | Output integrity verification (`"md5"` or `"sha256"`) |
+| `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
+| `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
 
 **Note:** When a rule declares outputs, at least one of `shell`, `script`, or `transform` must be provided. If both `shell` and `script` are defined, they execute sequentially: shell first, then script.
@@ -899,7 +906,7 @@ oxo-flow automatically cleans up temporary outputs:
 
 | Scenario | Cleanup |
 |---|---|---|
-| Success + `temp_output` | Cleaned after successful completion |
+| Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as `<name>.oxo-failed`; untouched pre-existing files are preserved |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
@@ -926,11 +933,17 @@ runs — the `--rerun` flag is the escape hatch for that case.
 
 ### Timeout Enforcement
 
-On Unix systems (Linux, macOS), timeout kills the entire process group, ensuring child processes don't survive:
+On Unix systems (Linux, macOS), a timeout kill walks the rule's **process
+subtree** rather than a process group — rules deliberately run inside the
+run's process group ("one run = one process group"), so the engine snapshots
+parent→child links via sysinfo and signals each descendant individually,
+deepest first: SIGTERM to the whole subtree, a 10-second grace poll for
+survivors, a re-scan for descendants spawned during the window, then SIGKILL
+to whatever remains (issue #194):
 
 ```toml
 [rules.resources]
-time_limit = "4h"  # SIGKILL sent to process group after 4 hours
+time_limit = "4h"  # SIGTERM → grace → SIGKILL escalation after 4 hours
 ```
 
 ### GPU Specification
@@ -1043,15 +1056,15 @@ name = "pipeline"
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `temp_output` | Array | Temporary outputs cleaned after downstream rules complete |
-| `protected_output` | Array | Protected outputs never overwritten or deleted |
+| `temp_output` | Array | Scratch artifacts cleaned when the rule fails; persist on success (see Cleanup Behavior) |
+| `protected_output` | Array | Declared-protected outputs; parsed but not enforced at runtime (advisory) |
 | `temporary` | Boolean | Delete the rule's outputs after a fully successful run once every dependent has completed (tombstone + lazy regeneration; leaf rules keep outputs) |
 
 ```toml
 [[rules]]
 name = "align"
 output = ["aligned/{sample}.bam", "aligned/{sample}.bam.bai"]
-temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned after downstream use
+temp_output = ["aligned/{sample}.tmp.bam"]  # Cleaned if the rule fails; kept on success
 temporary = true                             # Delete aligned/*.bam once all callers finish
 ```
 
@@ -1256,17 +1269,16 @@ retry_delay = "30s"
 | Field | Type | Description |
 |-------|------|-------------|
 | `ancient` | Array | Inputs that never trigger re-execution (reference files) |
-| `format_hint` | Array | File format hints for I/O optimization (`"bam"`, `"vcf"`) |
-| `pipe` | Boolean | Enable FIFO streaming mode for inputs |
-| `checksum` | String | Output checksum algorithm (`"md5"`, `"sha256"`) |
+| `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization) |
+| `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
+| `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
 
 ```toml
 [[rules]]
 name = "align"
 input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
 ancient = ["ref/hg38.fa"]  # Reference never triggers rebuild
-format_hint = ["bam"]
-checksum = "sha256"
+# format_hint and checksum are accepted but currently have no effect
 ```
 
 ### Organization
@@ -1368,7 +1380,7 @@ cache_key = "vc_v2.0"           # Content cache key — outputs are reused when 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_function` | String | Name of a dynamic input resolver function called at runtime |
+| `input_function` | String | Parsed and included in the rule fingerprint but **not yet called** — no dynamic input resolution is performed today (use `expand_inputs` or `output_pattern` for dynamic inputs) |
 
 ### Arbitrary Metadata
 
@@ -2187,8 +2199,8 @@ shell = "caller --input {input[0]} --output {output[0]}"
   gzip files (the record count is truncated — a trailing partial record
   does not round up); `wc_lines` streams lines of the **decompressed**
   content for plain or gzip files (same `.gz` detection as `reads_count`);
-  `file_size` returns the byte length. BAM/BGZF indexing is planned for
-  a future release.
+  `file_size` returns the byte length. BAM/CRAM input to these functions
+  is out of scope for now (it needs a BGZF parser, not line arithmetic).
 - **Regex extraction** — `regex_extract(path, pattern, group?)` reads the
   whole file (plain or `.gz`, up to 16 MiB) and takes the **first** regex
   match; the captured text (group `0` = whole match by default, or an
@@ -2461,6 +2473,27 @@ bwa mem -t {threads} ref.fa {input} | \
 """
 ```
 
+!!! warning "Backslashes inside `\"\"\"` blocks are TOML escape sequences"
+
+    `"""…"""` is a TOML *basic* string: escape sequences like `\n`, `\t`, and
+    `\\` are decoded **before** the shell ever sees the text. Two consequences:
+
+    - The `\` line continuations above only work because TOML folds
+      backslash-newline into nothing. But an embedded heredoc or regex that
+      needs a *literal* `\n` breaks — the shell receives a real newline
+      instead.
+    - For scripts with literal backslashes (embedded `python3 <<'EOF'`
+      heredocs, `sed 's/\t/,/g'`, …), use a **multi-line literal string** with
+      triple *single* quotes — TOML passes its contents through byte-for-byte:
+
+      ```toml
+      shell = '''
+      python3 - <<'PYEOF'
+      print("a\nb")   # literal backslash-n reaches python intact
+      PYEOF
+      '''
+      ```
+
 ---
 
 ## Complete Example
@@ -2602,8 +2635,10 @@ Semantics:
 - Bounds: checkpoint rules are never re-expanded themselves (no
   `{sample}`/`{group}`/`{pair_id}`/`{experiment}` — validation error E014)
   and re-entry is capped at 32 rounds — a rule that keeps discovering values
-  past that is a workflow bug, not an engine feature. Validation error E013
-  requires `checkpoint_manifest` on every checkpoint rule.
+  past that is a workflow bug, not an engine feature. Diagnostic E013
+  (emitted at warning severity — `checkpoint = true` predates the manifest
+  field) flags a checkpoint rule that does not declare
+  `checkpoint_manifest`.
 - `dry-run` previews replay recorded re-entries (the preview shows the same
   static plan a run would execute) and mark checkpoint rules as possible
   re-entry points; `--json` includes a `reentry` section.
