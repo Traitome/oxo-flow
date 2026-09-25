@@ -2187,8 +2187,8 @@ shell = "caller --input {input[0]} --output {output[0]}"
   gzip files (the record count is truncated — a trailing partial record
   does not round up); `wc_lines` streams lines of the **decompressed**
   content for plain or gzip files (same `.gz` detection as `reads_count`);
-  `file_size` returns the byte length. BAM/BGZF indexing is planned for
-  a future release.
+  `file_size` returns the byte length. BAM/CRAM input to these functions
+  is out of scope for now (it needs a BGZF parser, not line arithmetic).
 - **Regex extraction** — `regex_extract(path, pattern, group?)` reads the
   whole file (plain or `.gz`, up to 16 MiB) and takes the **first** regex
   match; the captured text (group `0` = whole match by default, or an

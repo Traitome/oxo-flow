@@ -67,7 +67,7 @@ available in `when` strings:
 | `wc_lines(path)` | any text file (plain or `.gz`) | line count of the decompressed content |
 | `file_size(path)` | any file | size in bytes |
 | `regex_extract(path, pattern, group?)` | any text file | integer parsed from the first regex match (group defaults to 0 = whole match; the captured text must be a number) |
-| `file_exists(path)` | — | 1/0 existence probe |
+| `file_exists(path)` | — | truth probe — `true` only when the path exists (don't write `== 1`) |
 
 ```toml
 [[rules]]
@@ -100,8 +100,9 @@ verdict actually flipped are invalidated (see "Resume & checkpoints").
 
 **Scope limits.** These functions are intentionally restricted to pure
 file reads — no shell, no globbing beyond `{wildcard}` expansion, and
-`reads_count` assumes 4-line FASTQ records (BAM/BGZF support is planned
-for a future release). Only `when` strings may call them; `shell`, `input`,
+`reads_count` assumes 4-line FASTQ records (BAM/CRAM input is out of
+scope for now — it needs a BGZF parser, not line arithmetic). Only
+`when` strings may call them; `shell`, `input`,
 and `output` still cannot read the filesystem at plan time.
 
 ### Wildcard-scoped conditions (`wildcard.<key>`)
