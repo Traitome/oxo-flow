@@ -4632,6 +4632,11 @@ Set the provider and your API key via environment variables:</p>
 </span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_PROVIDER</span><span class="o">=</span>ollama
 </span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_API_URL</span><span class="o">=</span><span class="s2">"http://localhost:11434"</span>
 </span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_MODEL</span><span class="o">=</span><span class="s2">"llama3"</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="c1"># Zero-config: if OXO_FLOW_AI_PROVIDER is unset and you already export</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="c1"># ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL (gateway) or OPENAI_API_KEY</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="c1"># (openai-compatible), oxo-flow auto-detects the provider — no extra</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="c1"># variables needed. See "Environment Variables" below for the exact rules.</span>
 </span></code></pre></div>
 <p>Configuration persists to <code>~/.oxo-flow/ai_config.json</code> after first use.</p>
 <h3 id="2-enable-ai-in-your-workflow">2. Enable AI in Your Workflow<a class="headerlink" href="#2-enable-ai-in-your-workflow" title="Permanent link">#</a></h3>
@@ -4901,7 +4906,12 @@ repository.</p>
 </tr>
 <tr>
 <td><code>ANTHROPIC_AUTH_TOKEN</code></td>
-<td>Anthropic-compatible API key</td>
+<td>Anthropic-compatible API key (the variable Anthropic SDKs and gateway deployments export)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td>Alias for <code>ANTHROPIC_AUTH_TOKEN</code></td>
 <td>—</td>
 </tr>
 <tr>
@@ -4936,11 +4946,12 @@ repository.</p>
 </tr>
 <tr>
 <td><code>OLLAMA_HOST</code></td>
-<td>Ollama server address (web service only; the CLI reads <code>OXO_FLOW_AI_API_URL</code>)</td>
+<td>Ollama server address (explicit opt-in — no key needed)</td>
 <td><code>http://localhost:11434</code></td>
 </tr>
 </tbody>
 </table>
+<p><strong>Zero-config auto-detection</strong>: when <code>OXO_FLOW_AI_PROVIDER</code> is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — <code>ANTHROPIC_AUTH_TOKEN</code> / <code>ANTHROPIC_API_KEY</code> / <code>CLAUDE_API_KEY</code> → claude, <code>OPENAI_API_KEY</code> → openai, <code>DEEPSEEK_API_KEY</code> → deepseek, <code>OLLAMA_HOST</code> → ollama. Gateway setups that only export <code>ANTHROPIC_AUTH_TOKEN</code> + <code>ANTHROPIC_BASE_URL</code> + <code>ANTHROPIC_MODEL</code> therefore work without any oxo-flow-specific configuration. An explicit <code>OXO_FLOW_AI_PROVIDER</code> (including <code>disabled</code>) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests.</p>
 <hr />
 <h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">#</a></h2>
 <p>The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):</p>
@@ -5264,7 +5275,9 @@ workflow, merge its PR, and re-dispatch the release.</p>
 </span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
 </span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="c1"># Set up any provider</span>
 </span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_AI_PROVIDER</span><span class="o">=</span>&lt;provider&gt;
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="nb">export</span><span class="w"> </span>&lt;PROVIDER&gt;_API_KEY<span class="o">=</span><span class="s2">"sk-&lt;YOUR-KEY&gt;"</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># then the matching credential:</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="c1">#   deepseek → DEEPSEEK_API_KEY, openai → OPENAI_API_KEY,</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="c1">#   claude → ANTHROPIC_AUTH_TOKEN, ollama → OLLAMA_HOST (no key)</span>
 </span></code></pre></div>
 <h3 id="ai-response-did-not-contain-valid-toml">"AI response did not contain valid TOML"<a class="headerlink" href="#ai-response-did-not-contain-valid-toml" title="Permanent link">#</a></h3>
 <p>The AI returned a response without valid <code>.oxoflow</code> TOML content. This is rare — try again with a more specific description.</p>
