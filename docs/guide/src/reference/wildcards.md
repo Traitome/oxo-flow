@@ -80,7 +80,7 @@ input = ["raw/{sample}.fastq.gz"]
 output = ["qc/{sample}_fastqc.html"]
 ```
 
-With samples `S1` and `S2`, this becomes **two tasks**: `fastqc_S1` (processing `S1`) and `fastqc_S2` (processing `S2`). This is what you want for per-sample steps — one definition, N tasks.
+With samples `S1` and `S2`, this becomes **two tasks**, one per sample. Each expanded rule name carries its group and sample (`{rule}_{group}_{sample}` — see [Rule Name Expansion](#rule-name-expansion)): `fastqc_auto-discovered_S1` (processing `S1`) and `fastqc_auto-discovered_S2` (processing `S2`) when the samples come from `sample_pattern` discovery, or `fastqc_<group>_S1` / `fastqc_<group>_S2` when samples are declared via `[[sample_groups]]`. This is what you want for per-sample steps — one definition, N tasks.
 
 `script` and the hook fields substitute per clone but never start a fan-out by themselves: a wildcard that appears *only* there keeps the rule as a single task (and `${sample}`-style shell-variable spellings inside `script` are never treated as wildcards).
 

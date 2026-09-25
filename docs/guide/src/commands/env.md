@@ -29,12 +29,15 @@ When given a workflow file, lists the environments used by each rule.
 
 ```
 oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
+https://github.com/Traitome/oxo-flow
 Available environment backends:
   ✓ conda
   ✓ docker
   ✓ singularity
   ✓ venv
 ```
+
+The two banner lines print only at an interactive terminal; redirected output starts at `Available environment backends:`.
 
 ### `env check`
 

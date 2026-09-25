@@ -219,6 +219,7 @@ oxo-flow env list
 
 ```
 oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
+https://github.com/Traitome/oxo-flow
 Available environment backends:
   ✓ system
   ✓ mamba
@@ -227,7 +228,7 @@ Available environment backends:
   ✓ venv
 ```
 
-The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely).
+The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely). The two banner lines print only at an interactive terminal; redirected output starts at `Available environment backends:`.
 
 Check that all environments in a specific workflow are valid:
 
@@ -237,6 +238,7 @@ oxo-flow env check my-pipeline.oxoflow
 
 ```
 oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
+https://github.com/Traitome/oxo-flow
   ✓ align (docker)
   ✓ call_variants (conda)
   ✓ plot_results (venv)

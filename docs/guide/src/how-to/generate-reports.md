@@ -89,7 +89,10 @@ A generated report includes:
 Sections adapt to available execution data — for example, **Execution
 Status** and **Failure Diagnosis** only appear with a checkpoint — and
 every section, including **Task Summary**, can be filtered via
-`[report].sections`. List them all with `oxo-flow report WF --list-sections`.
+`[report].sections`. List them all with `oxo-flow report WF --list-sections`
+(15 sections; **Resource Accounting** is not listed there because it is
+appended by the `--acct` import after the standard build and cannot be
+filtered by `[report].sections`).
 
 ---
 

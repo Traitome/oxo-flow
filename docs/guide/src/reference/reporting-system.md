@@ -251,12 +251,14 @@ working directory (the checkpoint-recorded workdir, else the workflow
 file's directory), not fabricated from templates. A recursive scanner
 (1 MiB per-file cap, depth 8, no symlinks, dot-directories skipped,
 deterministic order) classifies filenames by suffix and dispatches to one
-of six adapters in `report_metrics`:
+of seven adapters in `report_metrics`:
 
 - `fastp` (`*.fastp.json`), `flagstat` (`*.flagstat`,
   `*.flagstat.txt`), `STAR` (`*Log.final.out`), `featureCounts`
   (`*.summary`), `bcftools` (`*.bcftools.stats`), `kraken2`
-  (`*.kraken2.report`, `*.kraken.report`)
+  (`*.kraken2.report`, `*.kraken.report`), `mqc` (`*_mqc.json` —
+  MultiQC custom content; only the JSON form is parsed, `*_mqc.yml`
+  files are counted as skipped with a note in Scan Notes)
 
 Every adapter returns metrics in a stable order; each metric carries an
 optional QC flag from fixed thresholds (e.g. fastp `q30_rate` Pass ≥ 0.85 /
@@ -280,7 +282,8 @@ source ran the rule, and the two differ:
   allocations, so they are documented — here and in the `report` command
   reference — as sampled rather than exact.
 - **Cluster runs** report what the scheduler's own accounting store
-  recorded (`sacct`/`qstat -f`/`qacct`), read once as each job settles.
+  recorded (`sacct`/`qstat -x -f`/`qacct`/`bacct`), read once as each job
+  settles.
   That figure spans every step of the job rather than one sampled process.
 
 `-` means neither source reported a number: very short local rules the

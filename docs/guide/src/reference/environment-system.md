@@ -76,11 +76,11 @@ Before executing a rule with an environment specification:
 
 | Backend | Setup Command |
 |---|---|
-| Conda | `conda env create -f <yaml_file>` |
-| Mamba | `mamba env create -f <yaml_file>` (auto-detects mamba, micromamba, or conda) |
-| Pixi | `pixi install` (if pixi.toml exists) |
-| Docker | `docker pull <image>` |
-| Singularity | `singularity pull <image>` |
+| Conda | `conda env create -n <env> -f <yaml_file>` (falls back to `conda env update -n <env> -f <yaml_file>` if the env already exists) |
+| Mamba | `<mamba\|micromamba\|conda> env create -n <env> -f <yaml_file>` (falls back to `env update`; auto-detects mamba, micromamba, or conda) |
+| Pixi | `pixi install --manifest-path <pixi.toml>` (manifest must exist — validated upfront) |
+| Docker | `docker image inspect <image> \|\| docker pull <image>` — pull only when absent; bare names that 404 on Docker Hub get one quay.io/biocontainers retry re-tagged to the original name |
+| Singularity | Pull when needed: a URI (`docker://…`) is pulled to a derived `.sif` name; a local `.sif` path is used as-is |
 | Venv | `python3 -m venv <path> && source <path>/bin/activate && pip install -r <requirements>` |
 | Modules | None (no setup — modules are loaded at execution time) |
 | System | None (no setup needed — commands run directly in the current shell) |

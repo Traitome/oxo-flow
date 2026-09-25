@@ -12,8 +12,9 @@ endpoints — it does not bypass them.
 
 ```
 Intent (NL) → AI Translator → /api/pipelines/validate → Validated .oxoflow
-                  │                    │
-                  └─ Template match ───┘ (fallback if AI unavailable)
+                  │
+                  └─ Template keyword match → prompt hints + failure suggestion
+                     (deterministic, zero AI cost — never produces a pipeline)
 ```
 
 ## Endpoints
@@ -32,8 +33,9 @@ Process (one harness across all generation surfaces):
      env-discovered Claude → OpenAI → Ollama)
   2. Requests fail fast with a structured `AI_NOT_CONFIGURED` error when
      no provider is usable
-  3. Template names enter the prompt as hints; keyword matching remains a
-     deterministic fallback when all providers fail
+  3. Template names enter the prompt as hints; keyword matching also
+     shapes the structured failure message when AI generation fails
+     ("Try the '{name}' template") — it never produces a pipeline
   4. Every draft is validated by the engine via the web workflow service;
      validation errors feed the orchestrator's correction loop (bounded)
 Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
@@ -77,14 +79,20 @@ Output: { optimized_toml, changes, estimated: { time_saved, memory_reduction } }
 The AI layer uses an enum-based dispatch system:
 
 ```
-DeepSeek (default) → Claude (Anthropic) → OpenAI → Ollama (local) → Template keyword match
+caller's own provider → configured provider → env-discovered Claude →
+env-discovered OpenAI → Ollama (only when OLLAMA_HOST is set)
 ```
 
-**Fallback chain**: DeepSeek is the default provider. If the primary provider
-is unavailable, falls back to Claude. If Claude is unavailable, falls back to
-OpenAI. If OpenAI is unavailable, falls back to local Ollama. If all AI
-providers are unavailable, the request fails with an error suggesting the
-best-matching template name — no pipeline is produced without AI.
+**Fallback chain**: DeepSeek is the default provider. Candidates only enter
+the chain when they are actually usable — the caller's provider if usable,
+the runtime-configured provider if configured, Claude/OpenAI only when
+discoverable from the environment, and Ollama only when the operator opted
+in via `OLLAMA_HOST` (it is the only credential-free backend, so admitting
+it unconditionally would turn "nothing configured" into a doomed
+localhost connection attempt). If the candidate chain is empty, the request
+fails fast with a structured `AI_NOT_CONFIGURED` error. If every candidate
+fails, the request fails with an error suggesting the best-matching
+template name — no pipeline is produced without AI.
 
 **Request dedup**: Same intent + same data characteristics → cached result,
 avoiding redundant API calls.
@@ -128,6 +136,6 @@ These functions look like AI but are 100% rule-based and deterministic:
 |----------|--------|-----------|
 | File format detection | Extension matching (+ paired-end naming) | Deterministic |
 | Reference genome discovery | File existence in fixed search dirs | Deterministic |
-| Pipeline template matching | Keyword scoring | Reproducible |
+| Pipeline template matching | Keyword scoring | Reproducible — used for prompt hints and failure suggestions |
 | Failure classification | Error patterns + exit codes | Rule-based |
 | DAG optimization | Topological sort + critical path | Math problem |

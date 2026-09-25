@@ -223,6 +223,7 @@ for CI scripts and tooling that today grep the colored text:
    "inputs_expanded": […], "outputs_expanded": […]}
 ],
 "summary": {"would_execute": 12, "will_skip": 0, "total_rules": 12},
+"suggested_jobs": 2,
 "sample_groups": [{"name": "cohort", "samples": […]}],
 "pairs": [{"pair_id": "…", "experiment": "…", "control": "…"}]
 ```
@@ -281,7 +282,6 @@ instances at runtime are listed under the `reentry` section of `--json`
 ## Output
 
 ```
-oxo-flow v0.20.1 — Rust-native bioinformatics pipeline engine
 Plan: would run: 3 | skip: 0 | completed: 0 (DAG size: 3)
   1. generate_data
      threads=1
@@ -309,6 +309,13 @@ Summary: 3 rules, total 4 threads declared, max 2 threads/rule
 
 To execute:  oxo-flow run pipeline.oxoflow -j 1
 ```
+
+The human-readable plan goes to **stderr** (including the `Summary:` and
+`To execute:` lines) so it stays visible above redirected job output; with
+`--json` the machine-readable report goes to **stdout** instead. When a
+checkpoint exists, the plan is preceded by a `Checkpoint:` line and each
+rule carries a status marker (see below); the sample-scoped output also
+includes a `Sample readiness:` section.
 
 ---
 

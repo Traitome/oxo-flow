@@ -16,7 +16,7 @@ oxo-flow config <ACTION> [OPTIONS]
 
 | Action | Description |
 |---|---|
-| `show` | Show all configuration variables from a workflow |
+| `show` | Show workflow metadata and configuration variables |
 | `stats` | Show workflow statistics (rules, dependencies, etc.) |
 | `check` | Alias for `stats` |
 | `get <KEY>` | Get a specific configuration variable value |
@@ -100,7 +100,7 @@ Rule A ──► Rule B ──► Rule C
 
 **Why can dependencies exceed rules?**
 
-Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file that exactly matches another rule's output string creates an edge in the DAG (wildcard patterns like `{sample}` are matched literally and do not match other rules' patterns).
+Some rules depend on multiple upstream outputs (e.g., a merge rule that combines results from parallel branches). Each input file that exactly matches another rule's output string creates an edge in the DAG. Beyond exact matches, the DAG builder also connects: concrete inputs against producer outputs containing wildcards (e.g., input `mapped/A.bam` matches producer output `mapped/{sample}.bam`), glob inputs (`mapped/*.bam`) against any producer output the glob matches, and directory inputs against outputs under that directory — all best-effort; unmatched inputs are simply treated as source files.
 
 ---
 

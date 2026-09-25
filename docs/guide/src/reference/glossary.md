@@ -329,9 +329,9 @@ below cover the codes referenced across this documentation.
 | `E007` | `depends_on` names a rule that does not exist |
 | `E008` | `extends` names a rule that does not exist |
 | `E009` | An input path contains `..` and may escape the working directory |
-| `E010` | A rule references an undefined `env_group` |
+| `E010` | A rule references an undefined `env_group`. The same code also flags an **absolute** input file that does not exist (a missing *relative* input gets `W020` instead — see the lint table) |
 | `E011` | A rule command matches a dangerous shell pattern (destructive command class). Recursive deletions (`rm -rf`/`rm -r`) are only blocked when the target resolves OUTSIDE the run workdir — pipelines may delete their own outputs (see Security model) |
-| `E013` | A `checkpoint = true` rule lacks `checkpoint_manifest` |
+| `E013` | A `checkpoint = true` rule lacks `checkpoint_manifest`. Emitted at warning severity — `checkpoint = true` predates the manifest field, so legacy workflows keep validating (it appears in `--json` warnings, not errors) |
 | `E014` | A checkpoint rule is parameterized by `{sample}`/`{group}`/`{pair_id}` (not allowed) |
 | `E015` | Re-entry declares a `pair_id` with conflicting content |
 | `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry `pair_id` colliding with an existing instance name (see Checkpoint re-entry) |
@@ -345,7 +345,8 @@ below cover the codes referenced across this documentation.
 | `W003` | Rule missing a description |
 | `W004` | *(info)* Rule has a shell command but no `log` file specified — stdout/stderr are still captured into job records |
 | `W005` | Rule uses >8 threads with no `memory` |
-| `W007` | Rule declares no environment — runs in the bare system shell |
+| `W007` | *(info)* Leaf rule (no dependents) that could be marked `target = true` |
+| `W008` | *(info)* Rule declares no environment — runs in the bare system shell |
 | `W011` | Rule uses `shadow` but declares no inputs — the shadow directory is unnecessary |
 | `W012` | Rule has `retries` but no `retry_delay` (retries execute immediately) |
 | `W014` | `depends_on` references an unknown rule |
@@ -353,7 +354,7 @@ below cover the codes referenced across this documentation.
 | `W017` | Input path is absolute |
 | `W018` | Input path references a home directory |
 | `W019` | Rule executes a command but declares no outputs |
-| `W020`/`W021`/`W022` | `pre_exec`/`on_success`/`on_failure` contain a risky pattern |
+| `W020`/`W021`/`W022` | A missing relative input file (`W020`), or a `pre_exec`/`on_success`/`on_failure` hook containing a dangerous pattern. `W021` also labels a `script` that references another rule's output without an ordering edge (`depends_on`) |
 | `W023` | Shell command uses flagged idioms (`$()`, backticks, `rm -rf`, `chmod 777`, `eval`, curl-pipe-shell) — aggregated one diagnostic per command; common in bioinformatics scripts, verify intentional |
 | `W024` | A wildcard has no declared source — it will stay literal at run time |
 | `W025` | Legacy `threads =`/`memory =` keys under the rule body (use `resources.`) |
@@ -363,6 +364,7 @@ below cover the codes referenced across this documentation.
 | `W030` | Malformed `regex_extract` in a `when` condition |
 | `W031` | Producer is when-gated but its consumer expands the output unconditionally |
 | `W032` | A config key looks like a secret but is not declared `sensitive` |
+| `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
 
 The full, current list with suggestions is best read from the commands:
 `oxo-flow lint --json` prints every code with its message and suggestion
