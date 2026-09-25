@@ -24,7 +24,8 @@ oxo-flow validate [OPTIONS] <WORKFLOW>
 
 | Option | Short | Description |
 |---|---|---|
-| `--as-include` | — | Validate as a sub-workflow fragment (skips DAG and input-existence checks) |
+| `--as-include` | — | Validate as a sub-workflow fragment (skips input-existence checks and DAG construction; **cycle detection still applies**) |
+| `--json` | — | Output machine-readable JSON to stdout |
 | `--ai` | — | Enable AI-powered semantic validation |
 | `--verbose` | `-v` | Enable debug-level logging |
 
@@ -46,6 +47,23 @@ oxo-flow validate pipeline.oxoflow
 
 ```
 ✓ pipeline.oxoflow — 5 rules, 4 dependencies
+
+  ⚠ Warning: The following input files do not exist:
+    - refs/genome.fa
+```
+
+`--json` prints the full result object (stdout):
+
+```json
+{
+  "command": "validate",
+  "workflow": "pipeline.oxoflow",
+  "valid": true,
+  "rules": 5,
+  "dependencies": 4,
+  "errors": [],
+  "missing_inputs": ["refs/genome.fa"]
+}
 ```
 
 ### Invalid TOML syntax
@@ -57,7 +75,9 @@ oxo-flow validate pipeline.oxoflow
 ### Circular dependency
 
 ```
-✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: cycle detected: align → sort_bam → align
+  error [E006]: DAG error: cycle detected in workflow DAG: align → sort_bam → align
+    hint: check for circular dependencies between rules
+✗ pipeline.oxoflow — 1 validation error(s)
 ```
 
 ### Wildcard input without a sample domain
@@ -69,8 +89,10 @@ run fails mid-flight with a literal brace token, so `validate` reports
 the path as missing instead of approving it:
 
 ```
-⚠ Warning: The following input files do not exist:
-  - missing/{sample}.txt (no sample groups/pairs/sample_pattern declared)
+✓ wildin.oxoflow — 1 rule, 0 dependencies
+
+  ⚠ Warning: The following input files do not exist:
+    - {sample}.txt (no sample groups/pairs/sample_pattern declared)
 ```
 
 `--json` includes the same entry in `missing_inputs`. That field is a
@@ -84,8 +106,8 @@ or split on whitespace — match on the path prefix instead.
 ## Notes
 
 - Exits with code `0` on success, `1` on failure
-- Validates both TOML parsing and DAG construction
-- Missing input files are reported as warnings (not errors); `--as-include` skips DAG validation and input-existence checks
+- Validates TOML parsing, rule semantics, and DAG construction
+- Missing input files are reported as warnings (not errors); `--as-include` skips input-existence checks and DAG construction but cycle detection still applies (cycles are semantic errors, not missing files)
 - Relative paths resolve against the workflow file's directory — the same base rules run from — so warnings are accurate even when invoked from another directory
 - Environments and tools are not verified here — use
   [`oxo-flow test --deep`](test.md#deep-checks-deep) (checks environment

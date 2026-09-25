@@ -75,10 +75,12 @@ Failed rules:
 ### Staleness reasons
 
 When the checkpoint's workflow file is still present and parseable, `status`
-also classifies every completed rule exactly the way `run` would (issue
-#432) and explains **why each rule would re-run right now** — output
-deleted, input manifest mismatch, config change, or a cascade from an
-upstream rule:
+classifies every completed rule exactly the way `run` would (issue #432) and
+explains **why each rule would re-run right now** — output deleted, input
+manifest mismatch, config change, or a cascade from an upstream rule. The
+section (and the `staleness` JSON key) appears only when **at least one
+completed rule would re-run** — an all-up-to-date checkpoint shows just the
+plain completed/failed listing:
 
 ```
 Staleness reasons (as of now):
@@ -146,8 +148,9 @@ With `--json`, output goes to stdout:
 
 `timings`, `total_time_secs`, and `memory` are only present with
 `--timing`; `memory` only lists rules with a sampled peak-RSS
-measurement. `staleness` is present whenever the workflow file can be
-loaded for classification (see [Staleness reasons](#staleness-reasons)).
+measurement. `staleness` appears whenever the workflow file can be
+loaded for classification **and** at least one completed rule would
+re-run (see [Staleness reasons](#staleness-reasons)).
 
 ---
 
@@ -177,6 +180,12 @@ The checkpoint file is JSON with the following structure:
     "trim_reads": "sha256:1a2b3c…",
     "align": "sha256:4d5e6f…"
   },
+  "input_manifests": {
+    "align": [
+      { "path": "trimmed/S1.fq.gz", "size": 48213, "mtime_nanos": 1790300000000000000,
+        "hash": "sha256:9f2a…", "remote": null }
+    ]
+  },
   "tombstones": {
     "align": ["aligned/S1.bam"]
   },
@@ -195,12 +204,20 @@ The checkpoint file is JSON with the following structure:
 `config_snapshot` records the effective config values (sensitive keys stored
 as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
-`tombstones` lists outputs of [`temporary`](run.md#temporary-rules-temporary-true)
+`input_manifests` records, per completed rule, every resolved input file
+(path, size, mtime in nanoseconds, and a content hash for files up to
+64 MiB) so later runs detect changed inputs (issue #72). `tombstones` lists
+outputs of [`temporary`](run.md#temporary-rules-temporary-true)
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. `reentries` records checkpoint
 re-entry contributions (round, checkpoint rule, group, samples, pairs) so resumes
 replay them deterministically and revoke them when the rule is invalidated
 (see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).
+
+Every key above is omitted from the JSON when empty — a minimal workflow
+with no `[config]` section, no temporaries, and no re-entries writes a
+much smaller checkpoint containing only `completed_rules`, `failed_rules`,
+`benchmarks`, and `workflow_path`.
 
 ---
 
