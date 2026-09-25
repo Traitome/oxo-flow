@@ -30,12 +30,13 @@ pub struct RemoteIoPrep {
 
 /// Expand a pattern with the instance's wildcard values — the same pass
 /// `render_shell_command` performs at the end of rendering.
+///
+/// Fixed-point (`expand_to_fixed_point`), not a single pass: the map can
+/// carry chained values (`a → "{b}"`), and a single iteration made the
+/// result depend on HashMap order — the same pattern staged differently
+/// across processes (issue #471). Cycle-capped like every other expansion.
 fn expand_patterns(pattern: &str, wildcard_values: &HashMap<String, String>) -> String {
-    let mut expanded = pattern.to_string();
-    for (key, value) in wildcard_values {
-        expanded = expanded.replace(&format!("{{{key}}}"), value);
-    }
-    expanded
+    super::expand_to_fixed_point(pattern, wildcard_values, |value| value.to_owned())
 }
 
 /// Substitute patterns through an original → local-path map.
@@ -209,6 +210,21 @@ pub async fn stage_remote_io(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_patterns_resolves_chained_values_regardless_of_map_order() {
+        // Issue #471: the staging expansion is a fixed-point pass like every
+        // other expansion site. A single pass left "{b}" behind whenever
+        // HashMap order visited "a" after "b" — each loop iteration builds a
+        // fresh HashMap (fresh hasher seed), so 200 sweeps cover many orders
+        // and the assertion is deterministic post-fix.
+        for _ in 0..200 {
+            let mut values = HashMap::new();
+            values.insert("a".to_string(), "{b}".to_string());
+            values.insert("b".to_string(), "x".to_string());
+            assert_eq!(expand_patterns("p_{a}", &values), "p_x");
+        }
+    }
     use crate::storage::{RemoteStat, StorageBackend, StorageScheme};
     use std::sync::Arc;
 

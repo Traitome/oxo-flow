@@ -103,8 +103,13 @@ pub fn with_all_rules(items: Vec<NodeStatusItem>, all_rules: &[String]) -> Vec<N
         out.push(aggregate_rule(rule, groups.remove(rule)));
     }
     // Instances of rules missing from the snapshot (workflow edited since the
-    // run) are kept as their own rows rather than silently dropped.
-    for (name, items) in groups {
+    // run) are kept as their own rows rather than silently dropped. Sorted
+    // by name: `groups` is a HashMap whose iteration order is
+    // process-random, and the response rows must not shuffle across
+    // restarts (issue #471).
+    let mut orphans: Vec<(String, Vec<NodeStatusItem>)> = groups.into_iter().collect();
+    orphans.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, items) in orphans {
         if !emitted.contains(&name) {
             out.push(aggregate_rule(&name, Some(items)));
         }

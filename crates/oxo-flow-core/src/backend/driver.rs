@@ -10,7 +10,9 @@ use super::{BackendJobStatus, ExecutorBackend, ScheduledPlan, ScheduledRule, Ter
 use crate::error::{OxoFlowError, Result};
 use crate::executor::{JobRecord, JobStatus};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+    BTreeMap, {HashMap, HashSet},
+};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -237,7 +239,10 @@ impl BackendDriver {
         // Array index: base job id → element instance names, accumulated in
         // memory and persisted after each change (issue #136 H3 — the
         // read-modify-write pattern could lose earlier chunks).
-        let mut array_index: HashMap<String, Vec<String>> = HashMap::new();
+        // BTreeMap: index.json is a user-visible, diff-able run artifact —
+        // HashMap iteration is process-random and the key order shuffles
+        // across restarts (issue #471).
+        let mut array_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let index_path = opts.run_dir.join("index.json");
         // Rules skipped because an upstream failed. Tracked separately from
         // `done`'s Skipped status so the dependency gate can tell "blocked"
