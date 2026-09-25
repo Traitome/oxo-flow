@@ -2950,20 +2950,32 @@ pub async fn run_command(
                                 // it prevents re-submission on every later
                                 // run and keeps the audit trail aligned
                                 // with the disk.
-                                let benchmark =
-                                    oxo_flow_core::executor::checkpoint::BenchmarkRecord {
-                                        rule: rule_name.clone(),
-                                        wall_time_secs: 0.0,
-                                        max_memory_mb: None,
-                                        memory_limit_mb: rule
-                                            .effective_memory()
-                                            .and_then(oxo_flow_core::scheduler::parse_memory_mb),
-                                        cpu_seconds: None,
-                                        retries: 0,
-                                        recorded_as: Some("outputs up-to-date".to_string()),
-                                    };
+                                // Record a synthetic benchmark only when the
+                                // rule has no real one (e.g. first adoption
+                                // of a pre-existing run). A zero-wall
+                                // placeholder must never overwrite measured
+                                // wall-time history — the Dashboard's
+                                // "Total Runtime" and Prometheus
+                                // oxo_flow_rule_duration_seconds sum these
+                                // records (issue #481).
                                 let mut ck = checkpoint.lock().await;
-                                ck.mark_completed(&rule_name, benchmark);
+                                if !ck.benchmarks.contains_key(&rule_name) {
+                                    let benchmark =
+                                        oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+                                            rule: rule_name.clone(),
+                                            wall_time_secs: 0.0,
+                                            max_memory_mb: None,
+                                            memory_limit_mb: rule
+                                                .effective_memory()
+                                                .and_then(oxo_flow_core::scheduler::parse_memory_mb),
+                                            cpu_seconds: None,
+                                            retries: 0,
+                                            recorded_as: Some("outputs up-to-date".to_string()),
+                                        };
+                                    ck.mark_completed(&rule_name, benchmark);
+                                } else {
+                                    ck.mark_completed_quiet(&rule_name);
+                                }
                                 if let Err(e) = ck.save_to_file(&checkpoint_path) {
                                     tracing::warn!("Failed to save checkpoint: {e}");
                                 }
