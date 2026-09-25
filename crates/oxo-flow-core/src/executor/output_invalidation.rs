@@ -66,7 +66,7 @@ pub fn snapshot_outputs(
                 existed,
                 mtime,
                 size,
-                protected: protected.iter().any(|p| *p == expanded),
+                protected: protected.contains(&expanded),
             })
         })
         .collect()
