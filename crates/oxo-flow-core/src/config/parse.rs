@@ -554,17 +554,26 @@ impl WorkflowConfig {
             if !module_uses_this_contract {
                 continue;
             }
+            // Producer map keys and contract inputs are `{config.*}`-
+            // expanded so a concrete contract input wires its producer even
+            // when that producer declares the same path through a
+            // config-routed output template (issue #468 — raw matching
+            // silently dropped the producer from the `--module` closure).
+            let expand = |p: &str| crate::config::expand_config_vars_in_path(p, &self.config);
             let mut producers: HashMap<String, String> = HashMap::new();
             for rule in &self.rules {
                 for out in rule.output.to_vec() {
-                    producers.entry(out).or_insert_with(|| rule.name.clone());
+                    producers
+                        .entry(expand(&out))
+                        .or_insert_with(|| rule.name.clone());
                 }
             }
             for input in &contract.inputs {
-                if input.contains('{') {
+                let expanded = expand(input);
+                if expanded.contains('{') {
                     continue;
                 }
-                if let Some(producer) = producers.get(input)
+                if let Some(producer) = producers.get(&expanded)
                     && !members.contains(producer)
                     && !closure.contains(producer)
                 {
@@ -595,29 +604,37 @@ impl WorkflowConfig {
             return (errors, warnings);
         }
         // Producer map: output path → producing rule name (owned — rule
-        // outputs are borrowed across iterations).
+        // outputs are borrowed across iterations). Both sides are
+        // `{config.*}`-expanded (issue #468): a contract spelled concretely
+        // while the producing rule declares the config-routed template is
+        // the same wiring, not a validation error.
+        let expand = |p: &str| crate::config::expand_config_vars_in_path(p, &self.config);
         let mut producers: HashMap<String, String> = HashMap::new();
         for rule in &self.rules {
             for out in rule.output.to_vec() {
-                producers.entry(out).or_insert_with(|| rule.name.clone());
+                producers
+                    .entry(expand(&out))
+                    .or_insert_with(|| rule.name.clone());
             }
         }
         for (idx, contract) in self.include_contracts.iter().enumerate() {
             for input in &contract.inputs {
-                if input.contains('{') {
+                let expanded = expand(input);
+                if expanded.contains('{') {
                     continue; // wildcard wiring: DAG-time, documented
                 }
-                if !producers.contains_key(input) {
+                if !producers.contains_key(&expanded) {
                     errors.push(format!(
                         "include contract: declared input '{input}' is not produced by any rule — wire it to a host rule output"
                     ));
                 }
             }
             for output in &contract.outputs {
-                if output.contains('{') {
+                let expanded = expand(output);
+                if expanded.contains('{') {
                     continue;
                 }
-                match producers.get(output) {
+                match producers.get(&expanded) {
                     Some(producer)
                         if self
                             .module_of
@@ -633,8 +650,8 @@ impl WorkflowConfig {
             }
             // Encapsulation: host rules reading undeclared module-internal
             // files.
-            let declared: std::collections::HashSet<&str> =
-                contract.outputs.iter().map(String::as_str).collect();
+            let declared: std::collections::HashSet<String> =
+                contract.outputs.iter().map(|o| expand(o)).collect();
             for rule in &self.rules {
                 if self.module_of.get(&rule.name).is_some_and(|p| *p == idx) {
                     continue;
@@ -666,9 +683,9 @@ impl WorkflowConfig {
                         continue;
                     }
                     let internal = producers
-                        .get(&inp)
+                        .get(&expand(&inp))
                         .is_some_and(|p| self.module_of.get(p).is_some_and(|mp| *mp == idx));
-                    if internal && !declared.contains(inp.as_str()) {
+                    if internal && !declared.contains(&expand(&inp)) {
                         warnings.push(format!(
                             "rule '{}' reads module-internal file '{inp}' which the include contract does not declare — add it to `outputs` to keep the coupling explicit",
                             rule.name
