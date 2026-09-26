@@ -57,6 +57,15 @@ output:
 
 ## Running the Workflow
 
+### Demo Data for a Live Run
+
+Like the explicit scatter-gather pattern, the demo expects
+`aligned/sample.bam` and the reference in `config.reference`. The split
+values are labels (one `{chr}` substitution per map chunk), so a small
+multi-chromosome reference whose contig names match `config.chromosomes`
+is enough: FASTA + `bwa index` + `samtools faidx` + `samtools dict`, any
+reads aligned and sorted into `aligned/sample.bam`.
+
 ### Validate
 
 ```bash
@@ -79,6 +88,13 @@ graph TD
 (`parallel_qc_chr1` … `parallel_qc_chr5`) run in parallel with the map
 rules above but have no combine step; the diagram shows only the Mode A
 expansion for readability.
+
+!!! note "Live-run verified results"
+    On the same simulated 5-chromosome fixture used for scatter-gather:
+    Mode A's combine output was **byte-identical** (md5-verified) to the
+    explicit gather path of workflow 04, and Mode B's per-chromosome
+    flagstat chunks summed to exactly the BAM's read count (5 x 1,470 =
+    7,350), confirming the chunk partitioning covers every read.
 
 ## Use Cases
 
