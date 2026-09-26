@@ -86,11 +86,26 @@ const nodeTypes = { rule: RuleNodeCard } satisfies NodeTypes;
 
 // ── d3-dag auto-layout (layered Sugiyama; left-to-right) ──
 
-function computeLayout(dagNodes: DagJson['nodes']): Record<string, { x: number; y: number }> {
+function computeLayout(
+  dagNodes: DagJson['nodes'],
+  dagEdges: DagJson['edges'],
+): Record<string, { x: number; y: number }> {
   const positions: Record<string, { x: number; y: number }> = {};
   if (dagNodes.length === 0) return positions;
   try {
-    const items = dagNodes.map((n) => ({ id: n.id, parentIds: [] as string[] }));
+    // #548: parentIds come from the ACTUAL edges — the hardcoded empty
+    // array declared every node a root, so Sugiyama collapsed every graph
+    // to one column regardless of dependency topology.
+    const parents = new Map<string, string[]>();
+    for (const n of dagNodes) parents.set(n.id, []);
+    for (const e of dagEdges) {
+      // "from" produces for "to" → from is the parent.
+      parents.get(e.to)?.push(e.from);
+    }
+    const items = dagNodes.map((n) => ({
+      id: n.id,
+      parentIds: parents.get(n.id) ?? [],
+    }));
     const layout = sugiyama().nodeSize([110, 260]);
     const dag = graphStratify()(items);
     layout(dag);
@@ -98,7 +113,8 @@ function computeLayout(dagNodes: DagJson['nodes']): Record<string, { x: number; 
       positions[n.data.id] = { x: n.y ?? 0, y: n.x ?? 0 };
     }
   } catch {
-    // Fallback: column placement for graphs the layout cannot stratify.
+    // Fallback: column placement for graphs the layout cannot stratify
+    // (e.g. genuine cycles — dag.edges would not stratify).
     dagNodes.forEach((n, i) => {
       positions[n.id] = { x: 0, y: i * 130 };
     });
@@ -177,7 +193,7 @@ export default function WorkflowCanvas({
     lastNodeSet.current = nodeSet;
     const saved = sameSet ? positionsStore.load(scopeKey) : {};
     const layout =
-      sameSet && Object.keys(saved).length > 0 ? saved : computeLayout(dag.nodes);
+      sameSet && Object.keys(saved).length > 0 ? saved : computeLayout(dag.nodes, dag.edges);
 
     setNodes(
       dag.nodes.map((n) => {
@@ -256,7 +272,7 @@ export default function WorkflowCanvas({
 
   const applyLayout = useCallback(() => {
     if (!dag) return;
-    const layout = computeLayout(dag.nodes);
+    const layout = computeLayout(dag.nodes, dag.edges);
     setNodes((current) => current.map((n) => ({ ...n, position: layout[n.id] ?? n.position })));
     positionsStore.save(scopeKey, layout);
   }, [dag, scopeKey, setNodes]);

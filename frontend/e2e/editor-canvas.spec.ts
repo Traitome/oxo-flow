@@ -21,6 +21,57 @@ test.describe('Graphical workflow editor (canvas)', () => {
     await expect(page.locator('.rf-rule-node')).toHaveCount(2);
   });
 
+  test('auto-layout arranges a diamond DAG across multiple columns (#548)', async ({ page }) => {
+    // A → B, A → C, B → D, C → D: a diamond needs ≥3 distinct layers.
+    // The old layout hardcoded parentIds: [] — every node was a root and
+    // the whole graph collapsed into one column.
+    await page.goto('/editor');
+    const toml = [
+      '[workflow]',
+      'name = "diamond"',
+      '',
+      '[[rules]]',
+      'name = "a"',
+      'output = ["a.txt"]',
+      'shell = "echo a > {output[0]}"',
+      '',
+      '[[rules]]',
+      'name = "b"',
+      'input = ["a.txt"]',
+      'output = ["b.txt"]',
+      'shell = "cp {input[0]} {output[0]}"',
+      '',
+      '[[rules]]',
+      'name = "c"',
+      'input = ["a.txt"]',
+      'output = ["c.txt"]',
+      'shell = "cp {input[0]} {output[0]}"',
+      '',
+      '[[rules]]',
+      'name = "d"',
+      'input = ["b.txt", "c.txt"]',
+      'output = ["d.txt"]',
+      'shell = "cat {input[0]} {input[1]} > {output[0]}"',
+    ].join('\n');
+    // Paste the workflow into the TOML pane (single source of truth).
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.insertText(toml);
+    await expect(page.locator('.val-badge')).toContainText('Valid', { timeout: 10_000 });
+
+    // Four nodes on the canvas, laid out in ≥3 distinct x positions.
+    await expect(page.locator('.rf-rule-node')).toHaveCount(4);
+    await page.locator('.rf-layout-btn').click();
+    const xs = await page.locator('.rf-rule-node').evaluateAll((nodes) =>
+      nodes.map((n) => Math.round(n.getBoundingClientRect().x)),
+    );
+    const distinct = new Set(xs).size;
+    expect(
+      distinct,
+      `a diamond must spread over ≥3 columns, got xs=${JSON.stringify(xs)}`,
+    ).toBeGreaterThanOrEqual(3);
+  });
+
   test('palette adds a grounded tool rule; inspector edits it', async ({ page }) => {
     await page.goto('/editor');
     await page.locator('.rf-rule-node', { hasText: 'fastqc' }).waitFor();
