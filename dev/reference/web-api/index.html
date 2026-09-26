@@ -5361,6 +5361,15 @@ and input-set changes that invalidated checkpoint records this run
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>{"username": "admin", "password": "admin"}
 </span></code></pre></div>
 Returns session token, username, and role.</p>
+<blockquote>
+<p><strong>Credentials are environment-driven, not hardcoded.</strong> The example above
+only works when <code>OXO_FLOW_DEV_MODE=1</code> (accepts <code>password == username</code>) or
+when matching env passwords are set: <code>OXO_FLOW_ADMIN_PASSWORD</code>,
+<code>OXO_FLOW_USER_PASSWORD</code>, and <code>OXO_FLOW_VIEWER_PASSWORD</code> define the
+admin/user/viewer accounts. Without one of these the login returns 401 —
+set the env vars when launching <code>oxo-flow serve</code> (see
+<a href="../web-system-architecture/">Web System Architecture</a>).</p>
+</blockquote>
 <h3 id="check-session">Check Session<a class="headerlink" href="#check-session" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/auth/me
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Authorization: Bearer &lt;token&gt;

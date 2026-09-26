@@ -5166,7 +5166,11 @@ below cover the codes referenced across this documentation.</p>
 <code>S002</code> missing <code>[workflow]</code>, <code>S003</code> missing workflow name, <code>S004</code>
 malformed <code>[[rules]]</code>, <code>S005</code> a rule entry that is not a table, and
 <code>S006</code> an unknown top-level section (checked against the parser's own
-E017 whitelist — the documented sections are never flagged).</p>
+E017 whitelist — the documented sections are never flagged). <code>S007</code>
+warns when <code>[workflow].format_version</code> is present but unrecognized, and
+<code>S008</code> is the secret-scanning warning: a token-shaped pattern in the raw
+file (<a href="../security/">security</a>); it comes from the lint pass, not the
+schema pass.</p>
 <p>The full, current list with suggestions is best read from the commands:
 <code>oxo-flow lint --json</code> prints every code with its message and suggestion
 (see <a href="../../commands/lint/">lint</a>). AI-generated drafts that fail a gate

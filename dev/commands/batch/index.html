@@ -1948,6 +1948,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit Codes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3970,6 +3981,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit Codes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4167,6 +4189,14 @@
 <li><code>{}</code> is rush-compatible shorthand for <code>{item}</code></li>
 <li>Environment spec format: <code>conda: env.yaml</code> or <code>docker: image:tag</code></li>
 <li>Generated workflows create one rule per item (<code>batch_item_1</code>, <code>batch_item_2</code>, ...)</li>
+</ul>
+<h2 id="exit-codes">Exit Codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>0</strong> — all items succeeded, or items failed without <code>--stop-on-error</code> (the
+  per-item failures are still listed in the output and in <code>--json-output</code>'s
+  <code>results</code> array).</li>
+<li><strong>1</strong> — items failed <strong>and</strong> <code>--stop-on-error</code> (<code>-x</code>) was given: the first
+  failed item aborts the batch and the command exits non-zero.</li>
 </ul>
 
 
