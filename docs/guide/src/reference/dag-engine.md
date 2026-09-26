@@ -418,6 +418,14 @@ flags these with warning W019).
   grace period** (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the
   grace window are caught by a re-scan before the KILL sweep.
+- Aborts kill auxiliary children too (#524): every rule-side spawn
+  (environment setup/verify, `pre_exec`, success/failure hooks) sets
+  `kill_on_drop`, so cancelling a task kills its in-flight child instead
+  of orphaning it — an interrupted `conda env create` can no longer
+  outlive the env-create lock and corrupt a relaunched creation. The
+  abort kill-sweep itself runs on the blocking pool (its SIGTERM grace
+  poll sleeps up to 10s) and takes a **second** pid snapshot after
+  `abort_all()` to catch attempts spawned during the first sweep.
 - Scratch outputs move back to the workdir **atomically even across
   filesystems**: the copy lands in a temp sibling, is fsynced, renamed
   into place, and the parent directory fsynced — a crash leaves either

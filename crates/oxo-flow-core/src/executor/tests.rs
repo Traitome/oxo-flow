@@ -2599,6 +2599,42 @@ async fn execute_bash_only_syntax_process_substitution() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn spawn_rule_shell_children_die_on_drop() {
+    // #524: rule-side children set kill_on_drop — an aborted task dropping
+    // its in-flight Command future must not orphan the OS process (the
+    // abort sweep only knows about the registered main-loop pids).
+    let child =
+        super::process::spawn_rule_shell("sleep 30", &std::env::temp_dir(), &HashMap::new())
+            .unwrap();
+    let pid = child.id().expect("spawned child has a pid");
+    drop(child);
+
+    // kill_on_drop delivers SIGKILL synchronously on drop; poll briefly so
+    // the kernel finishes reaping before we probe.
+    let mut alive = true;
+    for _ in 0..20 {
+        let probe = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match probe {
+            Ok(status) if !status.success() => {
+                alive = false;
+                break;
+            }
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !alive,
+        "dropped child (pid {pid}) must be killed, still alive"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn spawn_rule_shell_falls_back_to_sh_when_bash_missing() {
     // A PATH containing only a marker `sh` (no bash anywhere) must fall
     // back to sh; the marker output proves which shell actually ran.
