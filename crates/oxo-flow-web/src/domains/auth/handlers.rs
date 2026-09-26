@@ -66,8 +66,12 @@ async fn validate_token(
         ));
     }
 
-    // Look up the user's role
-    let user: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE username = ?")
+    // Resolve the canonical user row. sessions.user_id is the users.id
+    // resolved at login (#516); matching by id only and failing closed on a
+    // missing row keeps deleted users and stale pre-upgrade sessions from
+    // authenticating (the old username match + "user" fallback let a
+    // client-chosen login name adopt any row's role).
+    let user: Option<models::UserRow> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
         .bind(&session.user_id)
         .fetch_optional(pool)
         .await
@@ -80,9 +84,15 @@ async fn validate_token(
             )
         })?;
 
-    let role = user.map(|u| u.role).unwrap_or_else(|| "user".to_string());
+    let user = user.ok_or_else(|| {
+        err(
+            StatusCode::UNAUTHORIZED,
+            "INVALID_TOKEN",
+            "Session is no longer valid; sign in again".into(),
+        )
+    })?;
 
-    Ok((session.user_id, role))
+    Ok((user.username, user.role))
 }
 
 /// Require admin role — returns 403 if the caller is not an admin.
@@ -170,12 +180,94 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     // Env-var credentials first (admin/user/viewer passwords); on failure,
     // fall back to DB-created accounts (bcrypt hash in users.password_hash,
     // issue #79 P1-06 — users created via the API must be able to sign in).
-    let result = match service::authenticate(&req.username, &req.password) {
-        Ok(response) => response,
+    //
+    // The chosen path also fixes the identity the session may carry (#516):
+    // a bcrypt-verified account adopts its canonical users.id, while an
+    // env-password login is bound to the provisioned row keyed
+    // id == username and must never adopt a UUID-keyed managed account —
+    // otherwise the shared user password could impersonate any existing
+    // user (including an admin) just by naming them.
+    let (session_user_id, result) = match service::authenticate(&req.username, &req.password) {
+        Ok(response) => {
+            // Env-password (or dev-mode) path. Resolve the canonical id:
+            // for the fixed admin name that is the bootstrap row (UUID id),
+            // found by username; for every other name it is the provisioned
+            // row whose id equals the username.
+            if result_is_admin_identity(&response) {
+                let pool = get_pool()?;
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT id, role FROM users WHERE username = 'admin'")
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("DB error resolving admin identity: {e}");
+                            err(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "DB_ERROR",
+                                "Internal database error".into(),
+                            )
+                        })?;
+                let (id, role) = row.ok_or_else(|| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DB_ERROR",
+                        "Admin bootstrap row missing".into(),
+                    )
+                })?;
+                let response = LoginResponse { role, ..response };
+                (id, response)
+            } else {
+                let pool = get_pool()?;
+                // Auto-provision a users row for env-password logins (issue
+                // #82 P1-16): id = username for these provisioned
+                // identities. UNIQUE(username) makes the insert a no-op when
+                // a row for this name already exists — either another
+                // provisioned identity (fine: resolved by id below) or a
+                // UUID-keyed managed account (the SELECT then misses and
+                // the login is rejected — #516).
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
+                     VALUES (?, ?, ?, 'password', '', ?)",
+                )
+                .bind(&response.username)
+                .bind(&response.username)
+                .bind(&response.role)
+                .bind(now_iso())
+                .execute(pool)
+                .await;
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
+                        .bind(&response.username)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(
+                                "DB error resolving env identity '{}': {e}",
+                                response.username
+                            );
+                            err(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "DB_ERROR",
+                                "Internal database error".into(),
+                            )
+                        })?;
+                let (id, role) = row.ok_or_else(|| {
+                    // The name belongs to a UUID-keyed managed account —
+                    // the shared env password must not adopt it (#516).
+                    err(
+                        StatusCode::UNAUTHORIZED,
+                        "AUTH_FAILED",
+                        "This username is a managed account; sign in with its own password".into(),
+                    )
+                })?;
+                let response = LoginResponse { role, ..response };
+                (id, response)
+            }
+        }
         Err(env_err) => {
             let pool = get_pool()?;
-            let user: Option<(String, Option<String>)> =
-                sqlx::query_as("SELECT role, password_hash FROM users WHERE username = ?")
+            let user: Option<(String, String, Option<String>)> =
+                sqlx::query_as("SELECT id, role, password_hash FROM users WHERE username = ?")
                     .bind(&req.username)
                     .fetch_optional(pool)
                     .await
@@ -188,8 +280,11 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
                         )
                     })?;
             match user {
-                Some((role, Some(hash))) if service::verify_db_password(&req.password, &hash) => {
-                    service::login_response_for(req.username.clone(), role)
+                Some((id, role, Some(hash)))
+                    if service::verify_db_password(&req.password, &hash) =>
+                {
+                    let response = service::login_response_for(req.username.clone(), role);
+                    (id, response)
                 }
                 _ => return Err(err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", env_err)),
             }
@@ -199,29 +294,12 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
     if let Ok(pool) = get_pool() {
-        // Auto-provision a users row for env-password logins (issue #82
-        // P1-16): those previously accepted ANY username with no user
-        // record, collapsing every login onto the 'default' pseudo-user
-        // and making audit trails useless. id = username for these
-        // legacy identities; UNIQUE(username) makes the insert a no-op
-        // for API-created accounts (which already have a UUID row).
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
-             VALUES (?, ?, ?, 'password', '', ?)",
-        )
-        .bind(&result.username)
-        .bind(&result.username)
-        .bind(&result.role)
-        .bind(now_iso())
-        .execute(pool)
-        .await;
-
         let expires = chrono::Utc::now() + chrono::Duration::hours(24);
         let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         )
         .bind(&result.token)
-        .bind(&result.username)
+        .bind(&session_user_id)
         .bind(now_iso())
         .bind(expires.to_rfc3339())
         .execute(pool)
@@ -241,6 +319,13 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
     }
 
     Ok(Json(result))
+}
+
+/// True when an env-password login response carries the admin identity —
+/// only the ADMIN_PASSWORD branch can produce it (service::authenticate
+/// rejects "admin" on the shared user/viewer branches, #516).
+fn result_is_admin_identity(response: &LoginResponse) -> bool {
+    response.username == "admin" && response.role == "admin"
 }
 
 #[utoipa::path(
@@ -555,14 +640,30 @@ pub async fn oauth_callback(
             .await
             .map_err(|e| err(StatusCode::BAD_REQUEST, "OAUTH_CALLBACK_ERROR", e))?;
 
-    // Persist the session
+    // Persist the session. The OAuth identity is namespaced (#516): the
+    // provider-supplied username is attacker-chosen, so it must never equal
+    // — or resolve to — a local users.username (e.g. "admin"). Both the
+    // users.id and the username carry provider prefixes; the session binds
+    // to the namespaced id, and role resolution only ever reads that row.
     if let Ok(pool) = get_pool() {
+        let oauth_user_id = format!("oauth:{provider}:{}", result.provider_user_id);
+        let oauth_username = format!("{provider}:{}", result.username);
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
+             VALUES (?, ?, 'user', 'oauth', '', ?)",
+        )
+        .bind(&oauth_user_id)
+        .bind(&oauth_username)
+        .bind(now_iso())
+        .execute(pool)
+        .await;
+
         let expires = chrono::Utc::now() + chrono::Duration::hours(24);
         let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         )
         .bind(&result.token)
-        .bind(&result.username)
+        .bind(&oauth_user_id)
         .bind(now_iso())
         .bind(expires.to_rfc3339())
         .execute(pool)
