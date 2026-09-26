@@ -208,7 +208,8 @@ export interface ClusterInfo {
   ssh_host: string;
   ssh_port: number;
   ssh_user?: string | null;
-  ssh_key?: string | null;
+  /** The key itself is never returned (#517) — only whether one is set. */
+  ssh_key_set?: boolean;
   scheduler?: string | null;
   remote_dir?: string | null;
   enabled: boolean;

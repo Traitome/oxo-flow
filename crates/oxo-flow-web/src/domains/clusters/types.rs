@@ -10,7 +10,13 @@ pub struct ClusterInfo {
     pub ssh_host: String,
     pub ssh_port: u16,
     pub ssh_user: Option<String>,
+    /// SSH key path/material as stored. Never serialized to API responses
+    /// (#517) — the field exists so the probe/submit paths can use the
+    /// credential in-process; clients see [`ssh_key_set`] instead.
+    #[serde(skip_serializing)]
     pub ssh_key: Option<String>,
+    /// Whether an SSH key is configured (the key itself is not returned).
+    pub ssh_key_set: bool,
     /// slurm | pbs | lsf | sge | auto
     pub scheduler: Option<String>,
     pub remote_dir: Option<String>,

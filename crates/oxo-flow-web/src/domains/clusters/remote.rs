@@ -53,7 +53,9 @@ fn ssh(cluster: &ClusterRow) -> tokio::process::Command {
     for arg in ssh_base_args(cluster.ssh_port as u16) {
         cmd.arg(arg);
     }
-    if let Some(key) = cluster.ssh_key.as_deref() {
+    // The stored value may be sealed (OXO_FLOW_MASTER_KEY set, #517) —
+    // open it just before use.
+    if let Some(key) = cluster.ssh_key.as_deref().map(crate::infra::crypto::open) {
         cmd.arg("-i").arg(key);
     }
     cmd.arg(match cluster.ssh_user.as_deref() {
