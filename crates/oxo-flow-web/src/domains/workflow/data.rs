@@ -31,15 +31,28 @@ static FORMAT_MAP: &[(&str, &str)] = &[
 ///
 /// Detects formats via extension matching, identifies paired-end naming
 /// patterns, and suggests an appropriate workflow template.
+///
+/// `scope` (#521): when set, every pattern must be relative (no `..`) and
+/// is probed at `scope/<pattern>` — the client cannot use this endpoint to
+/// stat arbitrary server paths. Responses still echo the client-supplied
+/// path text, never the resolved server location.
 pub fn analyze_files(
     paths: &[String],
     _max_depth: Option<usize>,
+    scope: Option<&std::path::Path>,
 ) -> Result<DataAnalysisResponse, String> {
     let mut files = Vec::new();
     let mut formats = std::collections::HashSet::new();
 
     for pattern in paths {
-        let path = std::path::Path::new(pattern);
+        let path = match scope {
+            Some(root) => {
+                crate::workspace::check_relative_path(pattern)
+                    .map_err(|e| format!("invalid data path: {e}"))?;
+                root.join(std::path::Path::new(pattern))
+            }
+            None => std::path::PathBuf::from(pattern),
+        };
         let filename = path
             .file_name()
             .unwrap_or_default()
@@ -183,17 +196,38 @@ mod tests {
 
     #[test]
     fn test_unknown_format() {
-        let result = analyze_files(&["/tmp/foo.xyz".into()], None).unwrap();
+        let result = analyze_files(&["/tmp/foo.xyz".into()], None, None).unwrap();
         assert_eq!(result.files[0].format, "unknown");
         assert_eq!(result.files[0].format_confidence, 0.0);
     }
 
     #[test]
     fn test_fastq_gz_detection() {
-        let result = analyze_files(&["/data/sample_R1.fastq.gz".into()], None).unwrap();
+        let result = analyze_files(&["/data/sample_R1.fastq.gz".into()], None, None).unwrap();
         assert!(result.files[0].format.contains("FASTQ"));
         assert!(result.files[0].format_confidence > 0.9);
         assert!(result.summary.paired_end_detected);
+    }
+
+    #[test]
+    fn scoped_analyze_rejects_escape_paths() {
+        // #521: with a scope, absolute paths and `..` are refused — the
+        // size probe must not become an arbitrary-path oracle.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("sample_R1.fastq.gz"), b"x").unwrap();
+        let scope = dir.path();
+
+        let result = analyze_files(&["sample_R1.fastq.gz".into()], None, Some(scope)).unwrap();
+        assert!(result.files[0].size > 0, "in-scope probe sees the file");
+        assert_eq!(
+            result.files[0].path, "sample_R1.fastq.gz",
+            "response echoes the client path"
+        );
+
+        for bad in ["/etc/passwd", "../escape.fastq", "sub/../../../etc/passwd"] {
+            let err = analyze_files(&[bad.to_string()], None, Some(scope)).unwrap_err();
+            assert!(err.contains("invalid data path"), "{bad}: {err}");
+        }
     }
 
     #[test]

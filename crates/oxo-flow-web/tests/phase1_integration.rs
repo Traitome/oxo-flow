@@ -26,12 +26,14 @@ async fn json_body(body: axum::body::Body) -> Value {
 #[tokio::test]
 async fn test_data_analyze_valid_paths() {
     common::ensure_db().await;
+    // Relative paths resolve inside the acting user's workspace (#521) —
+    // the file need not exist for format inference to answer 200.
     let req = Request::builder()
         .method("POST")
         .uri("/api/data/analyze")
         .header("content-type", "application/json")
         .body(Body::from(
-            json!({"paths": ["/tmp/test.fastq.gz"], "max_depth": 1}).to_string(),
+            json!({"paths": ["inputs/test.fastq.gz"], "max_depth": 1}).to_string(),
         ))
         .unwrap();
     let resp = app().oneshot(req).await.unwrap();
@@ -39,6 +41,23 @@ async fn test_data_analyze_valid_paths() {
     let body: Value = json_body(resp.into_body()).await;
     assert!(body.get("files").is_some(), "should have files array");
     assert!(body.get("summary").is_some(), "should have summary");
+
+    // Absolute paths are refused — the size probe must not stat arbitrary
+    // server paths.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/data/analyze")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"paths": ["/etc/passwd"], "max_depth": 1}).to_string(),
+        ))
+        .unwrap();
+    let resp = app().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "absolute path must be refused"
+    );
 }
 
 #[tokio::test]

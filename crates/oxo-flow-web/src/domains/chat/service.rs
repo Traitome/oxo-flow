@@ -90,7 +90,7 @@ pub async fn process_chat(
     let data_report = if let Some(ctx) = context {
         if let Some(ref paths) = ctx.data_paths {
             if !paths.is_empty() {
-                analyze_data_paths(paths)
+                analyze_data_paths_scoped(paths, invocation.user_id)
             } else {
                 None
             }
@@ -200,10 +200,21 @@ pub fn infer_intent(message: &str) -> String {
     }
 }
 
+/// Resolve the caller's workspace scope and analyze their data paths;
+/// a workspace error degrades to "no data report" (best-effort surface).
+fn analyze_data_paths_scoped(paths: &[String], user_id: &str) -> Option<serde_json::Value> {
+    let scope = crate::workspace::user_root(user_id).ok()?;
+    analyze_data_paths(paths, &scope)
+}
+
 /// Analyze data paths using the deterministic data discovery module.
-pub fn analyze_data_paths(paths: &[String]) -> Option<serde_json::Value> {
+///
+/// `scope` (#521): probes resolve inside the acting user's workspace; the
+/// caller derives it from the authenticated identity, never from the
+/// client-supplied paths.
+pub fn analyze_data_paths(paths: &[String], scope: &std::path::Path) -> Option<serde_json::Value> {
     let max_depth = Some(2usize);
-    match crate::domains::workflow::data::analyze_files(paths, max_depth) {
+    match crate::domains::workflow::data::analyze_files(paths, max_depth, Some(scope)) {
         Ok(report) => Some(serde_json::json!({
             "files": report.files.iter().map(|f| serde_json::json!({
                 "path": f.path, "size": f.size, "format": f.format,
@@ -341,7 +352,7 @@ pub async fn run_chat_agent(
     let data_report = context
         .and_then(|c| c.data_paths.as_ref())
         .filter(|p| !p.is_empty())
-        .and_then(|paths| analyze_data_paths(paths));
+        .and_then(|paths| analyze_data_paths_scoped(paths, user_id));
     let mut agent = super::agent::ChatAgent::new(intent.clone(), message.to_string());
     if let Some(report) = &data_report
         && let Some(summary) = report.get("summary")

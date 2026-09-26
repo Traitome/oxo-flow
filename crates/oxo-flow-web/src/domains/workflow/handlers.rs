@@ -161,7 +161,11 @@ pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseRes
 /// POST /api/pipelines/validate
 ///
 /// Accepts TOML content directly so the endpoint is self-contained.
-pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<ValidateResponse> {
+pub async fn validate_pipeline(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<ValidateResponse> {
+    let user = resolve(authenticated.as_ref());
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -174,10 +178,16 @@ pub async fn validate_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<
         })?;
     // Missing-input existence checks resolve against the caller's base_dir
     // (issue #81 parity: the CLI checks against the workflow's directory).
-    let base_dir = req
-        .get("base_dir")
-        .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from);
+    // Sandbox (#521): base_dir must be relative (no `..`) and resolves
+    // inside the acting user's workspace — an arbitrary base_dir turned the
+    // missing-input checks into a directory-existence oracle.
+    let base_dir = match req.get("base_dir").and_then(|v| v.as_str()) {
+        Some(raw) => Some(
+            crate::workspace::resolve_user_scoped_path(&user.id, raw)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_BASE_DIR", e))?,
+        ),
+        None => None,
+    };
     service::validate_pipeline(toml, base_dir.as_deref())
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "VALIDATE_ERROR", e))
@@ -1250,8 +1260,17 @@ pub async fn delete_template(
     )
 )]
 /// POST /api/data/analyze
-pub async fn analyze_data(Json(req): Json<DataAnalysisRequest>) -> ApiResult<DataAnalysisResponse> {
-    super::data::analyze_files(&req.paths, req.max_depth)
+///
+/// Paths are sandboxed to the acting user's workspace (#521) — the size
+/// probe previously stat-ed any client-supplied path on the server.
+pub async fn analyze_data(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<DataAnalysisRequest>,
+) -> ApiResult<DataAnalysisResponse> {
+    let user = resolve(authenticated.as_ref());
+    let scope = crate::workspace::user_root(&user.id)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "DATA_ERROR", e.to_string()))?;
+    super::data::analyze_files(&req.paths, req.max_depth, Some(&scope))
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "DATA_ERROR", e))
 }
@@ -1308,8 +1327,15 @@ pub async fn validate_plugin(
     )
 )]
 /// POST /api/data/perceive
-pub async fn perceive_data(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
+pub async fn perceive_data(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
     use crate::domains::ai::agents::data_agent;
+
+    let user = resolve(authenticated.as_ref());
+    let scope = crate::workspace::user_root(&user.id)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "DATA_ERROR", e.to_string()))?;
 
     let paths = req.get("paths").and_then(|v| v.as_array()).map(|a| {
         a.iter()
@@ -1322,16 +1348,16 @@ pub async fn perceive_data(Json(req): Json<serde_json::Value>) -> ApiResult<serd
 
     let report = if let Some(ref p) = paths {
         if !p.is_empty() {
-            data_agent::analyze_paths(p)
+            data_agent::analyze_paths(p, &scope)
         } else if let Some(ref desc) = description {
             data_agent::analyze_description(desc)
         } else {
-            data_agent::analyze_paths(&[])
+            data_agent::analyze_paths(&[], &scope)
         }
     } else if let Some(ref desc) = description {
         data_agent::analyze_description(desc)
     } else {
-        data_agent::analyze_paths(&[])
+        data_agent::analyze_paths(&[], &scope)
     };
 
     Ok(Json(serde_json::json!(report)))

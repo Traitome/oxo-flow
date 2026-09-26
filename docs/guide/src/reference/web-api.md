@@ -200,9 +200,11 @@ Returns structured pipeline: `pipeline_id`, `name`, `version`, `rules` (with sum
 POST /api/pipelines/validate
 Content-Type: application/json
 
-{"pipeline_id": "...", "toml_content": "<TOML>"}
+{"pipeline_id": "...", "toml_content": "<TOML>", "base_dir": "inputs"}
 ```
 Returns `{ valid, errors: [{ code, message, rule, suggestion }] }`.
+`base_dir` (optional, for missing-input checks) must be relative (no
+`..`) and resolves inside the acting user's workspace (#521).
 
 ### Prepare
 ```

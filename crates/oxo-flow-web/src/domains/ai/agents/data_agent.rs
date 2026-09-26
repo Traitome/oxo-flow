@@ -11,7 +11,7 @@ use crate::domains::workflow::data;
 /// Analyze data paths using the 4-level degradation model.
 ///
 /// Returns a DataPerceptionReport with findings at the highest possible level.
-pub fn analyze_paths(paths: &[String]) -> DataPerceptionReport {
+pub fn analyze_paths(paths: &[String], scope: &std::path::Path) -> DataPerceptionReport {
     let mut findings = Vec::new();
     let mut warnings = Vec::new();
     let mut suggestions = Vec::new();
@@ -27,7 +27,7 @@ pub fn analyze_paths(paths: &[String]) -> DataPerceptionReport {
     }
 
     // Try Level 3: actual file system scan
-    match data::analyze_files(paths, Some(3)) {
+    match data::analyze_files(paths, Some(3), Some(scope)) {
         Ok(report) => {
             level = DataPerceptionLevel::FileSystemAccess;
             findings.push(DataFinding {
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_analyze_empty_paths() {
-        let report = analyze_paths(&[]);
+        let report = analyze_paths(&[], std::path::Path::new(""));
         assert_eq!(report.data_level, 0);
         assert!(!report.warnings.is_empty());
     }

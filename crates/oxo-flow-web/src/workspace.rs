@@ -47,6 +47,42 @@ pub fn validate_username(username: &str) -> Result<()> {
 /// Setup the directory structure for a specific run.
 ///
 /// Ensures `workspace/users/<username>/runs/<run_id>` exists.
+/// The acting user's workspace root — the sandbox every client-supplied
+/// data/analysis path resolves against (#521). Nothing outside this tree is
+/// readable through the data endpoints.
+pub fn user_root(username: &str) -> Result<PathBuf> {
+    validate_path_component(username, "username")?;
+    Ok(base_workspace().join("users").join(username))
+}
+
+/// Reject absolute paths and `..` components in a client-supplied relative
+/// path (#521) — both turn path-taking endpoints into arbitrary-path
+/// existence/size oracles.
+pub fn check_relative_path(raw: &str) -> Result<(), String> {
+    let candidate = std::path::Path::new(raw);
+    if candidate.is_absolute() {
+        return Err(format!(
+            "absolute path '{raw}' not allowed — data paths resolve inside your workspace"
+        ));
+    }
+    if candidate
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "'..' components are not allowed in data paths ('{raw}')"
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve a client-supplied path against the user's workspace root.
+pub fn resolve_user_scoped_path(username: &str, raw: &str) -> Result<PathBuf, String> {
+    let root = user_root(username).map_err(|e| e.to_string())?;
+    check_relative_path(raw)?;
+    Ok(root.join(std::path::Path::new(raw)))
+}
+
 pub fn setup_run_directory(username: &str, run_id: &str) -> Result<PathBuf> {
     validate_path_component(username, "username")?;
     validate_path_component(run_id, "run_id")?;
