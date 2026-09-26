@@ -3477,6 +3477,7 @@ mod tests {
         records.insert(
             "step1".to_string(),
             JobRecord {
+                signal: None,
                 rule: "step1".to_string(),
                 status: crate::executor::JobStatus::Success,
                 started_at: Some(Utc::now()),
@@ -3859,6 +3860,7 @@ mod tests {
         records.insert(
             "align".to_string(),
             crate::executor::JobRecord {
+                signal: None,
                 rule: "align".to_string(),
                 status: crate::executor::JobStatus::Success,
                 started_at: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
@@ -3919,6 +3921,9 @@ mod tests {
         cp.rule_runs.insert(
             "call".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(127),
                 command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
                 stderr_tail: Some("gatk: command not found".to_string()),
@@ -4145,6 +4150,9 @@ input = ["out.bam"]
         cp.rule_runs.insert(
             "align".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(137),
                 command: None,
                 stderr_tail: Some("Killed".to_string()),
@@ -4397,6 +4405,9 @@ report = "Per-sample QC."
         cp.rule_runs.insert(
             "qc_cohort_S1".to_string(),
             RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(0),
                 command: Some("fastp -i S1.fq".to_string()),
                 stderr_tail: None,
@@ -4406,6 +4417,9 @@ report = "Per-sample QC."
         cp.rule_runs.insert(
             "qc_cohort_S2".to_string(),
             RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(0),
                 command: Some("fastp -i S2.fq".to_string()),
                 stderr_tail: None,
@@ -4972,6 +4986,9 @@ shell = "bwa mem"
         ck.rule_runs.insert(
             "summarize_cohort_S1".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S1".to_string()),
                 stderr_tail: None,
@@ -4981,6 +4998,9 @@ shell = "bwa mem"
         ck.rule_runs.insert(
             "summarize_cohort_S2".to_string(),
             crate::executor::checkpoint::RuleRunRecord {
+                status: None,
+                skip_reason: None,
+                signal: None,
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S2".to_string()),
                 stderr_tail: None,

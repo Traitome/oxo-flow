@@ -960,6 +960,7 @@ mod tests {
         // And once `a` completes, `c` becomes ready despite the absent `p`.
         let mut state = state;
         state.mark_completed(JobRecord {
+            signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
             started_at: None,
@@ -989,6 +990,7 @@ mod tests {
         assert_eq!(state.running_count(), 1);
 
         state.mark_completed(JobRecord {
+            signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
             started_at: None,
@@ -1185,6 +1187,7 @@ mod tests {
 
         // Complete "source"
         state.mark_completed(JobRecord {
+            signal: None,
             rule: "source".to_string(),
             status: JobStatus::Success,
             started_at: None,
@@ -1719,6 +1722,7 @@ mod reentry_tests {
         let dag = two_rule_dag();
         let mut sched = SchedulerState::new(&["a"]);
         sched.mark_completed(JobRecord {
+            signal: None,
             rule: "a".to_string(),
             status: JobStatus::Success,
             started_at: None,

@@ -425,6 +425,7 @@ pub(crate) async fn run_on_cluster(
         Box::pin(async move {
             let mut ck = ck.lock().await;
             ck.record_run(&oxo_flow_core::executor::JobRecord {
+                signal: None,
                 rule: rule.clone(),
                 status: oxo_flow_core::executor::JobStatus::Running,
                 started_at: Some(chrono::Utc::now()),
