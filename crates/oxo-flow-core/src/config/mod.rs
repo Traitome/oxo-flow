@@ -40,6 +40,22 @@ impl WorkflowConfig {
     /// Validate the workflow configuration for internal consistency.
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> Result<()> {
+        // `min_version` gate (issue #469): the workflow declares the minimum
+        // engine version it needs — an older engine must refuse to load it
+        // rather than mis-run newer syntax/semantics. Compares
+        // major.minor.patch, tolerating two-component declarations.
+        if let Some(min) = &self.workflow.min_version {
+            let engine = env!("CARGO_PKG_VERSION");
+            if version_less_than(engine, min) {
+                return Err(OxoFlowError::Config {
+                    message: format!(
+                        "workflow requires oxo-flow >= {min}, but this engine is {engine} — \
+                         upgrade the engine to run this workflow"
+                    ),
+                });
+            }
+        }
+
         // Check for duplicate rule names
         let mut seen = std::collections::HashSet::new();
         for rule in &self.rules {
@@ -65,8 +81,6 @@ impl WorkflowConfig {
                 });
             }
         }
-
-        self.validate_execution_groups()?;
 
         // Include interface contracts (issue #112): contract errors fail
         // fast with the wiring gap named; encapsulation gaps warn.
@@ -284,4 +298,21 @@ impl WorkflowConfig {
         }
         format!("{:016x}", hasher.finish())
     }
+}
+
+/// `true` when `a` is strictly less than `b` under major.minor.patch
+/// semantics. Missing components default to 0 ("0.21" == "0.21.0").
+/// Non-numeric tails (`-beta1`) are ignored — engine versions here are
+/// plain release triples.
+fn version_less_than(a: &str, b: &str) -> bool {
+    fn triple(v: &str) -> [u64; 3] {
+        let mut out = [0u64; 3];
+        for (i, part) in v.split('.').take(3).enumerate() {
+            let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+            out[i] = digits.parse().unwrap_or(0);
+        }
+        out
+    }
+    let (a, b) = (triple(a), triple(b));
+    a < b
 }

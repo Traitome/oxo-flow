@@ -268,53 +268,6 @@ fn parse_include_directives() {
 }
 
 #[test]
-fn parse_execution_groups() {
-    let toml_str = r#"
-        [workflow]
-        name = "grouped"
-
-        [[execution_group]]
-        name = "preprocessing"
-        rules = ["fastp", "fastqc"]
-        mode = "parallel"
-
-        [[execution_group]]
-        name = "alignment"
-        rules = ["bwa", "sort", "index"]
-        mode = "sequential"
-
-        [[rules]]
-        name = "fastp"
-        shell = "fastp"
-
-        [[rules]]
-        name = "fastqc"
-        shell = "fastqc"
-
-        [[rules]]
-        name = "bwa"
-        shell = "bwa"
-
-        [[rules]]
-        name = "sort"
-        shell = "sort"
-
-        [[rules]]
-        name = "index"
-        shell = "index"
-    "#;
-
-    let config = WorkflowConfig::parse(toml_str).unwrap();
-    assert_eq!(config.execution_groups.len(), 2);
-    assert_eq!(config.execution_groups[0].name, "preprocessing");
-    assert_eq!(config.execution_groups[0].mode, ExecutionMode::Parallel);
-    assert_eq!(config.execution_groups[0].rules.len(), 2);
-    assert_eq!(config.execution_groups[1].name, "alignment");
-    assert_eq!(config.execution_groups[1].mode, ExecutionMode::Sequential);
-    assert_eq!(config.execution_groups[1].rules.len(), 3);
-}
-
-#[test]
 fn include_directive_deserialization() {
     let toml_str = r#"
         path = "sub/workflow.oxoflow"
@@ -324,11 +277,6 @@ fn include_directive_deserialization() {
     let inc: IncludeDirective = toml::from_str(toml_str).unwrap();
     assert_eq!(inc.path, "sub/workflow.oxoflow");
     assert_eq!(inc.namespace.as_deref(), Some("sub"));
-}
-
-#[test]
-fn execution_mode_default() {
-    assert_eq!(ExecutionMode::default(), ExecutionMode::Parallel);
 }
 
 #[test]
@@ -581,50 +529,6 @@ fn resolve_includes_missing_file() {
 }
 
 #[test]
-fn validate_execution_groups_valid() {
-    let toml_str = r#"
-        [workflow]
-        name = "grouped"
-
-        [[execution_group]]
-        name = "prep"
-        rules = ["step1"]
-
-        [[rules]]
-        name = "step1"
-        shell = "echo hello"
-    "#;
-
-    let config = WorkflowConfig::parse(toml_str).unwrap();
-    assert!(config.validate_execution_groups().is_ok());
-}
-
-#[test]
-fn validate_execution_groups_unknown_rule() {
-    let toml_str = r#"
-        [workflow]
-        name = "grouped"
-
-        [[rules]]
-        name = "step1"
-        shell = "echo hello"
-    "#;
-
-    let mut config = WorkflowConfig::parse(toml_str).unwrap();
-    config.execution_groups.push(ExecutionGroup {
-        name: "bad_group".to_string(),
-        rules: vec!["nonexistent".to_string()],
-        mode: ExecutionMode::Parallel,
-    });
-
-    let result = config.validate_execution_groups();
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("nonexistent"));
-    assert!(err.contains("bad_group"));
-}
-
-#[test]
 fn validate_rejects_bad_execution_groups() {
     let toml_str = r#"
         [workflow]
@@ -872,6 +776,45 @@ fn validate_sample_sheet_duplicates() {
 }
 
 #[test]
+fn min_version_gates_older_engines() {
+    // Issue #469: the workflow's declared minimum engine version is
+    // enforced at parse time — an older engine refuses to load.
+    let toml = r#"
+[workflow]
+name = "t"
+version = "1.0"
+min_version = "99.0.0"
+
+[[rules]]
+name = "r"
+shell = "true"
+"#;
+    let err = WorkflowConfig::parse(toml).unwrap_err();
+    assert!(
+        err.to_string().contains("requires oxo-flow >= 99.0.0"),
+        "{err}"
+    );
+
+    let toml = toml.replace("99.0.0", "0.1");
+    WorkflowConfig::parse(&toml).expect("an older min_version loads fine");
+}
+
+#[test]
+fn min_version_accepts_two_component_declaration() {
+    let toml = r#"
+[workflow]
+name = "t"
+version = "1.0"
+min_version = "0.20"
+
+[[rules]]
+name = "r"
+shell = "true"
+"#;
+    WorkflowConfig::parse(toml).expect("two-component min_version == 0.20.0");
+}
+
+#[test]
 fn rule_name_newtype() {
     let rn = RuleName::from("align");
     assert_eq!(rn.to_string(), "align");
@@ -882,12 +825,6 @@ fn rule_name_newtype() {
 fn wildcard_pattern_newtype() {
     let wp = WildcardPattern::from("{sample}.bam");
     assert_eq!(wp.to_string(), "{sample}.bam");
-}
-
-#[test]
-fn execution_mode_display() {
-    assert_eq!(ExecutionMode::Sequential.to_string(), "sequential");
-    assert_eq!(ExecutionMode::Parallel.to_string(), "parallel");
 }
 
 #[test]

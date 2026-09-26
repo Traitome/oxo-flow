@@ -48,11 +48,10 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [[sample_groups]]   # Optional: multi-sample groups (WC-02)
 [[values]]          # Optional: named value lists for parameter wildcards
 [metadata]          # Optional: per-sample metadata columns ({meta.<column>})
-[resource_budget]   # Optional: resource limits (cluster submissions only; local runs and `max_jobs` not yet enforced — issue #469)
+[resource_budget]   # Optional: resource limits (enforced on cluster submissions; local runs use `--max-threads`/`--max-memory`)
 [env_groups]        # Optional: named reusable environment specs
 [resource_groups]   # Optional: shared resource pools (API limits, DB connections)
 [wildcard_constraints] # Optional: regex patterns to constrain wildcard values
-[[execution_group]] # Optional: explicit rule groups (parsed; mode/ordering not yet enforced — issue #469)
 [cluster]           # Optional: HPC cluster profile (SLURM, PBS, SGE, LSF)
 [[reference_db]]    # Optional: tracked reference database versions
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
@@ -188,7 +187,7 @@ author = "Your Name"
 | `author` | String | No | — | Author name or email |
 | `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
 | `genome_build` | String | No | — | Genome reference build identifier (e.g., `"GRCh38"`, `"hg38"`) |
-| `min_version` | String | No | — | Parsed but **not yet enforced** — no version gate runs today (unlike `format_version`, which warns via S007) (issue #469) |
+| `min_version` | String | No | — | Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; `"0.21"` equals `"0.21.0"`) |
 | `format_version` | String | No | — | Format specification version for compatibility |
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
 | `sample_groups_file` | String | No | — | External TSV/CSV/JSON file defining sample groups |
@@ -628,15 +627,15 @@ memory = "32G"
 | `expand_inputs` | Table | No | Cartesian product expansion of input patterns |
 | `input_groups` | Array of tables | No | Group files by a pattern wildcard into one per-group instance (the Nextflow `groupTuple` pattern) — see [Input Groups](#input-groups-input_groups) |
 | `priority` | Integer | No | Execution priority (higher = runs first; default: 0) |
-| `target` | Boolean | No | Parsed and consumed by lint (W007 leaf suggestion) but **not yet used** as a run-time default target — `run` without `-t` builds the full DAG (issue #469) |
+| `target` | Boolean | No | Default target: `run`/`dry-run` without an explicit `-t`/`--module` builds the rules marked `target = true` **and their transitive producers**; with no marked rule the full DAG runs (an explicit `-t` always wins) |
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
 | `optional` | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
-| `benchmark` | String | No | Parsed but **not yet used** — no engine-written benchmark file today. The reports' Resource Accounting uses the executor's own RSS sampling, not this path (issue #469) |
+| `benchmark` | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
 | `log` | String | No | Log file path for rule execution output |
-| `group` | String | No | Parsed but **not yet used** — cluster array grouping keys on template name, not this label (issue #469) |
+| `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 | `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
-| `rule_metadata` | Table | No | Arbitrary domain-specific metadata (assay, organism, etc.) — round-tripped only; no report section or `info` output renders it today (issue #469) |
+| `rule_metadata` | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
 | `env_group` | String | No | Reference to a named environment in `[env_groups]` |
 | `depends_on` | Array | No | Explicit rule-level dependencies (by rule name) |
 | `extends` | String | No | Inherit settings from a base rule |
@@ -646,9 +645,9 @@ memory = "32G"
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
-| `shadow` | String | No | Parsed and validated but **not yet used** — no shadow directory is created today (issue #469) |
-| `ancient` | Array | No | Parsed but **not yet used** — freshness/invalidation never consults it today (issue #469) |
-| `localrule` | Boolean | No | Parsed but **not yet used** — cluster submission does not honor it today; every schedulable rule can be submitted (issue #469) |
+
+| `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
+| `localrule` | Boolean | No | Parsed but **not enforced yet** — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see [Resource Tuning](../how-to/resource-tuning.md)) |
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
 | `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
@@ -968,11 +967,13 @@ When exact requirements unknown, provide hints for estimation:
 [rules.resource_hint]
 input_size = "medium"     # small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)
 memory_scale = 2.0        # Estimated memory = input_size × scale
-runtime = "slow"          # fast (<10min), medium (10min-1h), slow (>1h)
-io_bound = true           # true = I/O bound, false = CPU bound
+runtime = "slow"          # reserved: parsed, not yet consumed by the scheduler
+io_bound = true           # reserved: parsed, not yet consumed by the scheduler
 ```
 
-Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`
+Memory estimation formula: `estimated_mb = input_size_mb × memory_scale`. The
+`runtime` and `io_bound` hints are reserved scheduler knobs: only
+`input_size` and `memory_scale` are consumed today.
 
 ---
 
@@ -1099,8 +1100,8 @@ resume.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
-| `localrule` | Boolean | `false` | Parsed but **not yet enforced** — cluster submission does not honor it today (issue #469) |
-| `shadow` | String | — | Parsed but **not yet used** — no shadow directory is created today (issue #469) |
+| `localrule` | Boolean | `false` | Parsed but **not enforced yet** — every schedulable rule can currently be submitted to the cluster |
+
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 **DAG edge inference** — edges form when a rule's `input` paths match
@@ -1126,7 +1127,7 @@ depends_on = []  # Run first, before file-based dependencies
 [[rules]]
 name = "local_only"
 shell = "echo 'local task'"
-localrule = true  # NOTE: parsed but not yet enforced (issue #469)
+localrule = true  # NOTE: not yet enforced — every schedulable rule can be submitted
 ```
 
 ### Input Groups (`input_groups`)
@@ -1268,7 +1269,7 @@ retry_delay = "30s"
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ancient` | Array | Parsed but **not yet used** — freshness/invalidation never consults it today (issue #469) |
+| `ancient` | Array | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution |
 | `format_hint` | Array | Parsed but **not yet used** by the engine (planned for I/O optimization) |
 | `pipe` | Boolean | Parsed but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
 | `checksum` | String | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless |
@@ -1277,7 +1278,7 @@ retry_delay = "30s"
 [[rules]]
 name = "align"
 input = ["reads/{sample}.fastq.gz", "ref/hg38.fa"]
-ancient = ["ref/hg38.fa"]  # NOTE: parsed but not yet enforced (issue #469)
+ancient = ["ref/hg38.fa"]  # never triggers rebuild, however new the file is
 # format_hint and checksum are accepted but currently have no effect
 ```
 
@@ -1310,13 +1311,13 @@ threads = 16  # Override inherited value
 | Field | Type | Description |
 |-------|------|-------------|
 | `priority` | Integer | Execution priority (higher runs first; default: 0) |
-| `target` | Boolean | Parsed but **not yet used** as a run-time default target — `run` without `-t` builds the full DAG (issue #469) |
+| `target` | Boolean | Default target: built by `run`/`dry-run` when no explicit `-t`/`--module` is given (marked rules + their transitive producers; none marked → full DAG) |
 
 ```toml
 [[rules]]
 name = "critical_step"
 priority = 10   # Runs ahead of lower-priority rules
-target = true   # NOTE: parsed but not yet used as a default target (issue #469)
+target = true   # built by `run`/`dry-run` when no -t is given
 ```
 
 ### Optional and Required Rules
@@ -1353,26 +1354,26 @@ executing a doomed shell command on missing files.
 | Field | Type | Description |
 |-------|------|-------------|
 | `log` | String | File path for capturing rule stdout/stderr |
-| `benchmark` | String | Parsed but **not yet used** — no engine-written benchmark file today; Resource Accounting uses the executor's own RSS sampling (issue #469) |
+| `benchmark` | String | Per-instance benchmark file — the engine writes its sampled metrics as JSON here after the rule completes |
 
 ```toml
 [[rules]]
 name = "align"
 log = "logs/align_{sample}.log"
-benchmark = "benchmarks/align_{sample}.tsv"  # NOTE: parsed but not yet written (issue #469)
+benchmark = "benchmarks/align_{sample}.json"  # per-instance JSON, written by the engine
 ```
 
 ### Job Grouping and Caching
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `group` | String | Parsed but **not yet used** — cluster array grouping keys on template name, not this label (issue #469) |
+| `group` | String | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 
 ```toml
 [[rules]]
 name = "variant_call"
-group = "variant_calling"       # NOTE: parsed but not yet used for grouping (issue #469)
+group = "variant_calling"       # reserved metadata (grouping keys on the template name)
 cache_key = "vc_v2.0"           # Content cache key — outputs are reused when content is identical
 ```
 
@@ -1386,7 +1387,7 @@ cache_key = "vc_v2.0"           # Content cache key — outputs are reused when 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `rule_metadata` | Table | Domain-specific metadata (assay type, organism, protocol, etc.) — round-tripped only; no report section or `info` output renders it today (issue #469) |
+| `rule_metadata` | Table | Domain-specific metadata (assay type, organism, protocol, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
 
 ```toml
 [[rules]]

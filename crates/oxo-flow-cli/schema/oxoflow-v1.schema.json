@@ -289,35 +289,6 @@
         }
       }
     },
-    "execution_group": {
-      "type": "array",
-      "description": "Explicit sequential/parallel rule ordering",
-      "items": {
-        "type": "object",
-        "required": [
-          "name",
-          "rules"
-        ],
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "rules": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "sequential",
-              "parallel"
-            ]
-          }
-        }
-      }
-    },
     "pairs": {
       "type": "array",
       "description": "Experiment-control sample pairs",
@@ -1343,15 +1314,6 @@
             "type": "string"
           },
           "description": "Outputs that must never be overwritten"
-        },
-        "shadow": {
-          "type": "string",
-          "enum": [
-            "minimal",
-            "shallow",
-            "full"
-          ],
-          "description": "Shadow directory mode"
         },
         "ancient": {
           "type": "array",

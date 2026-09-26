@@ -776,7 +776,7 @@ pub fn snapshot_input_manifest(
     let mut saw_resolvable = false;
     for pattern in rule.input.to_vec() {
         let expanded = expand_config_in_path(&pattern, wildcard_values);
-        if expanded.contains('{') {
+        if expanded.contains('{') || input_is_ancient(rule, &expanded, wildcard_values) {
             // Engine wildcard ({sample}, {threads}, …) — expanded per
             // instance before checkpointing, not resolvable here.
             continue;
@@ -1096,6 +1096,31 @@ pub fn optional_inputs_missing(
 /// Two honest fallbacks keep the old behavior: any output beyond the hash
 /// cap (no re-verifiable digest), and rules with no recorded checksums at
 /// all, both degrade to the mtime comparison.
+/// Whether `expanded_input` is covered by the rule's `ancient` declarations
+/// (issue #469): ancient inputs never trigger re-execution, so the
+/// freshness gate and input manifests must ignore them. A literal
+/// declaration matches after `{config.*}` expansion; a declaration that
+/// still carries engine wildcards (`ref/{build}/hg38.fa`) matches
+/// structurally via the template matcher.
+fn input_is_ancient(
+    rule: &Rule,
+    expanded_input: &str,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    rule.ancient.iter().any(|ancient| {
+        let expanded = expand_config_in_path(ancient, wildcard_values);
+        if expanded == expanded_input {
+            return true;
+        }
+        if expanded.contains('{')
+            && let Ok(re) = crate::wildcard::pattern_to_regex(&expanded)
+        {
+            return re.is_match(expanded_input);
+        }
+        false
+    })
+}
+
 pub fn should_skip_rule_with_checksums(
     rule: &Rule,
     workdir: &Path,
@@ -1179,11 +1204,17 @@ pub fn should_skip_rule_with_checksums(
         }
     }
 
-    if expanded_inputs.is_empty() {
+    // `ancient` inputs never trigger re-execution (issue #469) — excluded
+    // from the mtime comparison entirely.
+    let freshness_inputs: Vec<&String> = expanded_inputs
+        .iter()
+        .filter(|i| !input_is_ancient(rule, i, wildcard_values))
+        .collect();
+    if freshness_inputs.is_empty() {
         return true; // No inputs to check freshness against
     }
     // Check if all outputs are newer than all inputs
-    expanded_inputs.iter().all(|input| {
+    freshness_inputs.iter().all(|input| {
         let input_path = workdir.join(input);
         expanded_outputs.iter().all(|output| {
             let output_path = workdir.join(output);
@@ -1358,6 +1389,93 @@ mod tests {
         assert_eq!(
             ck.benchmarks["fastqc"].recorded_as.as_deref(),
             Some("outputs up-to-date")
+        );
+    }
+
+    #[test]
+    fn ancient_inputs_never_trigger_reexecution() {
+        // Issue #469: an `ancient` input is excluded from the mtime
+        // comparison — even strictly NEWER than the output, it must not
+        // force re-execution; without the declaration it must.
+        let dir = tempfile::tempdir().unwrap();
+        // reads.fq FIRST (older than the output), then the output; ref.fa
+        // is touched NEWER than the output — only its ancient declaration
+        // keeps the rule skippable.
+        std::fs::write(dir.path().join("reads.fq"), b"READS").unwrap();
+        std::fs::write(dir.path().join("ref.fa"), b"REF").unwrap();
+        std::fs::write(dir.path().join("out.txt"), b"OUT").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        filetime::set_file_mtime(
+            dir.path().join("ref.fa"),
+            filetime::FileTime::from_unix_time(now.as_secs() as i64 + 60, 0),
+        )
+        .unwrap();
+        let mk = |ancient: Vec<String>| crate::rule::Rule {
+            name: "align".into(),
+            input: vec!["ref.fa".to_string(), "reads.fq".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
+            ancient,
+            ..Default::default()
+        };
+        let values = HashMap::new();
+
+        assert!(
+            should_skip_rule_with_checksums(&mk(vec!["ref.fa".into()]), dir.path(), &values, None),
+            "an ancient input must never trigger re-execution"
+        );
+        assert!(
+            !should_skip_rule_with_checksums(&mk(vec![]), dir.path(), &values, None),
+            "without the ancient declaration the fresh mtime forces re-execution"
+        );
+
+        // Manifest: the ancient input is not tracked; the regular one is.
+        let rule = mk(vec!["ref.fa".into()]);
+        let manifest = snapshot_input_manifest(
+            &rule,
+            dir.path(),
+            &values,
+            &crate::storage::StorageResolver::with_local(),
+        )
+        .unwrap()
+        .expect("manifest exists for the regular input");
+        assert!(
+            manifest.iter().any(|e| e.path == "reads.fq"),
+            "regular inputs stay tracked: {manifest:?}"
+        );
+        assert!(
+            !manifest.iter().any(|e| e.path == "ref.fa"),
+            "ancient inputs must be excluded from the input manifest: {manifest:?}"
+        );
+    }
+
+    #[test]
+    fn ancient_template_matches_expanded_input() {
+        // An ancient declaration carrying an engine wildcard matches the
+        // expanded input structurally.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("refs")).unwrap();
+        std::fs::write(dir.path().join("refs/hg38.fa"), b"R").unwrap();
+        std::fs::write(dir.path().join("out.txt"), b"O").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        filetime::set_file_mtime(
+            dir.path().join("refs/hg38.fa"),
+            filetime::FileTime::from_unix_time(now.as_secs() as i64 + 60, 0),
+        )
+        .unwrap();
+        let rule = crate::rule::Rule {
+            name: "align".into(),
+            input: vec!["refs/hg38.fa".to_string()].into(),
+            output: vec!["out.txt".to_string()].into(),
+            ancient: vec!["refs/{build}.fa".to_string()],
+            ..Default::default()
+        };
+        assert!(
+            should_skip_rule_with_checksums(&rule, dir.path(), &HashMap::new(), None),
+            "an ancient template declaration must cover its expanded input"
         );
     }
 

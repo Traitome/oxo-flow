@@ -31,7 +31,6 @@ pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
     "config",
     "defaults",
     "env_groups",
-    "execution_group",
     "include",
     "metadata",
     "pairs",
@@ -58,7 +57,6 @@ const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
     "config",
     "defaults",
     "env_groups",
-    "execution_group",
     "include",
     "metadata",
     "pairs",
@@ -135,9 +133,6 @@ const INCLUDE_KEYS: &[&str] = &[
     "ref",
     "repo",
 ];
-
-/// Keys of one `[[execution_group]]` entry.
-const EXECUTION_GROUP_KEYS: &[&str] = &["mode", "name", "rules"];
 
 /// Keys of the `[citation]` table.
 const CITATION_KEYS: &[&str] = &["authors", "doi", "title", "url"];
@@ -267,7 +262,6 @@ const RULE_KEYS: &[&str] = &[
     "rule_metadata",
     "scatter",
     "scratch",
-    "shadow",
     "shell",
     "script",
     "tags",
@@ -433,7 +427,6 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
 /// A known key whose value is an array of tables with their own whitelist.
 fn array_of_tables(key: &str) -> Option<&'static [&'static str]> {
     match key {
-        "execution_group" => Some(EXECUTION_GROUP_KEYS),
         "expand_inputs" => Some(EXPAND_INPUT_KEYS),
         "include" => Some(INCLUDE_KEYS),
         "input_groups" => Some(INPUT_GROUP_KEYS),
