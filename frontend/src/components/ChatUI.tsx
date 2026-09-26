@@ -72,19 +72,33 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
     api.aiConfig().then((c) => setAiConfigured(c.is_configured)).catch(() => setAiConfigured(false));
   }, []);
 
+  // #550: crypto.randomUUID exists only in secure contexts — plain-HTTP
+  // LAN/HPC deployments threw on Send and the chat silently broke.
+  const uuid = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return uuid();
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
   useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages, agents]);
 
-  const sendMessage = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
+  const lastPrompt = useRef('');
 
-    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text };
+  const sendMessage = async (override?: string) => {
+    const text = (override ?? input).trim();
+    if (!text || loading) return;
+    lastPrompt.current = text;
+
+    const userMsg: ChatMessage = { id: uuid(), role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setLoading(true);
 
     // Add assistant placeholder
-    const assistantId = crypto.randomUUID();
+    const assistantId = uuid();
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', agentStatus: t('chat.thinking') }]);
 
     // Abort any stream still running (issue #214): navigation away and the
@@ -115,38 +129,50 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           
           const lines = eventString.split('\n');
           let currentEvent = '';
-          let currentData = '';
+          // #550: SSE data fields may span multiple `data:` lines — they
+          // join with \n per the SSE spec. Last-line-wins truncated any
+          // multi-line payload.
+          const dataLines: string[] = [];
           for (const line of lines) {
             if (line.startsWith('event:')) currentEvent = line.substring(6).trim();
-            else if (line.startsWith('data:')) currentData = line.substring(5).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.substring(5).replace(/^ /, ''));
           }
+          const currentData = dataLines.join('\n');
           
           if (currentEvent && currentData) {
-            const payload = JSON.parse(currentData);
+            // #550: one bad frame (or an interleaved keepalive) must skip
+            // that frame, not abort the whole stream into the ❌ path.
+            let payload: Record<string, unknown>;
+            try {
+              payload = JSON.parse(currentData);
+            } catch {
+              console.warn('chat: skipping unparseable SSE frame', currentEvent, currentData.slice(0, 120));
+              continue;
+            }
             if (currentEvent === 'status') {
-              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: payload.message } : m));
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, agentStatus: String(payload.message ?? '') } : m));
             } else if (currentEvent === 'tool_call') {
               setMessages(prev => prev.map(m => m.id === assistantId ? {
                 ...m,
-                toolCalls: [...(m.toolCalls ?? []), { id: `${payload.name}-${crypto.randomUUID()}`, name: payload.name, args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
+                toolCalls: [...(m.toolCalls ?? []), { id: `${String(payload.name)}-${uuid()}`, name: String(payload.name), args: typeof payload.args === 'string' ? payload.args : JSON.stringify(payload.args) }],
               } : m));
             } else if (currentEvent === 'tool_result') {
               setMessages(prev => prev.map(m => m.id === assistantId ? {
                 ...m,
                 toolCalls: (m.toolCalls ?? []).map((tc, i, arr) =>
-                  i === arr.length - 1 && tc.name === payload.name ? { ...tc, summary: payload.summary } : tc
+                  i === arr.length - 1 && tc.name === String(payload.name) ? { ...tc, summary: String(payload.summary ?? '') } : tc
                 ),
               } : m));
             } else if (currentEvent === 'text') {
-              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + payload.chunk } : m));
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + String(payload.chunk ?? '') } : m));
             } else if (currentEvent === 'action') {
               if (payload.action_type === 'pipeline_ready') {
-                finalPipelineData = payload.data;
+                finalPipelineData = payload.data as { toml_content?: string; validation?: unknown; pipeline_id?: string } | null;
               }
             } else if (currentEvent === 'done') {
               doneReading = true;
             } else if (currentEvent === 'error') {
-              throw new Error(payload.message || JSON.stringify(payload));
+              throw new Error(String(payload.message ?? JSON.stringify(payload)));
             }
           }
         }
@@ -201,7 +227,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
       // backend attached to the pipeline_ready payload.
       const data = action.data as { toml_content?: string; validation?: { valid?: boolean } | null };
       if (data.validation && data.validation.valid === false) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ ${t('chat.validationFailed')}` }]);
+        setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `❌ ${t('chat.validationFailed')}` }]);
         return;
       }
       try {
@@ -210,13 +236,15 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
         await api.createPipeline({ name, toml_content: toml });
         session.setPipelineToml(toml);
         onPipelineReady?.(action.data);
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `✅ ${t('chat.saved').replace('{{name}}', name)}` }]);
+        setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `✅ ${t('chat.saved').replace('{{name}}', name)}` }]);
         navigate('/editor');
       } catch (err: unknown) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', err instanceof Error ? err.message : 'unknown error')}` }]);
+        setMessages(prev => [...prev, { id: uuid(), role: 'system', content: `❌ ${t('chat.saveFailed').replace('{{error}}', err instanceof Error ? err.message : 'unknown error')}` }]);
       }
     } else if (action.action === 'regenerate') {
-      sendMessage();
+      // #550: input was cleared on the first send — the button read empty
+      // input and did nothing. Re-send the retained last prompt.
+      void sendMessage(lastPrompt.current || undefined);
     } else if (action.action === 'edit' && action.data) {
       onPipelineReady?.(action.data);
     }
@@ -341,7 +369,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           style={{ flex: 1, minWidth: 0 }}
         />
         <button
-          onClick={sendMessage}
+          onClick={() => void sendMessage()}
           disabled={loading || !input.trim()}
           className="btn-run chat-send"
           aria-label={t('chat.send')}
