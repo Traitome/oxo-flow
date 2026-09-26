@@ -76,7 +76,7 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
   // LAN/HPC deployments threw on Send and the chat silently broke.
   const uuid = (): string => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return uuid();
+      return crypto.randomUUID();
     }
     const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
