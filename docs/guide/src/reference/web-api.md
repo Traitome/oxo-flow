@@ -100,8 +100,11 @@ comment ping; if the client falls behind the broadcast buffer, the stream
 carries a synthetic `{"type":"lagged","data":{"missed":N}}` event —
 refetch run state when you see it.
 
-**Team/hpc modes require `?token=<session token>`** (EventSource cannot set
-an Authorization header), and the stream is filtered to the subscriber's own
+**Team/hpc modes require a one-time `?ticket=`** minted at
+`POST /api/events/ticket` under normal bearer auth (EventSource cannot set
+an Authorization header; the ticket is single-use, expires in 30 s, and
+replaces the session token that used to travel — and leak — in the URL,
+#522). The stream is filtered to the subscriber's own
 runs — admins see everything. Events carry a `user` field (the owning user
 id, or `null` for system-wide events).
 

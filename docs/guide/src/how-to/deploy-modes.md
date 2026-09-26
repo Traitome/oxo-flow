@@ -207,8 +207,9 @@ Team/HPC modes scope every resource to the acting user:
   pipelines only.
 - **Anonymous surface**: `/api/system`, `/api/metrics`, `/api/ai/test`,
   and `/api/hpc` require authentication; `GET /api/ai/config` stays
-  public; `/api/events` requires `?token=` (EventSource cannot set
-  headers) and streams only the subscriber's runs; `/api/share/{token}`
+  public; `/api/events` requires a one-time `?ticket=` from
+  `POST /api/events/ticket` (EventSource cannot set headers; #522) and
+  streams only the subscriber's runs; `/api/share/{token}`
   is public by design (the token is the credential).
 - **Env-password logins** auto-provision a real users row (previously any
   username shared the `default` pseudo-user's identity).
