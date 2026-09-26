@@ -8328,6 +8328,78 @@ fn cli_resume_reuses_recorded_workdir() {
     );
 }
 
+/// `resume <path>` must load THAT checkpoint — the path the user passed,
+/// not a re-derived `<workdir>/.oxo-flow/checkpoint.json` (#538). With the
+/// derived file absent, resume used to proceed with an empty state and
+/// re-execute every completed rule while the banner claimed otherwise.
+#[test]
+fn cli_resume_explicit_checkpoint_path_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    let wd = dir.path().join("wd");
+    fs::create_dir_all(&wd).unwrap();
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"cp\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"one\"\noutput = [\"one.txt\"]\nshell = \"echo one > {output[0]}\"\n\n[[rules]]\nname = \"two\"\ninput = [\"one.txt\"]\noutput = [\"two.txt\"]\nshell = \"cat {input} > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Produce a checkpoint in the normal place, then MOVE it elsewhere and
+    // delete the original — the derived location no longer exists.
+    let out = oxo_flow_cmd()
+        .args([
+            "run",
+            wf.to_str().unwrap(),
+            "--workdir",
+            wd.to_str().unwrap(),
+        ])
+        .current_dir(&wd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let derived = wd.join(".oxo-flow/checkpoint.json");
+    let moved = dir.path().join("backup/ck.json");
+    fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    fs::rename(&derived, &moved).unwrap();
+    assert!(
+        !derived.exists(),
+        "setup: the derived checkpoint must be gone"
+    );
+
+    // Resume from the moved checkpoint with the same workdir: both rules
+    // must stay skipped (the explicit path wins), not re-executed.
+    let out = oxo_flow_cmd()
+        .args([
+            "resume",
+            moved.to_str().unwrap(),
+            "--workdir",
+            wd.to_str().unwrap(),
+        ])
+        .current_dir(&wd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("2 skipped"),
+        "the explicit checkpoint's completed rules must be skipped, got:\n{stderr}"
+    );
+    // Re-execution would print the rule-finished events; a skip prints none.
+    assert!(
+        !stderr.contains("✓") || stderr.matches("✓").count() <= 2,
+        "rules must be skipped, not re-executed: {stderr}"
+    );
+}
+
 /// Resuming a checkpoint with no executed rules is not an error: it points
 /// the user at `run` and exits cleanly instead of launching an executor.
 #[test]

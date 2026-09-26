@@ -1159,6 +1159,11 @@ pub async fn run_command(
     rerun: bool,
     no_report_snapshot: bool,
     max_submitted: Option<usize>,
+    // #538: `resume` forwards the user-supplied checkpoint path — without
+    // this, run_command re-derived <workdir>/.oxo-flow/checkpoint.json and
+    // an explicit `resume <path>` silently resumed from a DIFFERENT (or
+    // empty) checkpoint while the banner claimed otherwise.
+    checkpoint_override: Option<PathBuf>,
 ) -> Result<()> {
     print_banner();
 
@@ -1475,10 +1480,14 @@ pub async fn run_command(
     // construction (the invalidation set must reach the executor's
     // freshness gate, which would otherwise silently skip re-submitted
     // rules with stale outputs).
-    let checkpoint_path = workdir
-        .as_ref()
-        .unwrap_or(&workdir_default)
-        .join(".oxo-flow/checkpoint.json");
+    // An explicit checkpoint path (resume) wins over the workdir-derived
+    // default (#538); load AND save both use it.
+    let checkpoint_path = checkpoint_override.unwrap_or_else(|| {
+        workdir
+            .as_ref()
+            .unwrap_or(&workdir_default)
+            .join(".oxo-flow/checkpoint.json")
+    });
     // Retention for failed-output aside files (issue #194 C2): stale
     // `.oxo-failed` evidence ages out at run start instead of accumulating
     // forever. Best-effort — cleanup must never block the run.
@@ -6548,27 +6557,30 @@ pub async fn resume_command(
         jobs,
         keep_going,        // keep_going (same semantics as `run`)
         effective_workdir, // workdir (recorded by the original run)
-        None,              // log_file (default path)
-        Vec::new(),        // target
-        Vec::new(),        // module
-        0,                 // retry
-        timeout,           // timeout
-        false,             // resume_failed (user can re-run with --resume-failed in 'run')
-        None,              // profile
-        0,                 // max_threads
-        0,                 // max_memory
-        false,             // skip_env_setup
-        true,              // skip_ref_build (resume: refs already built)
-        None,              // cache_dir
-        false,             // provenance (checkpoint already has checksums)
-        false,             // json (resume defaults to human-readable)
-        Vec::new(),        // cli_args (resume reuses checkpoint state)
+        // #538: the user's checkpoint path wins over the workdir-derived
+        // default — the banner's "Resuming… N completed" must be the truth.
+        None,       // log_file (default path)
+        Vec::new(), // target
+        Vec::new(), // module
+        0,          // retry
+        timeout,    // timeout
+        false,      // resume_failed (user can re-run with --resume-failed in 'run')
+        None,       // profile
+        0,          // max_threads
+        0,          // max_memory
+        false,      // skip_env_setup
+        true,       // skip_ref_build (resume: refs already built)
+        None,       // cache_dir
+        false,      // provenance (checkpoint already has checksums)
+        false,      // json (resume defaults to human-readable)
+        Vec::new(), // cli_args (resume reuses checkpoint state)
         ai_recover,
         ai_max_retries,
         Vec::new(), // samples_filter (resume restores checkpoint state as-is)
         false,      // rerun (resume skips completed rules by design)
         no_report_snapshot,
-        None, // max_submitted (cluster queue cap — resume keeps the profile's)
+        None,             // max_submitted (cluster queue cap — resume keeps the profile's)
+        Some(checkpoint), // #538: explicit checkpoint path wins
     )
     .await
 }

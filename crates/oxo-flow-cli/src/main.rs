@@ -1462,6 +1462,7 @@ async fn main() -> Result<()> {
                 rerun,
                 no_report_snapshot,
                 max_submitted,
+                None, // checkpoint_override (run derives the workdir default)
             )
             .await?
         }
@@ -1912,6 +1913,7 @@ async fn main() -> Result<()> {
                         false, // rerun (test mode: normal up-to-date checks)
                         false, // no_report_snapshot (test mode keeps the standard run behavior)
                         None,  // max_submitted (cluster queue cap — test keeps the profile's)
+                        None,  // checkpoint_override (test derives the workdir default)
                     )
                     .await
                 );
