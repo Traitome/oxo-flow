@@ -245,6 +245,31 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
     for input in &rule.input {
         check("input path", input, &mut diagnostics);
     }
+    // #529: the runtime config-expands more fields than the original scan
+    // covered — `log` renders with the same wildcard + config expansion as
+    // every other path, `pre_exec`/`on_success`/`on_failure` are
+    // placeholder-rendered like the main command, `benchmark` expands at
+    // fan-out, and `output_pattern` is config-expanded before discovery.
+    // A typo'd key silently expanded to the literal placeholder text and
+    // the run proceeded — exactly what E005 exists to catch.
+    if let Some(ref log) = rule.log {
+        check("log path", log, &mut diagnostics);
+    }
+    if let Some(ref benchmark) = rule.benchmark {
+        check("benchmark path", benchmark, &mut diagnostics);
+    }
+    if let Some(ref output_pattern) = rule.output_pattern {
+        check("output_pattern", output_pattern, &mut diagnostics);
+    }
+    for (field, hook) in [
+        ("pre_exec", &rule.pre_exec),
+        ("on_success", &rule.on_success),
+        ("on_failure", &rule.on_failure),
+    ] {
+        if let Some(hook) = hook {
+            check(field, hook, &mut diagnostics);
+        }
+    }
     if let Some(ref when) = rule.when {
         // Quote-aware scan (issue #312): `config.<key>` text inside a
         // quoted argument — e.g. a `regex_extract` pattern matching a
@@ -579,11 +604,23 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
     // E014: checkpoint rule parameterized by sample/group/pair wildcards
     // (bounded re-entry: checkpoint rules never re-expand themselves)
     for rule in &config.rules {
+        // #529: the fan-out trigger set is input/output/shell/when/
+        // output_pattern (plus script/log for completeness) — a checkpoint
+        // rule whose only wildcard reference sits in `when` or the
+        // output_pattern escaped E014 and re-expanded unboundedly.
         let text = format!(
-            "{} {} {}",
+            "{} {} {} {} {} {} {}",
             rule.shell.as_deref().unwrap_or(""),
+            rule.script.as_deref().unwrap_or(""),
             rule.input.to_vec().join(" "),
-            rule.output.to_vec().join(" ")
+            rule.output.to_vec().join(" "),
+            rule.when.as_deref().unwrap_or(""),
+            rule.output_pattern.as_deref().unwrap_or(""),
+            [rule.log.as_deref(), rule.benchmark.as_deref(),]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ")
         );
         let sample_wildcard = text.contains("{sample}") || text.contains("{group}");
         // Pair-driven re-entry (issue #80 item 3) is bounded the same way:
@@ -1480,12 +1517,18 @@ pub fn lint_format(
         // can declare samples at run time, and transform split variables
         // (`_`-prefixed) are engine-managed.
         if !can_never_run {
+            // #529: `log`/`benchmark` are not fan-out trigger fields — a
+            // literal `{sample}` there never fans out and renders as a
+            // literal path at runtime, which is exactly the failure W024
+            // warns about. Scan them too.
             let text = format!(
-                "{} {} {} {}",
+                "{} {} {} {} {} {}",
                 rule.shell.as_deref().unwrap_or(""),
                 rule.script.as_deref().unwrap_or(""),
                 rule.input.to_vec().join(" "),
-                rule.output.to_vec().join(" ")
+                rule.output.to_vec().join(" "),
+                rule.log.as_deref().unwrap_or(""),
+                rule.benchmark.as_deref().unwrap_or("")
             );
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for wc in crate::wildcard::extract_wildcards(&text) {
@@ -2670,6 +2713,104 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let result = validate_format(&config);
         assert!(result.errors().iter().any(|d| d.code == "E014"));
+    }
+
+    #[test]
+    fn e005_scans_log_benchmark_output_pattern_and_hooks() {
+        // #529: the runtime config-expands log/benchmark/output_pattern and
+        // the pre_exec/on_success/on_failure hooks — a typo'd key there
+        // used to silently expand to literal placeholder text.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            known = "x"
+
+            [[rules]]
+            name = "gen"
+            output = ["out.txt"]
+            shell = "echo hi > {output}"
+            log = "logs/{config.undefined_log}.log"
+            benchmark = "bench/{config.undefined_bench}.json"
+            output_pattern = "chunks/{config.undefined_pattern}/*.txt"
+            pre_exec = "echo {config.undefined_pre}"
+            on_success = "echo {config.undefined_success}"
+            on_failure = "echo {config.undefined_failure}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let rule = &config.rules[0];
+        let diags = undefined_config_refs(rule, &config);
+        let messages: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.code == "E005")
+            .map(|d| d.message.as_str())
+            .collect();
+        for key in [
+            "undefined_log",
+            "undefined_bench",
+            "undefined_pattern",
+            "undefined_pre",
+            "undefined_success",
+            "undefined_failure",
+        ] {
+            assert!(
+                messages.iter().any(|m| m.contains(key)),
+                "E005 must cover '{key}': {messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn e014_catches_when_only_checkpoint_fanout() {
+        // #529: a checkpoint rule whose per-sample fan-out is expressed
+        // only in `when` (no {sample} in shell/input/output) used to
+        // escape E014 and re-expand unboundedly on resume.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "discover"
+            output = ["d.done"]
+            shell = "touch d.done"
+            when = "{sample} != ''"
+            checkpoint = true
+            checkpoint_manifest = "d.toml"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().any(|d| d.code == "E014"),
+            "when-only fan-out must trigger E014"
+        );
+    }
+
+    #[test]
+    fn w024_warns_on_literal_wildcards_in_log_and_benchmark() {
+        // #529: log/benchmark are not fan-out trigger fields — a literal
+        // {sample} there renders as a literal path with exit 0. The
+        // warning used to fire only mid-run.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "once"
+            output = ["report.txt"]
+            shell = "echo hi > {output}"
+            log = "logs/{sample}.log"
+            benchmark = "bench/{sample}.json"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = lint_format(&config, None);
+        assert!(
+            result
+                .iter()
+                .any(|d| d.code == "W024" && d.message.contains("{sample}")),
+            "W024 must cover the log field: {:?}",
+            result.iter().map(|d| &d.code).collect::<Vec<_>>()
+        );
     }
 
     #[test]
