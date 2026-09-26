@@ -4192,11 +4192,11 @@
 </ul>
 <h2 id="exit-codes">Exit Codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>0</strong> — all items succeeded, or items failed without <code>--stop-on-error</code> (the
-  per-item failures are still listed in the output and in <code>--json-output</code>'s
-  <code>results</code> array).</li>
-<li><strong>1</strong> — items failed <strong>and</strong> <code>--stop-on-error</code> (<code>-x</code>) was given: the first
-  failed item aborts the batch and the command exits non-zero.</li>
+<li><strong>0</strong> — all items succeeded.</li>
+<li><strong>1</strong> — any item failed (#540). The per-item failures are still listed in
+  the output and in <code>--json-output</code>'s <code>results</code> array. <code>--stop-on-error</code>
+  (<code>-x</code>) additionally aborts the batch on the FIRST failed item instead of
+  running the rest.</li>
 </ul>
 
 
