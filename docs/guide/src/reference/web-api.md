@@ -158,7 +158,9 @@ Returns license type, validity, commercial use flag, and contact info.
 ```
 POST /api/license/upload
 ```
-Upload a commercial license file for validation and activation.
+Admin-only outside personal mode; the payload is bounded (64 KiB). The
+raw blob is **not** stored — only its size and SHA-256 land in the audit
+trail (the endpoint does not yet activate licenses) (#519).
 
 ### Users (admin)
 ```
@@ -281,7 +283,10 @@ Content-Type: application/json
 `toml_content` is the workflow source (required — the run is created from
 it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
 `pipeline_id`, `cluster_id`, `samples`, and `targets` are top-level fields
-(not nested under a `config` object). This flat shape is the typed
+(not nested under a `config` object). Run-mutating endpoints
+(create/cancel/pause/resume/retry/clean/resume-checkpoint) require the
+`user` role or above — the viewer role is read-only — and a `pipeline_id`
+must be readable by the acting user (#519). This flat shape is the typed
 `CreateRunRequest` schema — the OpenAPI spec declares it as the endpoint's
 `requestBody`, and the handler parses exactly that type, so the spec, the
 server, and the TypeScript client stay in lockstep. Returns
@@ -396,6 +401,9 @@ Content-Type: application/json
 
 {"skip_succeeded": true}
 ```
+The retry spawns a real run, so it pays the same #213 runs-per-minute
+limiter and the quota pre-flight as run creation — a retry that exceeds
+the budget answers `429 RUN_RATE_LIMITED` / `QUOTA_EXCEEDED` (#519).
 `from_rule` is **not supported**: the engine has no "re-run from rule X
 downstream" mode (`--target` selects the *upstream* closure), so the field is
 rejected with `400 UNSUPPORTED_FIELD` instead of being silently ignored.
@@ -640,8 +648,8 @@ run endpoint.
 ## Webhooks
 
 ```
-GET /api/webhook   # { enabled, url, secret_set, events, signature_scheme } — secret never echoed
-PUT /api/webhook   # {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
+GET /api/webhook   # admin-only outside personal mode (#519) — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
+PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 ```
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:

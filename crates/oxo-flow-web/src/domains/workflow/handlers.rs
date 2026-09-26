@@ -1091,19 +1091,36 @@ pub async fn save_template(
         template_id.to_string()
     };
 
-    // Updating an existing system template is an admin operation too.
-    if !template_id.is_empty() && !user.is_admin() {
-        let existing_is_system: Option<i64> =
-            sqlx::query_scalar("SELECT is_system FROM templates WHERE id = ?")
+    // Updating an existing template requires owner-or-admin (#519) — the
+    // upsert used to let any user rewrite anyone's template (suggested to
+    // every user via LIMIT 20, so planted content was widely visible).
+    // Updating a system template is an admin operation (issue #81).
+    if !template_id.is_empty() {
+        let existing: Option<(String, i64)> =
+            sqlx::query_as("SELECT created_by, is_system FROM templates WHERE id = ?")
                 .bind(&id)
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
-        if existing_is_system == Some(1) {
+        let Some((created_by, is_system)) = existing else {
+            return Err(err(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                format!("Template {id} not found"),
+            ));
+        };
+        if is_system == 1 && !user.is_admin() {
             return Err(err(
                 StatusCode::FORBIDDEN,
                 "ACCESS_DENIED",
                 "Only admins may modify system templates".into(),
+            ));
+        }
+        if created_by != user.id && !user.is_admin() {
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                "ACCESS_DENIED",
+                "Only the template owner or an admin may modify it".into(),
             ));
         }
     }
