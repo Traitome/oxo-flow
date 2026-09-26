@@ -25,6 +25,7 @@ use crate::commands::quality::{format_command, lint_command, touch_command, vali
 use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
+use crate::commands::web::ServeMode;
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -703,8 +704,8 @@ pub enum Commands {
     /// Start the web interface server.
     Serve {
         /// Server operation mode: personal, team, or hpc.
-        #[arg(long, default_value = "personal", env = "OXO_FLOW_MODE")]
-        mode: String,
+        #[arg(long, value_enum, default_value_t = ServeMode::Personal, env = "OXO_FLOW_MODE")]
+        mode: ServeMode,
         #[arg(
             long,
             default_value = "127.0.0.1",
