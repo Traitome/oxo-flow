@@ -1307,14 +1307,26 @@ version = "1.0"
         let (config, dag, order, wildcard_values) = fixture(dir.path());
         // Deterministic freshness: the fixture writes inputs and outputs
         // back to back, and on filesystems with coarse timestamp
-        // granularity the strict `>` comparison in `file_is_newer` flips
-        // (CI flake: trim_cohort_S1 stayed NeverCompleted). Age the inputs
-        // so the pre-created outputs are unambiguously newer.
-        let older = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
-        for f in ["raw/S1.fq", "raw/S2.fq"] {
-            let p = dir.path().join(f);
-            let file = std::fs::OpenOptions::new().write(true).open(p).unwrap();
-            file.set_times(std::fs::FileTimes::new().set_modified(older))
+        // granularity (server /tmp is XFS: ~1ms ticks collapse
+        // back-to-back writes to the same mtime) the strict `>`
+        // comparison in `file_is_newer` ties and the freshness gate flips
+        // (CI flake class: trim_cohort_S1 / align_cohort_S2 stayed
+        // NeverCompleted). Age each dependency TIER so every out-vs-in
+        // comparison is strict regardless of tick granularity: raw/*
+        // (trim's inputs) oldest, trimmed/* (trim's output AND align's
+        // input) newer, and the pre-created aligned/* + combined.bam keep
+        // their creation mtimes — newest of all.
+        let older_raw = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
+        let older_trim = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
+        for (f, t) in [
+            ("raw/S1.fq", older_raw),
+            ("raw/S2.fq", older_raw),
+            ("trimmed/S1.fq", older_trim),
+            ("trimmed/S2.fq", older_trim),
+        ] {
+            let path = dir.path().join(f);
+            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(t))
                 .unwrap();
         }
         let ck = CheckpointState::new();
