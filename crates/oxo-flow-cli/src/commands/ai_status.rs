@@ -185,7 +185,8 @@ pub async fn ai_test_command() -> Result<()> {
         Ok(r) => println!(
             "{} (unexpected: {})",
             "WARN".yellow(),
-            &r[..20.min(r.len())]
+            // #541: byte slicing panicked on multi-byte replies (CJK).
+            r.chars().take(20).collect::<String>()
         ),
         Err(e) => {
             println!("{} ({})", "FAIL".red(), e);

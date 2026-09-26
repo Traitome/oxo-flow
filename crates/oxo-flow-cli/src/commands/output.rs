@@ -556,12 +556,15 @@ pub async fn handle_report(args: ReportArgs) -> Result<()> {
         },
     };
 
-    // Determine checkpoint path: discovery-loaded > explicit --checkpoint >
-    // base-relative. The base is --workdir when given (even with an
-    // explicit WORKFLOW — issue #68 semantics), else the auto-discovered
-    // directory, else the workflow's directory (issue #83 WS5).
-    let checkpoint_path = resolved.checkpoint_path.unwrap_or_else(|| {
-        checkpoint_path.unwrap_or_else(|| {
+    // Determine checkpoint path: explicit --checkpoint > discovery-loaded >
+    // base-relative (#541 — the old precedence rendered the WRONG run's
+    // report with no warning when a local .oxo-flow/checkpoint.json
+    // shadowed the explicit flag). The base is --workdir when given (even
+    // with an explicit WORKFLOW — issue #68 semantics), else the
+    // auto-discovered directory, else the workflow's directory (issue #83
+    // WS5).
+    let checkpoint_path = checkpoint_path.unwrap_or_else(|| {
+        resolved.checkpoint_path.unwrap_or_else(|| {
             let base = workdir
                 .clone()
                 .or(discovery_dir.clone())

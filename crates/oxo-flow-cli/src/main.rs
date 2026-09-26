@@ -1223,9 +1223,15 @@ async fn main() -> Result<()> {
     // The tracing layer used to key off the redirect variable alone, so
     // `--no-color`/NO_COLOR still painted ANSI escapes into redirected
     // stderr (audit finding).
+    // #541: stderr is where the narrative goes — a redirected stderr must
+    // not receive ANSI escapes even when stdout is still a TTY (the exact
+    // population `2> err.log` serves). Both the colored crate override and
+    // the tracing subscriber's with_ansi read this.
+    use std::io::IsTerminal;
     let color_disabled = cli.no_color
         || std::env::var_os("NO_COLOR").is_some()
-        || std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some();
+        || std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_some()
+        || !std::io::stderr().is_terminal();
     if color_disabled {
         colored::control::set_override(false);
     }
@@ -1594,6 +1600,23 @@ async fn main() -> Result<()> {
             // `ai explain` is the only action with a JSON document, and a
             // user may place the global flag before the subcommand.
             let json = json || cli.json;
+            // #541: `ai --json` is whitelisted as a JSON command, so an
+            // action-less invocation answers with the provider status
+            // document instead of a usage error. (With an explicit action
+            // the flag keeps its per-action meaning.)
+            if action.is_none() && json && workflow.is_none() && step.is_none() {
+                let provider = oxo_flow_ai::provider::create_provider_from_env();
+                let name = provider.name();
+                let doc = serde_json::json!({
+                    "command": "ai",
+                    "provider": name,
+                    "model": provider.model(),
+                    "configured": !matches!(name, "noop" | "disabled"),
+                    "hint": "use `oxo-flow ai explain <workflow.oxoflow>` for AI analysis",
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
             // --step/--level/--json/workflow only make sense with 'explain'.
             let explain_args = workflow.is_some() || step.is_some() || json;
             match action.as_deref() {

@@ -459,11 +459,22 @@ async fn pull_bundle(
     // (audit finding).
     eprintln!("{} Verifying bundle integrity...", "→".cyan().bold());
     if let Err(e) = super::bundle::extract_and_verify_bundle(&bundle_path) {
-        if let Err(remove_err) = std::fs::remove_file(&bundle_path) {
+        // #541: a local SOURCE file the user asked us to inspect must
+        // survive a failed verification — when no -o was given, the derived
+        // bundle path can equal the source, and removal deleted the user's
+        // original file.
+        let is_user_source = matches!(&source, PullSource::FileLocal(p) if p == &bundle_path);
+        if !is_user_source && let Err(remove_err) = std::fs::remove_file(&bundle_path) {
             tracing::warn!(
                 error = %remove_err,
                 path = %bundle_path.display(),
                 "failed to remove the bundle that failed verification"
+            );
+        } else if is_user_source {
+            eprintln!(
+                "  {} local source {} kept (it failed verification as a bundle)",
+                "⚠".yellow(),
+                bundle_path.display()
             );
         }
         return Err(e);

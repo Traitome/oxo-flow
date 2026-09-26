@@ -1209,13 +1209,32 @@ fn strip_log_timestamps(bytes: &[u8]) -> String {
         .lines()
         .map(|line| {
             // Log lines begin with the dim ANSI code, the RFC 3339 instant,
-            // and the reset+space that ends the prefix.
-            match line.find("\u{1b}[0m ") {
-                Some(end) if line.starts_with("\u{1b}[") && line[..end].contains('T') => {
-                    line[end + 5..].to_string()
-                }
-                _ => line.to_string(),
+            // and the reset+space that ends the prefix — OR, since #541
+            // disabled ANSI on non-TTY stderr, a bare
+            // `RFC3339-instant␣␣LEVEL` prefix. Handle both.
+            if line.starts_with("\u{1b}[") {
+                return match line.find("\u{1b}[0m ") {
+                    Some(end) if line[..end].contains('T') => line[end + 5..].to_string(),
+                    _ => line.to_string(),
+                };
             }
+            // Non-ANSI form: `2026-09-26T19:21:39.602814Z  WARN message`.
+            if line.len() > 20
+                && line.as_bytes()[4] == b'-'
+                && line.contains('T')
+                && line.as_bytes()[10] == b'T'
+            {
+                // Find the level token after the instant.
+                if let Some(pos) = line
+                    .find("  WARN ")
+                    .or_else(|| line.find("  INFO "))
+                    .or_else(|| line.find(" ERROR "))
+                    .or_else(|| line.find(" DEBUG "))
+                {
+                    return line[pos + 1..].to_string();
+                }
+            }
+            line.to_string()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -8425,6 +8444,50 @@ fn cli_json_stdout_stays_pure_with_ai_enabled() {
             .unwrap_or_else(|e| panic!("{cmd:?} stdout must be one JSON document: {e}\n{stdout}"));
         assert_eq!(parsed["command"], cmd[0].to_string(), "{cmd:?}");
     }
+}
+
+/// CLI contract batch (#541): byte-slicing panics, flag precedence and
+/// TTY-gated colors.
+#[test]
+fn cli_contract_fixes_541() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // ANSI colors never leak into redirected stderr (stdout still a TTY is
+    // not enough — the narrative lives on stderr).
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"c\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"one\"\noutput = [\"o.txt\"]\nshell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "redirected stderr must be ANSI-free: {stderr:?}"
+    );
+
+    // `ai --json` (action-less) answers with the provider status document
+    // (#541) — the whitelisted flag must not bail with a usage error.
+    let out = oxo_flow_cmd()
+        .args(["ai", "--json"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("ai --json stdout must be one JSON document: {e}\n{stdout}"));
+    assert_eq!(parsed["command"], "ai");
 }
 
 /// `resume <path>` must load THAT checkpoint — the path the user passed,
