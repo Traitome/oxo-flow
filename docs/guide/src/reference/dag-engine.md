@@ -418,6 +418,14 @@ flags these with warning W019).
   grace period** (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the
   grace window are caught by a re-scan before the KILL sweep.
+- Abort demotion is **evidence-based twice over** (#525): a failed rule
+  is only demoted to *cancelled* when its pid was in the abort's kill
+  snapshots **and** its record shows a pure signal death. A sibling the
+  kernel OOM-killer shot at the same moment carries the same signal
+  signature but no snapshot membership — its genuine failure record
+  survives. The SIGINT teardown records engine-killed rules with
+  `signal = SIGTERM, exit_code = none` (real evidence) instead of a
+  fabricated exit code.
 - Aborts kill auxiliary children too (#524): every rule-side spawn
   (environment setup/verify, `pre_exec`, success/failure hooks) sets
   `kill_on_drop`, so cancelling a task kills its in-flight child instead
