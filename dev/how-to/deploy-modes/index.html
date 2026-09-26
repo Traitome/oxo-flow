@@ -4273,8 +4273,9 @@ ignored.</p>
   pipelines only.</li>
 <li><strong>Anonymous surface</strong>: <code>/api/system</code>, <code>/api/metrics</code>, <code>/api/ai/test</code>,
   and <code>/api/hpc</code> require authentication; <code>GET /api/ai/config</code> stays
-  public; <code>/api/events</code> requires <code>?token=</code> (EventSource cannot set
-  headers) and streams only the subscriber's runs; <code>/api/share/{token}</code>
+  public; <code>/api/events</code> requires a one-time <code>?ticket=</code> from
+  <code>POST /api/events/ticket</code> (EventSource cannot set headers; #522) and
+  streams only the subscriber's runs; <code>/api/share/{token}</code>
   is public by design (the token is the credential).</li>
 <li><strong>Env-password logins</strong> auto-provision a real users row (previously any
   username shared the <code>default</code> pseudo-user's identity).</li>
