@@ -123,6 +123,14 @@ Content-Type: application/json
 ```
 Returns session token, username, and role.
 
+> **Credentials are environment-driven, not hardcoded.** The example above
+> only works when `OXO_FLOW_DEV_MODE=1` (accepts `password == username`) or
+> when matching env passwords are set: `OXO_FLOW_ADMIN_PASSWORD`,
+> `OXO_FLOW_USER_PASSWORD`, and `OXO_FLOW_VIEWER_PASSWORD` define the
+> admin/user/viewer accounts. Without one of these the login returns 401 —
+> set the env vars when launching `oxo-flow serve` (see
+> [Web System Architecture](web-system-architecture.md)).
+
 ### Check Session
 ```
 GET /api/auth/me
