@@ -3,10 +3,11 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
-use axum::{Json, http::StatusCode};
+use axum::{Extension, Json, http::StatusCode};
 
 use super::service;
 use super::types::*;
+use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::workflow::handlers::{ApiError, err, get_pool, now_iso};
 use crate::infra::db::models;
 
@@ -695,26 +696,66 @@ pub async fn oauth_callback(
     )
 )]
 /// POST /api/license/upload
-pub async fn upload_license(Json(req): Json<serde_json::Value>) -> ApiResult<LicenseResponse> {
-    // Log the upload attempt
-    if let Ok(pool) = get_pool() {
-        let license_data = req
-            .get("license_data")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !license_data.is_empty() {
-            let _ = sqlx::query(
-                "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(uuid::Uuid::new_v4().to_string())
-            .bind("system")
-            .bind("upload_license")
-            .bind("license")
-            .bind(Some(license_data))
-            .bind(now_iso())
-            .execute(pool)
-            .await;
+///
+/// Admin-only outside personal mode; the payload is bounded and the raw
+/// blob is NOT persisted (#519) — the endpoint never processes a license
+/// (license_status() is static), so storing unvalidated attacker-sized
+/// strings in audit metadata was pure liability.
+pub async fn upload_license(
+    authenticated: Option<Extension<CurrentUser>>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<LicenseResponse> {
+    let user = resolve(authenticated.as_ref());
+    if crate::server::running_mode() != "personal" && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required for license operations".into(),
+        ));
+    }
+    const MAX_LICENSE_BYTES: usize = 64 * 1024;
+    let license_data = req
+        .get("license_data")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if license_data.len() > MAX_LICENSE_BYTES {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "LICENSE_TOO_LARGE",
+            format!(
+                "license_data exceeds the {} KiB bound",
+                MAX_LICENSE_BYTES / 1024
+            ),
+        ));
+    }
+    if let Ok(pool) = get_pool()
+        && !license_data.is_empty()
+    {
+        use std::fmt::Write as _;
+
+        use sha2::{Digest, Sha256};
+        let mut metadata = String::new();
+        let digest = Sha256::digest(license_data.as_bytes());
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            let _ = write!(hex, "{byte:02x}");
         }
+        let _ = write!(
+            metadata,
+            "{{\"bytes\":{},\"sha256\":\"{hex}\"}}",
+            license_data.len(),
+        );
+        let _ = sqlx::query(
+            "INSERT INTO audit_logs (id, user_id, action, target, metadata, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&user.id)
+        .bind("upload_license")
+        .bind("license")
+        .bind(Some(metadata))
+        .bind(now_iso())
+        .execute(pool)
+        .await;
     }
 
     Ok(Json(service::license_status()))

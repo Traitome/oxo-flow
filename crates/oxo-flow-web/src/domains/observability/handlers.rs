@@ -322,10 +322,21 @@ pub async fn hpc_status() -> axum::Json<crate::hpc::HpcStatus> {
     )
 )]
 /// GET /api/webhook — current settings (the secret is never echoed back).
+///
+/// Admin-only outside personal mode, same as PUT (#519): the configured
+/// `url` conventionally embeds secret tokens, so it must not be readable
+/// by every authenticated user.
 pub async fn get_webhook_config(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
 ) -> ApiResult<serde_json::Value> {
-    let _user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    if crate::server::running_mode() != "personal" && !user.is_admin() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Admin role required to read the webhook configuration".into(),
+        ));
+    }
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,

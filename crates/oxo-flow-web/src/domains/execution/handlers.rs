@@ -14,7 +14,7 @@ use crate::extract::ApiQuery;
 use super::checkpoint_status;
 use super::service;
 use super::types::*;
-use crate::domains::workflow::handlers::{ApiError, err, now_iso};
+use crate::domains::workflow::handlers::{ApiError, can_read_pipeline, err, now_iso};
 use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -57,6 +57,82 @@ pub(crate) async fn load_owned_run(
         ));
     }
     Ok(run)
+}
+
+/// Run-mutating endpoints require at least the `user` role (#519): the
+/// viewer role is documented read-only. Personal mode has no roles.
+pub(crate) fn require_run_mutator(
+    user: &current_user::CurrentUser,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if crate::server::running_mode() != "personal" && user.role == "viewer" {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "Viewer role is read-only — the user role (or admin) is required to mutate runs".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Pre-flight quota usage (threads, memory MB) for a pipeline TOML — the
+/// single computation shared by create_run, retry, and resume-checkpoint
+/// so every spawn path budgets identically (#519).
+fn quota_usage_for(toml: &str) -> (u32, u64) {
+    oxo_flow_core::config::WorkflowConfig::parse(toml)
+        .map(|wf| {
+            let threads: u32 = wf.rules.iter().map(|r| r.effective_threads().max(1)).sum();
+            let memory_mb: u64 = wf
+                .rules
+                .iter()
+                .filter_map(|r| {
+                    r.memory
+                        .as_deref()
+                        .and_then(oxo_flow_core::scheduler::parse_memory_mb)
+                })
+                .sum();
+            (threads.max(1), memory_mb)
+        })
+        .unwrap_or((1, 0))
+}
+
+/// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
+/// spawn path (create_run, retry, resume-checkpoint — all of them spawn a
+/// real run, so all of them must respect the same budgets, #519).
+fn check_spawn_budget(
+    user_id: &str,
+    usage: (u32, u64),
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if let Err(wait_secs) = run_rate_limit::check(user_id) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                code: "RUN_RATE_LIMITED".into(),
+                message: format!("Too many runs created recently; retry in {wait_secs}s."),
+                detail: Some(format!(
+                    "Default allowance: {} runs per minute (override with \
+                     OXO_FLOW_RUNS_RATE_LIMIT).",
+                    run_rate_limit::DEFAULT_LIMIT
+                )),
+                suggestion: Some(
+                    "Wait for the window to reset, or batch work via `oxo-flow batch` \
+                     instead of many small runs."
+                        .into(),
+                ),
+            }),
+        ));
+    }
+    let quota = crate::infra::quota::global_quota_tracker().check(user_id, usage.0, usage.1);
+    if !quota.allowed {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "QUOTA_EXCEEDED",
+            format!(
+                "Quota exceeded: {} — see /api/quota for limits",
+                quota.violations.join("; ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Per-identity sliding-window rate limit for run creation (issue #213).
@@ -192,6 +268,7 @@ pub async fn create_run(
     }
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let toml = req.toml_content.as_str();
     let max_jobs = req.max_jobs.unwrap_or(4);
     let config = RunConfig {
@@ -234,21 +311,7 @@ pub async fn create_run(
     // Quota enforcement (issue #82 P1-9): the tracker was fully
     // implemented but never consulted — every run must pre-flight its
     // resource reservation.
-    let quota_usage = oxo_flow_core::config::WorkflowConfig::parse(toml)
-        .map(|wf| {
-            let threads: u32 = wf.rules.iter().map(|r| r.effective_threads().max(1)).sum();
-            let memory_mb: u64 = wf
-                .rules
-                .iter()
-                .filter_map(|r| {
-                    r.memory
-                        .as_deref()
-                        .and_then(oxo_flow_core::scheduler::parse_memory_mb)
-                })
-                .sum();
-            (threads.max(1), memory_mb)
-        })
-        .unwrap_or((1, 0));
+    let quota_usage = quota_usage_for(toml);
     let quota =
         crate::infra::quota::global_quota_tracker().check(&user.id, quota_usage.0, quota_usage.1);
     if !quota.allowed {
@@ -275,8 +338,12 @@ pub async fn create_run(
         // Resolve the working directory the executor will run in.
         let run_dir = match &pipeline_id {
             Some(pid) => {
-                let exists: Option<String> =
-                    sqlx::query_scalar("SELECT id FROM pipelines WHERE id = ?")
+                // Read permission, not just existence (#519): executing a
+                // private pipeline by id exposes its name/DAG/products
+                // through the run's own status endpoints. Foreign and
+                // unknown ids both answer PIPELINE_NOT_FOUND (no oracle).
+                let row: Option<models::PipelineRow> =
+                    sqlx::query_as("SELECT * FROM pipelines WHERE id = ?")
                         .bind(pid)
                         .fetch_optional(pool)
                         .await
@@ -288,7 +355,7 @@ pub async fn create_run(
                                 "Internal database error".into(),
                             )
                         })?;
-                if exists.is_none() {
+                if !row.is_some_and(|p| can_read_pipeline(&user, &p)) {
                     return Err(err(
                         StatusCode::NOT_FOUND,
                         "PIPELINE_NOT_FOUND",
@@ -1077,7 +1144,14 @@ pub async fn retry_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
+
+    // A retry spawns a REAL run — it pays the same limiter + quota
+    // pre-flight as create_run (#519); looping retry on a cheap failed run
+    // must not buy unbounded process spawns.
+    let quota_usage = quota_usage_for(&run.pipeline_snapshot);
+    check_spawn_budget(&user.id, quota_usage)?;
 
     // The retry re-executes in the SAME workdir; an active run would put
     // two CLIs on one checkpoint concurrently (corrupted state, duplicated
@@ -1180,6 +1254,13 @@ pub async fn retry_run(
         )
     })?;
 
+    crate::infra::quota::global_quota_tracker().record_start(
+        &user.id,
+        quota_usage.0,
+        quota_usage.1,
+    );
+    crate::infra::quota::reserve(&new_run_id, &user.id, quota_usage.0, quota_usage.1);
+
     // Same workdir → checkpoint-driven partial re-execution.
     crate::executor::spawn_background_run(
         new_run_id.clone(),
@@ -1224,6 +1305,7 @@ pub async fn cancel_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
 
     // Terminal states are final — cancelling a finished run would silently
@@ -1407,6 +1489,7 @@ pub async fn pause_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
     // Terminal states are final — pausing a finished run would leave a
     // 'paused' row nothing ever finalizes again (ghost run).
@@ -1501,6 +1584,7 @@ pub async fn resume_run(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
     // Only a paused run can be resumed; anything else would fabricate a
     // 'running' row with no process behind it (ghost run).
@@ -1820,6 +1904,7 @@ pub async fn visualize_report(
     })?;
 
     let user = current_user::resolve(authenticated.as_ref());
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
 
     // Real data sources: the run's file tree, or per-rule timings from the
@@ -2042,7 +2127,13 @@ pub async fn resume_checkpoint(
             "Database not available".into(),
         )
     })?;
+    require_run_mutator(&user)?;
     let run = load_owned_run(pool, &user, &id).await?;
+
+    // A checkpoint resume spawns a REAL run — same budgets as create_run
+    // and retry (#519).
+    let quota_usage = quota_usage_for(&run.pipeline_snapshot);
+    check_spawn_budget(&user.id, quota_usage)?;
     let workdir = run.workdir.clone().ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
@@ -2113,6 +2204,12 @@ pub async fn resume_checkpoint(
         "-j".into(),
         jobs.to_string().into(),
     ];
+    crate::infra::quota::global_quota_tracker().record_start(
+        &user.id,
+        quota_usage.0,
+        quota_usage.1,
+    );
+    crate::infra::quota::reserve(&new_run_id, &user.id, quota_usage.0, quota_usage.1);
     crate::executor::spawn_background_run_with_args(
         new_run_id.clone(),
         user.id.clone(),
