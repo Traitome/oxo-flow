@@ -1425,6 +1425,11 @@ fn create_provider_in(
                 .or_else(|| env.anthropic_auth_token.clone())
                 .or_else(|| env.anthropic_api_key.clone())
                 .or_else(|| env.claude_api_key.clone())
+                // A whitespace-only key (shell-profile leftover like
+                // `ANTHROPIC_AUTH_TOKEN=" "`) is the same unfinished setup
+                // as an empty one, and padding would leak into the
+                // Authorization header — trim, then treat blank as absent.
+                .map(|k| k.trim().to_string())
                 .unwrap_or_default();
             // An env-tier provider with no credential is an unfinished
             // setup, not a working backend — same rule as the saved-config
@@ -1446,6 +1451,7 @@ fn create_provider_in(
         ProviderKind::OpenAi => {
             let api_key = key
                 .or_else(|| env.openai_api_key.clone())
+                .map(|k| k.trim().to_string())
                 .unwrap_or_default();
             // Same no-credential guard as the claude tier (above) and the
             // saved-config tier (below): an empty key means unfinished
@@ -1463,6 +1469,7 @@ fn create_provider_in(
         ProviderKind::DeepSeek => {
             let api_key = key
                 .or_else(|| env.deepseek_api_key.clone())
+                .map(|k| k.trim().to_string())
                 .unwrap_or_default();
             // Same no-credential guard as the claude/openai tiers: an
             // empty key means unfinished setup, not a working backend.
@@ -1576,7 +1583,7 @@ fn resolve_provider(
         // real (and guaranteed-failing) network calls on an empty key. The
         // env-detection tier below still gets a chance, so a half-saved
         // Settings experiment does not bury a working shell credential.
-        if api_key.is_empty() {
+        if api_key.trim().is_empty() {
             tracing::info!(
                 "AI provider {} saved without an API key — checking environment credentials",
                 kind_str
@@ -1612,9 +1619,13 @@ fn resolve_provider(
 /// invent a configuration the user did not signal (no phantom
 /// localhost:11434 unless OLLAMA_HOST says otherwise).
 fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
-    if env.anthropic_auth_token.is_some()
-        || env.anthropic_api_key.is_some()
-        || env.claude_api_key.is_some()
+    // A credential only counts when it survives a trim: a whitespace-only
+    // export is an unfinished setup, not a working backend, and letting it
+    // win detection would bury a real credential for another provider.
+    let has_credential = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+    if has_credential(&env.anthropic_auth_token)
+        || has_credential(&env.anthropic_api_key)
+        || has_credential(&env.claude_api_key)
     {
         let provider = create_provider_in(ProviderKind::Claude, None, None, None, env);
         tracing::info!(
@@ -1624,7 +1635,7 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
         );
         return Some(provider);
     }
-    if env.openai_api_key.is_some() {
+    if has_credential(&env.openai_api_key) {
         let provider = create_provider_in(ProviderKind::OpenAi, None, None, None, env);
         tracing::info!(
             "AI provider auto-detected from OPENAI_API_KEY: {} (endpoint: {})",
@@ -1633,7 +1644,7 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
         );
         return Some(provider);
     }
-    if env.deepseek_api_key.is_some() {
+    if has_credential(&env.deepseek_api_key) {
         let provider = create_provider_in(ProviderKind::DeepSeek, None, None, None, env);
         tracing::info!(
             "AI provider auto-detected from DEEPSEEK_API_KEY: {}",
@@ -1641,7 +1652,7 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
         );
         return Some(provider);
     }
-    if env.ollama_host.is_some() {
+    if has_credential(&env.ollama_host) {
         let provider = create_provider_in(ProviderKind::Ollama, None, None, None, env);
         tracing::info!(
             "AI provider auto-detected from OLLAMA_HOST: {} (endpoint: {})",
@@ -2493,6 +2504,65 @@ mod tests {
         );
         // Ollama never needs a key.
         assert_eq!(resolve_provider("ollama", None, &env).name(), "ollama");
+    }
+
+    #[test]
+    fn whitespace_only_keys_are_unconfigured() {
+        // Live-observed on a gateway box: `ANTHROPIC_AUTH_TOKEN=" "` (a
+        // shell-profile leftover) passed the empty-key guards and built a
+        // "working" provider that only ever fired doomed 401s. A blank
+        // credential must behave exactly like a missing one — in the
+        // explicit tier, in detection, and in the saved-config tier.
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("   ".into()),
+            ..EnvSnapshot::default()
+        };
+        assert!(
+            matches!(resolve_provider("claude", None, &env), AiProvider::Noop),
+            "explicit claude with a whitespace-only key must be unconfigured"
+        );
+        // Detection must also ignore blank credentials...
+        assert!(matches!(resolve_provider("", None, &env), AiProvider::Noop));
+        // ...including when the blank value would bury a real credential
+        // for another provider behind a doomed claude backend.
+        let mixed = EnvSnapshot {
+            anthropic_auth_token: Some(" \t ".into()),
+            openai_api_key: Some("sk-real".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(resolve_provider("", None, &mixed).name(), "openai");
+        // Explicit openai/deepseek with blank keys → Noop.
+        let ws = |v: &str| Some(v.to_string());
+        let openai_env = EnvSnapshot {
+            openai_api_key: Some("\t".into()),
+            ..EnvSnapshot::default()
+        };
+        assert!(matches!(
+            resolve_provider("openai", None, &openai_env),
+            AiProvider::Noop
+        ));
+        let deepseek_env = EnvSnapshot {
+            deepseek_api_key: ws("  "),
+            ..EnvSnapshot::default()
+        };
+        assert!(matches!(
+            resolve_provider("deepseek", None, &deepseek_env),
+            AiProvider::Noop
+        ));
+        // Saved config with a blank stored key falls through as unconfigured.
+        let saved = ("claude", "   ", "", "");
+        assert!(matches!(
+            resolve_provider("", Some(saved), &EnvSnapshot::default()),
+            AiProvider::Noop
+        ));
+        // A real key still works after trimming, and a padded key is sent
+        // trimmed (no stray whitespace in the Authorization header).
+        let padded = EnvSnapshot {
+            anthropic_auth_token: Some("  sk-gw  ".into()),
+            anthropic_base_url: Some("https://gw.example.com".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(resolve_provider("claude", None, &padded).name(), "claude");
     }
 
     #[tokio::test]

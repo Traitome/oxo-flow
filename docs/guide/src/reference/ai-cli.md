@@ -319,7 +319,7 @@ repository.
 | `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint | `https://api.openai.com/v1/chat/completions` |
 | `OLLAMA_HOST` | Ollama server address (explicit opt-in — no key needed) | `http://localhost:11434` |
 
-**Zero-config auto-detection**: when `OXO_FLOW_AI_PROVIDER` is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY` → claude, `OPENAI_API_KEY` → openai, `DEEPSEEK_API_KEY` → deepseek, `OLLAMA_HOST` → ollama. Gateway setups that only export `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` therefore work without any oxo-flow-specific configuration. An explicit `OXO_FLOW_AI_PROVIDER` (including `disabled`) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests.
+**Zero-config auto-detection**: when `OXO_FLOW_AI_PROVIDER` is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY` → claude, `OPENAI_API_KEY` → openai, `DEEPSEEK_API_KEY` → deepseek, `OLLAMA_HOST` → ollama. Gateway setups that only export `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` therefore work without any oxo-flow-specific configuration. An explicit `OXO_FLOW_AI_PROVIDER` (including `disabled`) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests, and a whitespace-only credential value counts as absent.
 
 ---
 
