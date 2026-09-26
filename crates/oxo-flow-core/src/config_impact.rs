@@ -43,11 +43,43 @@ static CONFIG_BARE_RE: LazyLock<regex::Regex> =
 /// Engine-injected config keys that churn on every run (rewritten by
 /// `--samples`/`--sample`, sample discovery, and pair consolidation).
 /// Excluded from the change-triggering diff to avoid spurious invalidation
-/// storms: they only affect rule-set membership, which is self-healing, and
-/// any real effect on a rule's baked inputs is caught by the rule
-/// fingerprint.
+/// storms: they only affect rule-set membership, which is self-healing.
+///
+/// The injected keys only — the old `samples_` PREFIX match swallowed
+/// user-declared keys like `samples_dir` (#533): a
+/// `{config.samples_dir}` interpolation in shell/inputs expands at
+/// execution time and is caught by NOTHING else, so completed rules were
+/// reused against the old directory after a change. The per-group list
+/// keys (`samples_<group>`, injected by samples.rs) remain exempt via the
+/// declared-group registry — a user key does not match any group name and
+/// stays diff-visible.
 pub fn is_engine_injected_key(key: &str) -> bool {
-    key == "samples_list" || key == "pairs_list" || key.starts_with("samples_")
+    is_engine_injected_key_with(key, &[])
+}
+
+/// Config-aware variant: `group_names` are the declared
+/// `[[sample_groups]]` names, deciding which `samples_<name>` keys are
+/// engine-injected.
+pub fn is_engine_injected_key_with(key: &str, group_names: &[&str]) -> bool {
+    if matches!(key, "samples_list" | "pairs_list") {
+        return true;
+    }
+    if let Some(group) = key.strip_prefix("samples_") {
+        return group_names.contains(&group);
+    }
+    false
+}
+
+fn engine_group_names(config: Option<&crate::config::WorkflowConfig>) -> Vec<String> {
+    config
+        .map(|c| c.sample_groups.iter().map(|g| g.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+fn is_engine_injected_key_in(key: &str, config: Option<&crate::config::WorkflowConfig>) -> bool {
+    let group_names = engine_group_names(config);
+    let refs: Vec<&str> = group_names.iter().map(|s| s.as_str()).collect();
+    is_engine_injected_key_with(key, &refs)
 }
 
 /// Canonical string form of a config value.
@@ -214,6 +246,17 @@ fn braced_texts(rule: &Rule) -> Vec<String> {
     for value in rule.envvars.values() {
         texts.push(value.clone());
     }
+    // #533: `output_pattern` is config-expanded at discovery time
+    // (expand_config_in_path in discover_output_pattern_files) — a changed
+    // key silently re-scanned a different directory tree and consumers
+    // lost their domain. The `expand_inputs` glob patterns expand the same
+    // way.
+    if let Some(ref output_pattern) = rule.output_pattern {
+        texts.push(output_pattern.clone());
+    }
+    for expanded in &rule.expand_inputs {
+        texts.push(expanded.pattern.clone());
+    }
     // Params values expand transitively: `{params.<key>}` is replaced first,
     // then the wildcard loop expands any `{config.<key>}` inside the value.
     for value in rule.params.values() {
@@ -316,6 +359,16 @@ fn rule_fingerprint_impl(
         add("input", &canonical_file_patterns(&rule.input));
     }
     add("output", &canonical_file_patterns(&rule.output));
+    // #533: both fields are config-expanded at runtime — `output_pattern`
+    // before discovery, `log` at rule completion. Leaving them out made
+    // the fingerprint identical across a changed key, so completed rules
+    // were reused against stale inputs.
+    add(
+        "output_pattern",
+        rule.output_pattern.as_deref().unwrap_or(""),
+    );
+    add("log", rule.log.as_deref().unwrap_or(""));
+    add("benchmark", rule.benchmark.as_deref().unwrap_or(""));
     add("envvars", &canonical_string_map(&rule.envvars));
     add("params", &canonical_toml_map(&rule.params));
     add("when", rule.when.as_deref().unwrap_or(""));
@@ -534,7 +587,7 @@ pub fn detect_config_changes_with_replay(
     let mut removed_keys: Vec<String> = Vec::new();
     let mut all_diff_keys: Vec<String> = Vec::new();
     for (key, current_value) in current {
-        if is_engine_injected_key(key) {
+        if is_engine_injected_key_in(key, config) {
             continue;
         }
         let current_str = snapshot_value(current_value, sensitive_keys.contains(key));
@@ -551,7 +604,7 @@ pub fn detect_config_changes_with_replay(
         }
     }
     for key in checkpoint.config_snapshot.keys() {
-        if !is_engine_injected_key(key) && !current.contains_key(key) {
+        if !is_engine_injected_key_in(key, config) && !current.contains_key(key) {
             removed_keys.push(key.clone());
             all_diff_keys.push(key.clone());
         }
@@ -582,7 +635,7 @@ pub fn detect_config_changes_with_replay(
             // re-verifies set + content later, so a genuine input edit still
             // invalidates there). Checkpoints from older binaries carry no
             // input-excluded fingerprints — those keep invalidating.
-            let selection_only = expand_inputs_refs_engine_injected(rule)
+            let selection_only = expand_inputs_refs_engine_injected(rule, config)
                 && checkpoint.rule_fingerprints_no_input.get(&rule.name)
                     == Some(&rule_fingerprint_without_input(
                         rule,
@@ -641,7 +694,7 @@ pub fn detect_config_changes_with_replay(
 
     // ── 4. Bootstrap path: record provenance, keep everything completed ──
     if is_legacy {
-        checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys);
+        checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys, config);
         checkpoint.rule_fingerprints.extend(current_fingerprints);
         checkpoint
             .rule_fingerprints_no_input
@@ -718,7 +771,7 @@ pub fn detect_config_changes_with_replay(
     for rule_name in &invalidated {
         checkpoint.completed_rules.remove(rule_name);
     }
-    checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys);
+    checkpoint.config_snapshot = build_config_snapshot(current, sensitive_keys, config);
     checkpoint.rule_fingerprints.extend(current_fingerprints);
     checkpoint
         .rule_fingerprints_no_input
@@ -750,11 +803,14 @@ pub fn detect_config_changes_with_replay(
 /// engine-injected config key (`samples_list` / `samples_<group>` /
 /// `pairs_list`). Only such rules can have a fingerprint mismatch that is
 /// purely the `--samples` selection (issue #142 M1).
-fn expand_inputs_refs_engine_injected(rule: &Rule) -> bool {
+fn expand_inputs_refs_engine_injected(
+    rule: &Rule,
+    config: Option<&crate::config::WorkflowConfig>,
+) -> bool {
     rule.expand_inputs.iter().any(|exp| {
         exp.variables.values().any(|var_ref| {
             let key = var_ref.strip_prefix("config.").unwrap_or(var_ref);
-            is_engine_injected_key(key)
+            is_engine_injected_key_in(key, config)
         })
     })
 }
@@ -764,10 +820,11 @@ fn expand_inputs_refs_engine_injected(rule: &Rule) -> bool {
 fn build_config_snapshot(
     current: &HashMap<String, toml::Value>,
     sensitive_keys: &HashSet<String>,
+    config: Option<&crate::config::WorkflowConfig>,
 ) -> BTreeMap<String, String> {
     current
         .iter()
-        .filter(|(key, _)| !is_engine_injected_key(key))
+        .filter(|(key, _)| !is_engine_injected_key_in(key, config))
         .map(|(key, value)| {
             (
                 key.clone(),
@@ -2353,5 +2410,62 @@ mod tests {
         );
         assert_eq!(report.when_flip_invalidated, vec!["b".to_string()]);
         assert!(!checkpoint.is_completed("d"));
+    }
+}
+
+#[cfg(test)]
+mod issue533_tests {
+    use super::*;
+
+    #[test]
+    fn braced_texts_cover_output_pattern_and_expand_inputs() {
+        let rule = crate::rule::Rule {
+            name: "calls".into(),
+            output_pattern: Some("calls/{config.genome_build}/{sample}/*.vcf".into()),
+            expand_inputs: vec![crate::rule::ExpandConfig {
+                pattern: "raw/{config.flowcell}/*.fastq".into(),
+                variables: HashMap::new(),
+            }],
+            ..Default::default()
+        };
+        let texts = braced_texts(&rule);
+        let joined = texts.join("\n");
+        assert!(
+            joined.contains("genome_build"),
+            "output_pattern must be scanned: {joined}"
+        );
+        assert!(
+            joined.contains("flowcell"),
+            "expand_inputs pattern must be scanned: {joined}"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_with_output_pattern() {
+        let mk = |pattern: &str| crate::rule::Rule {
+            name: "calls".into(),
+            output_pattern: Some(pattern.into()),
+            ..Default::default()
+        };
+        let a = rule_fingerprint_impl(&mk("calls/37/{sample}/*.vcf"), &HashMap::new(), None, true);
+        let b = rule_fingerprint_impl(&mk("calls/38/{sample}/*.vcf"), &HashMap::new(), None, true);
+        assert_ne!(
+            a, b,
+            "a changed output_pattern key must change the fingerprint"
+        );
+    }
+
+    #[test]
+    fn user_samples_prefix_keys_stay_diff_visible() {
+        // #533: the old `samples_` prefix match excluded user-declared keys
+        // like samples_dir from the diff entirely.
+        assert!(!is_engine_injected_key("samples_dir"));
+        assert!(!is_engine_injected_key("samples_root"));
+        // The engine-injected forms stay excluded.
+        assert!(is_engine_injected_key("samples_list"));
+        assert!(is_engine_injected_key("pairs_list"));
+        // Per-group list keys are injected only for DECLARED groups.
+        assert!(is_engine_injected_key_with("samples_cohort", &["cohort"]));
+        assert!(!is_engine_injected_key_with("samples_dir", &["cohort"]));
     }
 }
