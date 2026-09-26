@@ -1398,20 +1398,24 @@ mod tests {
         // comparison — even strictly NEWER than the output, it must not
         // force re-execution; without the declaration it must.
         let dir = tempfile::tempdir().unwrap();
-        // reads.fq FIRST (older than the output), then the output; ref.fa
-        // is touched NEWER than the output — only its ancient declaration
-        // keeps the rule skippable.
         std::fs::write(dir.path().join("reads.fq"), b"READS").unwrap();
         std::fs::write(dir.path().join("ref.fa"), b"REF").unwrap();
         std::fs::write(dir.path().join("out.txt"), b"OUT").unwrap();
-        let now = std::time::SystemTime::now()
+        // Pin explicit filetimes (issue #249 family): write order is not
+        // enough on filesystems with coarse mtime granularity — equal
+        // mtimes make reads.fq look "not older" than the output. T0 <
+        // out < ref (ref is the ancient input).
+        let t0 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        for (name, offset) in [("reads.fq", -120i64), ("out.txt", -60), ("ref.fa", 60)] {
+            filetime::set_file_mtime(
+                dir.path().join(name),
+                filetime::FileTime::from_unix_time(t0 + offset, 0),
+            )
             .unwrap();
-        filetime::set_file_mtime(
-            dir.path().join("ref.fa"),
-            filetime::FileTime::from_unix_time(now.as_secs() as i64 + 60, 0),
-        )
-        .unwrap();
+        }
         let mk = |ancient: Vec<String>| crate::rule::Rule {
             name: "align".into(),
             input: vec!["ref.fa".to_string(), "reads.fq".to_string()].into(),
@@ -1458,12 +1462,18 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("refs")).unwrap();
         std::fs::write(dir.path().join("refs/hg38.fa"), b"R").unwrap();
         std::fs::write(dir.path().join("out.txt"), b"O").unwrap();
-        let now = std::time::SystemTime::now()
+        let t0 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap();
+            .unwrap()
+            .as_secs() as i64;
         filetime::set_file_mtime(
             dir.path().join("refs/hg38.fa"),
-            filetime::FileTime::from_unix_time(now.as_secs() as i64 + 60, 0),
+            filetime::FileTime::from_unix_time(t0 + 60, 0),
+        )
+        .unwrap();
+        filetime::set_file_mtime(
+            dir.path().join("out.txt"),
+            filetime::FileTime::from_unix_time(t0 - 60, 0),
         )
         .unwrap();
         let rule = crate::rule::Rule {
