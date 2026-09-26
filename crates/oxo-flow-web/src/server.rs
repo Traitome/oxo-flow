@@ -571,6 +571,9 @@ pub fn build_router(mode: &str) -> Router {
             get(observability::handlers::runtime_metrics),
         )
         .route("/api/events", get(crate::sse::sse_events))
+        // One-time SSE handshake tickets (#522) — normal bearer auth
+        // applies (the path is not on the public whitelist).
+        .route("/api/events/ticket", post(crate::sse::events_ticket))
         .route("/api/audit", get(observability::handlers::get_audit_logs))
         .route("/api/quota", get(observability::handlers::quota_status))
         .route(

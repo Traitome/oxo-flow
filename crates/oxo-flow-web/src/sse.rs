@@ -4,8 +4,11 @@
 //!
 //! Multi-tenancy (issue #82 P0-5): events carry the owning `user_id` (or
 //! `null` for system-wide events). In team/hpc modes the stream requires a
-//! `?token=` session token (EventSource cannot set headers) and delivers
-//! only the subscriber's own events plus userless ones; admins see all.
+//! one-time `?ticket=` (#522 — previously the long-lived session token
+//! traveled as `?token=`, landing in proxy logs and browser history; the
+//! ticket is issued at `POST /api/events/ticket`, expires in seconds and
+//! is consumed on first use). The stream delivers only the subscriber's
+//! own events plus userless ones; admins see all.
 
 use crate::extract::ApiQuery;
 use axum::http::StatusCode;
@@ -31,6 +34,89 @@ pub struct SseEvent {
 
 /// Broadcast channel for Server-Sent Events (SSE).
 static EVENT_TX: OnceLock<broadcast::Sender<SseEvent>> = OnceLock::new();
+
+/// One-time SSE connection tickets: ticket -> (expiry, user_id).
+///
+/// EventSource cannot set an Authorization header, so the handshake needs
+/// a URL credential — but a long-lived session token in a URL leaks into
+/// proxy logs, browser history and Referers (#522). The ticket is short-
+/// lived, single-use, and bound to the canonical user id at issuance.
+static EVENT_TICKETS: OnceLock<std::sync::Mutex<HashMap<String, (std::time::Instant, String)>>> =
+    OnceLock::new();
+
+/// Ticket time-to-live: long enough for the SPA to open the stream right
+/// after issuance, short enough that a leaked URL credential dies fast.
+const TICKET_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Issue a one-time SSE ticket for the acting user (#522).
+pub fn issue_ticket(user_id: &str) -> String {
+    let store = EVENT_TICKETS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    // 128 bits of randomness: tickets are bearer credentials for one
+    // handshake and must not be guessable.
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    let ticket: String = (0..32)
+        .map(|_| format!("{:02x}", rng.random_range(0..=255u8)))
+        .collect();
+    let mut guard = store.lock().unwrap();
+    // Opportunistic pruning keeps the map bounded even if tickets are
+    // never consumed.
+    guard.retain(|_, (exp, _)| *exp > std::time::Instant::now());
+    guard.insert(
+        ticket.clone(),
+        (std::time::Instant::now() + TICKET_TTL, user_id.to_string()),
+    );
+    ticket
+}
+
+/// Consume a one-time SSE ticket, returning its bound user id.
+///
+/// Single use: the entry is removed before validation so a replay — even
+/// a concurrent one — finds nothing.
+fn consume_ticket(ticket: &str) -> Option<String> {
+    let store = EVENT_TICKETS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let (exp, user_id) = store.lock().unwrap().remove(ticket)?;
+    if exp > std::time::Instant::now() {
+        Some(user_id)
+    } else {
+        None
+    }
+}
+
+/// POST /api/events/ticket — mint a one-time SSE connection ticket.
+///
+/// Requires normal bearer authentication (the route is NOT on the
+/// public-path whitelist); the returned ticket then authenticates exactly
+/// one `GET /api/events?ticket=` handshake.
+pub async fn events_ticket(
+    authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
+) -> Response {
+    let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
+    if crate::server::running_mode() != "personal" && user.id == "default" {
+        // resolve() falls back to the `default` pseudo-user when no auth
+        // extension is present — a real session always carries an
+        // authenticated id in team/hpc mode.
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            axum::Json(serde_json::json!({
+                "code": "AUTH_REQUIRED",
+                "message": "Authentication required to mint an event-stream ticket",
+            })),
+        )
+            .into_response();
+    }
+    let ticket = issue_ticket(&user.id);
+    (
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        axum::Json(serde_json::json!({
+            "ticket": ticket,
+            "expires_in_secs": TICKET_TTL.as_secs(),
+        })),
+    )
+        .into_response()
+}
 
 /// Get or initialize the broadcast channel sender.
 pub fn event_tx() -> broadcast::Sender<SseEvent> {
@@ -72,34 +158,6 @@ pub fn broadcast_event_for(event_type: &str, data: &Value, user: Option<&str>) {
     });
 }
 
-/// Validate a `?token=` session token; returns the acting user on success.
-async fn validate_event_token(
-    token: &str,
-) -> Option<crate::domains::auth::current_user::CurrentUser> {
-    let pool = crate::infra::db::sqlite::try_pool().ok()?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let session = sqlx::query_as::<_, (String,)>(
-        "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?",
-    )
-    .bind(token)
-    .bind(&now)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)?;
-    let user_id = session.0;
-
-    // sessions.user_id is the canonical users.id resolved at login (#516);
-    // match by id only and fail closed — the old username match plus the
-    // literal-admin fallback let a client-chosen login name adopt the
-    // privileged admin row.
-    let row = sqlx::query_as::<_, (String, String)>("SELECT id, role FROM users WHERE id = ?")
-        .bind(&user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-    row.map(|(id, role)| crate::domains::auth::current_user::CurrentUser { id, role })
-}
-
 #[utoipa::path(
     get,
     path = "/api/events",
@@ -112,40 +170,55 @@ async fn validate_event_token(
 )]
 /// `GET /api/events` — SSE endpoint for real-time execution events.
 ///
-/// Team/hpc modes require `?token=<session token>` (EventSource cannot set
-/// an Authorization header). The stream is then filtered to the
-/// subscriber's own events; admins receive everything.
+/// Team/hpc modes require a one-time `?ticket=` minted at
+/// `POST /api/events/ticket` (#522 — EventSource cannot set an
+/// Authorization header, and a session token in the URL leaks into proxy
+/// logs). The stream is then filtered to the subscriber's own events;
+/// admins receive everything.
 pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> Response {
     let me = if crate::server::running_mode() == "personal" {
         None
     } else {
-        match params.get("token").filter(|t| !t.is_empty()) {
-            Some(token) => match validate_event_token(token).await {
-                Some(user) => Some(user),
-                None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        axum::Json(serde_json::json!({
-                            "code": "INVALID_TOKEN",
-                            "message": "A valid ?token= session token is required for the event stream in team/hpc mode",
-                        })),
-                    )
-                        .into_response();
-                }
-            },
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    axum::Json(serde_json::json!({
-                        "code": "AUTH_REQUIRED",
-                        "message": "?token= is required for the event stream in team/hpc mode",
-                    })),
-                )
-                    .into_response();
-            }
-        }
+        let user_id = params
+            .get("ticket")
+            .map(String::as_str)
+            .filter(|t| !t.is_empty())
+            .and_then(consume_ticket);
+        let Some(user_id) = user_id else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                axum::Json(serde_json::json!({
+                    "code": "INVALID_TOKEN",
+                    "message": "A fresh one-time ?ticket= from POST /api/events/ticket is required for the event stream in team/hpc mode",
+                })),
+            )
+                .into_response();
+        };
+        // Resolve role from the canonical row; fail closed when the user
+        // has vanished since the ticket was minted (#516 policy).
+        let role = match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => sqlx::query_as::<_, (String,)>("SELECT role FROM users WHERE id = ?")
+                .bind(&user_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.0),
+            Err(_) => None,
+        };
+        let Some(role) = role else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                axum::Json(serde_json::json!({
+                    "code": "INVALID_TOKEN",
+                    "message": "Ticket user no longer exists",
+                })),
+            )
+                .into_response();
+        };
+        Some(crate::domains::auth::current_user::CurrentUser { id: user_id, role })
     };
 
     let mut rx = event_tx().subscribe();

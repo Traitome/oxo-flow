@@ -1608,31 +1608,61 @@ async fn team_mode_anonymous_endpoints_require_auth() {
         "/api/hpc must not be anonymously reachable in team mode"
     );
 
-    // SSE without a token is rejected.
-    let events_no_token = client
+    // SSE without a ticket is rejected (#522: the long-lived session token
+    // no longer travels in the URL).
+    let events_no_ticket = client
         .get(format!("{base}/api/events"))
         .send()
         .await
         .unwrap();
     assert_eq!(
-        events_no_token.status(),
+        events_no_ticket.status(),
         401,
-        "/api/events must require ?token="
+        "/api/events must require a one-time ticket"
     );
-
-    // SSE with a valid token connects (headers arrive immediately).
     let alice = server.login(&client, "alice", "user-secret").await;
-    let events_ok = client
+    let events_old_token = client
         .get(format!("{base}/api/events?token={alice}"))
-        .timeout(Duration::from_secs(10))
         .send()
         .await
         .unwrap();
     assert_eq!(
-        events_ok.status(),
-        200,
-        "SSE connects with a valid session token"
+        events_old_token.status(),
+        401,
+        "?token= must NOT authenticate the stream anymore"
     );
+
+    // The ticket flow: mint under the session, connect with the ticket.
+    let minted: serde_json::Value = client
+        .post(format!("{base}/api/events/ticket"))
+        .bearer_auth(&alice)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ticket = minted["ticket"]
+        .as_str()
+        .expect("ticket minted")
+        .to_string();
+    let events_ok = client
+        .get(format!("{base}/api/events?ticket={ticket}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(events_ok.status(), 200, "SSE connects with a fresh ticket");
+
+    // Tickets are single-use: the same ticket is refused on replay.
+    let replay = client
+        .get(format!("{base}/api/events?ticket={ticket}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 401, "a consumed ticket must be rejected");
 
     // AI config GET stays public; writes are gated (see next test).
     let ai_config = client

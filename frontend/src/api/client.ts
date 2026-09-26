@@ -225,12 +225,23 @@ export const api = {
   revokeApiKey: (id: string) => del<{ revoked: string }>(`/api/auth/keys/${id}`),
 };
 
-export function createEventSource(): EventSource {
-  // EventSource cannot set an Authorization header, so the session token
-  // travels as ?token= (validated by the SSE endpoint in team/hpc modes —
-  // issue #82 P0-5). Personal mode has no token and connects anonymously.
-  const token = localStorage.getItem('oxo_token');
-  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+/**
+ * Mint a one-time SSE connection ticket (#522). EventSource cannot set an
+ * Authorization header, so the handshake needs a URL credential — the
+ * short-lived single-use ticket replaces the session token that used to
+ * travel as ?token= and leak into proxy logs.
+ */
+export async function fetchEventTicket(): Promise<string> {
+  const { ticket } = await post<{ ticket: string; expires_in_secs: number }>('/api/events/ticket', {});
+  return ticket;
+}
+
+/** Open the SSE stream with a fresh one-time ticket (async — the ticket is
+ * fetched right before connecting so it cannot expire in between). */
+export async function createEventSource(): Promise<EventSource> {
+  const query = await fetchEventTicket()
+    .then((ticket) => `?ticket=${encodeURIComponent(ticket)}`)
+    .catch(() => '');
   return new EventSource(apiUrl(`/api/events${query}`));
 }
 

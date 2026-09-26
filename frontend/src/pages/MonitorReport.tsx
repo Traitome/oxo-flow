@@ -137,10 +137,59 @@ export default function MonitorReport() {
   }, []);
 
   // Update monitor status in real-time via SSE; the 5s fallback poll only
-  // runs while the monitor tab is actually visible.
+  // runs while the monitor tab is actually visible. The stream authenticates
+  // with a one-time ticket minted per connection (#522): on error (expired
+  // ticket, dropped socket) the stream is closed and recreated with a FRESH
+  // ticket — an expired credential used to kill live updates silently.
   useEffect(() => {
     if (!selId) return;
-    const es = createEventSource();
+    let closed = false;
+    let es: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+    let attempts = 0;
+    const MAX_RECONNECTS = 5;
+
+    const connect = async () => {
+      if (closed) return;
+      try {
+        es = await createEventSource();
+      } catch {
+        // Ticket minting failed (e.g. 401 with an expired session) — leave
+        // the 5s poll as the fallback instead of spinning.
+        return;
+      }
+      es.onopen = () => { attempts = 0; };
+      es.onerror = () => {
+        // EventSource auto-reconnects on network errors, but a 401
+        // handshake failure needs a NEW ticket — close and re-mint.
+        es?.close();
+        es = null;
+        if (closed) return;
+        attempts += 1;
+        if (attempts > MAX_RECONNECTS) return;
+        reconnectTimer = window.setTimeout(() => void connect(), 2000 * attempts);
+      };
+      es.onmessage = (evt) => {
+        try {
+          const event = JSON.parse(evt.data);
+          // Events are scoped to the run owner's canonical users.id (sse.rs),
+          // which the login response never exposes — comparing it against the
+          // stored login username dropped every live update. The loaded run row
+          // carries the id the server actually sends; an owner we cannot
+          // resolve yet is accepted (the stream is already ownership-filtered
+          // server-side in team/hpc mode, and personal mode is single-user).
+          const owner = runsRef.current.find((r) => r.id === selId)?.user_id;
+          const mine = !event.user || !owner || event.user === owner;
+          if (mine && event.data?.run_id === selId) {
+            if (event.type === 'run_completed' || event.type === 'run_failed') {
+              void refreshRuns();
+            }
+          }
+        } catch { /* ignore */ }
+      };
+    };
+    void connect();
+
     const interval = tab === 'monitor'
       ? setInterval(async () => {
           try {
@@ -150,26 +199,12 @@ export default function MonitorReport() {
         }, 5000)
       : null;
 
-    es.onmessage = (evt) => {
-      try {
-        const event = JSON.parse(evt.data);
-        // Events are scoped to the run owner's canonical users.id (sse.rs),
-        // which the login response never exposes — comparing it against the
-        // stored login username dropped every live update. The loaded run row
-        // carries the id the server actually sends; an owner we cannot
-        // resolve yet is accepted (the stream is already ownership-filtered
-        // server-side in team/hpc mode, and personal mode is single-user).
-        const owner = runsRef.current.find((r) => r.id === selId)?.user_id;
-        const mine = !event.user || !owner || event.user === owner;
-        if (mine && event.data?.run_id === selId) {
-          if (event.type === 'run_completed' || event.type === 'run_failed') {
-            if (interval) clearInterval(interval);
-            void refreshRuns();
-          }
-        }
-      } catch { /* ignore */ }
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (interval) clearInterval(interval);
+      es?.close();
     };
-    return () => { if (interval) clearInterval(interval); es.close(); };
   }, [selId, tab, refreshRuns]);
 
 
