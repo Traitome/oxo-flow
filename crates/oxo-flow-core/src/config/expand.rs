@@ -114,10 +114,15 @@ impl WorkflowConfig {
                         .any(|op| after.starts_with(op) || before.ends_with(op)) =>
                 {
                     let rendered = crate::executor::process::render_wildcard_value(value);
+                    // #537: escape the wrapper quote by DOUBLING it — the
+                    // evaluator's strip_quotes undoes exactly this. A value
+                    // containing both quote types used to be double-quoted
+                    // with its inner `"` raw, breaking the predicate for
+                    // every later resume/re-check.
                     if rendered.contains('\'') {
-                        result.push_str(&format!("\"{rendered}\""));
+                        result.push_str(&format!("\"{}\"", rendered.replace('"', "\"\"")));
                     } else {
-                        result.push_str(&format!("'{rendered}'"));
+                        result.push_str(&format!("'{}'", rendered.replace('\'', "''")));
                     }
                 }
                 // Bare truthiness position → literal true/false.
@@ -176,10 +181,15 @@ impl WorkflowConfig {
                 // Comparison operand → quoted literal of the metadata value.
                 Some(value) if in_comparison => {
                     let rendered = crate::executor::process::render_wildcard_value(value);
+                    // #537: escape the wrapper quote by DOUBLING it — the
+                    // evaluator's strip_quotes undoes exactly this. A value
+                    // containing both quote types used to be double-quoted
+                    // with its inner `"` raw, breaking the predicate for
+                    // every later resume/re-check.
                     if rendered.contains('\'') {
-                        result.push_str(&format!("\"{rendered}\""));
+                        result.push_str(&format!("\"{}\"", rendered.replace('"', "\"\"")));
                     } else {
-                        result.push_str(&format!("'{rendered}'"));
+                        result.push_str(&format!("'{}'", rendered.replace('\'', "''")));
                     }
                 }
                 // Bare truthiness position → literal true/false.
@@ -2976,4 +2986,41 @@ fn expand_group_text(
 /// rediscovered combo can never double-contribute (issue #227 item 5).
 fn wildcard_combo_key(combo: &crate::wildcard::WildcardValues) -> String {
     crate::wildcard::wildcard_combo_key(combo)
+}
+#[test]
+fn bake_when_escapes_values_containing_both_quote_types() {
+    // #537: a sample id like `it's "x"` used to be double-quoted with
+    // its inner quote raw — the baked predicate no longer parsed, and
+    // plan-time vs execution-time verdicts could diverge. The wrapper
+    // quote is now doubled, which the evaluator's strip_quotes undoes.
+    let mut combo = std::collections::HashMap::new();
+    combo.insert("sample".to_string(), "it's \"x\"".to_string());
+    let baked = WorkflowConfig::bake_wildcard_when("wildcard.sample != ''", &combo);
+    // The wrapper quote is doubled, not raw.
+    assert!(
+        baked.contains("\"\""),
+        "inner quote must be doubled: {baked}"
+    );
+    // Round-trip: the execution-time evaluator must read back the
+    // original value and decide TRUE.
+    assert!(
+        crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+            &baked,
+            &std::collections::HashMap::new(),
+            &combo,
+            None,
+        ),
+        "baked predicate must evaluate true: {baked}"
+    );
+    // And the false direction.
+    let combo2 = std::collections::HashMap::new();
+    let baked2 = WorkflowConfig::bake_wildcard_when("wildcard.sample != ''", &combo2);
+    assert!(
+        !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+            &baked2,
+            &std::collections::HashMap::new(),
+            &combo2,
+            None,
+        )
+    );
 }

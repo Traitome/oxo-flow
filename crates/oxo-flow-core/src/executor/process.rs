@@ -4036,7 +4036,7 @@ fn evaluate_condition_inner(
             if let Some(l) = strip_quotes(lhs)
                 && let Some(r) = strip_quotes(rhs)
             {
-                return ConditionVerdict::decided(compare_strings(l, r, op));
+                return ConditionVerdict::decided(compare_strings(&l, &r, op));
             }
         }
     }
@@ -4529,11 +4529,23 @@ fn compare_strings(a: &str, b: &str, op: &str) -> bool {
 
 /// Strip a fully quoted string literal (`'v'` or `"v"`) to its content.
 /// Returns `None` when the input is not an exact quoted literal.
-fn strip_quotes(s: &str) -> Option<&str> {
-    let first = s.as_bytes().first()?;
-    let last = s.as_bytes().last()?;
+fn strip_quotes(s: &str) -> Option<String> {
+    let first = s.as_bytes().first().copied()?;
+    let last = s.as_bytes().last().copied()?;
     match (first, last) {
-        (b'\'', b'\'') | (b'"', b'"') if s.len() >= 2 => Some(&s[1..s.len() - 1]),
+        (b'\'', b'\'') | (b'"', b'"') if s.len() >= 2 => {
+            let inner = &s[1..s.len() - 1];
+            // #537: the when-baking escapes the wrapper quote by DOUBLING
+            // it (the only escape both the baker and this evaluator
+            // understand — a value containing both quote types used to be
+            // wrapped with its inner quote raw, breaking the predicate).
+            let unescaped = if first == b'\'' {
+                inner.replace("''", "'")
+            } else {
+                inner.replace("\"\"", "\"")
+            };
+            Some(unescaped)
+        }
         _ => None,
     }
 }
