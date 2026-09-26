@@ -2578,6 +2578,49 @@ async fn execute_creates_log_parent_dir() {
 // ── bash -c executor ────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn retry_attempts_accumulate_output() {
+    // #526: a retry must not erase the previous attempt's captured output —
+    // attempt 1's traceback is the root cause when the last attempt dies
+    // with a bare "command timed out".
+    let workdir = std::env::temp_dir().join(format!("oxo-retry-log-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    std::fs::create_dir_all(&workdir).unwrap();
+    let config = ExecutorConfig {
+        max_jobs: 1,
+        dry_run: false,
+        workdir: workdir.clone(),
+        keep_going: false,
+        retry_count: 1,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    // First attempt fails with a distinctive marker; the marker file then
+    // exists, so the retry succeeds.
+    let rule = make_rule(
+        "flaky",
+        "if [ -f marker ]; then echo second_attempt_output; else echo first_attempt_traceback >&2; touch marker; exit 1; fi",
+    );
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    assert_eq!(record.retries, 1, "one retry recorded");
+    let stderr = record.stderr.unwrap_or_default();
+    assert!(
+        stderr.contains("first_attempt_traceback"),
+        "attempt 1's stderr must survive the retry: {stderr}"
+    );
+    assert!(
+        stderr.contains("attempt 1 (failed, retrying)"),
+        "attempt boundary must be marked: {stderr}"
+    );
+    let stdout = record.stdout.unwrap_or_default();
+    assert!(
+        stdout.contains("second_attempt_output"),
+        "attempt 2's stdout must be present: {stdout}"
+    );
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}
+
+#[tokio::test]
 async fn execute_bash_only_syntax_process_substitution() {
     let config = ExecutorConfig {
         max_jobs: 1,

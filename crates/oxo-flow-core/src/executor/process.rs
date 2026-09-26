@@ -1944,8 +1944,17 @@ impl LocalExecutor {
             }
 
             all_commands_succeeded = true;
-            combined_stdout.clear();
-            combined_stderr.clear();
+            // #526: attempts ACCUMULATE — attempt 1's traceback is the root
+            // cause when the last attempt dies with a bare "command timed
+            // out". Clearing it erased the only diagnosis from the
+            // checkpoint stderr_tail, the report, and AI recovery, while
+            // peak_bytes/cpu_seconds deliberately accumulated across
+            // attempts. A separator line marks the boundary.
+            if attempt > 0 {
+                let boundary = format!("\n--- attempt {} (failed, retrying) ---\n", attempt);
+                combined_stdout.push_str(&boundary);
+                combined_stderr.push_str(&boundary);
+            }
 
             for cmd in &resolved_commands {
                 // Rules deliberately inherit the caller's process group instead
