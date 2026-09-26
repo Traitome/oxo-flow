@@ -5369,6 +5369,15 @@ when matching env passwords are set: <code>OXO_FLOW_ADMIN_PASSWORD</code>,
 admin/user/viewer accounts. Without one of these the login returns 401 —
 set the env vars when launching <code>oxo-flow serve</code> (see
 <a href="../web-system-architecture/">Web System Architecture</a>).</p>
+<p><strong>Identity is pinned server-side (#516):</strong> the shared user/viewer
+passwords never mint or adopt the <code>admin</code> identity (or any existing
+API-created account) — <code>admin</code> signs in only with
+<code>OXO_FLOW_ADMIN_PASSWORD</code>, and a username that belongs to a managed
+account requires that account's own password. OAuth identities are
+namespaced (<code>&lt;provider&gt;:&lt;name&gt;</code>) and can never collide with local
+usernames. Sessions store the canonical <code>users.id</code> resolved at login;
+role lookups match by id only and a session whose user row is gone
+(deleted user, stale pre-upgrade session) is rejected with 401.</p>
 </blockquote>
 <h3 id="check-session">Check Session<a class="headerlink" href="#check-session" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/auth/me
