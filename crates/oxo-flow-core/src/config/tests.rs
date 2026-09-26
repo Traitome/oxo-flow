@@ -5329,6 +5329,43 @@ fn when_wildcard_scope_filters_instances_per_pair() {
 }
 
 #[test]
+fn when_only_pair_scope_still_fans_out() {
+    // #531: a rule whose pair scope is expressed ONLY in `when` (no
+    // {pair_id}/{control} anywhere in input/output/shell) must still fan
+    // out per pair combo. The bare brace trigger match missed the
+    // `wildcard.control` spelling, the rule kept the raw token, the strict
+    // unbound→false evaluator skipped it — and the rule silently ran zero
+    // instances.
+    let toml = r#"
+        [workflow]
+        name = "t"
+
+        [[pairs]]
+        pair_id = "p1"
+        control = "c1"
+        experiment = "e1"
+
+        [[pairs]]
+        pair_id = "p2"
+        control = "c2"
+        experiment = "e2"
+
+        [[rules]]
+        name = "report"
+        output = ["report.txt"]
+        when = "wildcard.control != ''"
+        shell = "echo {wildcard.control} > {output[0]}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    config.expand_wildcards().unwrap();
+    let names: Vec<&str> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.contains(&"report_p1") && names.contains(&"report_p2"),
+        "when-only pair scope must fan out per combo, got: {names:?}"
+    );
+}
+
+#[test]
 fn when_group_metadata_key_filters_instances() {
     // Live snparcher incident (issue #85): `when = "wildcard.input_type
     // == 'srr'"` must keep only the SRA cohort. The fastq cohort's

@@ -539,19 +539,27 @@ impl WorkflowConfig {
                 }
             }
 
-            let uses_pair_wildcard = !pair_combos.is_empty()
-                && trigger_text.iter().any(|t| {
-                    pair_wildcards
-                        .iter()
-                        .any(|w| t.contains(&format!("{{{w}}}")))
-                });
+            // #531: pair/group scope may be expressed ONLY in `when`
+            // (snakemake-style per-combo gating, e.g.
+            // `when = "wildcard.control != ''"`). The literal text
+            // `wildcard.control` contains no `{control}`, so the bare
+            // brace match missed it and the rule fell through to the
+            // no-expansion branch — the strict unbound→false evaluator
+            // then skipped every instance and the rule silently ran zero
+            // times. Match both spellings.
+            let mentions_pair = trigger_text.iter().any(|t| {
+                pair_wildcards.iter().any(|w| {
+                    t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
+                })
+            });
+            let uses_pair_wildcard = !pair_combos.is_empty() && mentions_pair;
 
-            let uses_group_wildcard = !group_combos.is_empty()
-                && trigger_text.iter().any(|t| {
-                    GROUP_WILDCARDS
-                        .iter()
-                        .any(|w| t.contains(&format!("{{{w}}}")))
-                });
+            let mentions_group = trigger_text.iter().any(|t| {
+                GROUP_WILDCARDS.iter().any(|w| {
+                    t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
+                })
+            });
+            let uses_group_wildcard = !group_combos.is_empty() && mentions_group;
 
             // `[[values]]` fan-out: tables whose names appear in the rule —
             // in inputs/outputs/shells, `expand_inputs` patterns, or its own
