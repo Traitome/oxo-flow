@@ -2,10 +2,36 @@
 
 use crate::commands::print_banner;
 use anyhow::Result;
+use clap::ValueEnum;
 use colored::Colorize;
 
+/// Server operation mode. Mirrors the standalone web binary's `ServerMode`
+/// (crates/oxo-flow-web/src/main.rs) so `oxo-flow serve` cannot start with a
+/// misspelled mode: any value outside these three is rejected at parse time
+/// instead of silently downgrading to a no-auth server (`build_router`
+/// enables auth only for exact "team"/"hpc" matches).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ServeMode {
+    /// Personal workstation mode (loopback bind, no auth).
+    Personal,
+    /// Team server mode (bind any host, auth required).
+    Team,
+    /// HPC cluster mode (bind any host, auth + scheduler routes).
+    Hpc,
+}
+
+impl ServeMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ServeMode::Personal => "personal",
+            ServeMode::Team => "team",
+            ServeMode::Hpc => "hpc",
+        }
+    }
+}
+
 pub async fn handle_serve(
-    mode: String,
+    mode: ServeMode,
     host: String,
     port: u16,
     base_path: String,
@@ -20,7 +46,7 @@ pub async fn handle_serve(
     eprintln!(
         "{} Starting oxo-flow web server in {} mode on {}:{}{}",
         "Serve:".bold().cyan(),
-        mode,
+        mode.as_str(),
         host,
         port,
         if base.is_empty() {
@@ -50,7 +76,7 @@ pub async fn handle_serve(
     // Pass the NORMALIZED path — axum's nest() panics on a mount path
     // without a leading slash (e.g. `--base-path oxoflow`), so the raw
     // argument must never reach the router.
-    oxo_flow_web::start_server_with_mode(&mode, &host, port, &base).await?;
+    oxo_flow_web::start_server_with_mode(mode.as_str(), &host, port, &base).await?;
 
     Ok(())
 }
