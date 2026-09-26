@@ -232,9 +232,20 @@ Reverts the last edit, restoring the previous TOML state.
 
 ```
 POST /api/pipeline/{id}/undo
+Content-Type: application/json
+
+{"toml_content": "<the client's current TOML>"}
 ```
 
-Returns the previous TOML content, or `404` with code `NO_UNDO` if the undo stack is empty.
+The request **requires** a JSON body with `toml_content` set to the caller's
+current TOML state. The undo stack's top transition is applied only when its
+resulting state matches that content exactly — a stale or out-of-sync client
+receives `404` with code `NO_UNDO` rather than a corrupted state. The same
+`404 NO_UNDO` is returned when the undo stack is empty (or, e.g., after a
+server restart, since stacks are in-memory).
+
+Returns `{ "toml_content": "<previous TOML>" }` — i.e. the state *before* the
+last edit.
 
 ### `redo`
 
@@ -242,9 +253,14 @@ Re-applies the last undone edit.
 
 ```
 POST /api/pipeline/{id}/redo
+Content-Type: application/json
+
+{"toml_content": "<the client's current TOML>"}
 ```
 
-Returns the redone TOML content, or `404` with code `NO_REDO` if the redo stack is empty.
+Same contract as `undo`: the JSON body is required, and `toml_content` must
+match the current state (the result of the last undo), otherwise `404` with
+code `NO_REDO`.
 
 **Note:** Performing a new edit after an undo clears the redo stack (standard undo/redo semantics).
 

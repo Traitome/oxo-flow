@@ -399,7 +399,11 @@ Cancels a running/pending run.
 POST /api/runs/{id}/pause
 POST /api/runs/{id}/resume
 ```
-Pauses a running run (`{"reason": "..."}` optional) and resumes it. A `from_rule` field is rejected with `400 UNSUPPORTED_FIELD` (see Smart Retry above).
+Pauses a running run (`{"reason": "..."}` optional; other body fields are
+ignored) and resumes it. On **resume**, a `from_rule` field is rejected with
+`400 UNSUPPORTED_FIELD` — a paused run continues in place, so re-running from a
+specific rule has no meaning (see Smart Retry above: cancel the run and retry
+it instead). A terminal run in either endpoint returns `409 RUN_NOT_ACTIVE`.
 
 ### Logs
 ```
@@ -686,10 +690,12 @@ Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and no
 
 ```
 POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
-POST /api/pipeline/{id}/undo      # Revert the last edit
-POST /api/pipeline/{id}/redo      # Re-apply the last undone edit
+POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
+POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
 ```
 
+`undo`/`redo` require a JSON body carrying the caller's current TOML; the
+stacked edit is applied only when it matches that state (otherwise `404`).
 See [DAG Edit API](dag-edit-api.md) for the full command reference.
 
 ---
