@@ -1074,6 +1074,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#demo-data-for-a-live-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Demo Data for a Live Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#validate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3846,6 +3857,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#demo-data-for-a-live-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Demo Data for a Live Run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#validate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4035,6 +4057,13 @@ output:</p>
   Failed runs keep their chunks for debugging.</li>
 </ul>
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
+<h3 id="demo-data-for-a-live-run">Demo Data for a Live Run<a class="headerlink" href="#demo-data-for-a-live-run" title="Permanent link">#</a></h3>
+<p>Like the explicit scatter-gather pattern, the demo expects
+<code>aligned/sample.bam</code> and the reference in <code>config.reference</code>. The split
+values are labels (one <code>{chr}</code> substitution per map chunk), so a small
+multi-chromosome reference whose contig names match <code>config.chromosomes</code>
+is enough: FASTA + <code>bwa index</code> + <code>samtools faidx</code> + <code>samtools dict</code>, any
+reads aligned and sorted into <code>aligned/sample.bam</code>.</p>
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/10_transform_operator.oxoflow
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>✓<span class="w"> </span>examples/gallery/10_transform_operator.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">2</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">0</span><span class="w"> </span>dependencies
@@ -4050,6 +4079,14 @@ output:</p>
 (<code>parallel_qc_chr1</code> … <code>parallel_qc_chr5</code>) run in parallel with the map
 rules above but have no combine step; the diagram shows only the Mode A
 expansion for readability.</p>
+<div class="admonition note">
+<p class="admonition-title">Live-run verified results</p>
+<p>On the same simulated 5-chromosome fixture used for scatter-gather:
+Mode A's combine output was <strong>byte-identical</strong> (md5-verified) to the
+explicit gather path of workflow 04, and Mode B's per-chromosome
+flagstat chunks summed to exactly the BAM's read count (5 x 1,470 =
+7,350), confirming the chunk partitioning covers every read.</p>
+</div>
 <h2 id="use-cases">Use Cases<a class="headerlink" href="#use-cases" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Per-chromosome variant calling</strong> — scatter GVCF calling by chromosome, merge with <code>GatherVcfs</code></li>
