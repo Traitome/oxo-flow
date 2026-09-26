@@ -12,7 +12,6 @@ use oxo_flow_core::config::{IncludeDirective, WorkflowConfig};
 // Canonical `{config.*}` expander — a private copy drifted once already
 // (#460 cleanup). Aliased so call sites keep their old name.
 use oxo_flow_core::config::expand_config_vars_in_path as expand_config_in_path;
-use oxo_flow_core::config_impact::is_engine_injected_key;
 use oxo_flow_core::rule::{EnvironmentSpec, Rule};
 use oxo_flow_core::scheduler::parse_memory_mb;
 use serde_json::{Value, json};
@@ -146,7 +145,15 @@ fn derive_meta(
     let mut config_keys: Vec<String> = cfg
         .config
         .keys()
-        .filter(|key| !is_engine_injected_key(key) && !cfg.is_injected_config_key(key))
+        // #533: the group-aware predicate keeps engine-injected
+        // `samples_<group>` keys out while user-declared `samples_*` keys
+        // stay visible.
+        .filter(|key| {
+            let group_names: Vec<&str> =
+                cfg.sample_groups.iter().map(|g| g.name.as_str()).collect();
+            !oxo_flow_core::config_impact::is_engine_injected_key_with(key, &group_names)
+                && !cfg.is_injected_config_key(key)
+        })
         .cloned()
         .collect();
     config_keys.sort();
@@ -272,7 +279,12 @@ fn config_params(cfg: &WorkflowConfig, descriptions: &BTreeMap<String, String>) 
     let mut records: Vec<Value> = cfg
         .config
         .iter()
-        .filter(|(key, _)| !is_engine_injected_key(key) && !cfg.is_injected_config_key(key))
+        .filter(|(key, _)| {
+            let group_names: Vec<&str> =
+                cfg.sample_groups.iter().map(|g| g.name.as_str()).collect();
+            !oxo_flow_core::config_impact::is_engine_injected_key_with(key, &group_names)
+                && !cfg.is_injected_config_key(key)
+        })
         .map(|(key, value)| {
             // Declared parameters (`key = { default, type, … }`) render
             // from their metadata: the raw toml table would surface the
@@ -838,6 +850,39 @@ shell = "cp {input} {output}"
                     ],
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn derive_meta_excludes_group_injected_list_keys() {
+        // #533: `samples_<group>` is engine-injected (samples.rs) — the
+        // catalog must not list it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.oxoflow");
+        std::fs::write(
+            &path,
+            r#"
+            [workflow]
+            name = "t"
+
+            [[sample_groups]]
+            name = "samples"
+            samples = ["S1"]
+
+            [[rules]]
+            name = "gen"
+            input = ["{sample}.fq"]
+            output = ["out/{sample}.txt"]
+            shell = "echo hi > {output[0]}"
+            "#,
+        )
+        .unwrap();
+        let cfg = WorkflowConfig::from_file(&path).unwrap();
+        let meta = derive_meta(&path, &cfg, &std::collections::BTreeMap::new());
+        let keys = meta["config_keys"].as_array().unwrap();
+        assert!(
+            !keys.iter().any(|k| k == "samples_samples"),
+            "group-injected key must not appear: {keys:?}"
         );
     }
 
