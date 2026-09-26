@@ -752,6 +752,19 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
     let expand = |path: &str| oxo_flow_core::config::expand_config_vars_in_path(path, &cfg.config);
     let mut missing = Vec::new();
     for rule in &cfg.rules {
+        // A `when`-gated-off rule can never run in this configuration —
+        // its inputs are not required to exist (issue #493, same stance as
+        // the validate-side E010/W020 gate).
+        if rule.when.as_deref().is_some_and(|when| {
+            !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &cfg.config,
+                &std::collections::HashMap::new(),
+                Some(workflow_dir),
+            )
+        }) {
+            continue;
+        }
         for input in &rule.input {
             let expanded = expand(input);
             if expanded.contains('{') {
@@ -788,6 +801,58 @@ mod tests {
     use predicates::prelude::PredicateBooleanExt;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn missing_inputs_resolve_config_placeholders_and_when_gates() {
+        use super::collect_missing_inputs;
+        // Issue #467: config-routed producers must satisfy concrete inputs
+        // and config-routed inputs must be existence-checked. Issue #493:
+        // a when-gated-off rule's missing inputs stay silent.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("ref.fa");
+        std::fs::write(&real, b"ACGT").unwrap();
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+
+[config]
+out = "{}"
+reference = "{}"
+prepare_reference = false
+
+[[rules]]
+name = "produce"
+output = ["{{config.out}}/x.txt"]
+shell = "echo x > {{config.out}}/x.txt"
+
+[[rules]]
+name = "consume"
+input = ["{}/x.txt", "{{config.reference}}", "definitely-missing.txt"]
+output = ["final.txt"]
+shell = "cat {{config.reference}} > final.txt"
+
+[[rules]]
+name = "gated_index"
+input = ["{{config.reference}}.missing-sidecar"]
+output = ["sidecar.done"]
+when = "config.prepare_reference"
+shell = "true"
+"#,
+            dir.path().display(),
+            real.display(),
+            dir.path().display()
+        );
+        let cfg = oxo_flow_core::config::WorkflowConfig::parse(&toml).unwrap();
+        let missing = collect_missing_inputs(&cfg, dir.path());
+        assert_eq!(
+            missing,
+            vec!["definitely-missing.txt".to_string()],
+            "config-routed generated input and existing config-routed input must pass; \
+             only the genuinely missing file may be flagged; the when-gated-off rule's \
+             missing sidecar must stay silent (issue #493): {missing:?}"
+        );
+    }
 
     #[test]
     fn test_as_include_skips_dag_validation() {

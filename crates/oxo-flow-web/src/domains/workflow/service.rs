@@ -222,6 +222,19 @@ pub fn validate_pipeline(
         .collect();
     let mut missing_inputs: Vec<String> = Vec::new();
     for rule in &config.rules {
+        // A `when`-gated-off rule can never run in this configuration —
+        // its inputs are not required to exist (issue #493, mirroring the
+        // CLI validate pass).
+        if rule.when.as_deref().is_some_and(|when| {
+            !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &config.config,
+                &std::collections::HashMap::new(),
+                base_dir,
+            )
+        }) {
+            continue;
+        }
         for input in &rule.input {
             let expanded = oxo_flow_core::config::expand_config_vars_in_path(input, &config.config);
             if expanded.contains('{') || produced.contains(&expanded) {
@@ -680,6 +693,7 @@ name = "t"
 [config]
 out = "{}"
 reference = "{}"
+prepare_reference = false
 
 [[rules]]
 name = "produce"
@@ -691,6 +705,13 @@ name = "consume"
 input = ["{}/x.txt", "{{config.reference}}", "definitely-missing.txt"]
 output = ["final.txt"]
 shell = "cat {{config.reference}} > final.txt"
+
+[[rules]]
+name = "gated_index"
+input = ["{{config.reference}}.missing-sidecar"]
+output = ["sidecar.done"]
+when = "config.prepare_reference"
+shell = "true"
 "#,
             dir.path().display(),
             real.display(),
@@ -700,7 +721,8 @@ shell = "cat {{config.reference}} > final.txt"
         assert_eq!(
             resp.missing_inputs,
             vec!["definitely-missing.txt".to_string()],
-            "config-routed generated and existing inputs must pass: {:?}",
+            "config-routed generated and existing inputs must pass; the when-gated-off \
+             rule's missing sidecar must stay silent (issue #493): {:?}",
             resp.missing_inputs
         );
     }
