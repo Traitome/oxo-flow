@@ -191,11 +191,16 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
 
     // Fresh wildcards declared by output_pattern producers — the deferral
     // registry expand.rs builds before scanning consumers.
+    // #530: register EVERY unbound wildcard of a pattern — expand.rs
+    // fans out on all of them, but this registry took only the first, so a
+    // consumer keyed on the second wildcard of `idx/{build}/{part}.bt2`
+    // escaped the deferred-consumer gate and instantiated once per
+    // discovered value writing to the same path (the exact SCI-AGG-RACE).
     let fresh_wildcards: Vec<String> = config
         .rules
         .iter()
         .filter_map(|r| r.output_pattern.as_deref())
-        .filter_map(|op| crate::wildcard::extract_wildcards(op).into_iter().next())
+        .flat_map(crate::wildcard::extract_wildcards)
         .collect();
 
     let mut warnings = Vec::new();
@@ -704,6 +709,42 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "SCI-AGG-RACE");
         assert_eq!(warnings[0].rule, "multiqc");
+    }
+
+    #[test]
+    fn fresh_wildcard_registry_covers_every_pattern_wildcard() {
+        // #530: the fresh-wildcard registry took only the FIRST wildcard of
+        // each output_pattern — a deferred consumer keyed on the second
+        // wildcard escaped the gate and instantiated once per discovered
+        // value, all writes landing on the same done-file (SCI-AGG-RACE).
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[values]]
+            name = "build"
+            values = ["37", "38"]
+
+            [[rules]]
+            name = "indexer"
+            output_pattern = "idx/{build}/{part}.bt2"
+            shell = "touch {output_pattern}"
+
+            [[rules]]
+            name = "consumer"
+            input = ["idx/37/{part}.bt2"]
+            output = ["done.txt"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "SCI-AGG-RACE" && w.rule == "consumer"),
+            "consumer keyed on the second wildcard must be gated: {warnings:?}"
+        );
     }
 
     #[test]

@@ -368,23 +368,9 @@ impl WorkflowConfig {
         // Pre-compile constraints for performance
         let compiled_constraints = self.compiled_wildcard_constraints()?;
 
-        // Wildcards that trigger pair expansion.
-        // Include backward-compatible aliases `{tumor}`/`{normal}`.
-        let mut pair_wildcards = vec![
-            "experiment",
-            "control",
-            "tumor",
-            "normal",
-            "pair_id",
-            "experiment_type",
-            "tumor_type",
-        ];
-        // Also include any metadata keys from defined pairs
-        for pair in &self.pairs {
-            for key in pair.metadata.keys() {
-                pair_wildcards.push(key.as_str());
-            }
-        }
+        // Wildcards that trigger pair expansion: the shared vocabulary
+        // (#530) — fixed aliases plus every pair metadata key.
+        let pair_wildcards = self.pair_fanout_wildcards();
 
         // Wildcards that trigger group expansion
         const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
@@ -421,7 +407,7 @@ impl WorkflowConfig {
                 rule.output_pattern.as_deref().unwrap_or_default(),
             );
             for w in wildcards {
-                if pair_wildcards.contains(&w.as_str())
+                if pair_wildcards.iter().any(|pw| pw == w.as_str())
                     || GROUP_WILDCARDS.contains(&w.as_str())
                     || self.values.iter().any(|v| v.name == w)
                     || w.starts_with("meta.")
