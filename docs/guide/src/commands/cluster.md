@@ -201,13 +201,21 @@ SLURM prints the job's `sacct` record (`JobID|State|ExitCode|Elapsed|MaxRSS`);
 PBS/SGE/LSF are best-effort (`qstat -f` / `qacct` / `bacct`). Requires the
 scheduler's client commands on `PATH`.
 
-On SLURM clusters **without slurmdbd** (accounting storage disabled), `sacct`
-returns nothing — settlement falls back to `scontrol show job <id>`, which
-reads the controller's in-memory record (state + exit code; no Elapsed/RSS/
-CPU). A job that has left both the live queue and every probe for longer
-than the blind-settlement window settles as **failed with an unknown exit
-code** and a warning naming the rule — the run ends instead of polling
-forever, and the operator verifies via the rule's output files.
+`cluster logs` on SLURM reads `sacct` directly and does NOT fall back to
+`scontrol`: on clusters without slurmdbd (accounting storage disabled),
+`sacct` exits non-zero and this command errors with
+`'sacct' exited 1: Slurm accounting storage is disabled` (live-verified on
+such a cluster). The `scontrol show job <id>` fallback mentioned below
+belongs to run-time **settlement** inside `oxo-flow run`, not to this
+command.
+
+On SLURM clusters **without slurmdbd**, settlement in `oxo-flow run` falls
+back to `scontrol show job <id>`, which reads the controller's in-memory
+record (state + exit code; no Elapsed/RSS/CPU). A job that has left both the
+live queue and every probe for longer than the blind-settlement window
+settles as **failed with an unknown exit code** and a warning naming the
+rule — the run ends instead of polling forever, and the operator verifies
+via the rule's output files.
 
 ---
 
