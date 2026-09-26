@@ -227,8 +227,15 @@ pub async fn batch_command(
         }
     }
 
-    if failed > 0 && stop_on_error {
-        return Err(anyhow::anyhow!("batch execution failed"));
+    // #540: any failed item makes the batch fail — matching every
+    // job-runner analog (xargs -P, make -k, Snakemake): a failed item must
+    // be visible to scripts through the exit code, not just the printed
+    // JSON. --stop-on-error stays the abort-on-first-failure switch, not
+    // the only failure signal.
+    if failed > 0 {
+        return Err(anyhow::anyhow!(
+            "batch execution failed: {failed} item(s) did not succeed"
+        ));
     }
 
     Ok(())

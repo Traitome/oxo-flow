@@ -112,8 +112,8 @@ oxo-flow batch -n "fastqc {item}" *.fastq.gz
 - Generated workflows create one rule per item (`batch_item_1`, `batch_item_2`, ...)
 ## Exit Codes
 
-- **0** — all items succeeded, or items failed without `--stop-on-error` (the
-  per-item failures are still listed in the output and in `--json-output`'s
-  `results` array).
-- **1** — items failed **and** `--stop-on-error` (`-x`) was given: the first
-  failed item aborts the batch and the command exits non-zero.
+- **0** — all items succeeded.
+- **1** — any item failed (#540). The per-item failures are still listed in
+  the output and in `--json-output`'s `results` array. `--stop-on-error`
+  (`-x`) additionally aborts the batch on the FIRST failed item instead of
+  running the rest.

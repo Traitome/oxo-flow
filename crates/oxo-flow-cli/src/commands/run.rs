@@ -271,6 +271,7 @@ async fn wait_for_termination_signal() -> Option<InterruptSignal> {
 /// in-flight rule's process tree (the default disposition would orphan them
 /// with PPID 1), record the interrupted rules in the checkpoint, persist it,
 /// and exit `128 + signum`. Never returns.
+#[allow(clippy::too_many_arguments)] // the teardown needs the full teardown context
 async fn terminate_on_signal(
     signal: InterruptSignal,
     executor: &LocalExecutor,
@@ -282,6 +283,11 @@ async fn terminate_on_signal(
     in_flight: impl Iterator<Item = &String>,
     checkpoint: &Arc<Mutex<CheckpointState>>,
     checkpoint_path: &Path,
+    // #540: `std::process::exit` bypassed the RunJsonSummary Drop backstop
+    // AND skipped the terminal webhook — --json consumers got zero bytes
+    // and webhook subscribers never saw the run end. Emit both here.
+    json_summary: &mut RunJsonSummary,
+    config: &WorkflowConfig,
 ) -> ! {
     eprintln!(
         "\n{} {} received — stopping in-flight rules and saving the checkpoint",
@@ -345,6 +351,14 @@ async fn terminate_on_signal(
     if let Err(e) = ck.save_to_file(checkpoint_path) {
         tracing::warn!(error = %e, "failed to save checkpoint after interruption");
     }
+    drop(ck);
+    json_summary.emit("failed", &RunCounts::default(), vec![]);
+    notify_webhook(
+        config,
+        oxo_flow_core::webhook::WebhookEvent::WorkflowFailed,
+        None,
+    )
+    .await;
     std::process::exit(signal.exit_code());
 }
 
@@ -3427,6 +3441,8 @@ pub async fn run_command(
                         task_rule.values(),
                         &checkpoint,
                         &checkpoint_path,
+                        &mut json_summary,
+                        &config,
                     )
                     .await
                 }
@@ -4110,6 +4126,13 @@ pub async fn run_command(
             }
         }
     }
+
+    // #540: the run loop is done — drop the receiver so a Ctrl-C landing
+    // in the post-run work (report snapshot, webhook POST, AI report)
+    // makes the watcher's `send` fail and its process-exit fallback
+    // engage. With the receiver alive but never polled again, the late
+    // signal was swallowed: nothing happened for potentially minutes.
+    drop(signal_rx);
 
     let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
     let fail_count = fail_count.load(std::sync::atomic::Ordering::Relaxed);

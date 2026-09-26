@@ -8328,6 +8328,64 @@ fn cli_resume_reuses_recorded_workdir() {
     );
 }
 
+/// `batch` exits non-zero when any item fails (#540): the engine's own
+/// verdict rule — a failed run exits non-zero — applies to the batch
+/// wrapper too; a printed `"success": false` is not machine-visible.
+#[test]
+fn cli_batch_failing_item_exits_nonzero() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"b\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"boom\"\noutput = [\"o.txt\"]\nshell = \"exit 1\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["batch", wf.to_str().unwrap(), "--items", "a,b", "--force"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "a failed batch must exit non-zero, stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// `clean --force` deletes directory outputs and exits non-zero when a
+/// deletion fails (#540): remove_file failed with EISDIR on the extremely
+/// common directory outputs while the command read as success.
+#[test]
+fn cli_clean_handles_directory_outputs_and_reports_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"c\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"gen\"\noutput = [\"results\"]\nshell = \"mkdir -p results && echo hi > results/out.txt\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(dir.path().join("results").is_dir());
+
+    // Clean removes the directory output without error.
+    let out = oxo_flow_cmd()
+        .args(["clean", wf.to_str().unwrap(), "--force"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "clean must delete a directory output: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.path().join("results").exists());
+}
+
 /// `validate --json` / `lint --json` / `dry-run --json` must emit exactly
 /// one JSON document on stdout even with `[ai] enabled = true` (#539): the
 /// AI narrative used to be println!'d to stdout ahead of the JSON,
