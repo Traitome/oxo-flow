@@ -1,6 +1,6 @@
 #!/bin/bash
-# Mock squeue — answers `squeue -j <ids> --noheader -o "%i|%t"` and
-# `squeue -u <user> --noheader -o "%i|%t"` (the no-ids `cluster status`
+# Mock squeue — answers `squeue -j <ids> --noheader -o "%i|%T"` and
+# `squeue -u <user> --noheader -o "%i|%T"` (the no-ids `cluster status`
 # listing). With MOCK_SQUEUE_HIDE_TERMINAL=1, terminal jobs are omitted —
 # real squeue only lists live jobs, and the driver must settle vanished ids
 # from sacct (issue: short jobs never settled).
@@ -34,6 +34,7 @@ for id in $(echo "$ids" | tr ',' ' '); do
   fi
   line="$fmt"
   line=${line//%i/$id}
+  line=${line//%T/$state}
   line=${line//%t/$state}
   echo "$line"
 done

@@ -54,7 +54,7 @@ fn unparseable(what: &str, stdout: &str, stderr: &str) -> OxoFlowError {
 }
 
 /// Parse one scheduler status line into `(job id, status)`; `None` for
-/// unrecognised shapes. SLURM lines use the driver's `%i|%t` format (array
+/// unrecognised shapes. SLURM lines use the driver's `%i|%T` format (array
 /// elements like `12345_7` are preserved verbatim); PBS/LSF lines are the
 /// default `qstat`/`bjobs` table rows.
 pub fn parse_status_line(
@@ -65,6 +65,7 @@ pub fn parse_status_line(
         ClusterBackend::Slurm => {
             let (id, state) = line.split_once('|')?;
             let status = match state {
+                // Long forms (`%T` — what the engine's squeue calls emit)…
                 "PENDING" | "CONFIGURING" => BackendJobStatus::Pending,
                 "RUNNING" | "COMPLETING" => BackendJobStatus::Running,
                 "COMPLETED" => BackendJobStatus::Completed,
@@ -72,6 +73,15 @@ pub fn parse_status_line(
                     BackendJobStatus::Failed
                 }
                 "CANCELLED" | "PREEMPTED" => BackendJobStatus::Cancelled,
+                // …and compact forms (`%t`): `squeue -o %t` prints `R`,
+                // `PD`, `CG`, … Without these every live job parses as
+                // `Unknown` (seen live: RUNNING jobs reported as
+                // "finished, or an unknown id" by `cluster status`).
+                "PD" => BackendJobStatus::Pending,
+                "R" | "CG" => BackendJobStatus::Running,
+                "CD" => BackendJobStatus::Completed,
+                "F" | "NF" | "TO" | "OOM" | "BF" => BackendJobStatus::Failed,
+                "CA" | "PR" => BackendJobStatus::Cancelled,
                 _ => BackendJobStatus::Unknown,
             };
             Some((id.to_string(), status))
@@ -142,7 +152,7 @@ pub fn parse_status_line(
 /// answer "Invalid job id specified" on a real cluster (the driver's own
 /// poller always joined them; the standalone `cluster status` command did
 /// not). PBS and LSF take ids positionally, SGE wants one `-j` per job.
-/// SLURM is asked for the same `%i|%t` shape the poller reads, so both
+/// SLURM is asked for the same `%i|%T` shape the poller reads, so both
 /// paths share one parser.
 pub fn status_invocations(
     backend: &ClusterBackend,
@@ -156,7 +166,7 @@ pub fn status_invocations(
                 job_ids.join(","),
                 "--noheader".to_string(),
                 "-o".to_string(),
-                "%i|%t".to_string(),
+                "%i|%T".to_string(),
             ],
         )],
         // `-x` includes finished (history) jobs: an OpenPBS by-id listing
@@ -200,7 +210,7 @@ pub fn my_jobs_invocations(backend: &ClusterBackend) -> Vec<(&'static str, Vec<S
                 user,
                 "--noheader".to_string(),
                 "-o".to_string(),
-                "%i|%t".to_string(),
+                "%i|%T".to_string(),
             ],
         )],
         ClusterBackend::Pbs => vec![("qstat", vec!["-u".to_string(), user])],
@@ -653,7 +663,7 @@ impl super::ExecutorBackend for ClusterExecutor {
             ClusterBackend::Slurm => {
                 let list = job_ids.join(",");
                 let out = self
-                    .run_cmd("squeue", &["-j", &list, "--noheader", "-o", "%i|%t"])
+                    .run_cmd("squeue", &["-j", &list, "--noheader", "-o", "%i|%T"])
                     .await?;
                 let mut statuses = HashMap::new();
                 for line in String::from_utf8_lossy(&out.stdout)
@@ -1182,6 +1192,33 @@ mod tests {
             parse_status_line(&ClusterBackend::Slurm, "12345|CANCELLED"),
             Some(("12345".into(), BackendJobStatus::Cancelled))
         );
+        // Compact forms (%t): a hand-written  query must
+        // not read live jobs as Unknown (cluster status used to report
+        // RUNNING jobs as "finished, or an unknown id").
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|R"),
+            Some(("12345".into(), BackendJobStatus::Running))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|PD"),
+            Some(("12345".into(), BackendJobStatus::Pending))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|CG"),
+            Some(("12345".into(), BackendJobStatus::Running))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|CD"),
+            Some(("12345".into(), BackendJobStatus::Completed))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|TO"),
+            Some(("12345".into(), BackendJobStatus::Failed))
+        );
+        assert_eq!(
+            parse_status_line(&ClusterBackend::Slurm, "12345|CA"),
+            Some(("12345".into(), BackendJobStatus::Cancelled))
+        );
         assert_eq!(
             parse_status_line(&ClusterBackend::Slurm, "12345|WEIRD"),
             Some(("12345".into(), BackendJobStatus::Unknown))
@@ -1284,7 +1321,7 @@ mod tests {
                     "101,202".to_string(),
                     "--noheader".to_string(),
                     "-o".to_string(),
-                    "%i|%t".to_string(),
+                    "%i|%T".to_string(),
                 ]
             )]
         );
@@ -1334,7 +1371,7 @@ mod tests {
                     user.clone(),
                     "--noheader".to_string(),
                     "-o".to_string(),
-                    "%i|%t".to_string(),
+                    "%i|%T".to_string(),
                 ]
             )]
         );
