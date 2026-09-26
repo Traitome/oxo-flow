@@ -10,12 +10,107 @@ use super::{Tool, ToolDef};
 use crate::error::AiError;
 
 /// Read contents of a local file.
-#[derive(Default)]
-pub struct ReadFileTool;
+///
+/// Scoping (#518): a scoped tool may only read below its workspace root —
+/// the model-driven read is the source of the prompt-injection exfiltration
+/// chain (read `~/.oxo-flow/ai_config.json` / `~/.ssh` / `.env`, then ship
+/// the contents out via `fetch_url`). A scoped tool is read-only and
+/// auto-executes; an UNSCOPED tool is not considered read-only, so it only
+/// runs where a human approver exists — with no approver it is refused.
+/// `Default` (and `new()`) produce the unscoped, fail-closed variant.
+pub struct ReadFileTool {
+    scope: Option<std::path::PathBuf>,
+}
 
 impl ReadFileTool {
     pub fn new() -> Self {
-        Self
+        Self { scope: None }
+    }
+
+    /// Restrict reads to the workspace rooted at `root` (typically the
+    /// project directory holding the workflow and reference files).
+    pub fn scoped(root: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            scope: Some(root.into()),
+        }
+    }
+}
+
+impl Default for ReadFileTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Resolve `path` against the scope root, rejecting any escape.
+///
+/// Absolute paths are allowed only when they stay below the (canonicalized)
+/// root; relative paths may not traverse out with `..`. Lexical
+/// normalization happens before the prefix check so `root/../x` is judged on
+/// its normalized form, not on its text.
+fn resolve_scoped_path(root: &std::path::Path, raw: &str) -> Result<std::path::PathBuf, AiError> {
+    use std::path::Component;
+
+    let root_abs = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let joined = if std::path::Path::new(raw).is_absolute() {
+        std::path::PathBuf::from(raw)
+    } else {
+        root_abs.join(raw)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(AiError::ToolError {
+                        tool: "read_file".into(),
+                        message: format!("path '{raw}' escapes the workspace scope"),
+                    });
+                }
+            }
+            Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    if !resolves_within(&root_abs, &normalized) {
+        return Err(AiError::ToolError {
+            tool: "read_file".into(),
+            message: format!(
+                "path '{raw}' is outside the workspace scope — read_file can only access files in the project directory"
+            ),
+        });
+    }
+    Ok(normalized)
+}
+
+/// True when `candidate` (which may not exist yet) stays below `root_abs`.
+///
+/// Symlinks make a text-prefix check wrong in both directions (e.g. macOS
+/// `/var` → `/private/var`), so the nearest existing ancestor is
+/// canonicalized and the non-existent tail re-appended before comparing.
+fn resolves_within(root_abs: &std::path::Path, candidate: &std::path::Path) -> bool {
+    if let Ok(resolved) = std::fs::canonicalize(candidate) {
+        return resolved.starts_with(root_abs);
+    }
+    let mut ancestor = candidate.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match ancestor.parent() {
+            Some(parent) => {
+                if let Some(name) = ancestor.file_name() {
+                    tail.push(name.to_os_string());
+                }
+                ancestor = parent.to_path_buf();
+            }
+            None => return false,
+        }
+        if let Ok(resolved) = std::fs::canonicalize(&ancestor) {
+            let mut full = resolved;
+            for part in tail.iter().rev() {
+                full.push(part);
+            }
+            return full.starts_with(root_abs);
+        }
     }
 }
 
@@ -42,6 +137,11 @@ impl Tool for ReadFileTool {
         "read_file"
     }
 
+    fn is_read_only(&self) -> bool {
+        // Only a scoped tool is safe to auto-execute (#518).
+        self.scope.is_some()
+    }
+
     async fn execute(&self, arguments: &str) -> Result<String, AiError> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| AiError::ToolError {
@@ -54,7 +154,12 @@ impl Tool for ReadFileTool {
             message: "missing 'path' argument".into(),
         })?;
 
-        let content = std::fs::read_to_string(path).map_err(|e| AiError::ToolError {
+        let resolved = match &self.scope {
+            Some(root) => resolve_scoped_path(root, path)?,
+            None => std::path::PathBuf::from(path),
+        };
+
+        let content = std::fs::read_to_string(&resolved).map_err(|e| AiError::ToolError {
             tool: "read_file".into(),
             message: format!(
                 "cannot read '{path}': {e} — embedded skills and tool docs are not files on disk; get them with lookup_skill and lookup_tool instead of read_file"
@@ -66,7 +171,7 @@ impl Tool for ReadFileTool {
 }
 
 /// Hostname suffixes treated as site-local and always blocked.
-const BLOCKED_HOST_SUFFIXES: [&str; 3] = [".localhost", ".local", ".internal"];
+pub(crate) const BLOCKED_HOST_SUFFIXES: [&str; 3] = [".localhost", ".local", ".internal"];
 
 /// Wall-clock bound for a single fetch hop, including TLS handshake.
 const FETCH_TIMEOUT_SECS: u64 = 15;
@@ -119,14 +224,14 @@ fn parse_allowlist(raw: &str) -> Vec<String> {
 
 /// Comma-separated explicit exemptions (`OXO_FLOW_AI_FETCH_ALLOW`), applied
 /// to hostnames/IP literals verbatim before validation.
-fn allowlist() -> Vec<String> {
+pub(crate) fn fetch_allowlist() -> Vec<String> {
     parse_allowlist(&std::env::var("OXO_FLOW_AI_FETCH_ALLOW").unwrap_or_default())
 }
 
 /// True for addresses an outbound model-driven fetch must never reach:
 /// loopback, unspecified, link-local, RFC1918 / ULA, and IPv4-mapped IPv6
 /// forms of any of those (cloud metadata endpoints live in 169.254/16).
-fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
+pub(crate) fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr::{V4, V6};
     let v4 = match ip {
         V4(v4) => v4,
@@ -156,7 +261,7 @@ async fn validate_public_url(raw: &str) -> Result<ScreenedTarget, String> {
         ));
     }
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    if allowlist().contains(&host) {
+    if fetch_allowlist().contains(&host) {
         return Ok(ScreenedTarget { url, pin: None });
     }
     if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
@@ -562,9 +667,11 @@ mod tests {
     }
 
     #[test]
-    fn read_file_tool_is_read_only() {
-        let tool = ReadFileTool::new();
-        assert!(tool.is_read_only());
+    fn read_file_scoping_rules() {
+        // #518: an unscoped read_file is NOT read-only — it needs a human
+        // approver. A scoped one is auto-executable but confined.
+        assert!(!ReadFileTool::new().is_read_only());
+        assert!(ReadFileTool::scoped(".").is_read_only());
     }
 
     #[tokio::test]
@@ -573,6 +680,57 @@ mod tests {
         // Read Cargo.toml of this crate
         let result = tool.execute(r#"{"path": "Cargo.toml"}"#).await.unwrap();
         assert!(result.contains("oxo-flow-ai"));
+    }
+
+    #[tokio::test]
+    async fn scoped_read_file_confined_to_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("reference.txt"), "in-scope").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/deep.txt"), "deep").unwrap();
+        let tool = ReadFileTool::scoped(dir.path());
+
+        // In-scope relative and absolute reads work.
+        let result = tool.execute(r#"{"path": "reference.txt"}"#).await.unwrap();
+        assert_eq!(result, "in-scope");
+        let abs = dir.path().join("sub/deep.txt");
+        let result = tool
+            .execute(&format!(
+                r#"{{"path": {}}}"#,
+                serde_json::to_string(&abs).unwrap()
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result, "deep");
+
+        // `..` traversal out of the root is refused.
+        let err = tool
+            .execute(r#"{"path": "../escape.txt"}"#)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("workspace scope"), "{err}");
+
+        // An absolute path outside the root is refused — including the
+        // classic exfil targets (#518). (`~` is never expanded by the
+        // engine, so the real home path is what matters.)
+        let mut outside_targets = vec!["/etc/passwd".to_string()];
+        if let Ok(home) = std::env::var("HOME") {
+            outside_targets.push(format!("{home}/.ssh/id_rsa"));
+            outside_targets.push(format!("{home}/.oxo-flow/ai_config.json"));
+        }
+        for outside in outside_targets {
+            let err = tool
+                .execute(&format!(
+                    r#"{{"path": {}}}"#,
+                    serde_json::to_string(&outside).unwrap()
+                ))
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("outside the workspace scope"),
+                "{outside}: {err}"
+            );
+        }
     }
 
     #[tokio::test]

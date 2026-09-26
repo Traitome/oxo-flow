@@ -58,16 +58,30 @@ impl AiRuntime {
             cli_overrides.as_ref(),
         );
 
-        // Register tools: builtins + discovered skills
+        // User-defined skills: discovery (read-only) + explicit activation.
+        let project = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));
+
+        // Register tools: builtins + discovered skills. read_file is scoped
+        // to the project directory (#518): the auto-approved read must not
+        // reach ~/.ssh, ~/.oxo-flow/ai_config.json, or any other path
+        // outside the workspace. Without a project directory the tool
+        // registers unscoped — which is deliberately NOT read-only, so a
+        // session without a human approver never executes it.
         let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(Box::new(builtin::ReadFileTool::new()));
+        match project {
+            Some(dir) => tool_registry.register(Box::new(builtin::ReadFileTool::scoped(dir))),
+            None => {
+                tracing::warn!(
+                    "no project directory — read_file registered unscoped and requires approval"
+                );
+                tool_registry.register(Box::new(builtin::ReadFileTool::new()));
+            }
+        }
         tool_registry.register(Box::new(builtin::FetchUrlTool::new()));
         tool_registry.register(Box::new(builtin::LookupTool::new()));
         tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
         tool_registry.register(Box::new(builtin::LookupPipelineTool::new()));
 
-        // User-defined skills: discovery (read-only) + explicit activation.
-        let project = project_dir.or_else(|| workflow_path.and_then(|p| p.parent()));
         let skill_context = activated_skill_context(project, &config);
 
         // Activated tool skills reference MCP servers via
