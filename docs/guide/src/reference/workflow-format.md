@@ -271,6 +271,7 @@ in rules uses `{config.key}` syntax; array values render as space-joined
 lists in the shell.
 
 Several keys are **engine-injected**:
+
 - `config.samples_list` (all sample names, comma-joined) and
   `config.pairs_list` (all pair ids, comma-joined) — use them in
   `expand_inputs` to gather across samples or pairs without maintaining a
@@ -808,6 +809,7 @@ interpreter = "python3" # Optional: overrides auto-detection
 ```
 
 **Interpreter Detection Order:**
+
 1.  **Explicit `interpreter` field** on the rule.
 2.  **Custom `[workflow.interpreter_map]`** in the metadata.
 3.  **Built-in defaults** based on file extension.
@@ -883,11 +885,13 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).
 oxo-flow tracks declared resources for scheduling but does not strictly enforce them in local execution. On HPC clusters, resources are enforced by the scheduler.
 
 **Local execution:**
+
 - Resources are tracked to prevent over-allocation
 - Warnings emitted when declaring resources exceeding system capacity
 - Jobs may oversubscribe if user intentionally requests more than available
 
 **HPC clusters:**
+
 - Resources translated to scheduler directives (SLURM, PBS, SGE, LSF)
 - Scheduler enforces limits - jobs requesting more than allocated will fail
 
@@ -1605,6 +1609,7 @@ the map is the value of `input`/`output` itself (a sub-table named
 ### Custom Wildcards
 
 Any `{name}` pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:
+
 1. **File discovery**: Scanning for matching files in the `input` path.
 2. **Explicit lists**: Defined in [`[[pairs]]`](#pairs-experiment-control-pairing-wc-01) or [`[[sample_groups]]`](#sample_groups-multi-sample-cohorts-wc-02).
 3. **Parameter lists**: Defined in [`[[values]]`](#values-parameter-fan-out-wc-03).
@@ -1773,6 +1778,7 @@ Creates pair:
 - `control = CTRL_01`
 
 **Pattern requirements:**
+
 - Must contain `{pair_id}`, `{experiment}`, and `{control}` wildcards
 - Optional `{experiment_type}` wildcard also extracted
 - Pattern is converted to glob (`*`) for filesystem scan

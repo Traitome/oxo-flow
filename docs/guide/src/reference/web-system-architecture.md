@@ -40,6 +40,7 @@ The execution backend is a dropdown — local, HPC queue, Docker, cloud batch. E
 ## Architecture Overview
 
 The web crate follows a **domain-driven modular monolith** pattern. Each domain has:
+
 - `types.rs` — request/response structs
 - `service.rs` — pure logic (zero HTTP dependency)
 - `handlers.rs` — HTTP → service adapters

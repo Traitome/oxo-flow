@@ -109,7 +109,9 @@ oxo-flow batch -n "fastqc {item}" *.fastq.gz
 - When no items provided and stdin has data, reads from pipe
 - `{}` is rush-compatible shorthand for `{item}`
 - Environment spec format: `conda: env.yaml` or `docker: image:tag`
+
 - Generated workflows create one rule per item (`batch_item_1`, `batch_item_2`, ...)
+
 ## Exit Codes
 
 - **0** — all items succeeded.

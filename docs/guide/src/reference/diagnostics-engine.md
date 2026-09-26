@@ -6,6 +6,7 @@
 ## Overview
 
 The Diagnostics Engine analyzes failed pipeline runs and returns:
+
 - **Error pattern** identified (e.g., OOM, command not found, file missing)
 - **Likely cause** with evidence
 - **Fix suggestions** (auto-fixable or manual)

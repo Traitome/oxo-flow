@@ -623,8 +623,9 @@ POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize U
 POST /api/auth/oauth/callback    # Provider callback → session token
 ```
 
-The redirect URI is `OAUTH_REDIRECT_URI` when set, derived from the
-request host otherwise (see the environment table in `AGENTS.md`).
+The redirect URI is `OXO_FLOW_OAUTH_REDIRECT_URI` when set, with a fixed
+fallback of `http://localhost:3000/api/auth/oauth/callback` (see the
+environment table in `AGENTS.md`).
 
 ---
 
