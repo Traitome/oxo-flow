@@ -316,8 +316,74 @@ pub struct CheckpointState {
     /// instances completed. Persisted so `resume` re-instantiates the
     /// deferred consumers WITHOUT re-running the producer. Legacy
     /// checkpoints load with an empty map.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    ///
+    /// Serializes canonically (#528): combos as key-sorted pairs (and the
+    /// combo list itself sorted), so identical state produces identical
+    /// bytes — the in-memory `WildcardValues` is a `HashMap`, whose
+    /// iteration order is per-process random and made provenance diffs
+    /// noisy. Dedup semantics only ever compare `wildcard_combo_key`, so
+    /// canonical ordering cannot change behavior.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "serialize_output_pattern_domains",
+        deserialize_with = "deserialize_output_pattern_domains"
+    )]
     pub output_pattern_domains: BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+}
+
+/// Canonical on-the-wire form: template → combos → key-sorted
+/// `(key, value)` pairs, combos sorted among themselves.
+type CanonicalDomains = BTreeMap<String, Vec<Vec<(String, String)>>>;
+
+fn canonical_domains(
+    domains: &BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+) -> CanonicalDomains {
+    domains
+        .iter()
+        .map(|(template, combos)| {
+            let mut canonical_combos: Vec<Vec<(String, String)>> = combos
+                .iter()
+                .map(|combo| {
+                    let mut pairs: Vec<(String, String)> =
+                        combo.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    pairs.sort();
+                    pairs
+                })
+                .collect();
+            canonical_combos.sort();
+            (template.clone(), canonical_combos)
+        })
+        .collect()
+}
+
+fn serialize_output_pattern_domains<S: serde::Serializer>(
+    domains: &BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    canonical_domains(domains).serialize(serializer)
+}
+
+fn deserialize_output_pattern_domains<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, Vec<crate::wildcard::WildcardValues>>, D::Error> {
+    let raw: CanonicalDomains = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(template, combos)| {
+            (
+                template,
+                combos
+                    .into_iter()
+                    .map(|pairs| {
+                        pairs
+                            .into_iter()
+                            .collect::<crate::wildcard::WildcardValues>()
+                    })
+                    .collect(),
+            )
+        })
+        .collect())
 }
 
 /// Bound on the stderr excerpt persisted per rule (issue #83 WS2). Full
@@ -1755,6 +1821,56 @@ mod tests {
             forward.to_json().unwrap(),
             backward.to_json().unwrap(),
             "identical checkpoint state must serialize identically regardless of insertion order"
+        );
+    }
+
+    #[test]
+    fn output_pattern_domains_serialize_canonically() {
+        // #528: each domain combo is a HashMap — its key order is
+        // per-process random, and the combo list followed discovery order.
+        // Identical state must still produce identical checkpoint bytes,
+        // whatever order the keys were inserted in and whichever combo was
+        // discovered first.
+        use crate::wildcard::WildcardValues;
+        let build = |first: bool| -> CheckpointState {
+            let mut ck = CheckpointState::default();
+            let mut combo_a = WildcardValues::new();
+            combo_a.insert("build".to_string(), "37".to_string());
+            combo_a.insert("part".to_string(), "1".to_string());
+            let mut combo_b = WildcardValues::new();
+            combo_b.insert("part".to_string(), "2".to_string());
+            combo_b.insert("build".to_string(), "38".to_string());
+            let combos = if first {
+                vec![combo_a, combo_b]
+            } else {
+                vec![combo_b, combo_a]
+            };
+            ck.record_output_pattern_domain("idx/{build}/{part}.bt2", combos);
+            ck
+        };
+        let forward = build(true);
+        let backward = build(false);
+        assert_eq!(
+            forward.to_json().unwrap(),
+            backward.to_json().unwrap(),
+            "identical domains must serialize identically regardless of HashMap order"
+        );
+        // Round-trip: resume reads the canonical form back into HashMaps.
+        let loaded = CheckpointState::from_json(&forward.to_json().unwrap()).unwrap();
+        let combos = loaded
+            .output_pattern_domains
+            .get("idx/{build}/{part}.bt2")
+            .unwrap();
+        assert_eq!(combos.len(), 2);
+        assert!(
+            combos
+                .iter()
+                .any(|c| c.get("build").map(String::as_str) == Some("37"))
+        );
+        assert!(
+            combos
+                .iter()
+                .any(|c| c.get("part").map(String::as_str) == Some("2"))
         );
     }
 
