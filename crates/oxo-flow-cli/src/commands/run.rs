@@ -291,12 +291,31 @@ async fn terminate_on_signal(
     // Same teardown as the first-failure abort (issue #131): release queued
     // resource waiters, then signal each live child's whole subtree.
     executor.clear_resource_waiters().await;
-    for (rule, pid) in executor.active_pids() {
-        if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
-            tracing::warn!(rule = %rule, pid, error = %e, "failed to signal in-flight rule on {}", signal.name);
+    // Blocking-pool sweep + a post-abort_all second pass — same shape and
+    // rationale as the first-failure abort (#524).
+    let snapshot = executor.active_pids();
+    tokio::task::spawn_blocking(move || {
+        for (rule, pid) in snapshot {
+            if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
+                tracing::warn!(rule = %rule, pid, error = %e, "failed to signal in-flight rule on {}", signal.name);
+            }
         }
-    }
+    })
+    .await
+    .ok();
     join_set.abort_all();
+    let late = executor.active_pids();
+    if !late.is_empty() {
+        tokio::task::spawn_blocking(move || {
+            for (rule, pid) in late {
+                if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
+                    tracing::warn!(rule = %rule, pid, error = %e, "failed to signal late-spawned rule on {}", signal.name);
+                }
+            }
+        })
+        .await
+        .ok();
+    }
 
     let mut ck = checkpoint.lock().await;
     for rule in in_flight {
@@ -3717,17 +3736,45 @@ pub async fn run_command(
             // Clear the pool's FIFO waiter queue first so cancelled waiters
             // cannot hold the line hostage (issue #123 100% guarantee).
             executor.clear_resource_waiters().await;
-            for (rule_name, pid) in executor.active_pids() {
-                if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
-                    tracing::warn!(
-                        rule = %rule_name,
-                        pid,
-                        error = %e,
-                        "failed to signal in-flight rule process during abort"
-                    );
+            // The grace poll inside kill_process_tree sleeps up to 10 s —
+            // run the sweep on the blocking pool, not a runtime worker
+            // (#524; the timeout path already follows this rule).
+            let snapshot = executor.active_pids();
+            tokio::task::spawn_blocking(move || {
+                for (rule_name, pid) in snapshot {
+                    if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
+                        tracing::warn!(
+                            rule = %rule_name,
+                            pid,
+                            error = %e,
+                            "failed to signal in-flight rule process during abort"
+                        );
+                    }
                 }
-            }
+            })
+            .await
+            .ok();
             join_set.abort_all();
+            // Re-snapshot and sweep again: a retry task could wake during
+            // the first sweep and spawn its next attempt; those late
+            // children escape the stale first snapshot (#524).
+            let late = executor.active_pids();
+            if !late.is_empty() {
+                tokio::task::spawn_blocking(move || {
+                    for (rule_name, pid) in late {
+                        if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
+                            tracing::warn!(
+                                rule = %rule_name,
+                                pid,
+                                error = %e,
+                                "failed to signal late-spawned rule process during abort"
+                            );
+                        }
+                    }
+                })
+                .await
+                .ok();
+            }
 
             // The killed siblings would otherwise surface as bare
             // "✗ rule 'X' failed" with no exit code and an empty stderr

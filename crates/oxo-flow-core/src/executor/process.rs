@@ -792,12 +792,19 @@ impl LocalExecutor {
                 "env-create cross-process lock unavailable — env setup proceeds unlocked"
             );
         }
-        let output = Command::new("sh")
+        // #524: kill_on_drop — when the abort path cancels this task, the
+        // in-flight conda/pixi/venv setup is killed at drop instead of
+        // outliving the EnvCreateLock guard (a relaunched run would
+        // otherwise run a second `conda env create` against the same
+        // prefix while the orphan is still installing — the exact
+        // transaction corruption the lock exists to prevent).
+        let mut setup = Command::new("sh");
+        setup
+            .kill_on_drop(true)
             .arg("-c")
             .arg(&setup_cmd)
-            .current_dir(&self.config.workdir)
-            .output()
-            .await;
+            .current_dir(&self.config.workdir);
+        let output = setup.output().await;
 
         match output {
             Ok(o) if o.status.success() => {
@@ -821,18 +828,20 @@ impl LocalExecutor {
                                 rule = %rule.name,
                                 "environment setup exited 0 but verification failed — tearing down and retrying once"
                             );
-                            let _ = Command::new("sh")
+                            let mut teardown_cmd = Command::new("sh");
+                            teardown_cmd
+                                .kill_on_drop(true)
                                 .arg("-c")
                                 .arg(&teardown)
-                                .current_dir(&self.config.workdir)
-                                .output()
-                                .await;
-                            if let Ok(retry) = Command::new("sh")
+                                .current_dir(&self.config.workdir);
+                            let _ = teardown_cmd.output().await;
+                            let mut retry_cmd = Command::new("sh");
+                            retry_cmd
+                                .kill_on_drop(true)
                                 .arg("-c")
                                 .arg(&setup_cmd)
-                                .current_dir(&self.config.workdir)
-                                .output()
-                                .await
+                                .current_dir(&self.config.workdir);
+                            if let Ok(retry) = retry_cmd.output().await
                                 && retry.status.success()
                             {
                                 verified = Self::env_verify(self, &verify).await;
@@ -883,8 +892,9 @@ impl LocalExecutor {
 
     /// Run an environment verification command (success = usable env).
     async fn env_verify(&self, verify: &str) -> bool {
-        Command::new("sh")
-            .arg("-c")
+        let mut cmd = Command::new("sh");
+        cmd.kill_on_drop(true); // #524: die with the aborted task
+        cmd.arg("-c")
             .arg(verify)
             .current_dir(&self.config.workdir)
             .output()
@@ -2634,6 +2644,12 @@ pub(super) fn spawn_rule_shell(
         envs: &HashMap<String, String>,
     ) -> tokio::process::Command {
         let mut c = tokio::process::Command::new(shell);
+        // #524: an aborted task (run abort, SIGINT) drops its in-flight
+        // Command future — without kill_on_drop the spawned child survives
+        // as an orphan. The main loop's child is additionally registered in
+        // active_pids for the explicit tree kill; this is the
+        // task-lifetime backstop that also covers pre_exec and hooks.
+        c.kill_on_drop(true);
         c.arg("-c").arg(cmd).current_dir(workdir).envs(envs);
         // stdin is explicitly null (issue #101): tokio's default is INHERIT,
         // so a TTY-launched `oxo-flow run` would hand the terminal to every
