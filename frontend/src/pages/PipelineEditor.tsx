@@ -266,8 +266,13 @@ export default function PipelineEditor() {
   };
 
   const handleUndo = async () => {
+    // #547: undo/redo take the editSeq ticket like runEdit/updateDag — a
+    // slow undo resolving after a newer edit used to revert the canvas
+    // while the server recorded the newer edit (local/server divergence).
+    const seq = ++editSeq.current;
     try {
       const res = await api.dagUndo(pipelineId, toml);
+      if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Nothing to undo';
@@ -275,8 +280,10 @@ export default function PipelineEditor() {
     }
   };
   const handleRedo = async () => {
+    const seq = ++editSeq.current;
     try {
       const res = await api.dagRedo(pipelineId, toml);
+      if (seq !== editSeq.current) return; // superseded by a newer edit
       setToml(res.toml_content);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Nothing to redo';
