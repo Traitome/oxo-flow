@@ -4290,13 +4290,28 @@ into that table (comments preserved); everything else is replaced wholesale.</p>
 <h3 id="undo"><code>undo</code><a class="headerlink" href="#undo" title="Permanent link">#</a></h3>
 <p>Reverts the last edit, restoring the previous TOML state.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/pipeline/{id}/undo
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Content-Type: application/json
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
 </span></code></pre></div>
-<p>Returns the previous TOML content, or <code>404</code> with code <code>NO_UNDO</code> if the undo stack is empty.</p>
+<p>The request <strong>requires</strong> a JSON body with <code>toml_content</code> set to the caller's
+current TOML state. The undo stack's top transition is applied only when its
+resulting state matches that content exactly — a stale or out-of-sync client
+receives <code>404</code> with code <code>NO_UNDO</code> rather than a corrupted state. The same
+<code>404 NO_UNDO</code> is returned when the undo stack is empty (or, e.g., after a
+server restart, since stacks are in-memory).</p>
+<p>Returns <code>{ "toml_content": "&lt;previous TOML&gt;" }</code> — i.e. the state <em>before</em> the
+last edit.</p>
 <h3 id="redo"><code>redo</code><a class="headerlink" href="#redo" title="Permanent link">#</a></h3>
 <p>Re-applies the last undone edit.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>POST /api/pipeline/{id}/redo
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Content-Type: application/json
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
 </span></code></pre></div>
-<p>Returns the redone TOML content, or <code>404</code> with code <code>NO_REDO</code> if the redo stack is empty.</p>
+<p>Same contract as <code>undo</code>: the JSON body is required, and <code>toml_content</code> must
+match the current state (the result of the last undo), otherwise <code>404</code> with
+code <code>NO_REDO</code>.</p>
 <p><strong>Note:</strong> Performing a new edit after an undo clears the redo stack (standard undo/redo semantics).</p>
 <hr />
 <h2 id="response-format">Response Format<a class="headerlink" href="#response-format" title="Permanent link">#</a></h2>
