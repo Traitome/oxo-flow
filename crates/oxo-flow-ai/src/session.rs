@@ -252,9 +252,55 @@ pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
     })?;
 
     write_json_atomic(&path, &json)?;
+    // #544: sessions hold user intent, full tool-call arguments and
+    // before/after workflow content — world-readable archives leaked all
+    // of it on shared HPC homes (ai_config.json already gets 0600).
+    restrict_to_owner(&path);
+
+    prune_old_sessions(&dir, MAX_SESSION_ARCHIVES);
 
     tracing::info!(session = %session.id, "AI session saved to {}", path.display());
     Ok(path)
+}
+
+/// Archives kept per directory: the oldest sessions are pruned after each
+/// save so the archive cannot grow unbounded (#544).
+const MAX_SESSION_ARCHIVES: usize = 200;
+
+/// chmod 0600 — best-effort (non-unix targets skip).
+fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// Delete the oldest session archives beyond `keep` (best-effort).
+fn prune_old_sessions(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut sessions: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let modified = e.metadata().and_then(|m| m.modified()).ok()?;
+            Some((modified, e.path()))
+        })
+        .collect();
+    if sessions.len() <= keep {
+        return;
+    }
+    sessions.sort();
+    let excess = sessions.len() - keep;
+    for (_, path) in sessions.into_iter().take(excess) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            tracing::warn!(error = %e, path = %path.display(), "session prune failed");
+        }
+    }
 }
 
 /// Write `json` to `path` atomically: a temp sibling plus a rename.
@@ -325,9 +371,32 @@ pub fn archive_before_modify(
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[test]
+fn prune_keeps_the_newest_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    // Create sequentially; mtime order = creation order (resolution
+    // caveats tolerated by asserting only membership counts and the
+    // newest survivor).
+    for i in 0..6 {
+        let p = dir.path().join(format!("s{i}.json"));
+        std::fs::write(&p, "{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    prune_old_sessions(dir.path(), 3);
+    let remaining: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(remaining.len(), 3, "keep exactly 3: {remaining:?}");
+    assert!(
+        remaining.contains(&"s5.json".to_string()),
+        "the newest session must survive: {remaining:?}"
+    );
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn write_json_atomic_publishes_and_leaves_no_temp_file() {
         // A truncated session file made `ai status` fail to parse; the

@@ -205,8 +205,11 @@ pub async fn generate_workflow(
         println!("{} Fetching {url}...", "  •".dimmed());
         match fetch_reference(&fetcher, url).await {
             Ok(text) => {
-                let preview = if text.len() > 300 {
-                    truncate_utf8(&text, 300).to_string()
+                // #544: align the URL bound with the file bound — 300
+                // bytes contributed ~2 sentences of grounding for a fetch
+                // the user explicitly paid for.
+                let preview = if text.len() > 2000 {
+                    truncate_utf8(&text, 2000).to_string()
                 } else {
                     text.clone()
                 };
