@@ -37,7 +37,7 @@ Available environment backends:
   ✓ venv
 ```
 
-The two banner lines print only at an interactive terminal; redirected output starts at `Available environment backends:`.
+The two banner lines print only at an interactive terminal. All of this output goes to **stderr** — capture it with `2>` or `2>&1`; stdout stays empty.
 
 ### `env check`
 
