@@ -326,6 +326,7 @@ pub fn clean_command(
         let mut not_found = 0usize;
         let mut rejected = 0usize;
         let mut protected = 0usize;
+        let mut total_failed = 0usize; // #540: survives the deletion block
 
         for (declared, path) in &resolved {
             if declared.contains("..") || declared.starts_with('/') || declared.starts_with('~') {
@@ -382,13 +383,22 @@ pub fn clean_command(
             let mut failed = 0usize;
 
             for path in &deletable {
-                match std::fs::remove_file(path) {
+                // #540: outputs are routinely directories — remove_file
+                // failed with EISDIR and the command still exited 0 while
+                // the output stayed on disk.
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(path)
+                } else {
+                    std::fs::remove_file(path)
+                };
+                match result {
                     Ok(()) => {
                         deleted += 1;
                         eprintln!("  {} {}", "✓".green(), path.display());
                     }
                     Err(e) => {
                         failed += 1;
+                        total_failed += 1;
                         eprintln!("  {} {} — {}", "✗".red(), path.display(), e);
                     }
                 }
@@ -404,6 +414,14 @@ pub fn clean_command(
                 rejected,
                 protected
             );
+
+            // #540: scripts read the exit code — deletions that failed must
+            // not read as success.
+            if total_failed > 0 {
+                return Err(anyhow::anyhow!(
+                    "clean: {total_failed} path(s) failed to delete"
+                ));
+            }
         }
     }
     Ok(())
