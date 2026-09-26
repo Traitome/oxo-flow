@@ -3956,6 +3956,12 @@ run workdir (pipelines legitimately clean up their own outputs), while root,
 home (<code>~</code>), <code>--no-preserve-root</code> forms, and any target outside the workdir
 remain hard errors. The static lint (E011) still flags raw <code>rm -rf /</code>-style
 templates regardless.</p>
+<p>Quoted operands are parsed, not blanket-rejected: each operand may be
+individually wrapped in balanced quotes (<code>rm -rf $prefix "$prefix.fa"</code> — the
+standard defensive spelling in shell loops), and the quotes are stripped
+before the in-workdir check. Command substitution (<code>$(...)</code>, backticks),
+unbalanced quotes, and quote pairs spanning multiple operands
+(<code>rm -rf "a b" c</code>) still fail closed as unparseable.</p>
 <h3 id="warning-patterns-non-blocking">Warning Patterns (Non-Blocking)<a class="headerlink" href="#warning-patterns-non-blocking" title="Permanent link">#</a></h3>
 <p>These emit <strong>warnings</strong> but allow execution — the rule runs either way. The
 warning exists because such idioms can also ride in on rendered wildcard
