@@ -4317,10 +4317,11 @@ ships it, and falls back to <code>sh</code> when it does not.</p>
 <li><strong>Resolution</strong>: <code>environment.venv</code> names the <strong>venv directory</strong> to create/reuse (e.g. <code>.venv</code>); <code>environment.venv_requirements</code> names the requirements file (default: <code>requirements.txt</code> in the working directory). Declaring a requirements file path in <code>venv</code> itself fails — the backend creates a directory at that path</li>
 <li><strong>Activation</strong>: Creates the venv (if needed) and activates it before the command</li>
 <li><strong>Caching</strong>: Venvs are stored in a cache directory keyed by the declared
-  venv spec (<code>venv:&lt;path&gt;</code> — the venv path you declared in the rule), not by
-  a hash of the requirements content. Editing <code>requirements.txt</code> in place
-  does not by itself invalidate the cache; bump the venv path or clear the
-  cache to force a rebuild.</li>
+  venv spec <strong>plus a content hash of the requirements file</strong>
+  (<code>venv:&lt;path&gt;:&lt;hash8&gt;</code>), so editing <code>requirements.txt</code> in place
+  invalidates the cache and the next run rebuilds the environment
+  (#532 — previously the key was the path only and edits were silently
+  ignored). Unreadable/missing files degrade to the plain path key.</li>
 </ul>
 <h3 id="hpc-modules">HPC Modules<a class="headerlink" href="#hpc-modules" title="Permanent link">#</a></h3>
 <ul>
