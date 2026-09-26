@@ -287,6 +287,11 @@ impl std::fmt::Display for SchedulerSummary {
 }
 
 /// Parse a memory string (e.g., "8G", "16384M", "1T") into megabytes.
+///
+/// Overflow-safe (#523): the unit conversion uses checked arithmetic — a
+/// hostile or typo'd value like `"18000000000000T"` returned `None`
+/// instead of silently wrapping in release builds (the wrapped number fed
+/// budget/OOM math and the raw string still reached the shell).
 pub fn parse_memory_mb(memory: &str) -> Option<u64> {
     let memory = memory.trim();
     if memory.is_empty() {
@@ -308,8 +313,8 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
 
     let num: u64 = num_str.parse().ok()?;
     let mb_int = match unit {
-        "T" => num * 1024 * 1024,
-        "G" => num * 1024,
+        "T" => num.checked_mul(1024 * 1024)?,
+        "G" => num.checked_mul(1024)?,
         "M" => num,
         "K" => num / 1024,
         _ => return None,
@@ -319,6 +324,26 @@ pub fn parse_memory_mb(memory: &str) -> Option<u64> {
         return None;
     }
     Some(mb_int)
+}
+
+#[cfg(test)]
+mod parse_memory_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn parse_memory_mb_is_overflow_safe() {
+        // #523: the T/G unit multiplications used unchecked arithmetic —
+        // a huge value silently wrapped in release builds and fed budget
+        // math, and the raw string still reached the shell.
+        assert_eq!(parse_memory_mb("18000000000000T"), None);
+        assert_eq!(parse_memory_mb("18446744073709551616G"), None);
+        // Sensible values keep parsing.
+        assert_eq!(parse_memory_mb("8G"), Some(8192));
+        assert_eq!(parse_memory_mb("16384M"), Some(16384));
+        assert_eq!(parse_memory_mb("1T"), Some(1024 * 1024));
+        // 512K rounds below 1 MB → treated as unparsable (0 with num > 0).
+        assert_eq!(parse_memory_mb("512k"), None);
+    }
 }
 
 /// Pre-flight check: report rules whose declared request can never fit an

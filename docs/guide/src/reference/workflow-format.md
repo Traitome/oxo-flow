@@ -611,6 +611,16 @@ memory = "32G"
 | `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
+
+> **Run-path field validation (#523).** Rule *names* (charset:
+> alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
+> (`<number><G|M|K|T>`), thread counts and `retry_delay` formats are
+> validated when the workflow is parsed — an invalid value fails the run
+> before any expansion or rendering, so values from a third-party
+> `[[include]]` can never reach the rendered docker/scheduler/shell
+> command line. Design-level checks (GPU/backend pairing,
+> `output_pattern` consistency) stay at expansion time where their
+> context-aware diagnostics run.
 | `environment` | Table | No | Environment specification |
 | `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
 | `when` | String | No | Conditional expression — skip rule when `false`. May call read-only runtime functions (`reads_count`, `wc_lines`, `file_size`, `file_exists`, `regex_extract`) that inspect files in the run workdir; see [Data-Dependent `when` Gates](#data-dependent-when-gates) |

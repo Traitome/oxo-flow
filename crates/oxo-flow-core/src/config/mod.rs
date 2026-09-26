@@ -66,6 +66,17 @@ impl WorkflowConfig {
             }
         }
 
+        // Per-rule field validation (#523): the type-state `Rule::validate`
+        // was only reachable through `WorkflowState`, which no CLI path
+        // uses — so rule names, memory formats and thread counts reached
+        // shell/docker/scheduler rendering unchecked. `WorkflowConfig::
+        // validate` IS on the run path, so fan out to the field-format
+        // subset here (the design-level checks keep their
+        // expansion-stage enforcement, which names the context better).
+        for rule in &self.rules {
+            rule.validate_field_formats()?;
+        }
+
         // Ensure each rule has either shell, script, or transform
         for rule in &self.rules {
             if rule.shell.is_none()
