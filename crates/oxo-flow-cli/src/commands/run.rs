@@ -319,13 +319,17 @@ async fn terminate_on_signal(
 
     let mut ck = checkpoint.lock().await;
     for rule in in_flight {
+        // #525: the engine killed this rule — record the signal evidence,
+        // never a fabricated exit code. `exit_code: Some(130)` read as a
+        // real process exit in rule_runs/reports (the exact inverse of the
+        // #498 evidence model, and undemotable).
         let record = oxo_flow_core::executor::JobRecord {
-            signal: None,
+            signal: Some(15), // SIGTERM — what kill_process_tree sends first
             rule: rule.clone(),
             status: oxo_flow_core::executor::JobStatus::Failed,
             started_at: None,
             finished_at: Some(chrono::Utc::now()),
-            exit_code: Some(signal.exit_code()),
+            exit_code: None,
             stdout: None,
             stderr: None,
             command: None,
@@ -3738,8 +3742,15 @@ pub async fn run_command(
             executor.clear_resource_waiters().await;
             // The grace poll inside kill_process_tree sleeps up to 10 s —
             // run the sweep on the blocking pool, not a runtime worker
-            // (#524; the timeout path already follows this rule).
+            // (#524; the timeout path already follows this rule). The
+            // snapshot also records WHICH rules the abort actually killed:
+            // the #498 demotion below keys on that evidence, not on bare
+            // signal deaths — a sibling the kernel OOM-killer shot carries
+            // the same signal signature and must keep its failed record
+            // (#525).
             let snapshot = executor.active_pids();
+            let mut abort_killed: std::collections::HashSet<String> =
+                snapshot.iter().map(|(r, _)| r.clone()).collect();
             tokio::task::spawn_blocking(move || {
                 for (rule_name, pid) in snapshot {
                     if let Err(e) = oxo_flow_core::executor::timeout::kill_process_tree(pid) {
@@ -3759,6 +3770,7 @@ pub async fn run_command(
             // the first sweep and spawn its next attempt; those late
             // children escape the stale first snapshot (#524).
             let late = executor.active_pids();
+            abort_killed.extend(late.iter().map(|(r, _)| r.clone()));
             if !late.is_empty() {
                 tokio::task::spawn_blocking(move || {
                     for (rule_name, pid) in late {
@@ -3809,6 +3821,17 @@ pub async fn run_command(
                     let mut ck = checkpoint.lock().await;
                     for rule_name in &killed {
                         if ck.is_completed(rule_name) {
+                            continue;
+                        }
+                        // The kill-snapshot membership is the demotion
+                        // evidence (#525): a signal death alone cannot
+                        // distinguish the abort's kill from a kernel
+                        // OOM-kill that merely reaped around the same time.
+                        // A rule that already failed on its own and was NOT
+                        // in the kill snapshots keeps its genuine failure
+                        // record untouched — never demoted, never
+                        // overwritten with a cancellation.
+                        if already_failed.contains(rule_name) && !abort_killed.contains(rule_name) {
                             continue;
                         }
                         if already_failed.contains(rule_name) {
