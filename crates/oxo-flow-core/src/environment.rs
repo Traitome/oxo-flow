@@ -220,8 +220,10 @@ fn missing_env_advice(
              rename it, or drop --skip-env-setup so the engine builds '{full}' itself"
         ))
     } else {
+        // #534: the spec path is quoted like the generated setup command.
+        let quoted = escape_for_sh_single_quote(spec);
         Some(format!(
-            "create it with `conda env create -n {full} -f {spec}` or drop \
+            "create it with `conda env create -n {full} -f '{quoted}'` or drop \
              --skip-env-setup (content hash {hash8} derives from '{spec}')"
         ))
     }
@@ -357,8 +359,10 @@ impl EnvironmentBackend for CondaBackend {
         // summarizedexperiment), breaking every R call in the env. The
         // fallback only needs to complete the spec; additive is enough.
         let env_name = conda_env_name_from_spec("conda", spec)?;
+        // #534: spec paths are quoted like the prefix below.
+        let quoted = escape_for_sh_single_quote(spec);
         Ok(format!(
-            "conda env create -n {env_name} -f {spec} || conda env update -n {env_name} -f {spec}"
+            "conda env create -n {env_name} -f '{quoted}' || conda env update -n {env_name} -f '{quoted}'"
         ))
     }
 
@@ -392,8 +396,10 @@ impl CondaBackend {
     /// (install to the system conda directory).
     pub fn setup_command_with_opts(&self, spec: &str, prefix: Option<&str>) -> Result<String> {
         if let Some(prefix) = prefix {
+            let quoted_prefix = escape_for_sh_single_quote(prefix);
+            let quoted_spec = escape_for_sh_single_quote(spec);
             Ok(format!(
-                "conda env create -p {prefix} -f {spec} || conda env update -p {prefix} -f {spec}"
+                "conda env create -p '{quoted_prefix}' -f '{quoted_spec}' || conda env update -p '{quoted_prefix}' -f '{quoted_spec}'"
             ))
         } else {
             self.setup_command(spec)
@@ -1265,6 +1271,14 @@ impl EnvironmentBackend for SingularityBackend {
         // registry host is not part of it), so the local-cache guard keeps
         // matching across mirrored and direct boxes; only the pull target
         // is rewritten through the box's mirrors.
+        // #534: the backend boundary guard (ensure_container_spec_safe)
+        // ran only on docker's setup and singularity's WRAP — the setup
+        // interpolated {spec} raw into a shell case statement. Guard here
+        // too, so nothing reaches the shell even when a caller skips
+        // workflow-level validation (E016).
+        if spec.contains("://") {
+            ensure_container_spec_safe(spec)?;
+        }
         let pull_spec = mirrored_spec(spec);
         Ok(format!(
             "case '{spec}' in *://*) IMG=$(printf '%s' '{spec}' | sed 's#^docker://##; s#.*/##; s#%3A#:#g; s#%3a#:#g; s#:#_#g'); case \"$IMG\" in *.sif) ;; *) IMG=\"$IMG.sif\" ;; esac; [ -f \"$IMG\" ] || {b} pull \"$IMG\" {pull_spec} ;; *) [ -f '{spec}' ] || {{ echo \"singularity spec '{spec}' is neither a pull URI nor an existing file\" >&2; exit 1; }} ;; esac",
@@ -1312,14 +1326,18 @@ impl EnvironmentBackend for VenvBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
-        Ok(format!("source {spec}/bin/activate && {command}"))
+        let quoted = escape_for_sh_single_quote(spec);
+        Ok(format!("source '{quoted}'/bin/activate && {command}"))
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
         // POSIX `.` (not `source` — a bashism): setup commands run under
         // `sh` (process.rs), where dash has no `source` builtin.
+        // #534: the spec is a client-controlled path — quote it (a space
+        // used to split into two command targets).
+        let quoted = escape_for_sh_single_quote(spec);
         Ok(format!(
-            "python3 -m venv {spec} && . {spec}/bin/activate && pip install -r requirements.txt"
+            "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate && pip install -r requirements.txt"
         ))
     }
 
@@ -1331,7 +1349,10 @@ impl EnvironmentBackend for VenvBackend {
                 message: format!("refusing to remove unsafe path: {spec}"),
             });
         }
-        Ok(Some(format!("rm -rf {spec}")))
+        // #534: `rm -rf {spec}` with a space in the spec deleted two
+        // unrelated paths; single-quote it.
+        let quoted = escape_for_sh_single_quote(spec);
+        Ok(Some(format!("rm -rf '{quoted}'")))
     }
 
     fn verify_command(&self, _spec: &str) -> Result<Option<String>> {
@@ -1359,8 +1380,10 @@ impl VenvBackend {
     ) -> Result<String> {
         let reqs = requirements.unwrap_or("requirements.txt");
         // POSIX `.` (not `source` — a bashism): setup commands run under sh.
+        // #534: quote the client-controlled spec like setup_command does.
+        let quoted = escape_for_sh_single_quote(spec);
         Ok(format!(
-            "python3 -m venv {spec} && . {spec}/bin/activate && pip install -r {reqs}"
+            "python3 -m venv '{quoted}' && . '{quoted}'/bin/activate && pip install -r {reqs}"
         ))
     }
 }
@@ -1493,7 +1516,23 @@ impl EnvironmentBackend for ModulesBackend {
         _resources: Option<&crate::rule::Resources>,
         _workdir: &std::path::Path,
     ) -> Result<String> {
+        // #534: `module load {modules}` had no validation anywhere —
+        // shell-active characters in the spec (from a workflow's
+        // environment.modules) reached the generated script verbatim.
+        // Module names legitimately contain [A-Za-z0-9._/+-] and
+        // comma/whitespace separators; anything else is rejected.
         let modules = spec.replace(',', " ");
+        if let Some(c) = modules
+            .chars()
+            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | ' ')))
+        {
+            return Err(OxoFlowError::Environment {
+                kind: "modules".to_string(),
+                message: format!(
+                    "module spec contains invalid character {c:?}: {spec:?} — module names may only contain [A-Za-z0-9._/-] separated by commas or spaces"
+                ),
+            });
+        }
         // Initialize module system before loading modules
         // Different HPC sites use different module system installations
         let module_init = r#"# Initialize module system
@@ -2096,6 +2135,46 @@ impl EnvironmentResolver {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn hostile_specs_cannot_break_out_of_generated_shell() {
+        // #534: every client-controlled path/spec interpolated into a
+        // generated command must be quoted or rejected — the classic
+        // payloads are a quote in a workdir and a shell-active char in a
+        // container spec.
+        let evil_dir = "/data/o'brien run";
+        let quoted = escape_for_sh_single_quote(evil_dir);
+        let line = format!("cd '{quoted}' && echo hi");
+        assert_eq!(line, "cd '/data/o'\\''brien run' && echo hi");
+
+        // venv teardown quotes the spec: a space no longer splits rm -rf
+        // into two targets.
+        let teardown = VenvBackend
+            .teardown_command("envs/my venv")
+            .unwrap()
+            .unwrap();
+        assert_eq!(teardown, "rm -rf 'envs/my venv'");
+
+        // Singularity setup rejects shell-active container specs at the
+        // backend boundary (not just in workflow-level E016 validation).
+        let singularity = crate::environment::SingularityBackend::default();
+        let err = singularity
+            .setup_command("docker://alpine'; rm -rf ~; '")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("shell-unsafe"),
+            "singularity setup must reject hostile specs: {err}"
+        );
+
+        // Modules: semicolons never reach `module load`.
+        let err = crate::environment::ModulesBackend
+            .wrap_command("true", "gcc; rm -rf ~", None, std::path::Path::new("."))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid character"),
+            "modules must reject shell-active names: {err}"
+        );
+    }
+
+    #[test]
     fn file_backed_cache_keys_track_content() {
         // #532: editing the file behind a file-backed spec must change the
         // cache key — a path-only key made every later rule reuse the
@@ -2181,7 +2260,7 @@ mod tests {
         let empty: HashSet<String> = HashSet::new();
         let advice =
             missing_env_advice("checkm2", "checkm2-08dc2a29", "envs/checkm2.yaml", &empty).unwrap();
-        assert!(advice.contains("conda env create -n checkm2-08dc2a29 -f envs/checkm2.yaml"));
+        assert!(advice.contains("conda env create -n checkm2-08dc2a29 -f 'envs/checkm2.yaml'"));
         // Suffixed env exists → silent.
         let with_full: HashSet<String> = ["checkm2-08dc2a29".to_string()].into();
         assert_eq!(
@@ -2352,8 +2431,8 @@ mod tests {
         // on the update fallback (issue #429): pruning re-resolves the
         // whole dependency graph and deleted `lib/R/bin/exec/R` from
         // pre-built bioconda R envs.
-        assert!(cmd.contains("conda env create -n qc -f envs/qc.yaml"));
-        assert!(cmd.contains("conda env update -n qc -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env create -n qc -f 'envs/qc.yaml'"));
+        assert!(cmd.contains("conda env update -n qc -f 'envs/qc.yaml'"));
         assert!(!cmd.contains("--prune"));
     }
 
@@ -2427,7 +2506,7 @@ mod tests {
         // Non-file specs (plain names) keep the plain name — no suffix.
         let backend = CondaBackend;
         let cmd = backend.setup_command("myenv").unwrap();
-        assert!(cmd.contains("conda env create -n myenv -f myenv"));
+        assert!(cmd.contains("conda env create -n myenv -f 'myenv'"));
     }
 
     #[test]
@@ -2958,7 +3037,7 @@ mod tests {
     fn venv_setup_command() {
         let backend = VenvBackend;
         let cmd = backend.setup_command(".venv").unwrap();
-        assert!(cmd.contains("python3 -m venv .venv"));
+        assert!(cmd.contains("python3 -m venv '.venv'"));
         assert!(cmd.contains("pip install -r requirements.txt"));
         // Setup runs under `sh` (process.rs), where `source` does not exist
         // — POSIX `.` is the activation builtin.
@@ -2966,14 +3045,14 @@ mod tests {
             !cmd.contains("source "),
             "setup must not use the bashism `source`: {cmd}"
         );
-        assert!(cmd.contains(". .venv/bin/activate"));
+        assert!(cmd.contains(". '.venv'/bin/activate"));
     }
 
     #[test]
     fn venv_teardown_command() {
         let backend = VenvBackend;
         let cmd = backend.teardown_command(".venv").unwrap().unwrap();
-        assert_eq!(cmd, "rm -rf .venv");
+        assert_eq!(cmd, "rm -rf '.venv'");
     }
 
     #[test]
@@ -3348,7 +3427,7 @@ mod tests {
         let result = backend
             .wrap_command("pip list", ".venv", None, std::path::Path::new("."))
             .unwrap();
-        assert!(result.contains("source .venv/bin/activate"));
+        assert!(result.contains("source '.venv'/bin/activate"));
         assert!(result.contains("pip list"));
     }
 
@@ -3544,10 +3623,10 @@ mod tests {
             .setup_command_with_opts("envs/qc.yaml", Some(".oxo-conda"))
             .unwrap();
         assert!(
-            cmd.contains("conda env create -p .oxo-conda -f envs/qc.yaml"),
+            cmd.contains("conda env create -p '.oxo-conda' -f 'envs/qc.yaml'"),
             "expected -p prefix form, got: {cmd}"
         );
-        assert!(cmd.contains("conda env update -p .oxo-conda -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env update -p '.oxo-conda' -f 'envs/qc.yaml'"));
         assert!(!cmd.contains("--prune"), "issue #429: no --prune: {cmd}");
     }
 
@@ -3557,7 +3636,7 @@ mod tests {
         let cmd = backend
             .setup_command_with_opts("envs/qc.yaml", None)
             .unwrap();
-        assert!(cmd.contains("conda env create -n qc -f envs/qc.yaml"));
+        assert!(cmd.contains("conda env create -n qc -f 'envs/qc.yaml'"));
         // Should NOT contain -p
         assert!(!cmd.contains(" -p "));
     }
@@ -3627,7 +3706,7 @@ mod tests {
         let cmd = backend
             .setup_command_with_reqs(".venv", Some("requirements-dev.txt"))
             .unwrap();
-        assert!(cmd.contains("python3 -m venv .venv"));
+        assert!(cmd.contains("python3 -m venv '.venv'"));
         assert!(cmd.contains("pip install -r requirements-dev.txt"));
     }
 

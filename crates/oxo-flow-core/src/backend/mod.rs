@@ -260,7 +260,12 @@ fn build_rule(
             message: format!("environment wrapping failed for '{name}': {e}"),
         })?;
     let dependencies = dag.dependencies(name).unwrap_or_default();
-    let shell_cmd = format!("cd '{}' && {}", workdir.display(), wrapped);
+    // #534: the run dir is a host path — quote it like environment.rs
+    // quotes the identical path elsewhere (a `'` in the path broke out of
+    // the quoting and injected).
+    let quoted_workdir =
+        crate::environment::escape_for_sh_single_quote(&workdir.display().to_string());
+    let shell_cmd = format!("cd '{quoted_workdir}' && {wrapped}");
     let template = config
         .template_of(name)
         .map(str::to_string)

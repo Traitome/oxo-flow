@@ -453,15 +453,20 @@ fn ensure_log_dirs(script: &str, workdir: &Path) {
 /// array renderer appends after the command on top of the copies the base
 /// script already carries before it.
 fn finish_script(script: &str, backend: &ClusterBackend, workdir: &Path) -> String {
-    let dir = absolute_workdir(workdir).display().to_string();
+    // #534: scheduler directive paths must survive spaces (and quotes) —
+    // SLURM/SGE/LSB parse the directive value as one token only when
+    // quoted; PBS's shell `cd` needs shell quoting.
+    let dir = crate::environment::escape_for_sh_single_quote(
+        &absolute_workdir(workdir).display().to_string(),
+    );
     let directive = match backend {
-        ClusterBackend::Slurm => format!("#SBATCH --chdir={dir}"),
+        ClusterBackend::Slurm => format!("#SBATCH --chdir='{dir}'"),
         // OpenPBS qsub has no working-directory option at all (no `-d` —
         // that is Torque; no `-w` — that is PBS Pro), so for PBS the pin
         // happens in the script body instead of as a scheduler directive.
         ClusterBackend::Pbs => format!("cd '{dir}' || exit 1"),
-        ClusterBackend::Sge => format!("#$ -wd {dir}"),
-        ClusterBackend::Lsf => format!("#BSUB -cwd {dir}"),
+        ClusterBackend::Sge => format!("#$ -wd '{dir}'"),
+        ClusterBackend::Lsf => format!("#BSUB -cwd '{dir}'"),
     };
     let mut lines = script.lines();
     let mut finished = vec![lines.next().unwrap_or_default().to_string()];
@@ -1468,13 +1473,13 @@ mod tests {
         // SGE in a queue-configured directory, so relative outputs landed
         // outside the run directory.
         let cases = [
-            (ClusterBackend::Slurm, "#SBATCH --chdir=/wf"),
+            (ClusterBackend::Slurm, "#SBATCH --chdir='/wf'"),
             // OpenPBS qsub has NO working-directory option (no -d — that is
             // Torque; no -w — that is PBS Pro), so the pin happens in the
             // script body (found live, issue #356).
             (ClusterBackend::Pbs, "cd '/wf' || exit 1"),
-            (ClusterBackend::Sge, "#$ -wd /wf"),
-            (ClusterBackend::Lsf, "#BSUB -cwd /wf"),
+            (ClusterBackend::Sge, "#$ -wd '/wf'"),
+            (ClusterBackend::Lsf, "#BSUB -cwd '/wf'"),
         ];
         for (backend, pin) in cases {
             let script = finish_script("#!/bin/bash\nset -e\ntrue\n", &backend, Path::new("/wf"));
@@ -1530,7 +1535,7 @@ mod tests {
             nested.as_path(),
         );
         let expected = format!(
-            "#!/bin/bash\n#SBATCH --chdir={}\ntrue\n",
+            "#!/bin/bash\n#SBATCH --chdir='{}'\ntrue\n",
             nested.canonicalize().unwrap().display()
         );
         assert_eq!(script, expected);
@@ -1560,11 +1565,11 @@ mod tests {
             "one mkdir -p logs only: {script}"
         );
         assert!(
-            script.contains("#SBATCH --chdir=/wf\n"),
+            script.contains("#SBATCH --chdir='/wf'\n"),
             "the array pins the working directory too: {script}"
         );
         assert!(
-            script.starts_with("#!/bin/bash\n#SBATCH --chdir=/wf\n#SBATCH --array=1-2\n"),
+            script.starts_with("#!/bin/bash\n#SBATCH --chdir='/wf'\n#SBATCH --array=1-2\n"),
             "the array range stays right after the new chdir directive: {script}"
         );
     }

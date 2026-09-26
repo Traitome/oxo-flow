@@ -510,7 +510,7 @@ output = ["finish.txt"]
         // The trait path additionally pins the working directory (audit G9):
         // the directive lands right after the shebang.
         let chdir = dir.path().canonicalize().unwrap().display().to_string();
-        let chdir_directive = format!("#SBATCH --chdir={chdir}");
+        let chdir_directive = format!("#SBATCH --chdir='{chdir}'");
         let mut lines: Vec<&str> = base.lines().collect();
         lines.insert(1, &chdir_directive);
         let expected = lines.join("\n");
