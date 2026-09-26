@@ -23,8 +23,12 @@ pub async fn validate_command(
     json: bool,
     ai: bool,
 ) -> Result<()> {
-    // AI: auto-detect from workflow [ai] or explicit --ai flag
-    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+    // AI: auto-detect from workflow [ai] or explicit --ai flag. Suppressed
+    // under --json (#539): the narrative is human-only, and the paid call's
+    // output is useless to a JSON consumer.
+    if !json
+        && let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai)
+    {
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "validate", "").await?;
         println!();
     }
@@ -198,8 +202,11 @@ pub async fn validate_command(
 pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool) -> Result<()> {
     print_banner();
 
-    // AI: auto-detect from workflow [ai] or explicit --ai flag
-    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+    // AI: auto-detect from workflow [ai] or explicit --ai flag. Suppressed
+    // under --json (#539): same contract as validate.
+    if !json
+        && let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai)
+    {
         crate::commands::ai_check::analyze_workflow(&workflow, &provider, "lint", "").await?;
         println!();
     }

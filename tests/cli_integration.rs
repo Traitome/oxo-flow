@@ -8328,6 +8328,47 @@ fn cli_resume_reuses_recorded_workdir() {
     );
 }
 
+/// `validate --json` / `lint --json` / `dry-run --json` must emit exactly
+/// one JSON document on stdout even with `[ai] enabled = true` (#539): the
+/// AI narrative used to be println!'d to stdout ahead of the JSON,
+/// breaking every jq/parser consumer.
+#[test]
+fn cli_json_stdout_stays_pure_with_ai_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"ai\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"one\"\noutput = [\"o.txt\"]\nshell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+
+    // Explicit --ai activates the AI surface (the [ai] workflow section is
+    // a separate activation path); a provider endpoint that can never
+    // answer keeps the test offline. The narrative must stay out of
+    // stdout's way — suppressed under --json.
+    for cmd in [
+        vec!["validate", wf.to_str().unwrap(), "--ai", "--json"],
+        vec!["lint", wf.to_str().unwrap(), "--ai", "--json"],
+        vec!["dry-run", wf.to_str().unwrap(), "--ai", "--json"],
+    ] {
+        let out = oxo_flow_cmd()
+            .args(&cmd)
+            .env("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+            .env("OPENAI_API_KEY", "test-key")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{cmd:?} must succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("{cmd:?} stdout must be one JSON document: {e}\n{stdout}"));
+        assert_eq!(parsed["command"], cmd[0].to_string(), "{cmd:?}");
+    }
+}
+
 /// `resume <path>` must load THAT checkpoint — the path the user passed,
 /// not a re-derived `<workdir>/.oxo-flow/checkpoint.json` (#538). With the
 /// derived file absent, resume used to proceed with an empty state and

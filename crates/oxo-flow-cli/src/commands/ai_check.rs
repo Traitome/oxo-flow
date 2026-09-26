@@ -16,12 +16,12 @@ pub async fn analyze_workflow(
     let toml_content = std::fs::read_to_string(workflow_path)
         .map_err(|e| anyhow::anyhow!("Cannot read {}: {e}", workflow_path.display()))?;
 
-    println!(
+    eprintln!(
         "{} {}",
         format!("AI Workflow Analysis ({command})").bold().green(),
         format!("— {}", workflow_path.display()).dimmed()
     );
-    println!(
+    eprintln!(
         "  Model: {}\n",
         provider.model().unwrap_or_else(|| "default".into())
     );
@@ -66,7 +66,7 @@ pub async fn analyze_workflow(
         workflow_path.display()
     );
 
-    println!("{}", "  Analyzing...".bold().cyan());
+    eprintln!("{}", "  Analyzing...".bold().cyan());
 
     use oxo_flow_ai::types::Message;
     let messages = vec![Message::system(&system), Message::user(&user)];
@@ -83,8 +83,8 @@ pub async fn analyze_workflow(
     );
 
     // Display analysis
-    println!("\n{}\n", "Analysis Results".bold().underline());
-    println!("{response_text}");
+    eprintln!("\n{}\n", "Analysis Results".bold().underline());
+    eprintln!("{response_text}");
 
     // Count issues by severity
     let errors = response_text
@@ -100,8 +100,8 @@ pub async fn analyze_workflow(
         .filter(|l| l.contains("[INFO]"))
         .count();
 
-    println!("\n{}", "Summary".bold().underline());
-    println!(
+    eprintln!("\n{}", "Summary".bold().underline());
+    eprintln!(
         "  {} errors, {} warnings, {} suggestions",
         errors.to_string().red(),
         warnings.to_string().yellow(),
@@ -109,14 +109,14 @@ pub async fn analyze_workflow(
     );
 
     if errors > 0 {
-        println!(
+        eprintln!(
             "\n{} Fix errors before running this workflow.",
             "⚠".yellow()
         );
     } else if warnings > 0 {
-        println!("\n{} Review warnings before running.", "ℹ".dimmed());
+        eprintln!("\n{} Review warnings before running.", "ℹ".dimmed());
     } else {
-        println!("\n{} No issues found.", "✓".green());
+        eprintln!("\n{} No issues found.", "✓".green());
     }
 
     Ok(())

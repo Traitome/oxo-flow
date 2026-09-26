@@ -4931,8 +4931,11 @@ pub async fn dry_run_command(
         text
     };
 
-    // AI: auto-detect from workflow [ai] or explicit --ai flag
-    if let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai) {
+    // AI: auto-detect from workflow [ai] or explicit --ai flag. Suppressed
+    // under --json (#539): same stdout-contract reasoning as validate/lint.
+    if !json
+        && let Some(provider) = crate::commands::ai_template::try_resolve_ai(Some(&workflow), ai)
+    {
         // `--ai-max-retries` bounds the attempts, same contract as `run`'s
         // recovery (only a FAILED analysis call is retried).
         let attempts = ai_attempts(ai_max_retries);
