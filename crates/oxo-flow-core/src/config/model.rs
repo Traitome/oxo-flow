@@ -70,16 +70,22 @@ pub(crate) fn pair_when_unknown_config_keys<'a>(
 /// Collect the `{meta.<column>}` references across a rule's texts that NO
 /// metadata row defines, deduplicated in order of first appearance. The
 /// caller aggregates across rules and emits one warn per column (#375 §1).
-pub(crate) fn missing_meta_columns<'a>(
-    texts: &[&'a str],
+///
+/// `#` shell comments are documentation, not executed code — a comment
+/// mentioning `{meta.id}` (e.g. explaining a filter idiom) must not warn
+/// (mag's ale_spades false positive). Scanning runs on comment-stripped
+/// text.
+pub(crate) fn missing_meta_columns(
+    texts: &[&str],
     known: &std::collections::HashSet<String>,
-) -> Vec<&'a str> {
+) -> Vec<String> {
     let mut missing = Vec::new();
     for text in texts {
-        for cap in META_NS_RE.captures_iter(text) {
+        let stripped = crate::wildcard::strip_shell_comments(text);
+        for cap in META_NS_RE.captures_iter(&stripped) {
             let Some(m) = cap.get(1) else { continue };
-            let column = &text[m.start()..m.end()];
-            if !known.contains(column) && !missing.contains(&column) {
+            let column = stripped[m.start()..m.end()].to_string();
+            if !known.contains(column.as_str()) && !missing.contains(&column) {
                 missing.push(column);
             }
         }

@@ -3433,10 +3433,14 @@ fn render_shell_command_inner(
             );
         }
     }
-    if expanded.contains("{config.")
-        || expanded.contains("{meta.")
-        || expanded.contains("{input")
-        || expanded.contains("{output")
+    // Comments are prose, not executed code — scan the command with them
+    // stripped so annotations like `# {input[N]} would interpolate the
+    // glob-annotated pattern` don't read as unresolved placeholders.
+    let scanned = crate::wildcard::strip_shell_comments(&expanded);
+    if scanned.contains("{config.")
+        || scanned.contains("{meta.")
+        || scanned.contains("{input")
+        || scanned.contains("{output")
     {
         tracing::warn!(
             rule = %rule.name,

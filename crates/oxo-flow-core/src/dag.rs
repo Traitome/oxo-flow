@@ -1758,7 +1758,7 @@ const KNOWN_FILE_EXTENSIONS: &[&str] = &[
 /// A declared [`FilePatterns::Dir`] input is always a directory; plain
 /// strings fall back to this check: an explicit trailing slash, or a last
 /// path component without a known file extension.
-fn looks_like_directory(path: &str) -> bool {
+pub(crate) fn looks_like_directory(path: &str) -> bool {
     if path.ends_with('/') {
         return true;
     }
