@@ -726,26 +726,6 @@ impl WorkflowConfig {
         }
     }
 
-    /// Validate that all execution group references point to existing rules.
-    #[must_use = "validation returns a Result that must be checked"]
-    pub fn validate_execution_groups(&self) -> Result<()> {
-        let rule_names: std::collections::HashSet<&str> =
-            self.rules.iter().map(|r| r.name.as_str()).collect();
-        for group in &self.execution_groups {
-            for rule_ref in &group.rules {
-                if !rule_names.contains(rule_ref.as_str()) {
-                    return Err(OxoFlowError::Config {
-                        message: format!(
-                            "execution group '{}' references unknown rule '{}'",
-                            group.name, rule_ref
-                        ),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Apply global defaults to all rules that don't have explicit overrides.
     pub fn apply_defaults(&mut self) {
         for rule in &mut self.rules {

@@ -347,7 +347,6 @@ below cover the codes referenced across this documentation.
 | `W005` | Rule uses >8 threads with no `memory` |
 | `W007` | *(info)* Leaf rule (no dependents) that could be marked `target = true` |
 | `W008` | *(info)* Rule declares no environment — runs in the bare system shell |
-| `W011` | Rule uses `shadow` but declares no inputs — the shadow directory is unnecessary |
 | `W012` | Rule has `retries` but no `retry_delay` (retries execute immediately) |
 | `W014` | `depends_on` references an unknown rule |
 | `W016` | Conda/pixi spec is not a lockfile — builds may not be reproducible |

@@ -1322,13 +1322,6 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
-    /// Shadow directory mode for atomic rule execution.
-    /// "minimal" copies only input files, "shallow" creates symlinks,
-    /// "full" copies the entire working directory.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shadow: Option<String>,
-
     /// Mark specific inputs as "ancient" - these inputs never trigger re-execution
     /// even if they are newer than outputs.
     #[serde(default)]
@@ -1957,13 +1950,6 @@ impl RuleBuilder {
     #[must_use]
     pub fn input_function(mut self, func: impl Into<String>) -> Self {
         self.rule.input_function = Some(func.into());
-        self
-    }
-
-    /// Set shadow directory mode.
-    #[must_use]
-    pub fn shadow(mut self, shadow: impl Into<String>) -> Self {
-        self.rule.shadow = Some(shadow.into());
         self
     }
 
@@ -2636,25 +2622,6 @@ mod tests {
         };
         assert_eq!(rule.tags.len(), 2);
         assert!(rule.tags.contains(&"alignment".to_string()));
-    }
-
-    #[test]
-    fn rule_shadow_field() {
-        let toml_str = r#"
-            name = "align"
-            input = ["reads.fq"]
-            output = ["sorted.bam"]
-            shell = "bwa mem ref reads.fq > sorted.bam"
-            shadow = "minimal"
-        "#;
-        let rule: Rule = toml::from_str(toml_str).unwrap();
-        assert_eq!(rule.shadow.as_deref(), Some("minimal"));
-    }
-
-    #[test]
-    fn rule_shadow_default_none() {
-        let rule = Rule::default();
-        assert!(rule.shadow.is_none());
     }
 
     #[test]

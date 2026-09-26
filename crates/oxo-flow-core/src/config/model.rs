@@ -489,45 +489,6 @@ pub struct ResolvedIncludeContract {
     pub outputs: Vec<String>,
 }
 
-/// Execution mode for an execution group.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ExecutionMode {
-    /// Rules in the group execute one after another.
-    Sequential,
-    /// Rules in the group execute concurrently.
-    #[default]
-    Parallel,
-}
-
-impl std::fmt::Display for ExecutionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExecutionMode::Sequential => write!(f, "sequential"),
-            ExecutionMode::Parallel => write!(f, "parallel"),
-        }
-    }
-}
-
-/// Execution group for explicit rule ordering.
-///
-/// Groups a set of rules under a named block with a specified execution
-/// mode (sequential or parallel).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExecutionGroup {
-    /// Group name.
-    pub name: String,
-
-    /// Rules in this group (by name).
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<String>,
-
-    /// Execution mode.
-    #[serde(default)]
-    pub mode: ExecutionMode,
-}
-
 /// Citation information for workflow reproducibility and publication.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CitationInfo {
@@ -1813,11 +1774,6 @@ pub struct WorkflowConfig {
     #[serde(default, rename = "include")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<IncludeDirective>,
-
-    /// Explicit execution groups for sequential/parallel rule ordering.
-    #[serde(default, rename = "execution_group")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub execution_groups: Vec<ExecutionGroup>,
 
     /// Citation information for reproducibility.
     #[serde(default)]

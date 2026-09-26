@@ -14,6 +14,114 @@ use tokio::sync::Mutex;
 
 /// Flatten workflow config values into the `{config.key}` placeholder map
 /// used for path expansion (DAG edge matching, run-time rendering, …).
+/// Default targets (issue #469): rules marked `target = true` are what
+/// `run`/`dry-run` build when neither `-t` nor `--module` selected
+/// anything — Snakemake's rule-all semantics. No marked rule → the full
+/// DAG (backward compatible); an explicit `-t`/`--module` always wins.
+fn resolve_default_targets(config: &WorkflowConfig, target: &[String]) -> Vec<String> {
+    if !target.is_empty() {
+        return target.to_vec();
+    }
+    let marked: Vec<String> = config
+        .rules
+        .iter()
+        .filter(|r| r.target)
+        .map(|r| r.name.clone())
+        .collect();
+    if marked.is_empty() {
+        target.to_vec()
+    } else {
+        marked
+    }
+}
+
+/// Render one engine-sampled benchmark record as JSON for the rule's
+/// declared `benchmark` path (issue #469). JSON keeps the fields
+/// self-describing and re-parseable; values mirror the checkpoint's
+/// BenchmarkRecord exactly.
+fn render_benchmark_json(b: &oxo_flow_core::executor::checkpoint::BenchmarkRecord) -> String {
+    serde_json::json!({
+        "rule": b.rule,
+        "wall_time_secs": b.wall_time_secs,
+        "max_memory_mb": b.max_memory_mb,
+        "memory_limit_mb": b.memory_limit_mb,
+        "cpu_seconds": b.cpu_seconds,
+        "retries": b.retries,
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod default_target_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_default_targets_prefers_explicit_selection() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+
+[[rules]]
+name = "a"
+target = true
+shell = "true"
+
+[[rules]]
+name = "b"
+shell = "true"
+"#,
+        )
+        .unwrap();
+
+        // Explicit -t always wins.
+        assert_eq!(
+            resolve_default_targets(&config, &["b".to_string()]),
+            vec!["b".to_string()]
+        );
+        // No explicit selection → the marked rule.
+        assert_eq!(resolve_default_targets(&config, &[]), vec!["a".to_string()]);
+        // --module already selected something → unchanged.
+        assert_eq!(
+            resolve_default_targets(&config, &["m_rule".to_string()]),
+            vec!["m_rule".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_default_targets_full_dag_without_marks() {
+        let config = WorkflowConfig::parse(
+            r#"
+[workflow]
+name = "t"
+
+[[rules]]
+name = "a"
+shell = "true"
+"#,
+        )
+        .unwrap();
+        assert!(resolve_default_targets(&config, &[]).is_empty());
+    }
+
+    #[test]
+    fn render_benchmark_json_carries_sampled_fields() {
+        let b = oxo_flow_core::executor::checkpoint::BenchmarkRecord {
+            rule: "fastqc".into(),
+            wall_time_secs: 2.75,
+            max_memory_mb: Some(512),
+            memory_limit_mb: Some(1024),
+            cpu_seconds: Some(2.1),
+            retries: 0,
+            recorded_as: None,
+        };
+        let json = render_benchmark_json(&b);
+        assert!(json.contains(r#""rule":"fastqc""#), "{json}");
+        assert!(json.contains(r#""wall_time_secs":2.75"#), "{json}");
+        assert!(json.contains(r#""max_memory_mb":512"#), "{json}");
+    }
+}
+
 pub(crate) fn config_placeholder_values(
     config: &HashMap<String, toml::Value>,
 ) -> HashMap<String, String> {
@@ -1287,6 +1395,9 @@ pub async fn run_command(
             .collect()
     };
 
+    // Default targets (issue #469): `target = true` rules seed the build
+    // when nothing explicit was selected. Explicit -t/--module wins.
+    let target = resolve_default_targets(&config, &target);
     let mut order = if target.is_empty() {
         dag.execution_order()?
     } else {
@@ -2911,6 +3022,30 @@ pub async fn run_command(
                                     retries: record.retries,
                                     recorded_as: None,
                                 };
+                            // `benchmark` declaration (issue #469): write the
+                            // engine-sampled metrics to the declared path,
+                            // per instance (the declaration may carry
+                            // `{sample}`-style wildcards). Best-effort — a
+                            // benchmark write failure must never fail a
+                            // completed rule.
+                            if let Some(bench_decl) = &rule.benchmark {
+                                let bench_path = oxo_flow_core::executor::checkpoint::expand_config_in_path(bench_decl, &wildcard_values);
+                                if !bench_path.contains('{') {
+                                    let rendered = render_benchmark_json(&benchmark);
+                                    let dest = workdir_actual.as_ref().join(&bench_path);
+                                    if let Some(parent) = dest.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    if let Err(e) = std::fs::write(&dest, rendered) {
+                                        tracing::warn!(
+                                            rule = %rule_name,
+                                            path = %dest.display(),
+                                            error = %e,
+                                            "failed to write benchmark file"
+                                        );
+                                    }
+                                }
+                            }
                             // Post-run manifest re-verification
                             // (issue #194 §2.10): an external writer
                             // touching an input mid-run is invisible to the
@@ -4736,6 +4871,8 @@ pub async fn dry_run_command(
             }
         }
     }
+    // Default targets (issue #469): same seeding as `run`.
+    let target = resolve_default_targets(&config, &target);
     // Targeted dry-runs close over the INSTANTIATED DAG (issue #247) —
     // the same when-gate filter `run` applies, so the preview cannot list
     // instances that would never execute.

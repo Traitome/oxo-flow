@@ -1288,18 +1288,6 @@ pub fn lint_format(
             });
         }
 
-        // W011: Rule uses shadow but has no inputs (shadow is unnecessary)
-        if rule.shadow.is_some() && rule.input.is_empty() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                message: "rule uses shadow but has no inputs — shadow directory is unnecessary"
-                    .to_string(),
-                rule: Some(rule.name.clone()),
-                code: "W011".to_string(),
-                suggestion: Some("remove the shadow setting, or add input files".to_string()),
-            });
-        }
-
         // W012: Rule has retries but no retry_delay
         if rule.retries > 0 && rule.retry_delay.is_none() {
             diagnostics.push(Diagnostic {
@@ -3599,35 +3587,6 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
     }
 
     #[test]
-    fn format_roundtrip_with_execution_groups() {
-        let toml = r#"
-            [workflow]
-            name = "test"
-            version = "1.0.0"
-
-            [[execution_group]]
-            name = "prep"
-            rules = ["step1"]
-            mode = "sequential"
-
-            [[rules]]
-            name = "step1"
-            shell = "echo hi"
-        "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let formatted = format_workflow(&config);
-        assert!(formatted.contains("[[execution_group]]"));
-        assert!(formatted.contains("name = \"prep\""));
-        assert!(formatted.contains("mode = \"sequential\""));
-        let reparsed = WorkflowConfig::parse(&formatted).unwrap();
-        assert_eq!(reparsed.execution_groups.len(), 1);
-        assert_eq!(
-            reparsed.execution_groups[0].mode,
-            crate::config::ExecutionMode::Sequential
-        );
-    }
-
-    #[test]
     fn format_retries_zero_not_emitted() {
         let toml = r#"
             [workflow]
@@ -3778,41 +3737,6 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let config = WorkflowConfig::parse(toml).unwrap();
         let diagnostics = lint_format(&config, None);
         assert!(!diagnostics.iter().any(|d| d.code == "W010"));
-    }
-
-    #[test]
-    fn lint_shadow_no_inputs() {
-        let toml = r#"
-            [workflow]
-            name = "test"
-
-            [[rules]]
-            name = "generate"
-            output = ["out.txt"]
-            shell = "echo hello > out.txt"
-            shadow = "minimal"
-        "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config, None);
-        assert!(diagnostics.iter().any(|d| d.code == "W011"));
-    }
-
-    #[test]
-    fn lint_shadow_with_inputs_no_w011() {
-        let toml = r#"
-            [workflow]
-            name = "test"
-
-            [[rules]]
-            name = "process"
-            input = ["in.txt"]
-            output = ["out.txt"]
-            shell = "cat in.txt > out.txt"
-            shadow = "minimal"
-        "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let diagnostics = lint_format(&config, None);
-        assert!(!diagnostics.iter().any(|d| d.code == "W011"));
     }
 
     #[test]
