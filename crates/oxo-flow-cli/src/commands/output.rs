@@ -176,7 +176,7 @@ pub struct ReportArgs {
 /// ambiguous directory is an error: a report is a one-shot artifact and the
 /// user must pick the workflow explicitly rather than get a silent arbitrary
 /// choice.
-fn discover_report_workflow_in(dir: &Path) -> Result<PathBuf> {
+fn discover_report_workflow_in(dir: &Path, plan: bool) -> Result<PathBuf> {
     // Priority: main.oxoflow (the conventional single-entry workflow).
     let main_workflow = dir.join("main.oxoflow");
     if main_workflow.exists() {
@@ -192,6 +192,10 @@ fn discover_report_workflow_in(dir: &Path) -> Result<PathBuf> {
     oxoflow_files.sort();
 
     match oxoflow_files.len() {
+        0 if plan => anyhow::bail!(
+            "no workflow found in {} — pass WORKFLOW explicitly to choose the workflow the template report describes",
+            dir.display()
+        ),
         0 => anyhow::bail!(
             "no workflow found in {} — pass WORKFLOW explicitly, or use --plan for a template-only report",
             dir.display()
@@ -306,10 +310,10 @@ fn resolve_report_workflow(
                         PathBuf::from(wp)
                     } else {
                         checkpoint = Some(cp);
-                        discover_report_workflow_in(discovery_dir)?
+                        discover_report_workflow_in(discovery_dir, plan)?
                     }
                 }
-                None => discover_report_workflow_in(discovery_dir)?,
+                None => discover_report_workflow_in(discovery_dir, plan)?,
             }
         }
     };
