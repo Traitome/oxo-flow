@@ -11,7 +11,7 @@ oxo-flow init my-pipeline
 cd my-pipeline
 ```
 
-This generates a project directory with a starter `.oxoflow` file, `envs/` and `scripts/` directories, and a `.gitignore`.
+This generates a project directory with a starter `.oxoflow` file, `envs/` and `scripts/` directories, an example `data/input.txt`, and a `.gitignore`.
 
 ---
 
