@@ -4293,7 +4293,7 @@ commonly used ones; <code>mamba</code> uses the same YAML syntax as <code>conda<
 <ol>
 <li>oxo-flow checks if the environment already exists (keyed by the YAML specification)</li>
 <li>If not, it creates it from the YAML file</li>
-<li>The shell command runs inside the environment via <code>conda run -n &lt;env-name&gt; bash -c '&lt;command&gt;'</code>, where <code>&lt;env-name&gt;</code> is the <code>name:</code> from your YAML plus a short content-hash suffix for file specs (<code>&lt;name&gt;-&lt;hash8&gt;</code>, see workflow-format) — so two different YAMLs that happen to share a name never collide</li>
+<li>The shell command runs inside the environment via <code>conda run --no-capture-output -n &lt;env-name&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code>, where <code>&lt;env-name&gt;</code> is the <code>name:</code> from your YAML plus a short content-hash suffix for file specs (<code>&lt;name&gt;-&lt;hash8&gt;</code>, see workflow-format) — so two different YAMLs that happen to share a name never collide</li>
 <li>The environment is created once and reused by every rule that references the same YAML</li>
 </ol>
 <div class="admonition tip">
