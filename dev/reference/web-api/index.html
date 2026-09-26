@@ -5790,8 +5790,12 @@ Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…},
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>GET    /api/clusters                  # configured SSH connections
 </span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
 </span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>DELETE /api/clusters/{id}
-</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection
+</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 </span></code></pre></div>
+The stored <code>ssh_key</code> is a secret (#517): it is never returned by any
+response (including the upsert echo) — clients see <code>ssh_key_set: true |
+false</code> instead. When <code>OXO_FLOW_MASTER_KEY</code> is set, the key is sealed at
+rest with the same AES-256-GCM scheme as AI provider keys.
 <code>POST /api/runs</code> accepts <code>cluster_id</code>: the run then stages its workdir to
 the remote host (tar over stdio — no rsync), executes under a per-run
 nohup wrapper, and pulls the results back on completion so every
