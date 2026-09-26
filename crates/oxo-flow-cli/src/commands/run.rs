@@ -301,6 +301,7 @@ async fn terminate_on_signal(
     let mut ck = checkpoint.lock().await;
     for rule in in_flight {
         let record = oxo_flow_core::executor::JobRecord {
+            signal: None,
             rule: rule.clone(),
             status: oxo_flow_core::executor::JobStatus::Failed,
             started_at: None,
@@ -2729,6 +2730,7 @@ pub async fn run_command(
                 if outputs_ok {
                     submitted.insert(rule_name.clone());
                     sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                        signal: None,
                         rule: rule_name.clone(),
                         status: oxo_flow_core::executor::JobStatus::Success,
                         started_at: None,
@@ -2860,6 +2862,7 @@ pub async fn run_command(
                 blocked.lock().await.push((rule_name.clone(), dep));
                 submitted.insert(rule_name.clone());
                 sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                    signal: None,
                     rule: rule_name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Skipped,
                     started_at: None,
@@ -3290,6 +3293,7 @@ pub async fn run_command(
                         // captures the same diagnostics the report will show
                         // (issue #83 WS2).
                         let record = oxo_flow_core::executor::JobRecord {
+                            signal: None,
                             rule: rule_name.clone(),
                             status: oxo_flow_core::executor::JobStatus::Failed,
                             started_at: None,
@@ -3456,6 +3460,7 @@ pub async fn run_command(
                     frs.insert(rule_name.clone());
                 }
                 let record = oxo_flow_core::executor::JobRecord {
+                    signal: None,
                     rule: rule_name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Failed,
                     started_at: None,
@@ -3522,6 +3527,7 @@ pub async fn run_command(
             // Build the record first so the checkpoint captures the same
             // diagnostics the report will show (issue #83 WS2).
             let record = oxo_flow_core::executor::JobRecord {
+                signal: None,
                 rule: completed_rule.clone(),
                 status: oxo_flow_core::executor::JobStatus::Failed,
                 started_at: None,
@@ -3596,6 +3602,7 @@ pub async fn run_command(
         {
             tracing::error!(rule = %completed_rule, error = %e, "output_pattern discovery failed");
             let record = oxo_flow_core::executor::JobRecord {
+                signal: None,
                 rule: completed_rule.clone(),
                 status: oxo_flow_core::executor::JobStatus::Failed,
                 started_at: None,
@@ -3743,14 +3750,52 @@ pub async fn run_command(
                 if !killed.is_empty() {
                     // A rule that already finished its closure (result still
                     // unreaped in the JoinSet) has written its own record —
-                    // never overwrite a genuine Success/Failed.
+                    // never overwrite a genuine Success/Failed. BUT a failure
+                    // whose only evidence is a signal death with no exit code
+                    // IS the abort's kill, not a self-caused failure: demote
+                    // it out of failed_rules/metrics (issue #498). Pure
+                    // signal deaths with no exit code are exactly what the
+                    // process-tree kill produces; a rule that failed on its
+                    // own (exit code, or a pre-abort signal like OOM-kill
+                    // whose result was reaped first) keeps its record.
                     let already_failed = failed_rules_set.lock().await.clone();
                     let mut ck = checkpoint.lock().await;
                     for rule_name in &killed {
-                        if ck.is_completed(rule_name) || already_failed.contains(rule_name) {
+                        if ck.is_completed(rule_name) {
+                            continue;
+                        }
+                        if already_failed.contains(rule_name) {
+                            let skip_reason = format!(
+                                "run aborted before this rule finished — required rule \
+'{completed_rule}' {verb}"
+                            );
+                            if ck.demote_failed_to_cancelled(rule_name, skip_reason) {
+                                let required =
+                                    config.get_rule(rule_name).is_some_and(|r| r.required);
+                                if required {
+                                    fail_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                                } else {
+                                    non_required_fail_count
+                                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                failures.lock().await.retain(|(n, _)| n != rule_name);
+                                if !is_tty {
+                                    diagnostic_narrate(
+                                        format_args!(
+                                            "  {} {} (run aborted — required rule '{}' {})",
+                                            "⊝".dimmed(),
+                                            rule_name,
+                                            completed_rule,
+                                            verb
+                                        ),
+                                        Some(&run_log),
+                                    );
+                                }
+                            }
                             continue;
                         }
                         let record = oxo_flow_core::executor::JobRecord {
+                            signal: None,
                             rule: rule_name.clone(),
                             status: oxo_flow_core::executor::JobStatus::Cancelled,
                             started_at: None,
@@ -3929,6 +3974,7 @@ pub async fn run_command(
                     frs.insert(name.clone());
                 }
                 sched.mark_completed(oxo_flow_core::executor::JobRecord {
+                    signal: None,
                     rule: name.clone(),
                     status: oxo_flow_core::executor::JobStatus::Skipped,
                     started_at: None,

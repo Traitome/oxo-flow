@@ -279,6 +279,7 @@ impl BackendDriver {
                 if is_blocked {
                     blocked.insert(name.clone());
                     records.push(JobRecord {
+                        signal: None,
                         rule: name.clone(),
                         status: JobStatus::Skipped,
                         started_at: None,
@@ -345,6 +346,7 @@ impl BackendDriver {
                         // a declared caption from, so the record's caption is
                         // always None here.
                         records.push(JobRecord {
+                            signal: None,
                             rule: name.clone(),
                             status: JobStatus::Skipped,
                             started_at: None,
@@ -909,6 +911,7 @@ impl BackendDriver {
                                 acct,
                             )?;
                             JobRecord {
+                                signal: None,
                                 rule: f.rule.clone(),
                                 status: JobStatus::Success,
                                 started_at: Some(started_at),
@@ -965,6 +968,7 @@ impl BackendDriver {
                                 }
                             }
                             JobRecord {
+                                signal: None,
                                 rule: f.rule.clone(),
                                 status: JobStatus::Failed,
                                 started_at: Some(started_at),
@@ -990,6 +994,7 @@ impl BackendDriver {
                             }
                         }
                         BackendJobStatus::Cancelled => JobRecord {
+                            signal: None,
                             rule: f.rule.clone(),
                             status: JobStatus::Cancelled,
                             started_at: Some(started_at),
@@ -1194,6 +1199,7 @@ fn return_record_failure(
     e: &OxoFlowError,
 ) {
     records.push(JobRecord {
+        signal: None,
         rule: f.rule.clone(),
         status: JobStatus::Failed,
         started_at: Some(f.submitted_at),

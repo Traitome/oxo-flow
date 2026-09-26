@@ -578,6 +578,7 @@ fn checkpoint_json_round_trip() {
 fn checkpoint_record_run_persists_diagnostics() {
     let mut state = CheckpointState::new();
     let record = JobRecord {
+        signal: None,
         rule: "call".to_string(),
         status: JobStatus::Failed,
         started_at: None,
@@ -616,6 +617,7 @@ fn checkpoint_stderr_tail_is_bounded() {
     let mut state = CheckpointState::new();
     let long = "x".repeat(10_000);
     let record = JobRecord {
+        signal: None,
         rule: "noisy".to_string(),
         status: JobStatus::Failed,
         started_at: None,

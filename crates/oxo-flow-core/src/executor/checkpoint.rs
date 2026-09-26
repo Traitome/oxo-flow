@@ -187,6 +187,22 @@ pub struct RuleRunRecord {
     /// legacy checkpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// Terminal status of the run ("failed", "cancelled", "timed_out", …)
+    /// — lets `rule_runs` express a cancellation as distinct from a
+    /// failure (issue #498). Absent in legacy checkpoints, which keep the
+    /// old inference: exit_code present → failed/completed as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Why the rule did not run to completion (`"run aborted before this
+    /// rule finished — required rule 'x' failed"`, …). Absent in legacy
+    /// checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<String>,
+    /// Terminating signal when the process died to one — the evidence
+    /// that a recorded failure was the abort's kill, not a self-caused
+    /// failure (issue #498). Absent in legacy checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
 }
 
 /// Persistent checkpoint state for resumable workflow execution.
@@ -498,8 +514,51 @@ impl CheckpointState {
                 command: record.command.clone(),
                 stderr_tail: stderr_tail(record.stderr.as_deref()),
                 caption: record.caption.clone(),
+                status: Some(record.status.to_string()),
+                skip_reason: record.skip_reason.clone(),
+                signal: record.signal,
             },
         );
+    }
+
+    /// Demote a recorded failure to a cancellation when the only evidence
+    /// is a signal death with no exit code (issue #498): during a fail-fast
+    /// abort, siblings killed by the process-tree signal used to be counted
+    /// as self-caused failures because their closures completed their
+    /// bookkeeping before the abort's reconciliation ran. Removes the rule
+    /// from `failed_rules` and re-records the run as cancelled, preserving
+    /// the command and stderr tail for the audit trail. Returns `false`
+    /// (no-op) for rules without pure signal-death evidence — a genuine
+    /// failure keeps its record.
+    pub fn demote_failed_to_cancelled(&mut self, rule: &str, skip_reason: String) -> bool {
+        let is_signal_death = self.failed_rules.contains(rule)
+            && self
+                .rule_runs
+                .get(rule)
+                .is_some_and(|r| r.exit_code.is_none() && r.signal.is_some());
+        if !is_signal_death {
+            return false;
+        }
+        self.failed_rules.remove(rule);
+        if let Some(existing) = self.rule_runs.get(rule) {
+            let command = existing.command.clone();
+            let stderr_tail = existing.stderr_tail.clone();
+            let caption = existing.caption.clone();
+            let signal = existing.signal;
+            self.rule_runs.insert(
+                rule.to_string(),
+                RuleRunRecord {
+                    exit_code: None,
+                    command,
+                    stderr_tail,
+                    caption,
+                    status: Some(crate::executor::JobStatus::Cancelled.to_string()),
+                    skip_reason: Some(skip_reason),
+                    signal,
+                },
+            );
+        }
+        true
     }
 
     /// Returns `true` if the rule finished successfully.
@@ -1390,6 +1449,104 @@ mod tests {
             ck.benchmarks["fastqc"].recorded_as.as_deref(),
             Some("outputs up-to-date")
         );
+    }
+
+    #[test]
+    fn record_run_captures_status_skip_reason_and_signal() {
+        // Issue #498: rule_runs can now express a cancellation (or any
+        // terminal status) distinct from a failure, and carry the
+        // signal-death evidence.
+        let mut ck = CheckpointState::default();
+        let record = JobRecord {
+            rule: "slow_scan".into(),
+            status: crate::executor::JobStatus::Cancelled,
+            started_at: None,
+            finished_at: Some(chrono::Utc::now()),
+            exit_code: None,
+            stdout: None,
+            stderr: Some("[oxo-flow] command terminated by SIGTERM (15)".into()),
+            command: Some("sleep 30".into()),
+            retries: 0,
+            skip_reason: Some("run aborted".into()),
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+            signal: Some(15),
+        };
+        ck.record_run(&record);
+        let r = &ck.rule_runs["slow_scan"];
+        assert_eq!(r.status.as_deref(), Some("cancelled"));
+        assert_eq!(r.skip_reason.as_deref(), Some("run aborted"));
+        assert_eq!(r.signal, Some(15));
+    }
+
+    #[test]
+    fn demote_failed_to_cancelled_only_for_signal_deaths() {
+        // Issue #498: the abort reconciliation may demote a failure to a
+        // cancellation ONLY when the failure's evidence is a signal death
+        // with no exit code — a self-caused failure (exit code) and a
+        // legacy record (no status/signal fields) both keep their record.
+        let mk = |record: JobRecord| {
+            let mut ck = CheckpointState::default();
+            ck.mark_failed(&record.rule);
+            ck.record_run(&record);
+            ck
+        };
+        let base = |status: crate::executor::JobStatus,
+                    exit_code: Option<i32>,
+                    signal: Option<i32>|
+         -> JobRecord {
+            JobRecord {
+                rule: "slow_scan".into(),
+                status,
+                started_at: None,
+                finished_at: Some(chrono::Utc::now()),
+                exit_code,
+                stdout: None,
+                stderr: None,
+                command: Some("sleep 30".into()),
+                retries: 0,
+                skip_reason: None,
+                max_rss_mb: None,
+                cpu_seconds: None,
+                caption: None,
+                signal,
+            }
+        };
+
+        // Signal death → demoted: out of failed_rules, record cancelled.
+        let mut ck = mk(base(crate::executor::JobStatus::Failed, None, Some(15)));
+        assert!(ck.demote_failed_to_cancelled(
+            "slow_scan",
+            "run aborted before this rule finished".into()
+        ));
+        assert!(!ck.failed_rules.contains("slow_scan"));
+        let r = &ck.rule_runs["slow_scan"];
+        assert_eq!(r.status.as_deref(), Some("cancelled"));
+        assert!(r.stderr_tail.is_none() || r.signal == Some(15));
+
+        // Exit-code failure → kept.
+        let mut ck = mk(base(crate::executor::JobStatus::Failed, Some(1), None));
+        assert!(!ck.demote_failed_to_cancelled("slow_scan", "run aborted".into()));
+        assert!(ck.failed_rules.contains("slow_scan"));
+
+        // Legacy record (no status/signal fields) → kept, never demoted.
+        let mut ck = CheckpointState::default();
+        ck.mark_failed("legacy");
+        ck.rule_runs.insert(
+            "legacy".into(),
+            RuleRunRecord {
+                exit_code: None,
+                command: None,
+                stderr_tail: None,
+                caption: None,
+                status: None,
+                skip_reason: None,
+                signal: None,
+            },
+        );
+        assert!(!ck.demote_failed_to_cancelled("legacy", "run aborted".into()));
+        assert!(ck.failed_rules.contains("legacy"));
     }
 
     #[test]

@@ -691,6 +691,18 @@ By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in 
 
 - **Filename**: `checkpoint.json` (the name is always the same regardless of workflow name)
 
+### Rule run records in the checkpoint
+
+Each executed rule carries a `rule_runs` entry in `checkpoint.json` with the
+expanded command, the process exit code, a bounded stderr tail, the resolved
+report caption, and (since the cancellation-semantics change) the terminal
+**`status`** (`"failed"`, `"cancelled"`, `"timed_out"`, …), the
+**`skip_reason`** when the rule did not run to completion, and the
+terminating **`signal`** when the process died to one. The three newer
+fields are optional and absent in checkpoints written by older engines —
+consumers must infer legacy records as before (failure when the rule is in
+`failed_rules`).
+
 ### Workflow version in the checkpoint
 
 When the workflow file lives inside a git repository, oxo-flow records the
@@ -991,6 +1003,8 @@ A progress bar shows execution progress with:
 - **Auto-detected capacity is soft:** Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.
 - **Deadlock detection:** If pending rules remain while nothing is running and none can become ready (typically an upstream failure), the engine reports `Deadlock detected: N rules stuck` with the stuck rule names. Resource waits cannot deadlock: over-capacity requests are clamped, and explicit budget violations fail fast before any rule runs.
 - **Target-aware execution:** The `-t` flag supports prefix matching — `-t al` matches all rules whose names start with "al". Use this to run a subset of the workflow, similar to `make <target>`. Only the named targets and their transitive upstream dependencies are executed; downstream rules are excluded.
+- **Default targets:** rules marked `target = true` are what `run`/`dry-run` build when neither `-t` nor `--module` selects anything — the marked rules and their transitive producers. With no marked rule the full DAG runs (backward compatible); an explicit `-t`/`--module` always wins.
+- **Abort cancellation semantics:** with fail-fast aborts, rules that were merely *killed* by the abort (signal death, no exit code) are recorded as **cancelled**, not failed — they are excluded from `failed_rules` and the failure counts, and narrated like skips. A sibling that failed on its own merit (exit code present) keeps its failure record. The checkpoint's per-rule `rule_runs` entries distinguish the two via their `status`/`skip_reason`/`signal` fields.
 - Setting `--max-threads 0` or `--max-memory 0` auto-detects system resources
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup

@@ -256,6 +256,11 @@ pub struct JobRecord {
     /// its `report.file`), captured at execution time (issue #281).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// Terminating signal when the process died to one (`status.code()`
+    /// is `None` then) — the evidence that distinguishes "killed by a
+    /// run abort" from "self-failed with an exit code" (issue #498).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
 }
 
 /// Configuration for the executor.
@@ -1264,6 +1269,7 @@ impl LocalExecutor {
         let timeout = self.get_timeout(rule);
 
         let mut record = JobRecord {
+            signal: None,
             rule: rule.name.clone(),
             status: JobStatus::Running,
             started_at: Some(Utc::now()),
@@ -2058,6 +2064,7 @@ impl LocalExecutor {
                             if status.code().is_none() {
                                 use std::os::unix::process::ExitStatusExt;
                                 if let Some(sig) = status.signal() {
+                                    record.signal = Some(sig);
                                     combined_stderr.push_str(&format!(
                                         "\n[oxo-flow] command terminated by {}",
                                         signal_name(sig)
@@ -2440,6 +2447,7 @@ impl LocalExecutor {
                 }
 
                 JobRecord {
+                    signal: None,
                     rule: rule.name.clone(),
                     status: JobStatus::Skipped,
                     started_at: None,
