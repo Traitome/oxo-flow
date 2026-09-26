@@ -140,7 +140,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_DISABLE_RATE_LIMIT` | No | unset | `"1"` disables the login/API rate limiter (tests only) |
 | `OXO_FLOW_OAUTH_REDIRECT_URI` | No | `http://localhost:3000/api/auth/oauth/callback` | Redirect URI registered with the OAuth provider (ORCID); set when running behind a proxy or non-default port |
 | `OXO_FLOW_PULL_MAX_BYTES` | No | `1073741824` (1 GiB) | Upper bound for `pull`/bundle downloads (buffered before checksum verify); raise for larger bundles |
-| `OXO_FLOW_AI_FETCH_ALLOW` | No | — | Comma-separated hostnames/IP literals exempted from the AI fetch SSRF guard (#204); use only for trusted internal endpoints |
+| `OXO_FLOW_AI_FETCH_ALLOW` | No | — | Comma-separated hostnames/IP literals exempted from the AI fetch/MCP SSRF guard (#204, #518); use only for trusted internal endpoints |
 | `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
 | `OXO_FLOW_RUNS_RATE_LIMIT` | No | `5` | Run-creation allowance per identity per minute on POST /api/runs (#213); `0` disables the dedicated limiter |
 | `OXO_FLOW_TRUSTED_PROXY` | No | unset | `"1"` makes the rate limiter and audit trail trust the client-supplied `X-Forwarded-For` / `X-Real-IP` headers. Leave unset unless the server sits behind a proxy that overwrites them — otherwise a client can spoof its identity and bypass the login limiter |

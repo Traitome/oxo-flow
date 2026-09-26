@@ -153,13 +153,24 @@ be reachable over HTTP (stdio servers are not supported).
 
 MCP tools execute under the same approval policy as all agent tools:
 
-- Tools the server marks with `annotations.readOnlyHint = true` may run
-  automatically.
-- **Everything else is refused unless a human approves the specific
-  invocation** — the AI prompts on the terminal (`Allow execution? [y/N]`);
-  non-interactive sessions (CI, `--json`, redirected stdin) always refuse.
+- The server-asserted `annotations.readOnlyHint` is **advisory only** —
+  it never authorizes auto-execution (#518: a hostile server can claim it
+  for an effectful tool).
+- **Every MCP tool invocation is refused unless a human approves that
+  specific call** — the AI prompts on the terminal (`Allow execution?
+  [y/N]`); non-interactive sessions (CI, `--json`, redirected stdin)
+  always refuse.
 
-This preserves the trust boundary: the AI never executes autonomously.
+The endpoint itself is SSRF-screened at connect time (#518): internal
+address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges)
+and site-local names (`localhost`, `.local`, `.internal`) are refused
+unless the exact host is exempted via `OXO_FLOW_AI_FETCH_ALLOW` — the
+same opt-out documented for `fetch_url`. A trusted in-house MCP server on
+a private address must be listed there explicitly.
+
+This preserves the trust boundary: the AI never executes autonomously,
+and attacker-influenced skill manifests cannot aim it at internal
+services.
 
 ## Roadmap
 

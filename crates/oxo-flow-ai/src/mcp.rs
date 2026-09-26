@@ -146,14 +146,14 @@ impl Tool for McpToolBridge {
     }
 
     fn is_read_only(&self) -> bool {
-        // Conservative: only the server's explicit readOnlyHint marks a
-        // tool safe to auto-execute. Unmarked MCP tools can do anything —
-        // they require human approval per invocation.
-        self.tool_def
-            .annotations
-            .as_ref()
-            .and_then(|a| a.read_only_hint)
-            .unwrap_or(false)
+        // #518: the server-asserted readOnlyHint is advisory, not
+        // authorization — a hostile or compromised MCP server can claim it
+        // for an effectful tool, and auto-executing on it contradicts the
+        // stated trust boundary (prompt injection only, zero code
+        // execution). MCP tool calls therefore always route through the
+        // human approver; where none exists (non-interactive sessions) they
+        // are refused.
+        false
     }
 }
 
@@ -173,9 +173,70 @@ pub struct McpHttpClient {
     server_name: String,
 }
 
+/// SSRF-screen an MCP endpoint host:port (same policy as `fetch_url`):
+/// loopback/link-local/RFC1918/ULA and site-local names are refused unless
+/// the exact host is exempted via `OXO_FLOW_AI_FETCH_ALLOW`. A host that
+/// cannot resolve is rejected too — an unreachable server is unusable, and
+/// failing closed keeps a later DNS change from smuggling the connection
+/// into internal space.
+fn screen_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<(), AiError> {
+    use std::net::ToSocketAddrs;
+
+    use crate::tools::builtin::{BLOCKED_HOST_SUFFIXES, ip_is_forbidden};
+
+    let parsed = reqwest::Url::parse(base_url).map_err(|e| AiError::Config {
+        message: format!("invalid MCP endpoint '{base_url}': {e}"),
+    })?;
+    let host = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let blocked = |why: String| AiError::Config {
+        message: format!(
+            "MCP endpoint '{base_url}' refused: {why} (internal address space is blocked; OXO_FLOW_AI_FETCH_ALLOW exempts trusted hosts)"
+        ),
+    };
+    if allow.iter().any(|a| a == &host) {
+        return Ok(());
+    }
+    if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
+        return Err(blocked(format!("host {host:?} is site-local")));
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return if ip_is_forbidden(ip) {
+            Err(blocked(format!(
+                "host {ip} lies in forbidden address space"
+            )))
+        } else {
+            Ok(())
+        };
+    }
+    let port = parsed
+        .port()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let addrs = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|e| blocked(format!("host {host:?} does not resolve: {e}")))?;
+    if let Some(offender) = addrs.map(|a| a.ip()).find(|ip| ip_is_forbidden(*ip)) {
+        return Err(blocked(format!(
+            "host {host:?} resolves into forbidden address space ({offender})"
+        )));
+    }
+    Ok(())
+}
+
 impl McpHttpClient {
-    /// Build a client for an `mcp://` (or `http(s)://`) endpoint URL.
+    /// Build a client for an `mcp://` (or `http(s)://`) endpoint URL,
+    /// SSRF-screened against the `OXO_FLOW_AI_FETCH_ALLOW` exemptions.
     pub fn new(url: &str) -> Result<Self, AiError> {
+        Self::new_with_allowlist(url, crate::tools::builtin::fetch_allowlist())
+    }
+
+    /// Build a client with an explicit exemption list (test seam; the
+    /// crate forbids unsafe code so tests cannot set process env).
+    pub fn new_with_allowlist(url: &str, allow: Vec<String>) -> Result<Self, AiError> {
         let base_url = if let Some(rest) = url.strip_prefix("mcp://") {
             format!("http://{rest}")
         } else if url.starts_with("http://") || url.starts_with("https://") {
@@ -187,6 +248,11 @@ impl McpHttpClient {
                 ),
             });
         };
+        // #518: a skill manifest is attacker-influenced text, so its
+        // mcp:// target gets the same SSRF screen as fetch_url — internal
+        // address space is unreachable unless explicitly allowlisted.
+        // Fail before any model call or request.
+        screen_mcp_endpoint(&base_url, &allow)?;
         let server_name = url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
@@ -460,6 +526,12 @@ impl McpClient for McpHttpClient {
 mod tests {
     use super::*;
 
+    /// Build a client as `new` does, but with an explicit allowlist — the
+    /// crate forbids unsafe code, so tests cannot mutate the process env.
+    fn client_with_allow(url: &str, allow: &[&str]) -> Result<McpHttpClient, AiError> {
+        McpHttpClient::new_with_allowlist(url, allow.iter().map(|s| s.to_string()).collect())
+    }
+
     /// A test MCP client that serves static tools.
     #[derive(Clone)]
     struct TestMcpClient;
@@ -675,9 +747,10 @@ mod tests {
         let write_name = "mcp_two-server_write_tool";
         assert!(registry.get(read_name).is_some());
         assert!(registry.get(write_name).is_some());
-        // readOnlyHint=true must mark the tool read-only (auto-execute);
-        // the unannotated one stays approval-gated.
-        assert!(registry.is_read_only(read_name));
+        // readOnlyHint is advisory (#518): NO MCP tool is read-only —
+        // every call routes through the human approver regardless of the
+        // server-asserted hint.
+        assert!(!registry.is_read_only(read_name));
         assert!(!registry.is_read_only(write_name));
     }
 
@@ -748,16 +821,18 @@ mod tests {
             }
         });
 
-        let client = McpHttpClient::new(&format!("mcp://{addr}")).unwrap();
+        // Loopback fixtures are exempted explicitly — exactly what a
+        // deployment with a trusted internal MCP server must do (#518).
+        let client = client_with_allow(&format!("mcp://{addr}"), &["127.0.0.1"]).unwrap();
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools.len(), 2);
 
-        // readOnlyHint drives the bridge's read-only flag; unannotated
-        // tools default to NOT read-only (conservative).
+        // readOnlyHint is advisory only (#518): even a hinted read-only MCP
+        // tool routes through the human approver.
         let bridges = McpToolBridge::discover(std::sync::Arc::new(client))
             .await
             .unwrap();
-        assert!(bridges[0].is_read_only());
+        assert!(!bridges[0].is_read_only());
         assert!(!bridges[1].is_read_only());
 
         let result = bridges[0].execute(r#"{"msg": "hi"}"#).await.unwrap();
@@ -832,7 +907,7 @@ mod tests {
                 _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
             }
         });
-        let client = McpHttpClient::new(&url).unwrap();
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
         let tools = client.list_tools().await.unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["page1", "page2"], "both pages must be exposed");
@@ -852,7 +927,7 @@ mod tests {
                 serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}})
             }
         });
-        let client = McpHttpClient::new(&url).unwrap();
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
         let err = client.list_tools().await.unwrap_err().to_string();
         assert!(err.contains("id mismatch"), "{err}");
     }
@@ -869,8 +944,22 @@ mod tests {
     #[test]
     fn mcp_http_client_rejects_bad_url() {
         assert!(McpHttpClient::new("stdio://local").is_err());
-        assert!(McpHttpClient::new("mcp://localhost:8080").is_ok());
         assert!(McpHttpClient::new("https://example.com/mcp").is_ok());
+    }
+
+    #[test]
+    fn mcp_endpoints_are_ssrf_screened() {
+        // #518: internal address space and site-local names are refused;
+        // the allowlist exempts explicitly trusted hosts.
+        assert!(McpHttpClient::new("mcp://localhost:8080").is_err());
+        assert!(McpHttpClient::new("mcp://127.0.0.1:8080").is_err());
+        assert!(McpHttpClient::new("mcp://10.0.0.5:8080").is_err());
+        assert!(McpHttpClient::new("mcp://169.254.169.254:80").is_err());
+        assert!(McpHttpClient::new("mcp://myserver.local:9000").is_err());
+        let allow = vec!["10.0.0.5".to_string(), "127.0.0.1".to_string()];
+        assert!(McpHttpClient::new_with_allowlist("mcp://127.0.0.1:8080", allow.clone()).is_ok());
+        assert!(McpHttpClient::new_with_allowlist("mcp://10.0.0.5:8080", allow).is_ok());
+        assert!(McpHttpClient::new("mcp://localhost:8080").is_err());
     }
 
     #[test]
