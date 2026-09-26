@@ -56,11 +56,11 @@ pub async fn diagnose_failure(
     stderr: &str,
     provider: &AiProvider,
 ) -> Result<DiagnoseResult> {
-    println!();
-    println!("{}", "AI Error Recovery".bold().green());
-    println!("  Failed rule: {}", failed_rule.yellow());
-    println!("  Exit code: {}", exit_code.to_string().red());
-    println!(
+    eprintln!();
+    eprintln!("{}", "AI Error Recovery".bold().green());
+    eprintln!("  Failed rule: {}", failed_rule.yellow());
+    eprintln!("  Exit code: {}", exit_code.to_string().red());
+    eprintln!(
         "  Model: {}\n",
         provider.model().unwrap_or_else(|| "default".into())
     );
@@ -83,7 +83,7 @@ pub async fn diagnose_failure(
          5. State whether the fix is safe to auto-apply",
     );
 
-    println!("{}", "  Diagnosing...".bold().cyan());
+    eprintln!("{}", "  Diagnosing...".bold().cyan());
 
     use oxo_flow_ai::types::Message;
     let messages = vec![Message::system(&system), Message::user(&user)];
@@ -107,9 +107,9 @@ pub async fn diagnose_failure(
     // Extract modified TOML
     let modified_toml = extract_toml_block(&response_text);
 
-    println!("\n{}\n{}", "Root Cause:".bold().red(), root_cause);
-    println!("{}\n{}", "Suggested Fix:".bold().yellow(), fix_action);
-    println!(
+    eprintln!("\n{}\n{}", "Root Cause:".bold().red(), root_cause);
+    eprintln!("{}\n{}", "Suggested Fix:".bold().yellow(), fix_action);
+    eprintln!(
         "Safe to auto-apply: {}",
         if safe { "yes".green() } else { "no".red() }
     );
@@ -132,7 +132,7 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let backup_path = archive_dir.join(format!("{timestamp}-{session_id}-before.oxoflow"));
     std::fs::write(&backup_path, &original)?;
-    println!(
+    eprintln!(
         "{} Original archived to {}",
         "  ✓".green(),
         backup_path.display()
@@ -140,7 +140,7 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
 
     // Write fix
     std::fs::write(workflow_path, modified_toml)?;
-    println!(
+    eprintln!(
         "{} Fix applied to {}",
         "  ✓".green(),
         workflow_path.display()
