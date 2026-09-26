@@ -1744,6 +1744,13 @@ jobs:
       - name: Install MkDocs Material + mike
         run: pip install mkdocs-material mike
 
+      # #551: MD032 (blank line before a list) is the repo's documented
+      # markdown invariant (AGENTS.md "Markdown lists") — gate it on the
+      # docs deploy so it cannot rot again. Config: MD032 only.
+      - name: Lint docs lists (MD032)
+        run: |
+          npx --yes markdownlint-cli2 --config <(printf '%s' '{"default":false,"MD032":true}') "docs/guide/src/**/*.md"
+
       - name: Configure git identity (mike pushes the gh-pages branch)
         run: |
           git config user.name "github-actions[bot]"

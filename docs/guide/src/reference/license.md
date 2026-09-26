@@ -16,11 +16,13 @@ oxo-flow uses a per-crate licensing model with dual licensing for the web server
 ### Academic Use (LICENSE-ACADEMIC)
 
 Free for:
+
 - Academic research at universities and non-profit research institutions
 - Teaching and educational purposes
 - Non-commercial government research
 
 Under the academic license, you may:
+
 - Use, modify, and distribute the software freely
 - Contribute modifications back to the project
 - Run the web server for academic research groups
@@ -28,6 +30,7 @@ Under the academic license, you may:
 ### Commercial Use (LICENSE-COMMERCIAL)
 
 Requires a paid license for:
+
 - Pharmaceutical and biotech companies
 - Clinical diagnostic laboratories
 - Commercial bioinformatics service providers

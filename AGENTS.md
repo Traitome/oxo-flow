@@ -126,10 +126,10 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_AI_TIMEOUT_SECS` | No | `300` | Per-request timeout for all AI provider backends. A measured GLM thinking round took 145 s — the old 120 s default killed it mid-round. Raise further for slower endpoints, together with OXO_FLOW_AI_MAX_TOKENS |
 | `OXO_FLOW_MASTER_KEY` | No | — | AES-256-GCM seed encrypting AI provider keys at rest (`v1:`-prefixed rows in the local DB). Unset = plaintext legacy mode |
 | `ANTHROPIC_AUTH_TOKEN` | No | — | Claude/Anthropic API key (overrides OXO_FLOW_AI_API_KEY) |
-| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Anthropic-compatible API base URL |
+| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com/v1/messages` (endpoint; base `https://api.anthropic.com`) | Anthropic-compatible API endpoint URL |
 | `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Claude model name |
 | `OPENAI_API_KEY` | No | — | OpenAI-compatible API key (overrides OXO_FLOW_AI_API_KEY) |
-| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1/chat/completions` (endpoint; base `https://api.openai.com/v1`) | OpenAI-compatible API endpoint URL |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
 | `OXO_FLOW_PORT` | No | `8080` | Web server port (also settable via `--port`). The standalone `oxo-flow-web` binary defaults to `3000` |

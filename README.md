@@ -180,8 +180,9 @@ oxo-flow supports job submission to HPC cluster schedulers including SLURM, PBS/
 # Submit a workflow to a SLURM cluster
 oxo-flow cluster submit workflow.oxoflow --backend slurm --queue short -o jobs/
 
-# Check submission status (status needs the backend and at least one job id)
+# Check submission status (no job ids: lists the user's jobs; --backend optional)
 oxo-flow cluster status --backend slurm <job-id>
+oxo-flow cluster status
 
 # Cancel a submitted job
 oxo-flow cluster cancel --backend slurm <job-id>

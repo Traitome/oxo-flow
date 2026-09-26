@@ -169,6 +169,7 @@ let ready: Vec<String> = state.ready_rules_critical_path(&dag, &rules)?;
 ```
 
 Sort order:
+
 1. **Critical path membership** — critical rules first
 2. **Explicit priority** (`priority` field, higher first)
 3. **Alphabetical name** (deterministic tie-breaker)
@@ -463,6 +464,7 @@ flags these with warning W019).
 ### "My cycle error shows a confusing path"
 
 The cycle path `A → B → C → A` shows you the circular chain. To break it:
+
 1. Pick one edge in the cycle (e.g., `C → A`)
 2. If it's file-based: rename one of the files so they don't match
 3. If it's `depends_on`: remove the explicit dependency

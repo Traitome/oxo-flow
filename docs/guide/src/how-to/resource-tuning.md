@@ -285,6 +285,7 @@ oxo-flow graph pipeline.oxoflow
 ```
 
 Insights:
+
 - Maximum parallelism is 2 (width) — `-j 2` is sufficient
 - The critical path is `source → left → merge` — `right` is not on it
 - If `left` takes 2 hours, that's your bottleneck regardless of `right`'s speed

@@ -149,6 +149,7 @@ A section that sets default values (threads, memory, environment) for all rules 
 A section defining experiment-control sample pairs for comparative analyses like tumor-normal variant calling.
 
 **Fields**:
+
 - `pair_id`: Unique identifier for the pair
 - `experiment`: Sample name (e.g., tumor)
 - `control`: Matched control sample (e.g., normal)
@@ -160,6 +161,7 @@ A section defining experiment-control sample pairs for comparative analyses like
 A section organizing samples into named groups for cohort studies.
 
 **Fields**:
+
 - `name`: Group name (e.g., "treatment", "control")
 - `samples`: Array of sample identifiers
 

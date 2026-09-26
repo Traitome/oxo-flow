@@ -330,11 +330,12 @@ The AI agent combines four embedded knowledge sources (all compiled into the bin
 1. **Tool Reference Table**: 40 curated bioinformatics tools with resource allocations (threads, memory)
 2. **Bioconda Tool Database**: 6,525 curated CLI tools with current versions and descriptions (`knowledge_meta.json`: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
-4. **Pipeline Knowledge Graph**: 78 workflow skills and 465 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
+4. **Pipeline Knowledge Graph**: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
 
 Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.
 
 The agent:
+
 1. Analyzes your intent (assay type, tools mentioned)
 2. Matches relevant bioSkills domains and injects curated expertise
 3. Selects tools from the reference table, verifying current versions via the Bioconda database
@@ -442,6 +443,7 @@ oxo-flow dry-run workflow.oxoflow --ai
 ```
 
 The AI checks:
+
 - Resource allocations vs. tool recommendations
 - DAG structure (missing dependencies, invalid edges)
 - Safety violations (destructive commands)
@@ -471,6 +473,7 @@ oxo-flow run workflow.oxoflow --ai-recover
 ```
 
 **Recovery flow:**
+
 1. Rule fails → capture error signature
 2. AI matches against known error patterns (OOM, segfault, missing files, etc.)
 3. AI proposes root cause + specific fix
