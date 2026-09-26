@@ -128,6 +128,20 @@ fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -
     panic!("web server could not bind a free port after 5 attempts\n{last_log}");
 }
 
+async fn put(base: &str, path: &str, token: &str, body: Value) -> (reqwest::StatusCode, Value) {
+    let client = Client::new();
+    let resp = client
+        .put(format!("{base}{path}"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let value = resp.json::<Value>().await.unwrap_or(Value::Null);
+    (status, value)
+}
+
 async fn post(
     base: &str,
     path: &str,
@@ -143,6 +157,91 @@ async fn post(
     let status = resp.status();
     let value = resp.json::<Value>().await.unwrap_or(Value::Null);
     (status, value)
+}
+
+/// PUT advanced AI options then GET must round-trip them (#545): the
+/// Settings form read fields the GET never returned, silently reverting
+/// saved values and wiping them on the next save.
+#[tokio::test]
+async fn user_ai_config_advanced_fields_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = spawn_server(
+        dir.path(),
+        free_port(),
+        &[
+            ("OXO_FLOW_MODE", "team"),
+            ("OXO_FLOW_ADMIN_PASSWORD", "secret-admin"),
+        ],
+    );
+    let base = server.base.clone();
+
+    let (status, login) = post(
+        &base,
+        "/api/auth/login",
+        None,
+        json!({"username": "admin", "password": "secret-admin"}),
+    )
+    .await;
+    assert_eq!(status, 200, "admin login: {login}");
+    let admin = login["token"].as_str().unwrap().to_string();
+    let (status, body) = post(
+        &base,
+        "/api/users",
+        Some(&admin),
+        json!({"username": "carol", "password": "carol-pw"}),
+    )
+    .await;
+    assert_eq!(status, 200, "create carol: {body}");
+    let (status, login) = post(
+        &base,
+        "/api/auth/login",
+        None,
+        json!({"username": "carol", "password": "carol-pw"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let carol = login["token"].as_str().unwrap().to_string();
+
+    // PUT advanced fields (as the Settings page does).
+    let (status, body) = put(
+        &base,
+        "/api/ai/config/user",
+        &carol,
+        json!({
+            "provider": "openai",
+            "api_url": "https://api.example.com/v1",
+            "model": "gpt-test",
+            "api_key": "sk-test",
+            "auto_retry_enabled": true,
+            "max_correction_rounds": 5,
+            "search_enabled": false,
+            "monitor_enabled": false
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "PUT user config: {body}");
+
+    // GET must return exactly what was stored — never defaults.
+    let client = Client::new();
+    let resp = client
+        .get(format!("{base}/api/ai/config/user"))
+        .bearer_auth(&carol)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let got: Value = resp.json().await.unwrap();
+    let u = &got["user_config"];
+    assert_eq!(u["auto_retry_enabled"], true, "{got}");
+    assert_eq!(u["max_correction_rounds"], 5, "{got}");
+    assert_eq!(u["search_enabled"], false, "{got}");
+    assert_eq!(u["monitor_enabled"], false, "{got}");
+    assert_eq!(u["provider"], "openai", "{got}");
+    assert_eq!(u["api_key_set"], true, "{got}");
+    assert!(
+        !got.to_string().contains("sk-test"),
+        "the api key must never be returned: {got}"
+    );
 }
 
 /// Cross-tenant access through the AI surface must 404; the owner and the

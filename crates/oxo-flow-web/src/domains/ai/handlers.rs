@@ -777,16 +777,63 @@ pub async fn update_server_ai_config(
     )
 )]
 /// GET /api/ai/config/user
-pub async fn get_user_ai_config() -> ApiResult<serde_json::Value> {
-    let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+///
+/// Returns the ACTING USER's stored row (#545): the four advanced fields
+/// PUT persists must round-trip, or the Settings form silently reverted
+/// them and the next save wiped the stored values. The API key never
+/// leaves the server — only `api_key_set` travels.
+pub async fn get_user_ai_config(
+    authenticated: Option<Extension<CurrentUser>>,
+) -> ApiResult<serde_json::Value> {
+    type UserConfigRow = (String, String, String, Option<String>, i64, i64, i64, i64);
+    let user = resolve(authenticated.as_ref());
+    let row: Option<UserConfigRow> = match crate::infra::db::sqlite::try_pool() {
+            Ok(pool) => sqlx::query_as(
+                "SELECT provider, api_url, model, api_key, search_enabled, monitor_enabled,                  auto_retry_enabled, max_correction_rounds FROM ai_provider_config                  WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+            )
+            .bind(&user.id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None),
+            Err(_) => None,
+        };
+
+    let user_config = match row {
+        Some((provider, api_url, model, api_key, search, monitor, auto_retry, rounds)) => {
+            let key_present = api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+            serde_json::json!({
+                "provider": provider,
+                "api_url": api_url,
+                "model": model,
+                "api_key_set": key_present,
+                "is_configured": provider != "disabled" && key_present,
+                "search_enabled": search != 0,
+                "monitor_enabled": monitor != 0,
+                "auto_retry_enabled": auto_retry != 0,
+                "max_correction_rounds": rounds,
+            })
+        }
+        None => {
+            // No per-user row yet — mirror the shared runtime and the
+            // PUT defaults so a first save does not surprise.
+            let config = crate::ai_provider::AiProviderRegistry::global().get_config();
+            serde_json::json!({
+                "provider": config.provider,
+                "api_url": config.api_url,
+                "model": config.model,
+                "api_key_set": false,
+                "is_configured": config.is_configured,
+                "search_enabled": true,
+                "monitor_enabled": true,
+                "auto_retry_enabled": false,
+                "max_correction_rounds": 3,
+            })
+        }
+    };
+    let configured = user_config["is_configured"].as_bool().unwrap_or(false);
     Ok(Json(serde_json::json!({
-        "user_config": {
-            "provider": config.provider,
-            "api_url": config.api_url,
-            "model": config.model,
-            "is_configured": config.is_configured,
-        },
-        "configured": config.is_configured,
+        "user_config": user_config,
+        "configured": configured,
     })))
 }
 

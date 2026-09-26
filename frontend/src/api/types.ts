@@ -425,7 +425,13 @@ export interface UserAiConfig {
     provider: string;
     api_url: string;
     model: string;
+    api_key_set?: boolean;
     is_configured: boolean;
+    /** #545: the four advanced fields PUT persists must round-trip. */
+    search_enabled?: boolean;
+    monitor_enabled?: boolean;
+    auto_retry_enabled?: boolean;
+    max_correction_rounds?: number;
   } | null;
   configured: boolean;
 }
