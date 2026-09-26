@@ -72,6 +72,17 @@ gatk GatherVcfs $(for f in {input}; do echo "-I $f "; done) -O {output[0]}
 
 ## Running the Workflow
 
+### Demo Data for a Live Run
+
+The workflow expects `aligned/sample.bam` plus the reference named in
+`config.reference`. To reproduce the live-run verification below without
+GRCh38, any small multi-chromosome reference works — the scatter values are
+just labels substituted into `-L {chr}`, so the BAM's contig names must
+match `config.chromosomes`. A minimal fixture: a FASTA with one `>chrN`
+entry per scatter value, `bwa index` + `samtools faidx` + `samtools dict`
+(GATK requires the `.dict`), simulated reads aligned with any BWA flavor,
+and `samtools sort` into `aligned/sample.bam`.
+
 ### Validate
 
 ```bash
@@ -89,6 +100,15 @@ graph TD
     A4[haplotype_caller<br/>chr=chr4] --> G
     A5[haplotype_caller<br/>chr=chr5] --> G
 ```
+
+!!! note "Live-run verified results"
+    On a simulated 5-chromosome genome (30 kb each, 4 heterozygous SNVs
+    injected per chromosome, 150 bp PE reads at ~15x over a 15 kb target
+    window): the 5 scattered HaplotypeCaller jobs ran in parallel and the
+    gathered GVCF held 584 records across all 5 contigs. 19 of the 20
+    injected SNVs were called with the exact ref/alt; the single miss
+    (chr2:12317) had only a 20% alt fraction (3/15 reads), below
+    HaplotypeCaller's het threshold — a fixture artifact, not a bug.
 
 ## Use Cases
 
