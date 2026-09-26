@@ -60,6 +60,21 @@ type SessionAction =
 
 const STORAGE_KEY = 'oxo_session';
 
+// #547: two tabs used to last-writer-wins one whole blob — tab B's older
+// snapshot resurrected over tab A's newer draft on reload. Each write now
+// carries a monotonic stamp; a flush never overwrites a NEWER foreign
+// write, and other tabs pull the newer state via the `storage` event.
+let writeStamp = 0;
+
+function readStamp(): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw)._stamp as number ?? 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function loadStoredState(): Partial<PipelineSessionState> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -82,7 +97,9 @@ function loadStoredState(): Partial<PipelineSessionState> {
 
 function saveState(state: PipelineSessionState) {
   try {
+    writeStamp = Math.max(writeStamp, readStamp()) + 1;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      _stamp: writeStamp,
       pipelineToml: state.pipelineToml,
       dagData: state.dagData,
       activeRunId: state.activeRunId,
@@ -172,10 +189,41 @@ export function PipelineSessionProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [state]);
   useEffect(() => {
-    const flush = () => saveState(stateRef.current);
+    const flush = () => {
+      // #547: never flush-on-unmount over a NEWER write from another tab —
+      // that resurrection was the whole last-writer-wins bug. The
+      // saveState stamp takes max(existing)+1 for OUR writes; a foreign
+      // newer write means our state is older and must be dropped.
+      if (readStamp() > writeStamp) {
+        writeStamp = readStamp();
+        return;
+      }
+      saveState(stateRef.current);
+    };
     window.addEventListener('beforeunload', flush);
+    // Live cross-tab sync: a newer write from another tab pulls that state
+    // in instead of leaving this tab stale.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          const foreign = parsed._stamp as number ?? 0;
+          if (foreign > writeStamp) {
+            writeStamp = foreign;
+            dispatch({ type: 'RESTORE_STATE', payload: {
+              pipelineToml: parsed.pipelineToml || '',
+              dagData: parsed.dagData || null,
+              activeRunId: parsed.activeRunId || null,
+              chatMessages: parsed.chatMessages || undefined,
+            } });
+          }
+        } catch { /* corrupt foreign write — ignore */ }
+      }
+    };
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('storage', onStorage);
       flush();
     };
   }, []);

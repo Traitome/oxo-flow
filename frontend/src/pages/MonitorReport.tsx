@@ -260,9 +260,17 @@ export default function MonitorReport() {
 
   // ── Logs ── (issue #82 P0-7: the raw execution.log with search,
   // per-rule filtering, failure highlighting, and download)
+  // #547: the multi-MB log response must not land under a newer
+  // selection — check selectSeq before setState, exactly like the
+  // Promise.allSettled loader above.
   useEffect(() => {
     if (tab === 'logs' && selId && logs === null) {
-      api.getRunLogs(selId).then(setLogs).catch(() => setLogs(''));
+      const seq = selectSeq.current;
+      api.getRunLogs(selId).then((text) => {
+        if (seq === selectSeq.current) setLogs(text);
+      }).catch(() => {
+        if (seq === selectSeq.current) setLogs('');
+      });
     }
   }, [tab, selId, logs]);
 
@@ -324,7 +332,13 @@ export default function MonitorReport() {
   // "which sample under which rule failed")
   useEffect(() => {
     if (tab === 'instances' && selId && instances === null) {
-      api.getRunInstances(selId).then(setInstances).catch(() => setInstances([]));
+      // #547: same seq guard as the logs loader.
+      const seq = selectSeq.current;
+      api.getRunInstances(selId).then((rows) => {
+        if (seq === selectSeq.current) setInstances(rows);
+      }).catch(() => {
+        if (seq === selectSeq.current) setInstances([]);
+      });
     }
   }, [tab, selId, instances]);
 
