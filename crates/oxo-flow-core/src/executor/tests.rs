@@ -1707,6 +1707,13 @@ fn validate_shell_safety_allows_rm_rf_relative_path() {
         validate_shell_safety("rm -rf output_dir/").is_ok(),
         "should allow rm -rf with relative path"
     );
+    // Issue #513: individually quoted relative operands are standard
+    // defensive shell practice — the base (no-workdir) check must not
+    // blanket-reject them either.
+    assert!(
+        validate_shell_safety("rm -rf $prefix \"$prefix.fa\"").is_ok(),
+        "should allow rm -rf with bare + quoted relative operands"
+    );
 }
 
 #[test]
@@ -1942,6 +1949,79 @@ fn workdir_safety_fails_closed_on_unparseable_rm_operands() {
     assert!(
         validate_shell_safety_in_workdir("rm -rf /data/run/x /etc", workdir).is_err(),
         "plain multi-operand form must still be analyzed operand-by-operand"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// validate_shell_safety_in_workdir — issue #513: individually quoted rm
+// operands are the standard defensive spelling and must parse; substitution
+// and multi-operand quote groups stay blocked.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workdir_safety_allows_individually_quoted_relative_operands() {
+    // mag's prokka cleanup (oxo-flow-mag 06_taxonomy.oxoflow): a quoted
+    // second operand tripped the old blanket quote-reject even though both
+    // targets are relative — inside the workdir by construction.
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf $prefix \"$prefix.fa\"", workdir).is_ok(),
+        "bare + individually-quoted relative operands must be allowed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"$prefix\" \"$prefix.fa\"", workdir).is_ok(),
+        "all operands individually quoted stays allowed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf 'results/tmp'", workdir).is_ok(),
+        "single-quoted relative operand stays allowed"
+    );
+}
+
+#[test]
+fn workdir_safety_still_blocks_quoted_targets_outside_workdir() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/etc/nginx\"", workdir).is_err(),
+        "quoting must not bypass the outside-workdir check"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf '/etc/nginx'", workdir).is_err(),
+        "single-quoted outside-workdir target stays blocked"
+    );
+}
+
+#[test]
+fn workdir_safety_still_fails_closed_on_substitution_in_quoted_operands() {
+    let workdir = Path::new("/data/run");
+    for hostile in [
+        "rm -rf \"$(cat /tmp/list)\"",
+        "rm -rf `ls /etc`",
+        "rm -rf \"$(find / -name x)\"",
+    ] {
+        assert!(
+            validate_shell_safety_in_workdir(hostile, workdir).is_err(),
+            "{hostile} must stay blocked"
+        );
+    }
+}
+
+#[test]
+fn workdir_safety_fails_closed_on_multi_operand_quote_groups() {
+    // `rm -rf "a b" c` — the shell sees 2 operands, a naive split sees 3.
+    // A quoted group spanning whitespace must keep failing closed.
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/data/run/a b\" /etc", workdir).is_err(),
+        "quote pair spanning a space must fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/data/run/a\"b c", workdir).is_err(),
+        "interior quote (not a full-operand wrapper) must fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/data/run/a", workdir).is_err(),
+        "unbalanced quote must fail closed"
     );
 }
 
