@@ -2989,14 +2989,16 @@ pub async fn run_command(
                 // Remote inputs record (scheme, key, size, etag) when a cloud
                 // backend is registered (issue #78 P2); without one they
                 // degrade gracefully (warning + entry skipped).
-                let input_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
-                    &rule,
-                    workdir_actual.as_ref(),
-                    &wildcard_values,
-                    &crate::commands::run_preview::storage_resolver(),
-                )
-                .ok()
-                .flatten();
+                let input_manifest =
+                    oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
+                        &rule,
+                        workdir_actual.as_ref(),
+                        &wildcard_values,
+                        &crate::commands::run_preview::storage_resolver(),
+                    )
+                    .await
+                    .ok()
+                    .flatten();
 
                 let result = executor
                     .execute_rule_with_bindings(&rule, &wildcard_values, &typed_config, &instance_bindings)
@@ -3081,12 +3083,13 @@ pub async fn run_command(
                             // then sees the mismatch and re-executes this
                             // rule instead of serving outputs built from a
                             // mixed file state.
-                            let post_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest(
+                            let post_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
                                 &rule,
                                 workdir_actual.as_ref(),
                                 &wildcard_values,
                                 &crate::commands::run_preview::storage_resolver(),
                             )
+                .await
                             .ok()
                             .flatten();
                             if let (Some(pre), Some(post)) = (&input_manifest, &post_manifest) {
@@ -3153,7 +3156,7 @@ pub async fn run_command(
                                 }
                                 provenance_recorded.fetch_add(recorded_here, std::sync::atomic::Ordering::Relaxed);
                             }
-                            if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                            if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                                 tracing::warn!("Failed to save checkpoint: {e}");
                             }
                             (rule_name, oxo_flow_core::executor::JobStatus::Success, record)
@@ -3201,7 +3204,7 @@ pub async fn run_command(
                                 } else {
                                     ck.mark_completed_quiet(&rule_name);
                                 }
-                                if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                                if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                                     tracing::warn!("Failed to save checkpoint: {e}");
                                 }
                             }
@@ -3235,7 +3238,7 @@ pub async fn run_command(
                             let mut ck = checkpoint.lock().await;
                             ck.record_run(&record);
                             ck.mark_failed(&rule_name);
-                            if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                            if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                                 tracing::warn!("Failed to save checkpoint: {e}");
                             }
                             let mut err_msg = format!("rule '{}' failed", rule_name);
@@ -3345,7 +3348,7 @@ pub async fn run_command(
                         let mut ck = checkpoint.lock().await;
                         ck.record_run(&record);
                         ck.mark_failed(&rule_name);
-                        if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                        if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                             tracing::warn!("Failed to save checkpoint: {e}");
                         }
                         if !keep_going {
@@ -3509,7 +3512,7 @@ pub async fn run_command(
                 let mut ck = checkpoint.lock().await;
                 ck.record_run(&record);
                 ck.mark_failed(&rule_name);
-                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
                 }
                 let mut f = failures.lock().await;
@@ -3578,7 +3581,7 @@ pub async fn run_command(
                 let mut ck = checkpoint.lock().await;
                 ck.record_run(&record);
                 ck.mark_failed(&completed_rule);
-                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
                 }
             }
@@ -3653,7 +3656,7 @@ pub async fn run_command(
                 let mut ck = checkpoint.lock().await;
                 ck.record_run(&record);
                 ck.mark_failed(&completed_rule);
-                if let Err(save_err) = ck.save_to_file(&checkpoint_path) {
+                if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
                 }
             }
@@ -3897,7 +3900,7 @@ pub async fn run_command(
                             );
                         }
                     }
-                    if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                    if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                         tracing::warn!(error = %e, "failed to save checkpoint after abort");
                     }
                 }

@@ -29,6 +29,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::OxoFlowError;
+
 /// Version tag mixed into every cache identity — bump to invalidate all
 /// entries when the key material or restore semantics change.
 const CACHE_FORMAT_VERSION: &str = "oxo-flow content cache v1";
@@ -136,16 +138,26 @@ pub async fn restore_outputs(
         }
         copies.push((src, workdir.join(&expanded)));
     }
-    for (src, dest) in copies {
-        if let Some(parent) = dest.parent()
-            && !parent.as_os_str().is_empty()
-            && !parent.exists()
-        {
-            std::fs::create_dir_all(parent)?;
+    // #527: a cache hit copies the rule's full outputs — routinely
+    // multi-GB BAMs — recursively. Run the copies on the blocking pool so
+    // the synchronous tree walk cannot stall the runtime workers.
+    tokio::task::spawn_blocking(move || {
+        for (src, dest) in copies {
+            if let Some(parent) = dest.parent()
+                && !parent.as_os_str().is_empty()
+                && !parent.exists()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            super::process::copy_tree_atomic(&src, &dest)?;
         }
-        super::process::copy_tree_atomic(&src, &dest)?;
-    }
-    Ok(true)
+        Ok(true)
+    })
+    .await
+    .map_err(|e| OxoFlowError::Execution {
+        rule: rule.name.clone(),
+        message: format!("cache restore task failed: {e}"),
+    })?
 }
 
 /// Copy a rule's resolved outputs into its cache entry — atomically: a
@@ -167,34 +179,51 @@ pub async fn populate_outputs(
     let tmp = sibling_tmp_dir(entry_dir);
     let _ = std::fs::remove_dir_all(&tmp);
 
-    let mut copied_any = false;
-    for output in &rule.output {
-        let expanded = super::checkpoint::expand_config_in_path(output, wildcard_values);
-        if crate::wildcard::has_wildcards(&expanded) {
-            continue;
-        }
-        let src = workdir.join(&expanded);
-        if !src.exists() {
-            continue;
-        }
-        copied_any = true;
-        let dest = tmp.join(&expanded);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        super::process::copy_tree(&src, &dest)?;
-    }
-    if !copied_any {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Ok(());
-    }
-
-    // Replace any previous entry with identical content (parallel
-    // instances of the same rule race here; both write identical bytes).
-    if entry_dir.exists() {
-        std::fs::remove_dir_all(entry_dir)?;
-    }
-    std::fs::rename(&tmp, entry_dir)?;
+    // #527: the whole populate (recursive output copy + atomic rename) is
+    // synchronous bulk I/O — blocking pool, like the restore path.
+    {
+        let rule_outputs = rule.output.clone();
+        let workdir = workdir.to_path_buf();
+        let tmp = tmp.clone();
+        let entry_dir = entry_dir.to_path_buf();
+        let wildcard_values = wildcard_values.clone();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let mut copied_any = false;
+            for output in &rule_outputs {
+                let expanded = super::checkpoint::expand_config_in_path(output, &wildcard_values);
+                if crate::wildcard::has_wildcards(&expanded) {
+                    continue;
+                }
+                let src = workdir.join(&expanded);
+                if !src.exists() {
+                    continue;
+                }
+                copied_any = true;
+                let dest = tmp.join(&expanded);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                super::process::copy_tree(&src, &dest)?;
+            }
+            if !copied_any {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Ok(false);
+            }
+            // Replace any previous entry with identical content (parallel
+            // instances of the same rule race here; both write identical
+            // bytes).
+            if entry_dir.exists() {
+                std::fs::remove_dir_all(&entry_dir)?;
+            }
+            std::fs::rename(&tmp, &entry_dir)?;
+            Ok(true)
+        })
+        .await
+        .map_err(|e| OxoFlowError::Execution {
+            rule: rule.name.clone(),
+            message: format!("cache populate task failed: {e}"),
+        })??
+    };
 
     // Completeness marker, last: restores require it.
     let meta = serde_json::json!({

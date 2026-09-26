@@ -594,6 +594,47 @@ impl CheckpointState {
     /// directory so the rename itself survives a crash. A power failure can
     /// no longer leave a truncated `checkpoint.json` — readers see either
     /// the previous state or the complete new one.
+    /// Blocking-pool variant of [`Self::save_to_file`] (#527): every rule
+    /// completion serializes and fsyncs the whole checkpoint — the write +
+    /// two fsyncs belong on the blocking pool, not a runtime worker. Call
+    /// it while holding the checkpoint mutex; `&self` stays borrowed, the
+    /// serialized bytes move to the pool.
+    pub async fn save_to_file_async(&self, path: &Path) -> Result<()> {
+        let json = self.to_json()?;
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let parent = crate::parent_dir(&path);
+            if parent != std::path::Path::new(".") {
+                std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
+                    message: format!("failed to create checkpoint directory: {e}"),
+                })?;
+            }
+            let tmp_path = path.with_extension("json.tmp");
+            let write_result = (|| -> std::io::Result<()> {
+                let mut f = std::fs::File::create(&tmp_path)?;
+                use std::io::Write;
+                f.write_all(json.as_bytes())?;
+                f.sync_all()?;
+                drop(f);
+                std::fs::rename(&tmp_path, &path)?;
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+                Ok(())
+            })();
+            write_result.map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                OxoFlowError::Config {
+                    message: format!("failed to save checkpoint to {}: {e}", path.display()),
+                }
+            })
+        })
+        .await
+        .map_err(|e| OxoFlowError::Config {
+            message: format!("checkpoint save task failed: {e}"),
+        })?
+    }
+
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
         let parent = crate::parent_dir(path);
         if parent != std::path::Path::new(".") {
@@ -805,6 +846,29 @@ pub fn content_hash_if_small(path: &Path, md: &std::fs::Metadata) -> Option<Stri
 /// Returns `Err` when an input cannot be resolved (missing file/dir,
 /// unreadable metadata, invalid glob pattern). Callers treat that as "cannot
 /// verify" and invalidate the rule rather than reuse it.
+/// Blocking-pool wrapper for [`snapshot_input_manifest`] (#527): the
+/// manifest hashes every (small) input file — keep it off the workers.
+pub async fn snapshot_input_manifest_async(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    resolver: &crate::storage::StorageResolver,
+) -> Result<Option<InputManifest>> {
+    let owned_rule = rule.clone();
+    let rule_name = rule.name.clone();
+    let workdir = workdir.to_path_buf();
+    let wildcard_values = wildcard_values.clone();
+    let resolver = resolver.clone();
+    tokio::task::spawn_blocking(move || {
+        snapshot_input_manifest(&owned_rule, &workdir, &wildcard_values, &resolver)
+    })
+    .await
+    .map_err(|e| crate::error::OxoFlowError::Execution {
+        rule: rule_name,
+        message: format!("input manifest task failed: {e}"),
+    })?
+}
+
 pub fn snapshot_input_manifest(
     rule: &Rule,
     workdir: &Path,
@@ -1178,6 +1242,26 @@ fn input_is_ancient(
         }
         false
     })
+}
+
+/// Blocking-pool wrapper for [`should_skip_rule_with_checksums`] (#527):
+/// the checksum path hashes up to 64 MiB per output — synchronous bulk
+/// work that must not run on a tokio worker.
+pub async fn should_skip_rule_with_checksums_async(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    checksums: Option<&BTreeMap<String, String>>,
+) -> bool {
+    let rule = rule.clone();
+    let workdir = workdir.to_path_buf();
+    let wildcard_values = wildcard_values.clone();
+    let checksums = checksums.cloned();
+    tokio::task::spawn_blocking(move || {
+        should_skip_rule_with_checksums(&rule, &workdir, &wildcard_values, checksums.as_ref())
+    })
+    .await
+    .unwrap_or(false)
 }
 
 pub fn should_skip_rule_with_checksums(

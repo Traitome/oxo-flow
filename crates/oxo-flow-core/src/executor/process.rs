@@ -1578,12 +1578,13 @@ impl LocalExecutor {
         };
         if !self.config.force_rerun
             && !self.config.force_rules.contains(&rule.name)
-            && super::checkpoint::should_skip_rule_with_checksums(
+            && super::checkpoint::should_skip_rule_with_checksums_async(
                 &rule,
                 &self.config.workdir,
                 wildcard_values,
                 freshness_checksums.as_ref(),
             )
+            .await
             && self.remote_outputs_present(&uploads).await
         {
             // A 0-byte "up to date" output is usually a failed attempt's
@@ -1705,12 +1706,14 @@ impl LocalExecutor {
                 // source rule loses content caching.
                 Some(Vec::new())
             } else {
-                match super::checkpoint::snapshot_input_manifest(
+                match super::checkpoint::snapshot_input_manifest_async(
                     &rule,
                     &self.config.workdir,
                     wildcard_values,
                     &self.config.storage_resolver,
-                ) {
+                )
+                .await
+                {
                     Ok(Some(manifest)) => Some(manifest),
                     // `Ok(None)` here is "no provable input identity"
                     // (declared inputs that do not resolve, engine wildcards
