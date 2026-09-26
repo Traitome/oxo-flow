@@ -1489,6 +1489,22 @@ impl Rule {
     /// - Thread count is positive (if specified)
     #[must_use = "validation returns a Result that must be checked"]
     pub fn validate(&self) -> crate::error::Result<()> {
+        self.validate_field_formats()?;
+        self.validate_output_pattern()?;
+        self.environment.validate_gpus()?;
+        Ok(())
+    }
+
+    /// Validate the field-format subset of [`Self::validate`] — the checks
+    /// that must hold before any rendering happens (#523).
+    ///
+    /// The run path enforces exactly this subset via
+    /// `WorkflowConfig::validate`: name charset, thread counts, memory and
+    /// retry-delay formats. The design-level checks (`output_pattern`
+    /// consistency, GPU/backend pairing) stay in [`Self::validate`] and in
+    /// the expansion stage, where their stage-appropriate diagnostics run.
+    #[must_use = "validation returns a Result that must be checked"]
+    pub fn validate_field_formats(&self) -> crate::error::Result<()> {
         if self.name.trim().is_empty() {
             return Err(crate::error::OxoFlowError::Validation {
                 message: "rule name cannot be empty or whitespace-only".to_string(),
@@ -1524,8 +1540,6 @@ impl Rule {
                 suggestion: None,
             });
         }
-        self.validate_output_pattern()?;
-        self.environment.validate_gpus()?;
         if let Some(threads) = self.threads
             && threads == 0
         {
@@ -1547,7 +1561,7 @@ impl Rule {
                 let valid = mem_trimmed
                     .strip_suffix(['G', 'g', 'M', 'm', 'K', 'k', 'T', 't'])
                     .and_then(|num_part| num_part.parse::<f64>().ok())
-                    .map(|v| v > 0.0)
+                    .map(|v| v.is_finite() && v > 0.0)
                     .unwrap_or(false);
                 if !valid {
                     return Err(crate::error::OxoFlowError::Validation {

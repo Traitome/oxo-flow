@@ -1600,10 +1600,14 @@ fn cli_report_md_format() {
 fn cli_report_xss_escaped() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wf.oxoflow");
+    // The workflow name is free-form, so the HTML emitter must escape it.
+    // Rule NAMES are charset-validated at parse since #523 — a hostile
+    // rule name is rejected before any report could render it (asserted
+    // below); the escaping routine stays as defense-in-depth.
     fs::write(
         &path,
         "[workflow]\nname = \"evil<script>alert(1)</script>\"\nversion = \"0.1\"\n\n\
-         [[rules]]\nname = \"x<script>alert(2)</script>\"\nshell = \"echo hi\"\n",
+         [[rules]]\nname = \"gen\"\nshell = \"echo hi\"\n",
     )
     .unwrap();
     let out = dir.path().join("report.html");
@@ -1624,13 +1628,27 @@ fn cli_report_xss_escaped() {
         "workflow name must be escaped"
     );
     assert!(
-        content.contains("&lt;script&gt;alert(2)&lt;/script&gt;"),
-        "rule name must be escaped"
-    );
-    assert!(
         !content.contains("<script>alert"),
         "raw script tag must not survive"
     );
+
+    // Hostile rule names cannot enter the pipeline at all anymore.
+    let hostile = dir.path().join("hostile.oxoflow");
+    fs::write(
+        &hostile,
+        "[workflow]\nname = \"t\"\n\n\
+         [[rules]]\nname = \"x<script>alert(2)</script>\"\nshell = \"echo hi\"\n",
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args([
+            "report",
+            hostile.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
 }
 
 #[test]

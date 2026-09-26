@@ -643,14 +643,38 @@ mod tests {
     }
 
     #[test]
-    fn yaml_quotes_hostile_rule_names() {
+    fn yaml_quotes_rule_names_with_special_chars() {
+        // Names with YAML-significant characters must survive round-trip.
+        // (The truly hostile variant — spaces/quotes — is now rejected at
+        // parse time by the run-path field validation, #523, so the quoting
+        // only has to handle the legal charset: alphanumerics, _, -, :.)
         let (config, path) = config_from(
-            "[[rules]]\nname = \"weird: rule'\\\"\"\nenv.docker = \"x:1\"\nshell = \"y\"\n",
+            "[[rules]]\nname = \"align:paired-1\"\nenv.docker = \"x:1\"\nshell = \"y\"\n",
         );
         let doc = collect_software_versions(&config, None, Some(&path));
         let yaml = doc.to_yaml();
-        // Single-quoted, with the embedded single quote doubled ('' in YAML).
-        assert!(yaml.contains("- key: 'test:weird: rule''\"'"));
+        assert!(
+            yaml.contains("- key: 'test:align:paired-1'"),
+            "colon-bearing names must be quoted: {yaml}"
+        );
+    }
+
+    #[test]
+    fn hostile_rule_names_are_rejected_at_parse() {
+        // #523: rule names are now charset-validated on the run path, so
+        // quote/space payloads never reach the YAML emitter (or the shell).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hostile.oxoflow");
+        std::fs::write(
+            &path,
+            "[workflow]\nname = \"t\"\n[[rules]]\nname = \"weird: rule'\\\"\"\nshell = \"y\"\n",
+        )
+        .unwrap();
+        let err = WorkflowConfig::from_file(&path).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid characters"),
+            "hostile name must be rejected: {err}"
+        );
     }
 
     #[test]

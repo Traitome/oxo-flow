@@ -2517,10 +2517,15 @@ mod tests {
             memory = "invalid"
             shell = "echo hello"
         "#;
-        let config = WorkflowConfig::parse(toml).unwrap();
-        let result = validate_format(&config);
-        assert!(!result.valid);
-        assert!(result.errors().iter().any(|d| d.code == "E004"));
+        // #523: field formats are validated hard on the run path — parse
+        // rejects the value before the diagnostic layer ever sees it. The
+        // E004 check remains as defense-in-depth for programmatically
+        // constructed configs.
+        let err = WorkflowConfig::parse(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid memory format"),
+            "invalid memory must be rejected: {err}"
+        );
     }
 
     #[test]
