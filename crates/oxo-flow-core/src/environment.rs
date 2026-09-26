@@ -457,13 +457,35 @@ impl CondaBackend {
     }
 
     /// Cache key with optional project-local prefix.
+    ///
+    /// For file-backed specs the YAML CONTENT hash rides in the key
+    /// (#532): the prefix verify only checks the directory exists, so
+    /// editing the file behind the path must produce a fresh cache entry
+    /// or every subsequent rule silently reuses the stale environment.
     pub fn cache_key_with_opts(&self, spec: &str, prefix: Option<&str>) -> String {
+        let content_tag = spec_content_tag(spec);
         if let Some(prefix) = prefix {
-            format!("conda:{spec}:{prefix}")
+            format!("conda:{spec}:{prefix}{content_tag}")
         } else {
-            self.cache_key(spec)
+            format!("conda:{spec}{content_tag}")
         }
     }
+}
+
+/// Short content tag for a file-backed spec, for cache keys (#532).
+///
+/// Empty when the spec is not a readable file (inline package specifiers,
+/// named envs — their identity already rides elsewhere). The named-env
+/// conda path is the precedent: its content hash lives in the derived
+/// env name, so its cache-hit verify catches edits.
+fn spec_content_tag(spec: &str) -> String {
+    let Ok(bytes) = std::fs::read(spec) else {
+        return String::new();
+    };
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(&bytes);
+    let hash8: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    format!(":{hash8}")
 }
 
 /// Container-internal shell shim: re-exec the user script under `bash -c`
@@ -1317,7 +1339,11 @@ impl EnvironmentBackend for VenvBackend {
     }
 
     fn cache_key(&self, spec: &str) -> String {
-        format!("venv:{spec}")
+        // #532: fold the requirements-file content hash into the key —
+        // editing requirements.txt must invalidate the cached env (the
+        // venv backend has no verify command, so a stale hit silently
+        // served every subsequent rule).
+        format!("venv:{spec}{}", spec_content_tag(spec))
     }
 }
 
@@ -1393,7 +1419,9 @@ impl EnvironmentBackend for PixiBackend {
     }
 
     fn cache_key(&self, spec: &str) -> String {
-        format!("pixi:{spec}")
+        // #532: same content-hash discipline as venv — the pixi manifest
+        // must invalidate the cache when edited.
+        format!("pixi:{spec}{}", spec_content_tag(spec))
     }
 }
 
@@ -2067,6 +2095,40 @@ impl EnvironmentResolver {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_backed_cache_keys_track_content() {
+        // #532: editing the file behind a file-backed spec must change the
+        // cache key — a path-only key made every later rule reuse the
+        // stale environment (venv/pixi have no verify command; the conda
+        // prefix verify only checks the directory exists).
+        let dir = tempfile::tempdir().unwrap();
+        let reqs = dir.path().join("requirements.txt");
+        std::fs::write(&reqs, "numpy==1.26\n").unwrap();
+        let spec = reqs.to_str().unwrap();
+
+        let k1 = VenvBackend.cache_key(spec);
+        std::fs::write(&reqs, "numpy==2.0\n").unwrap();
+        let k2 = VenvBackend.cache_key(spec);
+        assert_ne!(k1, k2, "edited requirements must change the venv cache key");
+
+        let c1 = CondaBackend.cache_key_with_opts(spec, Some(".oxo-conda"));
+        std::fs::write(&reqs, "numpy==2.1\n").unwrap();
+        let c2 = CondaBackend.cache_key_with_opts(spec, Some(".oxo-conda"));
+        assert_ne!(c1, c2, "edited YAML must change the conda prefix cache key");
+
+        // Inline (non-file) specs keep their old shape — the tag is empty.
+        assert_eq!(
+            CondaBackend.cache_key("bioconda::fastp=0.23.4"),
+            "conda:bioconda::fastp=0.23.4"
+        );
+        // A missing file also degrades to the plain key (setup fails
+        // later on its own terms).
+        assert_eq!(
+            VenvBackend.cache_key("/no/such/requirements.txt"),
+            "venv:/no/such/requirements.txt"
+        );
+    }
+
     use super::*;
 
     // ── Missing-env diagnosis (issue #300) ─────────────────────────

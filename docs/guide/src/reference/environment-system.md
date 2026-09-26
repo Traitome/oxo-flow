@@ -158,10 +158,11 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 - **Resolution**: `environment.venv` names the **venv directory** to create/reuse (e.g. `.venv`); `environment.venv_requirements` names the requirements file (default: `requirements.txt` in the working directory). Declaring a requirements file path in `venv` itself fails — the backend creates a directory at that path
 - **Activation**: Creates the venv (if needed) and activates it before the command
 - **Caching**: Venvs are stored in a cache directory keyed by the declared
-  venv spec (`venv:<path>` — the venv path you declared in the rule), not by
-  a hash of the requirements content. Editing `requirements.txt` in place
-  does not by itself invalidate the cache; bump the venv path or clear the
-  cache to force a rebuild.
+  venv spec **plus a content hash of the requirements file**
+  (`venv:<path>:<hash8>`), so editing `requirements.txt` in place
+  invalidates the cache and the next run rebuilds the environment
+  (#532 — previously the key was the path only and edits were silently
+  ignored). Unreadable/missing files degrade to the plain path key.
 
 ### HPC Modules
 
