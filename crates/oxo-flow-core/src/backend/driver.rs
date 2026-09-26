@@ -1120,15 +1120,21 @@ fn record_t(status: &JobStatus) -> &'static str {
 /// downstream can reconstruct it afterwards.
 fn emit(events: &mut std::fs::File, t: &str, rule: &str, job: Option<&str>, reason: Option<&str>) {
     let ts = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let line = match (job, reason) {
-        (Some(j), Some(r)) => {
-            format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"job":{j:?},"reason":{r:?}}}"#)
-        }
-        (Some(j), None) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"job":{j:?}}}"#),
-        (None, Some(r)) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?},"reason":{r:?}}}"#),
-        (None, None) => format!(r#"{{"ts":"{ts}","t":"{t}","rule":{rule:?}}}"#),
-    };
-    let _ = writeln!(events, "{line}");
+    // serde_json, not Rust's {finding} Debug (#536): Debug escapes control
+    // bytes as \u{1} (invalid JSON) — commands embed arbitrary user shell
+    // text and reason embeds scheduler stderr.
+    let mut obj = serde_json::json!({
+        "ts": ts,
+        "t": t,
+        "rule": rule,
+    });
+    if let Some(j) = job {
+        obj["job"] = serde_json::Value::String(j.to_string());
+    }
+    if let Some(r) = reason {
+        obj["reason"] = serde_json::Value::String(r.to_string());
+    }
+    let _ = writeln!(events, "{obj}");
 }
 
 fn write_status(job_dir: &Path, job_id: &str, command: &str, state: &str) -> Result<()> {
@@ -1155,10 +1161,14 @@ fn write_status_full(
     std::fs::create_dir_all(job_dir).map_err(|e| OxoFlowError::Config {
         message: format!("cannot create {}: {e}", job_dir.display()),
     })?;
+    // serde_json, not {heading} Debug — same reasoning as `emit` (#536):
+    // `command` carries arbitrary user shell text whose control bytes made
+    // status.json unparseable.
+    let json_string = |v: &str| serde_json::Value::String(v.to_string()).to_string();
     let mut fields = vec![
-        format!(r#""state":{state:?}"#),
-        format!(r#""job_id":{job_id:?}"#),
-        format!(r#""command":{command:?}"#),
+        format!(r#""state":{}"#, json_string(state)),
+        format!(r#""job_id":{}"#, json_string(job_id)),
+        format!(r#""command":{}"#, json_string(command)),
     ];
     if let Some((submitted, observed)) = times {
         let fmt = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -1234,6 +1244,22 @@ fn sanitize(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_json_round_trips_control_bytes() {
+        // #536: Rust's {finding} Debug escapes control bytes as \u{1}
+        // (invalid JSON); serde_json emits \u0001, so the resume/status
+        // readers and downstream tooling can always parse the file.
+        let dir = tempfile::tempdir().unwrap();
+        let job_dir = dir.path().join("job");
+        let hostile = "echo \u{1} hostile \u{7}; rm -rf ~";
+        write_status(&job_dir, "id\u{2}x", hostile, "completed").unwrap();
+        let raw = std::fs::read_to_string(job_dir.join("status.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("status.json must parse: {e}\n{raw}"));
+        assert_eq!(parsed["command"], hostile);
+        assert_eq!(parsed["job_id"], "id\u{2}x");
+    }
+
     use super::*;
     use crate::backend::ScheduledPlan;
     use crate::backend::cluster::ClusterExecutor;
