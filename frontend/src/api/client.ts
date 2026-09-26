@@ -96,6 +96,7 @@ export const api = {
   // ── Auth & License ──
   login: (username: string, password: string) => post<LoginResponse>('/api/auth/login', { username, password }),
   authMe: () => get<{ authenticated: boolean; username?: string; role?: string }>('/api/auth/me'),
+  logout: () => post<{ logged_out: boolean }>('/api/auth/logout', {}),
   listUsers: () => get<UserInfo[]>('/api/users'),
   createUser: (username: string, role: string, password?: string) => post<UserInfo>('/api/users', { username, role, password }),
   deleteUser: (id: string) => del<{ deleted: string }>(`/api/users/${id}`),

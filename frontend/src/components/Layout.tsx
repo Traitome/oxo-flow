@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck, Server } from 'lucide-react';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
-import { api } from '../api/client';
+import { api, apiUrl } from '../api/client';
 import { useServerVersion, fetchServerHealth } from '../api/version';
 import { useI18n } from '../context/I18n';
 
@@ -152,7 +152,23 @@ export default function Layout() {
           </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
           {userName ? (
-            <span className="header-user" title={t('nav.signedIn')}>{userName}</span>
+            <>
+              <span className="header-user" title={t('nav.signedIn')}>{userName}</span>
+              <button
+                className="header-user"
+                style={{ cursor: 'pointer', border: 'none', background: 'none' }}
+                title={t('nav.signOut')}
+                onClick={() => {
+                  // Revoke server-side (#520) before dropping the local copy.
+                  api.logout().catch(() => {}).finally(() => {
+                    localStorage.removeItem('oxo_token');
+                    window.location.assign(apiUrl('/'));
+                  });
+                }}
+              >
+                {t('nav.signOut')}
+              </button>
+            </>
           ) : (
             <Link to="/login" className="header-user">{t('nav.guest')}</Link>
           )}

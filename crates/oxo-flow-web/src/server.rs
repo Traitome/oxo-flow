@@ -455,6 +455,7 @@ pub fn build_router(mode: &str) -> Router {
     let auth_routes = Router::new()
         .route("/api/auth/login", post(auth::handlers::login))
         .route("/api/auth/me", get(auth::handlers::auth_me))
+        .route("/api/auth/logout", post(auth::handlers::logout))
         .route("/api/users", get(auth::handlers::list_users))
         .route("/api/users", post(auth::handlers::create_user))
         .route("/api/users/{id}", delete(auth::handlers::delete_user))
