@@ -451,18 +451,20 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // Get scatter variable if present - scatter variables are exempt from E003
         let scatter_var = rule.scatter.as_ref().map(|s| s.variable.as_str());
 
-        // Collect pair wildcards when pairs are defined
-        let pair_wildcards: Vec<&str> = if config.pairs.is_empty() {
+        // Pair/group exemption sets derive from the SAME shared vocabulary
+        // expand.rs binds on (#530): the old hardcoded three-name lists
+        // rejected legal workflows like
+        // `output = ["qc/{experiment_type}/{pair_id}.html"]` with a
+        // metadata-column wildcard, while the engine expanded it fine.
+        let pair_wildcards: Vec<String> = if config.pairs.is_empty() {
             Vec::new()
         } else {
-            vec!["pair_id", "experiment", "control"]
+            config.pair_fanout_wildcards()
         };
-
-        // Collect sample group wildcards when sample_groups are defined
-        let group_wildcards: Vec<&str> = if config.sample_groups.is_empty() {
+        let group_wildcards: Vec<String> = if config.sample_groups.is_empty() {
             Vec::new()
         } else {
-            vec!["group", "sample"]
+            config.group_fanout_wildcards()
         };
 
         // [[values]] tables declare parameter wildcards — these fan rules
@@ -477,11 +479,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
                 continue;
             }
             // Skip validation for pair wildcards when pairs are defined
-            if pair_wildcards.contains(&wc.as_str()) {
+            if pair_wildcards.iter().any(|p| p == wc) {
                 continue;
             }
             // Skip validation for sample group wildcards when sample_groups are defined
-            if group_wildcards.contains(&wc.as_str()) {
+            if group_wildcards.iter().any(|g| g == wc) {
                 continue;
             }
             // Skip validation for [[values]]-declared parameter wildcards
@@ -1125,21 +1127,10 @@ pub fn lint_format(
         }
     }
     if !config.pairs.is_empty() {
-        for wc in [
-            "pair_id",
-            "experiment",
-            "control",
-            "tumor",
-            "normal",
-            "experiment_type",
-            "tumor_type",
-        ] {
-            declared_wildcards.insert(wc.to_string());
-        }
-        for pair in &config.pairs {
-            for key in pair.metadata.keys() {
-                declared_wildcards.insert(key.clone());
-            }
+        // Same shared vocabulary as expand.rs (#530) — the alias list used
+        // to be retyped here.
+        for wc in config.pair_fanout_wildcards() {
+            declared_wildcards.insert(wc);
         }
     }
     for table in &config.values {
@@ -2713,6 +2704,40 @@ mod tests {
         let config = WorkflowConfig::parse(toml).unwrap();
         let result = validate_format(&config);
         assert!(result.errors().iter().any(|d| d.code == "E014"));
+    }
+
+    #[test]
+    fn e003_accepts_pair_and_group_metadata_wildcards() {
+        // #530: the exemption vocabulary must match expand.rs's binding —
+        // a metadata-column wildcard in an output is legal, not an E003
+        // error.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[pairs]]
+            pair_id = "pair1"
+            control = "C1"
+            experiment = "T1"
+            metadata = { batch = "b1" }
+
+            [[rules]]
+            name = "qc"
+            input = ["in.fastq"]
+            output = ["qc/{batch}/{pair_id}.html"]
+            shell = "echo qc > {output[0]}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let result = validate_format(&config);
+        assert!(
+            result.errors().iter().all(|d| d.code != "E003"),
+            "pair metadata wildcard must be exempt: {:?}",
+            result
+                .errors()
+                .iter()
+                .map(|d| (&d.code, &d.message))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -145,6 +145,45 @@ impl WorkflowConfig {
         Ok(())
     }
 
+    /// The full pair-fanout wildcard vocabulary (#530): the fixed aliases
+    /// expand.rs fans out on plus every pair metadata key. THE shared
+    /// source — `expand_wildcards` (trigger check) and the E003/W024
+    /// detectors all derive from this, so the exemption lists cannot drift
+    /// from the engine's binding behavior.
+    pub fn pair_fanout_wildcards(&self) -> Vec<String> {
+        let mut wildcards: Vec<String> = [
+            "experiment",
+            "control",
+            "tumor",
+            "normal",
+            "pair_id",
+            "experiment_type",
+            "tumor_type",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        for pair in &self.pairs {
+            for key in pair.metadata.keys() {
+                wildcards.push(key.clone());
+            }
+        }
+        wildcards
+    }
+
+    /// The full group-fanout wildcard vocabulary (#530): the fixed
+    /// `group`/`sample` names plus every sample-group metadata key.
+    pub fn group_fanout_wildcards(&self) -> Vec<String> {
+        let mut wildcards: Vec<String> =
+            ["group", "sample"].iter().map(|s| s.to_string()).collect();
+        for group in &self.sample_groups {
+            for key in group.metadata.keys() {
+                wildcards.push(key.clone());
+            }
+        }
+        wildcards
+    }
+
     /// Validate the group-level metadata vocabulary (issue #283).
     ///
     /// `reads_layout` is the documented second read dimension: sheet rows
