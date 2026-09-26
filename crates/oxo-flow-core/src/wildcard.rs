@@ -1107,10 +1107,7 @@ mod tests {
         // The mag false-positive shape: a comment documents why a placeholder
         // grammar was NOT used — the scanner must not see it (issue #477).
         let text = "cp a b\n# {input[N]} would interpolate the glob-annotated pattern\ncp c d";
-        assert_eq!(
-            strip_shell_comments(text),
-            "cp a b\n\ncp c d"
-        );
+        assert_eq!(strip_shell_comments(text), "cp a b\n\ncp c d");
         // Inline comment after a command.
         assert_eq!(strip_shell_comments("echo hi # {meta.id} note"), "echo hi ");
         // Executable `#` glued to a word is NOT a comment.
@@ -1122,7 +1119,10 @@ mod tests {
         );
         assert_eq!(strip_shell_comments("awk '{print $1}'"), "awk '{print $1}'");
         // No `#` anywhere → returned unchanged (fast path).
-        assert_eq!(strip_shell_comments("samtools view in.bam"), "samtools view in.bam");
+        assert_eq!(
+            strip_shell_comments("samtools view in.bam"),
+            "samtools view in.bam"
+        );
     }
 
     #[test]

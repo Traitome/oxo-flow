@@ -275,9 +275,10 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         // The directory part must be literal (no wildcard left in it, so
         // every instance targets the SAME dir) and must not be duplicated
         // as a whole by another fan-out wildcard.
-        let has_dir_output = rule.output.iter().any(|o| {
-            crate::dag::looks_like_directory(o) && !PLACEHOLDER_RE.is_match(o)
-        });
+        let has_dir_output = rule
+            .output
+            .iter()
+            .any(|o| crate::dag::looks_like_directory(o) && !PLACEHOLDER_RE.is_match(o));
         if has_dir_output {
             continue;
         }
