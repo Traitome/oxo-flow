@@ -1568,9 +1568,16 @@ jobs:
           # not drag :latest backwards — only the repo's actual latest
           # release gets the :latest alias; older ones keep their immutable
           # version tag and gain only the rolling :<major.minor>.
+          # #552: an API failure (429 rate limit, outage) must HARD-FAIL
+          # the promotion — an empty LATEST_TAG used to satisfy the guard
+          # and re-published an old release onto :latest in a green run.
           LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" \
             | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 || true)
-          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
+          if [ -z "$LATEST_TAG" ]; then
+            echo "::error::could not determine the repo's latest release — refusing to promote :latest on unknown state"
+            exit 1
+          fi
+          if [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
             echo "::warning::${RELEASE_TAG} is not the latest release (${LATEST_TAG}) — promoting only :${MAJOR_MINOR}, :latest stays with ${LATEST_TAG}"
             docker buildx imagetools create -t "${IMAGE}:${MAJOR_MINOR}" "${IMAGE}:${VERSION}"
             exit 0
