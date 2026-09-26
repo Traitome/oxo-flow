@@ -34,6 +34,7 @@ pub async fn create_pipeline(
     data_paths: Option<&[String]>,
     user_description: Option<&str>,
     templates: &[String],
+    scope: Option<&std::path::Path>,
 ) -> Result<OrchestrationResult, String> {
     // 1. Ingest — understand intent
     let intent = infer_intent(user_message);
@@ -41,7 +42,7 @@ pub async fn create_pipeline(
     // 2. Data Agent — analyze data
     let data_report = if let Some(paths) = data_paths {
         if !paths.is_empty() {
-            data_agent::analyze_paths(paths)
+            data_agent::analyze_paths(paths, scope.unwrap_or_else(|| std::path::Path::new("")))
         } else if let Some(desc) = user_description {
             data_agent::analyze_description(desc)
         } else {
@@ -323,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_orchestrate_creation() {
-        let result = create_pipeline("RNA-seq differential expression", None, None, &[])
+        let result = create_pipeline("RNA-seq differential expression", None, None, &[], None)
             .await
             .unwrap();
         assert_eq!(result.intent, "RNA-seq analysis");
