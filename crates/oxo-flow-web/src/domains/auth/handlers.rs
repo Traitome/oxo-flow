@@ -378,6 +378,41 @@ pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    tag = "auth",
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 200, description = "Success", body = serde_json::Value),
+    )
+)]
+/// POST /api/auth/logout — revoke the presented session (#520).
+///
+/// Sessions used to be irrevocable until their 24-hour expiry; a stolen
+/// token kept working after the user "signed out". The server deletes the
+/// session row; the client drops its local copy.
+pub async fn logout(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Value> {
+    let Some(token) = extract_token(&headers).filter(|t| !t.is_empty()) else {
+        return Ok(Json(serde_json::json!({"logged_out": false})));
+    };
+    if let Ok(pool) = get_pool() {
+        match sqlx::query("DELETE FROM sessions WHERE token = ?")
+            .bind(&token)
+            .execute(pool)
+            .await
+        {
+            Ok(result) => {
+                tracing::info!("logout revoked {} session(s)", result.rows_affected());
+            }
+            Err(e) => {
+                tracing::error!("DB error deleting session on logout: {e}");
+            }
+        }
+    }
+    Ok(Json(serde_json::json!({"logged_out": true})))
+}
+
+#[utoipa::path(
     get,
     path = "/api/users",
     tag = "auth",
@@ -545,6 +580,24 @@ pub async fn delete_user(
                 "Internal database error".into(),
             )
         })?;
+
+    // Cascade the user's live credentials (#520): sessions and API keys
+    // used to outlive the account and kept authenticating for up to 24 h
+    // after "firing" the user.
+    if let Err(e) = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        .bind(&id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!("DB error deleting sessions of user {id}: {e}");
+    }
+    if let Err(e) = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
+        .bind(&id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!("DB error deleting api_keys of user {id}: {e}");
+    }
 
     Ok(Json(serde_json::json!({"deleted": id})))
 }

@@ -148,6 +148,17 @@ Authorization: Bearer <token>
 ```
 Returns `{"authenticated": true, "username": "admin", "role": "admin"}` or `{"authenticated": false}`.
 
+### Sign Out
+```
+POST /api/auth/logout
+Authorization: Bearer <token>
+```
+Revokes the presented session server-side (#520) — the token stops
+authenticating immediately instead of living out its 24-hour TTL. The
+client should drop its local copy (`logged_out: true` on success).
+Deleting a user (`DELETE /api/users/{id}`) cascades: the deleted user's
+sessions and API keys are removed with the account.
+
 ### License Status
 ```
 GET /api/license
