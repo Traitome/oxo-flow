@@ -3886,7 +3886,7 @@ When given a workflow file, lists the environments used by each rule.</p>
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  ✓ singularity
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  ✓ venv
 </span></code></pre></div>
-<p>The two banner lines print only at an interactive terminal; redirected output starts at <code>Available environment backends:</code>.</p>
+<p>The two banner lines print only at an interactive terminal. All of this output goes to <strong>stderr</strong> — capture it with <code>2&gt;</code> or <code>2&gt;&amp;1</code>; stdout stays empty.</p>
 <h3 id="env-check"><code>env check</code><a class="headerlink" href="#env-check" title="Permanent link">#</a></h3>
 <p>Check that all environments declared in a workflow file are valid and their backends are available.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span><span class="o">[</span>WORKFLOW<span class="o">]</span>

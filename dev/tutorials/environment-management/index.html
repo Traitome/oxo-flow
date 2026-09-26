@@ -4155,7 +4155,7 @@
 </span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>  ✓ docker
 </span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>  ✓ venv
 </span></code></pre></div>
-<p>The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely). The two banner lines print only at an interactive terminal; redirected output starts at <code>Available environment backends:</code>.</p>
+<p>The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely). The two banner lines print only at an interactive terminal. All of this output (banner and backend list alike) goes to <strong>stderr</strong> — capture it with <code>2&gt;</code> or <code>2&gt;&amp;1</code>, since stdout stays empty.</p>
 <p>Check that all environments in a specific workflow are valid:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>my-pipeline.oxoflow
 </span></code></pre></div>
@@ -4165,6 +4165,7 @@
 </span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  ✓ call_variants (conda)
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  ✓ plot_results (venv)
 </span></code></pre></div>
+<p>Like <code>env list</code>, all output goes to stderr.</p>
 <hr />
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">#</a></h2>
 <ul>
