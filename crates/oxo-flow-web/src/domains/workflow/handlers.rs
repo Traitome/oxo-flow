@@ -14,7 +14,7 @@ use crate::infra::db::models;
 /// Pipeline read permission (issue #82 P0-4): admins and the owner always
 /// pass; `workspace`-visibility pipelines are readable by any
 /// authenticated user; everything else is private.
-fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
+pub(crate) fn can_read_pipeline(user: &CurrentUser, row: &models::PipelineRow) -> bool {
     user.is_admin() || row.user_id == user.id || row.visibility == "workspace"
 }
 

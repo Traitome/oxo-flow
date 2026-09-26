@@ -10,7 +10,7 @@ use crate::domains::ai::types::*;
 use crate::domains::auth::current_user::{CurrentUser, resolve};
 use crate::domains::execution::types::DiagnosticsResponse;
 use crate::domains::workflow::handlers::{
-    ApiError, ai_not_configured_error, err, error_event, get_pool,
+    ApiError, ai_not_configured_error, can_read_pipeline, err, error_event, get_pool,
 };
 use crate::infra::db::models;
 
@@ -216,48 +216,35 @@ pub async fn explain(
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
 
-    // Try to look up run diagnostics from DB
+    // Try to look up run diagnostics from DB. Ownership is enforced exactly
+    // like the execution handlers (#515): foreign and unknown runs both 404
+    // — the run's execution log must not be readable through the AI surface.
     let (diagnostics, log_output) = if let Ok(pool) = get_pool() {
-        let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-            .bind(&req.run_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+        let run =
+            crate::domains::execution::handlers::load_owned_run(pool, &user, &req.run_id).await?;
 
-        if let Some(run) = run {
-            // Node status comes from the engine's checkpoint state. The
-            // checkpoint/log reads are synchronous file I/O — run the
-            // combined block on the blocking pool (#268 item 4, web minor).
-            let workdir = run.workdir.clone();
-            let running = run.status == "running";
-            let (node_items, log, benchmarks) = tokio::task::spawn_blocking(move || {
-                let wd = workdir.as_deref().unwrap_or("");
-                let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
-                    std::path::Path::new(wd),
-                    running,
-                );
-                let log =
-                    std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default();
-                let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
-                    std::path::Path::new(wd),
-                );
-                (node_items, log, benchmarks)
-            })
-            .await
-            .unwrap_or_default();
-            let diagnostics =
-                crate::domains::execution::service::diagnose_run(&node_items, &log, &benchmarks);
-            (diagnostics, log)
-        } else {
-            (
-                DiagnosticsResponse {
-                    failed_nodes: vec![],
-                    warnings: vec![],
-                    resource_bottlenecks: vec![],
-                },
-                String::new(),
-            )
-        }
+        // Node status comes from the engine's checkpoint state. The
+        // checkpoint/log reads are synchronous file I/O — run the
+        // combined block on the blocking pool (#268 item 4, web minor).
+        let workdir = run.workdir.clone();
+        let running = run.status == "running";
+        let (node_items, log, benchmarks) = tokio::task::spawn_blocking(move || {
+            let wd = workdir.as_deref().unwrap_or("");
+            let node_items = crate::domains::execution::checkpoint_status::load_node_statuses(
+                std::path::Path::new(wd),
+                running,
+            );
+            let log = std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default();
+            let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
+                std::path::Path::new(wd),
+            );
+            (node_items, log, benchmarks)
+        })
+        .await
+        .unwrap_or_default();
+        let diagnostics =
+            crate::domains::execution::service::diagnose_run(&node_items, &log, &benchmarks);
+        (diagnostics, log)
     } else {
         (
             DiagnosticsResponse {
@@ -315,16 +302,16 @@ pub async fn interpret(
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
 
-    // Try to get output summary from run
+    // Try to get output summary from run. Ownership is enforced exactly
+    // like the execution handlers (#515): foreign and unknown runs both 404
+    // — the workdir file listing must not be readable through the AI surface.
     let output_summary = if let Ok(pool) = get_pool() {
-        let run: Option<models::RunRow> = sqlx::query_as("SELECT * FROM runs WHERE id = ?")
-            .bind(&req.run_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+        let run =
+            crate::domains::execution::handlers::load_owned_run(pool, &user, &req.run_id).await?;
 
-        run.and_then(|r| {
-            r.workdir.as_ref().and_then(|wd| {
+        run.workdir
+            .as_ref()
+            .and_then(|wd| {
                 // Read result files for summary — synchronous directory
                 // walk, kept off the async runtime (#268 item 4, web
                 // minor). The blocking-pool hop is only worth it when a
@@ -347,8 +334,7 @@ pub async fn interpret(
                     }
                 })
             })
-        })
-        .unwrap_or_default()
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -383,7 +369,10 @@ pub async fn optimize(
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
 
-    // Use provided TOML, or load from DB
+    // Use provided TOML, or load from DB. A `pipeline_id` lookup enforces
+    // the same read permission as the pipeline library (#515): private
+    // pipelines must not be exfiltrated through the AI surface. Foreign and
+    // unknown ids both 404 to avoid existence probing.
     let toml_content = if let Some(ref toml) = req.toml_content {
         toml.clone()
     } else if let Ok(pool) = get_pool() {
@@ -393,7 +382,16 @@ pub async fn optimize(
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
-        pipeline.map(|p| p.toml_content).unwrap_or_default()
+        match pipeline.filter(|p| can_read_pipeline(&user, p)) {
+            Some(p) => p.toml_content,
+            None => {
+                return Err(err(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    format!("Pipeline {} not found", req.pipeline_id),
+                ));
+            }
+        }
     } else {
         String::new()
     };

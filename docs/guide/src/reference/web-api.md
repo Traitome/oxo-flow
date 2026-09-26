@@ -536,9 +536,9 @@ Validates a plugin manifest and optionally verifies its HMAC signature against t
 ```
 POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
 POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
-POST /api/ai/explain            # Explain run failure + suggest fix
-POST /api/ai/interpret          # Interpret results with caveats
-POST /api/ai/optimize           # Optimize pipeline parameters
+POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
+POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
+POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
 GET  /api/ai/config             # Get AI provider configuration (public)
 POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
 POST /api/ai/test               # Test the provider (admin-only outside personal mode)

@@ -88,11 +88,13 @@ async fn test_ai_explain_endpoint_exists() {
         .body(Body::from(json!({"run_id": "nonexistent-run"}).to_string()))
         .unwrap();
     let resp = app().oneshot(req).await.unwrap();
-    // Should respond (may fail due to missing run, but endpoint must exist)
+    // Ownership enforcement (#515): an unknown (or foreign) run id answers
+    // 404 — the run's existence itself is private.
     let status = resp.status();
-    assert!(
-        status != StatusCode::NOT_FOUND,
-        "/api/ai/explain should exist (got 404)"
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "/api/ai/explain must 404 on an unknown run"
     );
 }
 
@@ -123,10 +125,13 @@ async fn test_ai_interpret_endpoint_exists() {
         ))
         .unwrap();
     let resp = app().oneshot(req).await.unwrap();
+    // Ownership enforcement (#515): an unknown (or foreign) run id answers
+    // 404 — the run's existence itself is private.
     let status = resp.status();
-    assert!(
-        status != StatusCode::NOT_FOUND,
-        "/api/ai/interpret should exist (got 404)"
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "/api/ai/interpret must 404 on an unknown run"
     );
 }
 
