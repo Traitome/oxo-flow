@@ -139,9 +139,14 @@ fn write_env_setup(
                     // install directly, no YAML file needed. -c conda-forge
                     // stands in for the channels block a YAML would declare
                     // (bioconda transitive deps live on conda-forge).
+                    // #535: the env name MUST match the runtime derivation
+                    // (conda_env_name_from_spec: {first-pkg}-{hash8} for
+                    // inline specs) — the plain rule name made the
+                    // pre-built env unreachable at run time and every rule
+                    // re-created its env from the network.
+                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     dockerfile.push_str(&format!(
-                        "RUN conda create -n {} -y -c conda-forge {}\n\n",
-                        rule.name, conda_env
+                        "RUN conda create -n {env_name} -y -c conda-forge {conda_env}\n\n"
                     ));
                 } else {
                     // YAML file path — copy and create from file.
@@ -588,9 +593,11 @@ pub fn generate_singularity_def(
             if let Some(ref conda_env) = rule.environment.conda {
                 if is_package_specifier(conda_env) {
                     // Package specifier — install directly.
+                    // #535: same runtime-name derivation as the Dockerfile
+                    // branch.
+                    let env_name = runtime_conda_env_name(&rule.name, conda_env);
                     def.push_str(&format!(
-                        "    /opt/conda/bin/conda create -n {} -y -c conda-forge {}\n",
-                        rule.name, conda_env
+                        "    /opt/conda/bin/conda create -n {env_name} -y -c conda-forge {conda_env}\n"
                     ));
                 } else {
                     // YAML file path.
@@ -822,6 +829,44 @@ mod tests {
         );
         assert!(!dockerfile.contains("-n step1"), "{dockerfile}");
 
+        // #535: inline package specifiers derive the SAME runtime name —
+        // the old `conda create -n {rule.name}` pre-built an env the
+        // runtime could never address.
+        let inline = WorkflowConfig::parse(
+            r#"
+            [workflow]
+            name = "conda-test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "fastp_step"
+            output = ["clean.fq"]
+            shell = "echo hi"
+
+            [rules.environment]
+            conda = "bioconda::fastp=0.23.4"
+        "#,
+        )
+        .unwrap();
+        let inline_expected =
+            crate::environment::conda_env_name_from_spec("conda", "bioconda::fastp=0.23.4")
+                .unwrap();
+        assert!(
+            inline_expected.starts_with("fastp-"),
+            "derived: {inline_expected}"
+        );
+        let dockerfile = generate_dockerfile(&inline, &default_non_rootless()).unwrap();
+        assert!(
+            dockerfile.contains(&format!(
+                "conda create -n {inline_expected} -y -c conda-forge"
+            )),
+            "inline spec must pre-build under the runtime name: {dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains("-n fastp_step"),
+            "the plain rule name must not be used: {dockerfile}"
+        );
+
         let def = generate_singularity_def(&workflow, &default_non_rootless()).unwrap();
         assert!(
             def.contains(&format!(
@@ -854,10 +899,20 @@ mod tests {
         .unwrap();
 
         let dockerfile = generate_dockerfile(&workflow, &default_non_rootless()).unwrap();
+        // #535: the env name is the RUNTIME derivation (fastp-<hash8> for
+        // inline specs), no longer the plain rule name.
+        let expected_name = crate::environment::conda_env_name_from_spec(
+            "conda",
+            "bioconda::fastp=0.23.4 bioconda::samtools=1.24",
+        )
+        .unwrap();
         assert!(
-            dockerfile.contains("conda create -n qc -y -c conda-forge bioconda::fastp=0.23.4 bioconda::samtools=1.24"),
+            dockerfile.contains(&format!(
+                "conda create -n {expected_name} -y -c conda-forge bioconda::fastp=0.23.4 bioconda::samtools=1.24"
+            )),
             "{dockerfile}"
         );
+        assert!(!dockerfile.contains("-n qc "), "{dockerfile}");
         let _ = dir.keep();
     }
 
