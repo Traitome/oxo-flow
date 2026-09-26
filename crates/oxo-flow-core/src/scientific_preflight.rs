@@ -267,6 +267,22 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             continue;
         }
 
+        // Directory-output aggregation is a deliberate convergence shape,
+        // not a race (live false positive: mag's convert_depths_{spades,
+        // megahit}): each instance writes distinct per-sample files into
+        // its own scratch dir and additively `mv`s them into the shared
+        // output directory — instances never open the same path twice.
+        // The directory part must be literal (no wildcard left in it, so
+        // every instance targets the SAME dir) and must not be duplicated
+        // as a whole by another fan-out wildcard.
+        let has_dir_output = rule
+            .output
+            .iter()
+            .any(|o| crate::dag::looks_like_directory(o) && !PLACEHOLDER_RE.is_match(o));
+        if has_dir_output {
+            continue;
+        }
+
         warnings.push(ScientificWarning {
             code: "SCI-AGG-RACE".into(),
             rule: rule.name.clone(),
@@ -1064,6 +1080,74 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
             expand_inputs = [{ pattern = "asm/{assembler}/stats.txt" }]
             output = ["report/asm.html"]
             shell = "python quast_report.py {input} report/asm.html"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+    }
+
+    #[test]
+    fn agg_race_silent_for_literal_dir_output_split_into_scratch() {
+        // Live false positive (mag convert_depths_{spades,megahit}): a
+        // per-sample rule writes distinct per-sample files in its own
+        // scratch dir, then additively `mv`s them into a shared literal
+        // output DIRECTORY. Instances never open the same path — the
+        // dir-output convergence shape is safe, not a race.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "convert_depths"
+            input = ["depths/SPAdes-{sample}-depth.txt.gz"]
+            output = ["maxbin2_abund/SPAdes"]
+            shell = """
+            mkdir -p .tmp/convert_depths_{sample} && cd .tmp/convert_depths_{sample}
+            mkdir -p "$wd/maxbin2_abund/SPAdes"
+            for f in SPAdes-{sample}-*.abund; do
+                [ -e "$f" ] && mv "$f" "$wd/maxbin2_abund/SPAdes/"
+            done
+            cd "$wd" && rm -rf .tmp/convert_depths_{sample}
+            """
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert!(
+            warnings.iter().all(|w| w.code != "SCI-AGG-RACE"),
+            "literal dir output with per-instance scratch split must not fire: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn agg_race_still_warns_for_file_output_fanned_per_sample() {
+        // The suppression is scoped to literal dir outputs: a plain
+        // wildcard-free FILE output still collides per instance and
+        // must keep warning.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[values]]
+            name = "assembler"
+            values = ["spades", "megahit"]
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1", "S2"]
+
+            [[rules]]
+            name = "collect"
+            input = ["done.marker"]
+            expand_inputs = [{ pattern = "depths/{assembler}-{sample}.txt" }]
+            output = ["abund/merged.txt"]
+            shell = "cat {input} > abund/merged.txt"
         "#;
         let config = WorkflowConfig::parse(toml).unwrap();
         let warnings = analyze_scientific_constraints(&config);

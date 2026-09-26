@@ -642,6 +642,53 @@ pub fn extract_wildcards(pattern: &str) -> Vec<String> {
     names
 }
 
+/// Strip `#` shell comments from a command text for *static scanning*.
+///
+/// Diagnostic scanners (the `{meta.<column>}` typo check, the
+/// execution-time residual-placeholder guard) match placeholder grammar
+/// over raw text. Shell comments are documentation, not executed code — a
+/// comment that mentions `{meta.id}` or `{input[N]}` (e.g. explaining why
+/// a glob pattern was NOT used) must not warn. A `#` starts a comment when
+/// it begins a line or follows whitespace; `#` glued to a word
+/// (`dir${x}#2`, shebang-free `a#b`) is left alone. Quoted `#` characters
+/// are preserved — the scanners' false-positive evidence is all full-line
+/// comments, so a conservative quote-aware single-pass scan suffices.
+#[must_use = "stripping returns a new String"]
+pub fn strip_shell_comments(text: &str) -> String {
+    if !text.contains('#') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut at_line_start = true;
+    let mut last_was_space = true;
+    while let Some(c) = chars.next() {
+        if c == '\n' {
+            at_line_start = true;
+            last_was_space = true;
+            out.push(c);
+            continue;
+        }
+        // `#` at a word boundary starts a comment — drop to end of line.
+        // (`#` glued to a word — `a#b` — is literal shell text.)
+        if c == '#' && (at_line_start || last_was_space) {
+            for skipped in chars.by_ref() {
+                if skipped == '\n' {
+                    at_line_start = true;
+                    last_was_space = true;
+                    out.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        at_line_start = false;
+        last_was_space = c.is_whitespace();
+        out.push(c);
+    }
+    out
+}
+
 /// Compact dedup key for a wildcard combo: sorted `key=value` parts joined
 /// by commas — the same canonical form the discovery walkers build, so a
 /// rediscovered combo can never double-contribute (issue #227 item 5).
@@ -1053,6 +1100,36 @@ mod tests {
     fn extract_wildcards_simple() {
         let names = extract_wildcards("{sample}_R{read}.fastq.gz");
         assert_eq!(names, vec!["sample", "read"]);
+    }
+
+    #[test]
+    fn strip_shell_comments_drops_comment_text() {
+        // The mag false-positive shape: a comment documents why a placeholder
+        // grammar was NOT used — the scanner must not see it (issue #477).
+        let text = "cp a b\n# {input[N]} would interpolate the glob-annotated pattern\ncp c d";
+        assert_eq!(strip_shell_comments(text), "cp a b\n\ncp c d");
+        // Inline comment after a command.
+        assert_eq!(strip_shell_comments("echo hi # {meta.id} note"), "echo hi ");
+        // Executable `#` glued to a word is NOT a comment.
+        assert_eq!(strip_shell_comments("echo a#b"), "echo a#b");
+        // Brace-groups and awk single-quotes are code — preserved.
+        assert_eq!(
+            strip_shell_comments("[ $? -eq 0 ] || { echo fail; exit 1; }"),
+            "[ $? -eq 0 ] || { echo fail; exit 1; }"
+        );
+        assert_eq!(strip_shell_comments("awk '{print $1}'"), "awk '{print $1}'");
+        // No `#` anywhere → returned unchanged (fast path).
+        assert_eq!(
+            strip_shell_comments("samtools view in.bam"),
+            "samtools view in.bam"
+        );
+    }
+
+    #[test]
+    fn strip_shell_comments_preserves_shebang_style_hashbang() {
+        // `#` at line start is a comment; the newline is kept so line-based
+        // consumers (rendered-command scans) see stable line structure.
+        assert_eq!(strip_shell_comments("#!/bin/bash\necho ok"), "\necho ok");
     }
 
     #[test]

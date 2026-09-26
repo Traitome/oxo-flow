@@ -3829,6 +3829,21 @@ fn missing_meta_columns_helper_reports_typos_per_rule() {
         missing_meta_columns(&["{meta.a}", "{meta.b}"], &known),
         vec!["a", "b"]
     );
+    // Shell comments are documentation, not code — a `{meta.id}` mention in
+    // a comment (mag ale_spades: `# (bam.name.endsWith('-{meta.id}.bam'))`)
+    // must NOT warn.
+    assert_eq!(
+        missing_meta_columns(
+            &["gzip -cd f | bioawk -t '\n# (bam.name.endsWith(\"-{meta.id}.bam\"))\n{ print }'"],
+            &known
+        ),
+        Vec::<&str>::new()
+    );
+    // The same reference in live code still warns.
+    assert_eq!(
+        missing_meta_columns(&["filter -i \"{meta.id}\""], &known),
+        vec!["id"]
+    );
 }
 
 #[test]
