@@ -371,7 +371,11 @@ Schema-check codes (`S001`–`S006`) come from the raw-file schema pass
 `S002` missing `[workflow]`, `S003` missing workflow name, `S004`
 malformed `[[rules]]`, `S005` a rule entry that is not a table, and
 `S006` an unknown top-level section (checked against the parser's own
-E017 whitelist — the documented sections are never flagged).
+E017 whitelist — the documented sections are never flagged). `S007`
+warns when `[workflow].format_version` is present but unrecognized, and
+`S008` is the secret-scanning warning: a token-shaped pattern in the raw
+file ([security](security.md)); it comes from the lint pass, not the
+schema pass.
 
 The full, current list with suggestions is best read from the commands:
 `oxo-flow lint --json` prints every code with its message and suggestion

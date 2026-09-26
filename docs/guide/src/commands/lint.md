@@ -27,7 +27,7 @@ oxo-flow lint [OPTIONS] <WORKFLOW>
 | `--strict` | — | — | Treat warnings as errors (non-zero exit) |
 | `--ai` | — | — | Enable AI-powered semantic linting |
 | `--verbose` | `-v` | — | Enable verbose (debug-level) logging |
-| `--quiet` | — | — | Suppress non-essential output (errors only) |
+| `--quiet` | — | — | Global log-level flag: suppresses `info`-level log lines and the banner. Lint diagnostics and the summary are printed regardless |
 | `--no-color` | — | — | Disable colored output |
 | `--json` | — | — | Output machine-readable JSON to stdout |
 

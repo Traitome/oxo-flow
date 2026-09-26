@@ -55,7 +55,7 @@ flowchart LR
     end
 
     subgraph surfaces["oxo-flow surfaces"]
-        cli["oxo-flow CLI<br/>30 subcommands"]
+        cli["oxo-flow CLI<br/>31 subcommands"]
         web["Web server<br/>axum + REST + SSE"]
         ai["AI layer<br/>orchestrator + tools"]
     end
@@ -104,7 +104,7 @@ compiled, licensed, and audited in isolation.
 | `oxo-flow-core` | library | — | The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting |
 | `oxo-flow-ai` | library | — | AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system |
 | `oxo-flow-web` | library | core, ai | REST/WebSocket server: 9 domains, storage backends, SSE broadcast, OpenAPI |
-| `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 30 subcommands, run loop, human rendering |
+| `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 31 subcommands, run loop, human rendering |
 
 ```mermaid
 flowchart TB

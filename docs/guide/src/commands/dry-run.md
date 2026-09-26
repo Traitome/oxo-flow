@@ -138,7 +138,12 @@ rule in the execution set exactly the way `run` would — same config-impact
 fingerprints, same input manifests, same DAG downstream closure — so the
 preview matches what an actual `run` will do. Without a checkpoint the same
 classification still runs against an empty state (every rule "never
-completed", `when` conditions still honored):
+completed", `when` conditions still honored). A warning makes the absent
+checkpoint explicit instead of implying a completed-run state:
+
+```console
+⚠ no checkpoint at ./.oxo-flow/checkpoint.json — treating every rule as never completed
+```
 
 ```console
 $ oxo-flow dry-run pipeline.oxoflow --samples NA12891
