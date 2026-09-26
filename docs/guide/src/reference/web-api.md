@@ -685,8 +685,12 @@ Usage is visible at `GET /api/quota` (`{ enabled, limits: {…}, usage: { active
 GET    /api/clusters                  # configured SSH connections
 POST   /api/clusters                  # upsert (admin-only outside personal mode)
 DELETE /api/clusters/{id}
-POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection
+POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 ```
+The stored `ssh_key` is a secret (#517): it is never returned by any
+response (including the upsert echo) — clients see `ssh_key_set: true |
+false` instead. When `OXO_FLOW_MASTER_KEY` is set, the key is sealed at
+rest with the same AES-256-GCM scheme as AI provider keys.
 `POST /api/runs` accepts `cluster_id`: the run then stages its workdir to
 the remote host (tar over stdio — no rsync), executes under a per-run
 nohup wrapper, and pulls the results back on completion so every

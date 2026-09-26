@@ -110,7 +110,9 @@ pub async fn probe(cluster: &ClusterInfo) -> ClusterProbeResult {
     cmd.arg("-o").arg("ConnectTimeout=8");
     cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
     cmd.arg("-p").arg(cluster.ssh_port.to_string());
-    if let Some(key) = cluster.ssh_key.as_deref() {
+    // The stored value may be sealed (OXO_FLOW_MASTER_KEY set, #517) —
+    // open it just before use.
+    if let Some(key) = cluster.ssh_key.as_deref().map(crate::infra::crypto::open) {
         cmd.arg("-i").arg(key);
     }
     let target = match cluster.ssh_user.as_deref() {
@@ -303,6 +305,7 @@ mod tests {
             ssh_port: 22,
             ssh_user: Some("nobody".into()),
             ssh_key: None,
+            ssh_key_set: false,
             scheduler: None,
             remote_dir: None,
             enabled: true,

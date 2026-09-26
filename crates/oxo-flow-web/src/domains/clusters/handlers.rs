@@ -84,7 +84,12 @@ pub async fn upsert_cluster(
     .bind(&req.ssh_host)
     .bind(req.ssh_port as i64)
     .bind(req.ssh_user.as_deref())
-    .bind(req.ssh_key.as_deref())
+    .bind(
+            req.ssh_key
+                .as_deref()
+                .map(crate::infra::crypto::seal)
+                .as_deref(),
+        )
     .bind(req.scheduler.as_deref())
     .bind(req.remote_dir.as_deref())
     .bind(req.enabled)
@@ -165,7 +170,15 @@ pub async fn delete_cluster(
     )
 )]
 /// POST /api/clusters/{id}/probe — SSH connectivity + scheduler detection.
-pub async fn probe_cluster(Path(id): Path<String>) -> ApiResult<ClusterProbeResult> {
+///
+/// Admin-only outside personal mode (#517): a probe actively uses the
+/// stored SSH credential against an arbitrary endpoint.
+pub async fn probe_cluster(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<ClusterProbeResult> {
+    let user = resolve(authenticated.as_ref());
+    require_cluster_admin(&user)?;
     let pool = get_pool()?;
     let row: Option<models::ClusterRow> = sqlx::query_as("SELECT * FROM clusters WHERE id = ?")
         .bind(&id)
@@ -196,6 +209,10 @@ fn cluster_from_row(row: models::ClusterRow) -> ClusterInfo {
         ssh_host: row.ssh_host,
         ssh_port: row.ssh_port as u16,
         ssh_user: row.ssh_user,
+        // The stored (possibly sealed) value stays in-memory for the
+        // probe/submit paths; `skip_serializing` keeps it out of every API
+        // response and `ssh_key_set` tells clients whether it exists (#517).
+        ssh_key_set: row.ssh_key.is_some(),
         ssh_key: row.ssh_key,
         scheduler: row.scheduler,
         remote_dir: row.remote_dir,
@@ -239,7 +256,12 @@ pub async fn import_from_config(definitions: &[crate::config::ClusterDefinition]
         .bind(&req.ssh_host)
         .bind(req.ssh_port as i64)
         .bind(req.ssh_user.as_deref())
-        .bind(req.ssh_key.as_deref())
+        .bind(
+            req.ssh_key
+                .as_deref()
+                .map(crate::infra::crypto::seal)
+                .as_deref(),
+        )
         .bind(req.scheduler.as_deref())
         .bind(req.remote_dir.as_deref())
         .bind(req.enabled)
