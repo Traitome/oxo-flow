@@ -937,30 +937,42 @@ async fn require_auth(
         // request extensions (issue #82 P0-4: every ownership check consumes
         // this; nothing trusts client-supplied user ids).
         //
-        // sessions.user_id holds the login name — for API-created users that
-        // is a username, not the UUID users.id. The users table disambiguates;
-        // legacy env-password logins without a users row keep the username as
-        // their identity (role: 'admin' for the admin bootstrap password,
-        // 'user' otherwise).
+        // sessions.user_id holds the canonical users.id, resolved
+        // server-side at login time (#516): bcrypt logins carry the
+        // account's UUID, env-password logins the provisioned row keyed
+        // id == username, OAuth logins the `oauth:{provider}:{id}`
+        // namespace. Role resolution therefore matches by id ONLY — never
+        // by username, or a client-chosen login name could adopt a
+        // privileged row. A session whose user has no row (deleted user,
+        // pre-upgrade username-keyed session) is rejected fail-closed; the
+        // old `user_id == "admin"` literal fallback is gone for the same
+        // reason.
         let (user_id, role) = match crate::infra::db::sqlite::try_pool() {
             Ok(pool) => {
                 let row: Option<(String, String)> =
-                    sqlx::query_as("SELECT id, role FROM users WHERE id = ? OR username = ?")
-                        .bind(&session.user_id)
+                    sqlx::query_as("SELECT id, role FROM users WHERE id = ?")
                         .bind(&session.user_id)
                         .fetch_optional(pool)
                         .await
                         .unwrap_or(None);
                 match row {
                     Some((id, role)) => (id, role),
-                    None => (
-                        session.user_id.clone(),
-                        if session.user_id == "admin" {
-                            "admin".to_string()
-                        } else {
-                            "user".to_string()
-                        },
-                    ),
+                    None => {
+                        tracing::warn!(
+                            "require_auth: session references unknown user '{}'; rejecting",
+                            session.user_id
+                        );
+                        return (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            axum::Json(serde_json::json!({
+                                "code": "INVALID_TOKEN",
+                                "message": "Session is no longer valid; sign in again",
+                                "suggestion": "Login again at POST /api/auth/login to obtain a fresh token"
+                            })),
+                        )
+                            .into_response();
+                    }
                 }
             }
             // DB unavailable — reject everything (fail-secure).

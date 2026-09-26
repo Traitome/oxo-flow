@@ -130,6 +130,16 @@ Returns session token, username, and role.
 > admin/user/viewer accounts. Without one of these the login returns 401 —
 > set the env vars when launching `oxo-flow serve` (see
 > [Web System Architecture](web-system-architecture.md)).
+>
+> **Identity is pinned server-side (#516):** the shared user/viewer
+> passwords never mint or adopt the `admin` identity (or any existing
+> API-created account) — `admin` signs in only with
+> `OXO_FLOW_ADMIN_PASSWORD`, and a username that belongs to a managed
+> account requires that account's own password. OAuth identities are
+> namespaced (`<provider>:<name>`) and can never collide with local
+> usernames. Sessions store the canonical `users.id` resolved at login;
+> role lookups match by id only and a session whose user row is gone
+> (deleted user, stale pre-upgrade session) is rejected with 401.
 
 ### Check Session
 ```

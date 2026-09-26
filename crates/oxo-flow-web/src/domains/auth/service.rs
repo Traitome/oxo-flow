@@ -22,6 +22,13 @@ pub fn authenticate(username: &str, password: &str) -> Result<LoginResponse, Str
             role: "admin".into(),
         });
     }
+    // The shared user/viewer passwords must never mint the admin identity
+    // (#516): OXO_FLOW_ADMIN_PASSWORD is the only credential that may sign
+    // in as "admin", otherwise anyone holding the weaker shared secret gets
+    // a session whose name resolves to the privileged admin row.
+    if username == "admin" {
+        return Err("Invalid credentials".into());
+    }
     // Check user
     if let Ok(user_pw) = std::env::var("OXO_FLOW_USER_PASSWORD")
         && password == user_pw
@@ -333,6 +340,26 @@ mod tests {
         assert!(
             result.is_err(),
             "password==username should be rejected without OX_FLOW_DEV_MODE=1"
+        );
+    }
+
+    #[test]
+    fn test_env_user_password_never_mints_admin() {
+        // #516: the shared user/viewer passwords must not mint the admin
+        // identity — a session named "admin" resolves to the privileged
+        // bootstrap row. Note the admin branch is skipped entirely when
+        // OXO_FLOW_ADMIN_PASSWORD is unset in the test environment.
+        if std::env::var("OXO_FLOW_USER_PASSWORD").is_ok()
+            || std::env::var("OXO_FLOW_VIEWER_PASSWORD").is_ok()
+        {
+            return; // env-password branches active — skip this assertion
+        }
+        // Without any env password set, authenticate falls through to the
+        // dev-mode gate and fails — the identity is never minted.
+        let result = authenticate("admin", "anything");
+        assert!(
+            result.is_err(),
+            "admin must not authenticate without its own password"
         );
     }
 

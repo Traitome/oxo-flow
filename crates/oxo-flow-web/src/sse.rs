@@ -88,25 +88,16 @@ async fn validate_event_token(
     .unwrap_or(None)?;
     let user_id = session.0;
 
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT id, role FROM users WHERE id = ? OR username = ?",
-    )
-    .bind(&user_id)
-    .bind(&user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-    match row {
-        Some((id, role)) => Some(crate::domains::auth::current_user::CurrentUser { id, role }),
-        None => Some(crate::domains::auth::current_user::CurrentUser {
-            id: user_id.clone(),
-            role: if user_id == "admin" {
-                "admin".into()
-            } else {
-                "user".into()
-            },
-        }),
-    }
+    // sessions.user_id is the canonical users.id resolved at login (#516);
+    // match by id only and fail closed — the old username match plus the
+    // literal-admin fallback let a client-chosen login name adopt the
+    // privileged admin row.
+    let row = sqlx::query_as::<_, (String, String)>("SELECT id, role FROM users WHERE id = ?")
+        .bind(&user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    row.map(|(id, role)| crate::domains::auth::current_user::CurrentUser { id, role })
 }
 
 #[utoipa::path(
