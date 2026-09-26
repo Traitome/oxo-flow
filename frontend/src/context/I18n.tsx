@@ -551,6 +551,7 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'common.loading': 'Loading…',
     'common.loadFailed': 'Failed to load: {{error}}',
     'common.unknownError': 'Unknown error',
+    'common.close': 'Close',
   },
   zh: {
     'nav.dashboard': '仪表盘',
@@ -1089,6 +1090,7 @@ const TRANSLATIONS: Record<Lang, Record<string, string>> = {
     'common.loading': '加载中…',
     'common.loadFailed': '加载失败：{{error}}',
     'common.unknownError': '未知错误',
+    'common.close': '关闭',
   },
 };
 

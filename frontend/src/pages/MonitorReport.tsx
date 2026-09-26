@@ -33,6 +33,9 @@ export default function MonitorReport() {
   const [dagStatus, setDagStatus] = useState<DagStatus | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [preview, setPreview] = useState<DryRunPreview | null>(null);
+  // #549: destructive-action failures used to vanish — the user believed a
+  // failed cancel/clean had succeeded.
+  const [actionError, setActionError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabType>('monitor');
   const [logs, setLogs] = useState<string | null>(null);
   const [logQuery, setLogQuery] = useState('');
@@ -213,28 +216,37 @@ export default function MonitorReport() {
     if (!selId) return;
     try {
       await api.pauseRun(selId, 'user_request');
+      setActionError(null);
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
-    } catch { /* ignore */ }
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+    }
   };
 
   const handleResume = async () => {
     if (!selId) return;
     try {
       await api.resumeRun(selId);
+      setActionError(null);
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
-    } catch { /* ignore */ }
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+    }
   };
 
   const handleRetry = async () => {
     if (!selId) return;
     try {
       const plan = await api.retryRun(selId);
+      setActionError(null);
       // The route is the selection source of truth; setSelId alone would be
       // reverted by the URL sync effect below.
       if (plan.new_run_id) navigate(`/runs/${plan.new_run_id}`);
-    } catch { /* ignore */ }
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+    }
   };
 
   const handleCancel = async () => {
@@ -242,10 +254,15 @@ export default function MonitorReport() {
     if (!window.confirm(t('monitor.cancelConfirm'))) return;
     try {
       await api.cancelRun(selId);
+      setActionError(null);
       void refreshRuns();
       const s = await api.aiStatus(selId);
       setMonitorStatus(s);
-    } catch { /* ignore */ }
+    } catch (err: unknown) {
+      // A 409 (process already exited) or any other failure must be
+      // visible — silence read as success.
+      setActionError(err instanceof Error ? err.message : t('common.unknownError'));
+    }
   };
 
   const handleAsk = async () => {
@@ -758,6 +775,19 @@ export default function MonitorReport() {
     <div className="page">
       <h1 className="page-title">{t('monitor.title')}</h1>
       <p className="page-subtitle">{t('monitor.subtitle')}</p>
+
+      {actionError && (
+        <div className="tool-palette-hint error" role="alert">
+          {actionError}
+          <button
+            className="icon-btn"
+            aria-label={t('common.close')}
+            onClick={() => setActionError(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Run selector */}
       <div className="section">

@@ -43,6 +43,14 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = authHeaders({ 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> || {}) });
 
   const res = await fetch(apiUrl(url), { ...options, headers });
+  // #549: an expired/invalid session must land the user on the login page
+  // instead of leaking raw statusText failures from every subsequent call.
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    localStorage.removeItem('oxo_token');
+    const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+    window.location.assign(`${base}/login?reason=expired`);
+    throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
+  }
   if (!res.ok) throw await toApiError(res);
   return res.json();
 }
