@@ -2050,6 +2050,20 @@ impl LocalExecutor {
                         if !status.success() {
                             all_commands_succeeded = false;
                             record.status = JobStatus::Failed;
+                            // Signal death carries no exit code; without a
+                            // note the record fails silently — a rule killed
+                            // by a run abort printed a bare "✗ failed" with
+                            // an empty stderr tail.
+                            #[cfg(unix)]
+                            if status.code().is_none() {
+                                use std::os::unix::process::ExitStatusExt;
+                                if let Some(sig) = status.signal() {
+                                    combined_stderr.push_str(&format!(
+                                        "\n[oxo-flow] command terminated by {}",
+                                        signal_name(sig)
+                                    ));
+                                }
+                            }
                             if let Some(handle) = rss_handle {
                                 cpu_seconds = Self::fold_cpu_seconds(cpu_seconds, &handle);
                                 peak_bytes = peak_bytes.max(handle.finish());
@@ -3134,6 +3148,24 @@ fn percent_encode(value: &str) -> String {
         }
     }
     out
+}
+
+/// Human-readable fatal-signal annotation for a rule killed by a signal
+/// (signal deaths carry no exit code — the stderr note is the only
+/// diagnostic an operator gets).
+#[cfg(unix)]
+fn signal_name(sig: i32) -> String {
+    match sig {
+        1 => "SIGHUP (1)".to_string(),
+        2 => "SIGINT (2)".to_string(),
+        3 => "SIGQUIT (3)".to_string(),
+        6 => "SIGABRT (6)".to_string(),
+        9 => "SIGKILL (9)".to_string(),
+        11 => "SIGSEGV (11)".to_string(),
+        13 => "SIGPIPE (13)".to_string(),
+        15 => "SIGTERM (15)".to_string(),
+        other => format!("signal {other}"),
+    }
 }
 
 fn push_stderr_note(record: &mut JobRecord, note: &str) {
@@ -4544,6 +4576,36 @@ mod tests {
         assert_eq!(residual_wildcard_token("plain/path.txt"), None);
         assert_eq!(residual_wildcard_token("{1numeric}/x"), None);
         assert_eq!(residual_wildcard_token("{}/x"), None);
+    }
+
+    #[tokio::test]
+    async fn signal_death_is_annotated_in_stderr() {
+        // A rule whose shell dies by signal has no exit code; the record
+        // must still name the signal instead of failing silently (this is
+        // what a collateral kill during a run abort used to look like).
+        let dir = tempfile::tempdir().unwrap();
+        let executor = LocalExecutor::new(ExecutorConfig {
+            workdir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+        let rule = crate::RuleBuilder::new("signalled")
+            .shell("kill -TERM $$")
+            .output(vec![])
+            .build();
+        let record = executor
+            .execute_rule_with_config(&rule, &HashMap::new(), &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(record.status, JobStatus::Failed);
+        assert_eq!(
+            record.exit_code, None,
+            "signal death must not carry an exit code"
+        );
+        let stderr = record.stderr.as_deref().unwrap_or_default();
+        assert!(
+            stderr.contains("command terminated by SIGTERM (15)"),
+            "stderr must name the signal: {stderr:?}"
+        );
     }
 
     #[tokio::test]

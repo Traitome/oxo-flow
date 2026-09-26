@@ -3587,6 +3587,72 @@ pub async fn run_command(
             }
             join_set.abort_all();
 
+            // The killed siblings would otherwise surface as bare
+            // "✗ rule 'X' failed" with no exit code and an empty stderr
+            // tail: the process-tree kill makes their shells die by signal,
+            // so their command loops record exit_code None and no
+            // diagnostics. Record them as honest Cancelled entries instead
+            // — never in failed_rules, they are collateral cancellations,
+            // not failures — and narrate them like skips.
+            {
+                let verb = if status == oxo_flow_core::executor::JobStatus::Cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                let killed: Vec<String> = task_rule
+                    .values()
+                    .filter(|name| *name != &completed_rule)
+                    .cloned()
+                    .collect();
+                if !killed.is_empty() {
+                    // A rule that already finished its closure (result still
+                    // unreaped in the JoinSet) has written its own record —
+                    // never overwrite a genuine Success/Failed.
+                    let already_failed = failed_rules_set.lock().await.clone();
+                    let mut ck = checkpoint.lock().await;
+                    for rule_name in &killed {
+                        if ck.is_completed(rule_name) || already_failed.contains(rule_name) {
+                            continue;
+                        }
+                        let record = oxo_flow_core::executor::JobRecord {
+                            rule: rule_name.clone(),
+                            status: oxo_flow_core::executor::JobStatus::Cancelled,
+                            started_at: None,
+                            finished_at: Some(chrono::Utc::now()),
+                            exit_code: None,
+                            stdout: None,
+                            stderr: None,
+                            command: None,
+                            retries: 0,
+                            skip_reason: Some(format!(
+                                "run aborted before this rule finished — required rule \
+'{completed_rule}' {verb}"
+                            )),
+                            max_rss_mb: None,
+                            cpu_seconds: None,
+                            caption: None,
+                        };
+                        ck.record_run(&record);
+                        if !is_tty {
+                            diagnostic_narrate(
+                                format_args!(
+                                    "  {} {} (run aborted — required rule '{}' {})",
+                                    "⊝".dimmed(),
+                                    rule_name,
+                                    completed_rule,
+                                    verb
+                                ),
+                                Some(&run_log),
+                            );
+                        }
+                    }
+                    if let Err(e) = ck.save_to_file(&checkpoint_path) {
+                        tracing::warn!(error = %e, "failed to save checkpoint after abort");
+                    }
+                }
+            }
+
             // AI error recovery
             let should_recover =
                 ai_recover || crate::commands::ai_template::should_use_ai(Some(&workflow), false);
