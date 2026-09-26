@@ -105,6 +105,7 @@ for the first instance is:
 
 ```bash
 #!/bin/bash
+#SBATCH --chdir=/abs/path/to/workdir
 #SBATCH --job-name=align_batch_S1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
@@ -127,6 +128,12 @@ plans, so a script maps back to a planned rule by name. The `sh -c '…' sh
 [Environment Wrapping](#environment-wrapping), and `singularity` is
 substituted when `apptainer` is absent.
 
+Note the workdir pinning at the top of each script (`--chdir` / `cd` /
+`-wd`): without it SLURM starts a job in the submission directory, PBS in
+`$HOME`, and SGE in a queue-configured directory, so a rule's relative
+output paths would silently land outside the run directory. The examples
+below show the pin for each backend.
+
 ---
 
 ## PBS Example
@@ -137,6 +144,7 @@ substituted when `apptainer` is absent.
 #PBS -l nodes=1:ppn=16,mem=32G,walltime=1-00:00:00
 #PBS -o logs/align_batch_S1.out
 #PBS -e logs/align_batch_S1.err
+cd /abs/path/to/workdir || exit 1
 
 set -e
 
@@ -150,6 +158,7 @@ apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocont
 
 ```bash
 #!/bin/bash
+#$ -wd /abs/path/to/workdir
 #$ -N align_batch_S1
 #$ -pe smp 16
 #$ -l h_vmem=32G
