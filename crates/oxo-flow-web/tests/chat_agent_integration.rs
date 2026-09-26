@@ -81,12 +81,14 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
             }]),
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         },
         ScriptedTurn {
             content: Some(format!("```toml\n{VALID_TOML}```")),
             tool_calls: None,
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         },
     ]);
     let text = post_chat(json!({"message": "run fastqc on my samples"})).await;
@@ -122,6 +124,7 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
             }]),
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         },
         ScriptedTurn {
             // Must validate as a workflow — the chat agent rejects non-TOML.
@@ -129,6 +132,7 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
             tool_calls: None,
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         },
     ]);
     let text =

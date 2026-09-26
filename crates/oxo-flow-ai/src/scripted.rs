@@ -34,6 +34,9 @@ pub struct ScriptedTurn {
     /// Artificial latency in milliseconds before the turn is replayed.
     #[serde(default)]
     pub delay_ms: u64,
+    /// Override the replayed finish_reason (default: stop / tool_calls).
+    #[serde(default)]
+    pub finish_reason: Option<String>,
 }
 
 impl ScriptedTurn {
@@ -117,11 +120,13 @@ impl ScriptedBackend {
         if let Some(tag) = turn.error {
             return Err(scripted_error(&tag));
         }
-        let finish_reason = if turn.tool_calls.is_some() {
-            "tool_calls"
-        } else {
-            "stop"
-        };
+        let finish_reason = turn.finish_reason.clone().unwrap_or_else(|| {
+            if turn.tool_calls.is_some() {
+                "tool_calls".to_string()
+            } else {
+                "stop".to_string()
+            }
+        });
         Ok(AiResponse {
             content: turn.content,
             reasoning_content: None,

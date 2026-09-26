@@ -275,6 +275,25 @@ impl Orchestrator {
                 if let Some(sink) = &mut sink {
                     sink(AgentEvent::Text(content.clone()));
                 }
+
+                // #543: a `length`/`max_tokens` finish means the completion
+                // was CUT OFF — parseable-prefix artifacts (a pipeline cut
+                // right after the last complete rule) sailed through
+                // extraction and validation and shipped silently truncated.
+                // Treat truncation as a validation failure feeding the
+                // retry loop, like any other rejected output.
+                if matches!(response.finish_reason.as_str(), "length" | "max_tokens") {
+                    let rc = response.reasoning_content.as_deref().unwrap_or("");
+                    push_retry_feedback(
+                        &mut messages,
+                        content,
+                        rc,
+                        "Your response was cut off by the output-token limit (finish_reason: length).                          The output is INCOMPLETE and cannot be used. Produce the complete output —                          same content, no re-analysis — possibly by omitting commentary to fit the budget.",
+                        rounds + 1 == self.max_rounds,
+                    );
+                    continue;
+                }
+
                 // Extract content (agent-specific, e.g., strip code fences)
                 let extracted = agent.extract_content(content);
 
@@ -889,6 +908,7 @@ mod tests {
             }]),
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         }
     }
 
@@ -1028,6 +1048,7 @@ mod tests {
             }]),
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         };
         let backend = ScriptedBackend::new(vec![
             narrated_turn("tc-1"),
@@ -1052,6 +1073,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_completion_is_not_delivered_as_validated() {
+        // #543: a completion cut by the output-token limit (finish_reason
+        // "length") used to sail through extraction and validation when the
+        // cut landed at a document boundary — a silently truncated pipeline
+        // shipped as validated. Truncation must feed the retry loop; only a
+        // `stop` finish may be delivered.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+
+        let mut truncated = ScriptedTurn::content("```toml\n[tool]\n```");
+        truncated.finish_reason = Some("length".into());
+        let backend = ScriptedBackend::new(vec![
+            truncated,
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 3);
+        let outcome = orch.execute(&TestAgent, &test_context()).await.unwrap();
+        assert!(
+            outcome.success,
+            "the retry must deliver the complete output"
+        );
+
+        let calls = backend.observed_calls().await;
+        assert_eq!(
+            calls.len(),
+            2,
+            "the truncated turn must be retried, not delivered"
+        );
+        assert!(
+            calls[1]
+                .iter()
+                .any(|m| m.content.contains("cut off by the output-token limit")),
+            "the model must be told its output was truncated: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn empty_round_after_tool_calls_nudges_without_consecutive_users() {
         // #542: a thinking-only round after tool calls has no text and no
         // tool_use. The nudge was PUSHED as a new user turn right after the
@@ -1072,6 +1129,7 @@ mod tests {
             }]),
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         };
         let backend = ScriptedBackend::new(vec![
             empty_after_tools,
@@ -1168,12 +1226,14 @@ mod tests {
                 }]),
                 error: None,
                 delay_ms: 0,
+                finish_reason: None,
             },
             ScriptedTurn {
                 content: Some("final output".into()),
                 tool_calls: None,
                 error: None,
                 delay_ms: 0,
+                finish_reason: None,
             },
         ]);
         let orch = Orchestrator::new(provider, 3);
@@ -1224,6 +1284,7 @@ mod tests {
             tool_calls: None,
             error: None,
             delay_ms: 0,
+            finish_reason: None,
         }]);
         let orch = Orchestrator::new(provider, 3);
         let ctx = test_context();
