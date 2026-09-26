@@ -2703,6 +2703,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rule-run-records-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule run records in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#workflow-version-in-the-checkpoint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4418,6 +4429,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rule-run-records-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule run records in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#workflow-version-in-the-checkpoint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5277,6 +5299,16 @@ the pid is in the summary line and (while the run is in flight) in
 <ul>
 <li><strong>Filename</strong>: <code>checkpoint.json</code> (the name is always the same regardless of workflow name)</li>
 </ul>
+<h3 id="rule-run-records-in-the-checkpoint">Rule run records in the checkpoint<a class="headerlink" href="#rule-run-records-in-the-checkpoint" title="Permanent link">#</a></h3>
+<p>Each executed rule carries a <code>rule_runs</code> entry in <code>checkpoint.json</code> with the
+expanded command, the process exit code, a bounded stderr tail, the resolved
+report caption, and (since the cancellation-semantics change) the terminal
+<strong><code>status</code></strong> (<code>"failed"</code>, <code>"cancelled"</code>, <code>"timed_out"</code>, …), the
+<strong><code>skip_reason</code></strong> when the rule did not run to completion, and the
+terminating <strong><code>signal</code></strong> when the process died to one. The three newer
+fields are optional and absent in checkpoints written by older engines —
+consumers must infer legacy records as before (failure when the rule is in
+<code>failed_rules</code>).</p>
 <h3 id="workflow-version-in-the-checkpoint">Workflow version in the checkpoint<a class="headerlink" href="#workflow-version-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>When the workflow file lives inside a git repository, oxo-flow records the
 repository's <strong>HEAD commit SHA</strong> in the checkpoint (<code>workflow_git_sha</code>) at
@@ -5543,6 +5575,8 @@ the config surface.</p>
 <li><strong>Auto-detected capacity is soft:</strong> Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.</li>
 <li><strong>Deadlock detection:</strong> If pending rules remain while nothing is running and none can become ready (typically an upstream failure), the engine reports <code>Deadlock detected: N rules stuck</code> with the stuck rule names. Resource waits cannot deadlock: over-capacity requests are clamped, and explicit budget violations fail fast before any rule runs.</li>
 <li><strong>Target-aware execution:</strong> The <code>-t</code> flag supports prefix matching — <code>-t al</code> matches all rules whose names start with "al". Use this to run a subset of the workflow, similar to <code>make &lt;target&gt;</code>. Only the named targets and their transitive upstream dependencies are executed; downstream rules are excluded.</li>
+<li><strong>Default targets:</strong> rules marked <code>target = true</code> are what <code>run</code>/<code>dry-run</code> build when neither <code>-t</code> nor <code>--module</code> selects anything — the marked rules and their transitive producers. With no marked rule the full DAG runs (backward compatible); an explicit <code>-t</code>/<code>--module</code> always wins.</li>
+<li><strong>Abort cancellation semantics:</strong> with fail-fast aborts, rules that were merely <em>killed</em> by the abort (signal death, no exit code) are recorded as <strong>cancelled</strong>, not failed — they are excluded from <code>failed_rules</code> and the failure counts, and narrated like skips. A sibling that failed on its own merit (exit code present) keeps its failure record. The checkpoint's per-rule <code>rule_runs</code> entries distinguish the two via their <code>status</code>/<code>skip_reason</code>/<code>signal</code> fields.</li>
 <li>Setting <code>--max-threads 0</code> or <code>--max-memory 0</code> auto-detects system resources</li>
 <li>Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)</li>
 <li>Use <code>--skip-env-setup</code> when environments are pre-built to avoid redundant setup</li>
