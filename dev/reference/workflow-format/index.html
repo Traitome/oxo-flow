@@ -6280,16 +6280,15 @@
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="k">[[sample_groups]]</span><span class="w">   </span><span class="c1"># Optional: multi-sample groups (WC-02)</span>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="k">[[values]]</span><span class="w">          </span><span class="c1"># Optional: named value lists for parameter wildcards</span>
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="k">[metadata]</span><span class="w">          </span><span class="c1"># Optional: per-sample metadata columns ({meta.&lt;column&gt;})</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">[resource_budget]</span><span class="w">   </span><span class="c1"># Optional: resource limits (cluster submissions only; local runs and `max_jobs` not yet enforced — issue #469)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">[resource_budget]</span><span class="w">   </span><span class="c1"># Optional: resource limits (enforced on cluster submissions; local runs use `--max-threads`/`--max-memory`)</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">[env_groups]</span><span class="w">        </span><span class="c1"># Optional: named reusable environment specs</span>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">[resource_groups]</span><span class="w">   </span><span class="c1"># Optional: shared resource pools (API limits, DB connections)</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">[wildcard_constraints]</span><span class="w"> </span><span class="c1"># Optional: regex patterns to constrain wildcard values</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">[[execution_group]]</span><span class="w"> </span><span class="c1"># Optional: explicit rule groups (parsed; mode/ordering not yet enforced — issue #469)</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[cluster]</span><span class="w">           </span><span class="c1"># Optional: HPC cluster profile (SLURM, PBS, SGE, LSF)</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">[cluster]</span><span class="w">           </span><span class="c1"># Optional: HPC cluster profile (SLURM, PBS, SGE, LSF)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="k">[[reference_db]]</span><span class="w">    </span><span class="c1"># Optional: tracked reference database versions</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -6495,7 +6494,7 @@ and includes without a contract behave exactly as before.</p>
 <td>String</td>
 <td>No</td>
 <td>—</td>
-<td>Parsed but <strong>not yet enforced</strong> — no version gate runs today (unlike <code>format_version</code>, which warns via S007) (issue #469)</td>
+<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.21.0"</code>)</td>
 </tr>
 <tr>
 <td><code>format_version</code></td>
@@ -7286,7 +7285,7 @@ disk space matters.</p>
 <td><code>target</code></td>
 <td>Boolean</td>
 <td>No</td>
-<td>Parsed and consumed by lint (W007 leaf suggestion) but <strong>not yet used</strong> as a run-time default target — <code>run</code> without <code>-t</code> builds the full DAG (issue #469)</td>
+<td>Default target: <code>run</code>/<code>dry-run</code> without an explicit <code>-t</code>/<code>--module</code> builds the rules marked <code>target = true</code> <strong>and their transitive producers</strong>; with no marked rule the full DAG runs (an explicit <code>-t</code> always wins)</td>
 </tr>
 <tr>
 <td><code>required</code></td>
@@ -7304,7 +7303,7 @@ disk space matters.</p>
 <td><code>benchmark</code></td>
 <td>String</td>
 <td>No</td>
-<td>Parsed but <strong>not yet used</strong> — no engine-written benchmark file today. The reports' Resource Accounting uses the executor's own RSS sampling, not this path (issue #469)</td>
+<td>Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule</td>
 </tr>
 <tr>
 <td><code>log</code></td>
@@ -7316,7 +7315,7 @@ disk space matters.</p>
 <td><code>group</code></td>
 <td>String</td>
 <td>No</td>
-<td>Parsed but <strong>not yet used</strong> — cluster array grouping keys on template name, not this label (issue #469)</td>
+<td>Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling</td>
 </tr>
 <tr>
 <td><code>cache_key</code></td>
@@ -7334,7 +7333,7 @@ disk space matters.</p>
 <td><code>rule_metadata</code></td>
 <td>Table</td>
 <td>No</td>
-<td>Arbitrary domain-specific metadata (assay, organism, etc.) — round-tripped only; no report section or <code>info</code> output renders it today (issue #469)</td>
+<td>Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it</td>
 </tr>
 <tr>
 <td><code>env_group</code></td>
@@ -7390,50 +7389,14 @@ disk space matters.</p>
 <td>No</td>
 <td>Categorization tags (e.g., <code>["qc", "alignment"]</code>)</td>
 </tr>
-<tr>
-<td><code>shadow</code></td>
-<td>String</td>
-<td>No</td>
-<td>Parsed and validated but <strong>not yet used</strong> — no shadow directory is created today (issue #469)</td>
-</tr>
-<tr>
-<td><code>ancient</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Parsed but <strong>not yet used</strong> — freshness/invalidation never consults it today (issue #469)</td>
-</tr>
-<tr>
-<td><code>localrule</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Parsed but <strong>not yet used</strong> — cluster submission does not honor it today; every schedulable rule can be submitted (issue #469)</td>
-</tr>
-<tr>
-<td><code>format_hint</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization)</td>
-</tr>
-<tr>
-<td><code>pipe</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Parsed and validated but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today)</td>
-</tr>
-<tr>
-<td><code>checksum</code></td>
-<td>String</td>
-<td>No</td>
-<td>Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today</td>
-</tr>
-<tr>
-<td><code>resource_hint</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Resource estimation hints for dynamic scheduling</td>
-</tr>
 </tbody>
 </table>
+<p>| <code>ancient</code> | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
+| <code>localrule</code> | Boolean | No | Parsed but <strong>not enforced yet</strong> — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see <a href="../../how-to/resource-tuning/">Resource Tuning</a>) |
+| <code>format_hint</code> | Array | No | Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization) |
+| <code>pipe</code> | Boolean | No | Parsed and validated but <strong>not yet used</strong> by the engine (planned for FIFO streaming; no streaming is performed today) |
+| <code>checksum</code> | String | No | Parsed but <strong>not yet enforced</strong> — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
+| <code>resource_hint</code> | Table | No | Resource estimation hints for dynamic scheduling |</p>
 <p><strong>Note:</strong> When a rule declares outputs, at least one of <code>shell</code>, <code>script</code>, or <code>transform</code> must be provided. If both <code>shell</code> and <code>script</code> are defined, they execute sequentially: shell first, then script.</p>
 <h3 id="environment-specification">Environment specification<a class="headerlink" href="#environment-specification" title="Permanent link">#</a></h3>
 <p>Exactly one backend per rule (uncomment the one you need):</p>
@@ -7737,10 +7700,12 @@ to whatever remains (issue #194):</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="k">[rules.resource_hint]</span>
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="n">input_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"medium"</span><span class="w">     </span><span class="c1"># small (~1GB), medium (~10GB), large (~100GB), xlarge (~500GB)</span>
 </span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="n">memory_scale</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.0</span><span class="w">        </span><span class="c1"># Estimated memory = input_size × scale</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">          </span><span class="c1"># fast (&lt;10min), medium (10min-1h), slow (&gt;1h)</span>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="n">io_bound</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># true = I/O bound, false = CPU bound</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"slow"</span><span class="w">          </span><span class="c1"># reserved: parsed, not yet consumed by the scheduler</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="n">io_bound</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># reserved: parsed, not yet consumed by the scheduler</span>
 </span></code></pre></div>
-<p>Memory estimation formula: <code>estimated_mb = input_size_mb × memory_scale</code></p>
+<p>Memory estimation formula: <code>estimated_mb = input_size_mb × memory_scale</code>. The
+<code>runtime</code> and <code>io_bound</code> hints are reserved scheduler knobs: only
+<code>input_size</code> and <code>memory_scale</code> are consumed today.</p>
 <hr />
 <h2 id="script-execution">Script Execution<a class="headerlink" href="#script-execution" title="Permanent link">#</a></h2>
 <p><code>shell</code> commands run through <code>bash</code> (falling back to <code>sh</code> when bash is
@@ -7928,22 +7893,11 @@ resume.</p>
 <td><code>localrule</code></td>
 <td>Boolean</td>
 <td><code>false</code></td>
-<td>Parsed but <strong>not yet enforced</strong> — cluster submission does not honor it today (issue #469)</td>
-</tr>
-<tr>
-<td><code>shadow</code></td>
-<td>String</td>
-<td>—</td>
-<td>Parsed but <strong>not yet used</strong> — no shadow directory is created today (issue #469)</td>
-</tr>
-<tr>
-<td><code>checkpoint</code></td>
-<td>Boolean</td>
-<td><code>false</code></td>
-<td>Enable checkpoint re-entry (requires <code>checkpoint_manifest</code>; the rule must not use <code>{sample}</code>/<code>{group}</code>)</td>
+<td>Parsed but <strong>not enforced yet</strong> — every schedulable rule can currently be submitted to the cluster</td>
 </tr>
 </tbody>
 </table>
+<p>| <code>checkpoint</code> | Boolean | <code>false</code> | Enable checkpoint re-entry (requires <code>checkpoint_manifest</code>; the rule must not use <code>{sample}</code>/<code>{group}</code>) |</p>
 <p><strong>DAG edge inference</strong> — edges form when a rule's <code>input</code> paths match
 another rule's <code>output</code> paths, for every input form: template paths,
 <code>expand_inputs</code> patterns (both the expanded concrete paths at run time
@@ -7965,7 +7919,7 @@ and duplicate edges are deduplicated.</p>
 </span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a><span class="k">[[rules]]</span>
 </span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"local_only"</span>
 </span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8" href="#__codelineno-37-8"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"echo 'local task'"</span>
-</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a><span class="n">localrule</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c1"># NOTE: parsed but not yet enforced (issue #469)</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a><span class="n">localrule</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c1"># NOTE: not yet enforced — every schedulable rule can be submitted</span>
 </span></code></pre></div>
 <h3 id="input-groups-input_groups">Input Groups (<code>input_groups</code>)<a class="headerlink" href="#input-groups-input_groups" title="Permanent link">#</a></h3>
 <p>Group many files of one sample (or any pattern key) into a <strong>single</strong>
@@ -8122,7 +8076,7 @@ antibody is wanted:</p>
 <tr>
 <td><code>ancient</code></td>
 <td>Array</td>
-<td>Parsed but <strong>not yet used</strong> — freshness/invalidation never consults it today (issue #469)</td>
+<td>Inputs excluded from freshness tracking and input manifests — they never trigger re-execution</td>
 </tr>
 <tr>
 <td><code>format_hint</code></td>
@@ -8144,7 +8098,7 @@ antibody is wanted:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{sample}.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span>
-</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a><span class="n">ancient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span><span class="w">  </span><span class="c1"># NOTE: parsed but not yet enforced (issue #469)</span>
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a><span class="n">ancient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"ref/hg38.fa"</span><span class="p">]</span><span class="w">  </span><span class="c1"># never triggers rebuild, however new the file is</span>
 </span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a><span class="c1"># format_hint and checksum are accepted but currently have no effect</span>
 </span></code></pre></div>
 <h3 id="organization">Organization<a class="headerlink" href="#organization" title="Permanent link">#</a></h3>
@@ -8202,14 +8156,14 @@ antibody is wanted:</p>
 <tr>
 <td><code>target</code></td>
 <td>Boolean</td>
-<td>Parsed but <strong>not yet used</strong> as a run-time default target — <code>run</code> without <code>-t</code> builds the full DAG (issue #469)</td>
+<td>Default target: built by <code>run</code>/<code>dry-run</code> when no explicit <code>-t</code>/<code>--module</code> is given (marked rules + their transitive producers; none marked → full DAG)</td>
 </tr>
 </tbody>
 </table>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"critical_step"</span>
 </span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">   </span><span class="c1"># Runs ahead of lower-priority rules</span>
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">   </span><span class="c1"># NOTE: parsed but not yet used as a default target (issue #469)</span>
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">   </span><span class="c1"># built by `run`/`dry-run` when no -t is given</span>
 </span></code></pre></div>
 <h3 id="optional-and-required-rules">Optional and Required Rules<a class="headerlink" href="#optional-and-required-rules" title="Permanent link">#</a></h3>
 <table>
@@ -8270,14 +8224,14 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>benchmark</code></td>
 <td>String</td>
-<td>Parsed but <strong>not yet used</strong> — no engine-written benchmark file today; Resource Accounting uses the executor's own RSS sampling (issue #469)</td>
+<td>Per-instance benchmark file — the engine writes its sampled metrics as JSON here after the rule completes</td>
 </tr>
 </tbody>
 </table>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
 </span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a><span class="n">log</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"logs/align_{sample}.log"</span>
-</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a><span class="n">benchmark</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"benchmarks/align_{sample}.tsv"</span><span class="w">  </span><span class="c1"># NOTE: parsed but not yet written (issue #469)</span>
+</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a><span class="n">benchmark</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"benchmarks/align_{sample}.json"</span><span class="w">  </span><span class="c1"># per-instance JSON, written by the engine</span>
 </span></code></pre></div>
 <h3 id="job-grouping-and-caching">Job Grouping and Caching<a class="headerlink" href="#job-grouping-and-caching" title="Permanent link">#</a></h3>
 <table>
@@ -8292,7 +8246,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>group</code></td>
 <td>String</td>
-<td>Parsed but <strong>not yet used</strong> — cluster array grouping keys on template name, not this label (issue #469)</td>
+<td>Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling</td>
 </tr>
 <tr>
 <td><code>cache_key</code></td>
@@ -8303,7 +8257,7 @@ executing a doomed shell command on missing files.</p>
 </table>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a><span class="k">[[rules]]</span>
 </span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_call"</span>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_calling"</span><span class="w">       </span><span class="c1"># NOTE: parsed but not yet used for grouping (issue #469)</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_calling"</span><span class="w">       </span><span class="c1"># reserved metadata (grouping keys on the template name)</span>
 </span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a><span class="n">cache_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"vc_v2.0"</span><span class="w">           </span><span class="c1"># Content cache key — outputs are reused when content is identical</span>
 </span></code></pre></div>
 <h3 id="dynamic-input-resolution">Dynamic Input Resolution<a class="headerlink" href="#dynamic-input-resolution" title="Permanent link">#</a></h3>
@@ -8336,7 +8290,7 @@ executing a doomed shell command on missing files.</p>
 <tr>
 <td><code>rule_metadata</code></td>
 <td>Table</td>
-<td>Domain-specific metadata (assay type, organism, protocol, etc.) — round-tripped only; no report section or <code>info</code> output renders it today (issue #469)</td>
+<td>Domain-specific metadata (assay type, organism, protocol, etc.) — a round-tripped surface for external tooling; the engine itself does not render it</td>
 </tr>
 </tbody>
 </table>
