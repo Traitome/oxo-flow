@@ -244,7 +244,7 @@ struct DeletionTarget {
 /// the real `rm` deletes both (issue #428 review finding).
 ///
 /// Returns `Err` when a recursive-deletion invocation cannot be parsed
-/// reliably (quoted operands or command substitution inside the operand
+/// reliably (unbalanced quotes or command substitution inside the operand
 /// segment): the caller must treat that as BLOCKED, never as "nothing to
 /// check". An empty `Ok` means no recursive `rm` invocation is present.
 fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
@@ -268,9 +268,18 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
             continue;
         }
         let segment = caps.get(2).map_or("", |m| m.as_str());
-        // Quoting or substitution inside the operand segment defeats
-        // whitespace tokenization — fail closed instead of guessing.
-        if segment.contains(['"', '\'', '`']) || segment.contains("$(") {
+        // Command substitution ($(...) and backticks) can smuggle arbitrary
+        // text into the operand list — fail closed. Bare variable
+        // expansions (`$prefix`, `${prefix}`) stay allowed: they were
+        // tokenized-as-is before this extractor existed and expand to a
+        // single path word in the cleanup idioms pipelines actually use.
+        // Balanced *surrounding* double quotes are likewise the standard
+        // defensive spelling of a single path (`rm -rf "$prefix"` in a
+        // for-loop) and carry no substitution content of their own: they
+        // are stripped below and the plain operand analyzed (issue #513:
+        // mag's prokka cleanup `rm -rf $prefix "$prefix.fa"` tripped the
+        // old blanket reject).
+        if segment.contains("$(") || segment.contains('`') {
             return Err(OxoFlowError::Validation {
                 message: format!(
                     "Shell command blocked: unparseable recursive deletion in '{}'",
@@ -278,13 +287,51 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
                 ),
                 rule: None,
                 suggestion: Some(
-                    "Recursive deletions must be plainly spelled out; remove quotes or \
-                     substitution from rm operands, or use a script file instead"
+                    "Recursive deletions must be plainly spelled out; remove substitution from \
+                     rm operands, or use a script file instead"
                         .to_string(),
                 ),
             });
         }
-        for operand in segment.split_whitespace() {
+        let quote_count = segment.matches('"').count();
+        let apostrophes = segment.matches('\'').count();
+        if quote_count % 2 != 0 || apostrophes % 2 != 0 {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Shell command blocked: unparseable recursive deletion in '{}'",
+                    cmd
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Recursive deletions must be plainly spelled out; remove quotes from \
+                     rm operands, or use a script file instead"
+                        .to_string(),
+                ),
+            });
+        }
+        // A segment whose quote pairs enclose MULTIPLE operands
+        // (`rm -rf "a b" c`) still defeats whitespace tokenization: the
+        // shell sees 2 operands, a naive split sees 3. Only the form where
+        // every operand is individually fully quoted (or bare) is safe to
+        // split: `rm -rf $prefix "$prefix.fa"` → [$prefix, $prefix.fa].
+        // Any quote that survives wrapper-stripping (interior quotes,
+        // multi-operand groups) fails closed below.
+        let unquoted = strip_surrounding_quote_pairs(segment);
+        if unquoted.contains('"') || unquoted.contains('\'') {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "Shell command blocked: unparseable recursive deletion in '{}'",
+                    cmd
+                ),
+                rule: None,
+                suggestion: Some(
+                    "Quote each rm operand individually (\"$dir/file a\" spans one operand); \
+                     or use a script file instead"
+                        .to_string(),
+                ),
+            });
+        }
+        for operand in unquoted.split_whitespace() {
             if operand.starts_with('-') {
                 continue; // trailing flags after the first operand
             }
@@ -294,6 +341,34 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
         }
     }
     Ok(targets)
+}
+
+/// Remove quote characters that PAIR UP as full operand wrappers.
+///
+/// Iteratively strips balanced quote pairs around whitespace-separated
+/// operands: `"$prefix" "$prefix.fa"` → `$prefix $prefix.fa`. An interior
+/// quote that isn't a full-operand wrapper (e.g. `a"b c"d`) survives —
+/// the caller detects the resulting whitespace-shape change and fails
+/// closed on it.
+fn strip_surrounding_quote_pairs(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for tok in segment.split_whitespace() {
+        let mut t = tok;
+        loop {
+            let wrapped = (t.starts_with('"') && t.ends_with('"') && t.len() >= 2)
+                || (t.starts_with('\'') && t.ends_with('\'') && t.len() >= 2);
+            if wrapped {
+                t = &t[1..t.len() - 1];
+            } else {
+                break;
+            }
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(t);
+    }
+    out
 }
 
 /// Classify an absolute deletion target against the run workdir.

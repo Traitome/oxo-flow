@@ -29,6 +29,13 @@ home (`~`), `--no-preserve-root` forms, and any target outside the workdir
 remain hard errors. The static lint (E011) still flags raw `rm -rf /`-style
 templates regardless.
 
+Quoted operands are parsed, not blanket-rejected: each operand may be
+individually wrapped in balanced quotes (`rm -rf $prefix "$prefix.fa"` — the
+standard defensive spelling in shell loops), and the quotes are stripped
+before the in-workdir check. Command substitution (`$(...)`, backticks),
+unbalanced quotes, and quote pairs spanning multiple operands
+(`rm -rf "a b" c`) still fail closed as unparseable.
+
 ### Warning Patterns (Non-Blocking)
 
 These emit **warnings** but allow execution — the rule runs either way. The
