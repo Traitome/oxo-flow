@@ -228,7 +228,7 @@ Available environment backends:
   ✓ venv
 ```
 
-The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely). The two banner lines print only at an interactive terminal; redirected output starts at `Available environment backends:`.
+The output is system-dependent — only backends installed on the current machine are listed (unavailable ones are omitted entirely). The two banner lines print only at an interactive terminal. All of this output (banner and backend list alike) goes to **stderr** — capture it with `2>` or `2>&1`, since stdout stays empty.
 
 Check that all environments in a specific workflow are valid:
 
@@ -243,6 +243,8 @@ https://github.com/Traitome/oxo-flow
   ✓ call_variants (conda)
   ✓ plot_results (venv)
 ```
+
+Like `env list`, all output goes to stderr.
 
 ---
 
