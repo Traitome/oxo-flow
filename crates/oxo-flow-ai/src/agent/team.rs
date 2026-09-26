@@ -230,10 +230,24 @@ pub enum Verdict {
 /// discarded (returns `None`) so a broken reviewer never blocks delivery.
 pub fn parse_verdict(review: &str) -> Option<Verdict> {
     let marker = review.lines().find(|l| l.contains("VERDICT:"))?;
-    let lowered = marker.to_lowercase();
-    if lowered.contains("approve") && !lowered.contains("request_changes") {
-        Some(Verdict::Approve)
-    } else if lowered.contains("request_changes") {
+    // #544: only the text AFTER the `VERDICT:` marker counts — a review
+    // like "VERDICT: I do not approve, request changes" used to contain
+    // "approve" (from "do not approve") without the underscore token and
+    // parsed as Approve, silently skipping the bounded regeneration the
+    // Full profile exists to buy. Ambiguous markers return None
+    // (fail-safe: the review is discarded, never guessed as approve).
+    let verdict_text = marker
+        .split_once("VERDICT:")
+        .map(|(_, rest)| rest.to_lowercase())
+        .unwrap_or_default();
+    let asks_changes = verdict_text.contains("request_changes")
+        || verdict_text.contains("request changes")
+        || verdict_text.contains("changes requested");
+    let says_approve = verdict_text.contains("approve")
+        && !verdict_text.contains("not approve")
+        && !verdict_text.contains("do not ")
+        && !verdict_text.contains("n't approve");
+    if asks_changes {
         // Findings = the rest of the response, minus the verdict line.
         let findings = review
             .lines()
@@ -242,10 +256,12 @@ pub fn parse_verdict(review: &str) -> Option<Verdict> {
             .join("\n")
             .trim()
             .to_string();
-        Some(Verdict::RequestChanges(findings))
-    } else {
-        None
+        return Some(Verdict::RequestChanges(findings));
     }
+    if says_approve {
+        return Some(Verdict::Approve);
+    }
+    None
 }
 
 /// Stage 5 agent: an INDEPENDENT evaluator instance. It sees the task
@@ -355,6 +371,22 @@ mod tests {
         assert_eq!(kws.iter().filter(|k| *k == "fastp").count(), 1);
         assert!(kws.contains(&"fastp".to_string()));
         assert!(kws.contains(&"star".to_string()));
+    }
+
+    #[test]
+    fn parse_verdict_rejects_negated_approvals() {
+        // #544: "VERDICT: I do not approve, request changes" parsed as
+        // Approve under the old substring matching — the bounded
+        // regeneration was silently skipped.
+        let negated = "VERDICT: I do not approve, request changes.\nThe loop bounds are wrong.";
+        match parse_verdict(negated) {
+            Some(Verdict::RequestChanges(findings)) => {
+                assert!(findings.contains("loop bounds"));
+            }
+            other => panic!("negated approval must not parse as approve: {other:?}"),
+        }
+        // Ambiguous → discarded (fail-safe), never approve.
+        assert_eq!(parse_verdict("VERDICT: looks decent I think"), None);
     }
 
     #[test]
