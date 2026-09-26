@@ -382,6 +382,19 @@ impl Orchestrator {
                     let directive = messages.last_mut().expect("length checked above");
                     directive.content.push_str("\n\n");
                     directive.content.push_str(&nudge);
+                } else if messages
+                    .last()
+                    .is_some_and(|m| m.role == crate::types::MessageRole::Tool)
+                {
+                    // #542: after a tool round the last message is Tool —
+                    // pushing a separate user turn put two consecutive user
+                    // messages on the Anthropic wire (400 roles-must-
+                    // alternate) and archive_failed_generation killed the
+                    // whole paid generation. Append to the tool-result
+                    // message, the same trick as the exploration nudge.
+                    let tool_msg = messages.last_mut().expect("length checked above");
+                    tool_msg.content.push_str("\n\n");
+                    tool_msg.content.push_str(&nudge);
                 } else {
                     messages.push(Message::user(&nudge));
                 }
@@ -1035,6 +1048,59 @@ mod tests {
                 .flatten()
                 .any(|m| m.content.contains("Exploration budget warning")),
             "narrated tool rounds are not silent exploration: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_round_after_tool_calls_nudges_without_consecutive_users() {
+        // #542: a thinking-only round after tool calls has no text and no
+        // tool_use. The nudge was PUSHED as a new user turn right after the
+        // Tool result message — to_anthropic_messages coalesces tool
+        // results into a user turn but never merges consecutive users, so
+        // the wire was [user(tool_results), user(nudge)] and Anthropic
+        // rejected the whole generation with 400 roles-must-alternate.
+        // The nudge now folds into the Tool message.
+        use crate::scripted::{ScriptedBackend, ScriptedTurn};
+        use crate::types::ToolCall;
+
+        let empty_after_tools = ScriptedTurn {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-1".into(),
+                name: "read_only_tool".into(),
+                arguments: "{}".into(),
+            }]),
+            error: None,
+            delay_ms: 0,
+        };
+        let backend = ScriptedBackend::new(vec![
+            empty_after_tools,
+            ScriptedTurn::default(), // the empty round under test
+            ScriptedTurn::content("```toml\n[tool]\n```"),
+        ]);
+        let orch = Orchestrator::new(AiProvider::Scripted(backend.clone()), 4);
+        let ctx = tool_registry_with_read_only_tool();
+        let outcome = orch.execute(&FenceAgent, &ctx).await.unwrap();
+        assert!(
+            outcome.success,
+            "the generation must survive the empty round"
+        );
+
+        // The wire on the LAST call must never carry consecutive user
+        // turns, and the nudge must be present (folded into the tool
+        // message).
+        let calls = backend.observed_calls().await;
+        let last = calls.last().expect("at least one provider call");
+        for pair in last.windows(2) {
+            assert!(
+                !(matches!(pair[0].role, crate::types::MessageRole::User)
+                    && matches!(pair[1].role, crate::types::MessageRole::User)),
+                "no consecutive user turns may reach the wire: {last:?}"
+            );
+        }
+        assert!(
+            last.iter().any(|m| m.content.contains("did not contain")),
+            "the nudge must reach the model: {last:?}"
         );
     }
 
