@@ -4965,6 +4965,22 @@ flags these with warning W019).</p>
   grace period</strong> (10s) before escalating to SIGKILL, so well-behaved
   tools get a chance to flush state; descendants spawned during the
   grace window are caught by a re-scan before the KILL sweep.</li>
+<li>Abort demotion is <strong>evidence-based twice over</strong> (#525): a failed rule
+  is only demoted to <em>cancelled</em> when its pid was in the abort's kill
+  snapshots <strong>and</strong> its record shows a pure signal death. A sibling the
+  kernel OOM-killer shot at the same moment carries the same signal
+  signature but no snapshot membership — its genuine failure record
+  survives. The SIGINT teardown records engine-killed rules with
+  <code>signal = SIGTERM, exit_code = none</code> (real evidence) instead of a
+  fabricated exit code.</li>
+<li>Aborts kill auxiliary children too (#524): every rule-side spawn
+  (environment setup/verify, <code>pre_exec</code>, success/failure hooks) sets
+  <code>kill_on_drop</code>, so cancelling a task kills its in-flight child instead
+  of orphaning it — an interrupted <code>conda env create</code> can no longer
+  outlive the env-create lock and corrupt a relaunched creation. The
+  abort kill-sweep itself runs on the blocking pool (its SIGTERM grace
+  poll sleeps up to 10s) and takes a <strong>second</strong> pid snapshot after
+  <code>abort_all()</code> to catch attempts spawned during the first sweep.</li>
 <li>Scratch outputs move back to the workdir <strong>atomically even across
   filesystems</strong>: the copy lands in a temp sibling, is fsynced, renamed
   into place, and the parent directory fsynced — a crash leaves either

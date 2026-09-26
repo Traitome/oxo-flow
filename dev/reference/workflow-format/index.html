@@ -7185,212 +7185,53 @@ disk space matters.</p>
 <td>No</td>
 <td>Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups)</td>
 </tr>
-<tr>
-<td><code>environment</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Environment specification</td>
-</tr>
-<tr>
-<td><code>transform</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Unified scatter-gather operator (split → map → combine)</td>
-</tr>
-<tr>
-<td><code>when</code></td>
-<td>String</td>
-<td>No</td>
-<td>Conditional expression — skip rule when <code>false</code>. May call read-only runtime functions (<code>reads_count</code>, <code>wc_lines</code>, <code>file_size</code>, <code>file_exists</code>, <code>regex_extract</code>) that inspect files in the run workdir; see <a href="#data-dependent-when-gates">Data-Dependent <code>when</code> Gates</a></td>
-</tr>
-<tr>
-<td><code>envvars</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Dictionary of environment variables to inject</td>
-</tr>
-<tr>
-<td><code>params</code></td>
-<td>Table</td>
-<td>No</td>
-<td>User-defined parameters for shell templates</td>
-</tr>
-<tr>
-<td><code>pre_exec</code></td>
-<td>String</td>
-<td>No</td>
-<td>Command to run <em>before</em> the main shell command</td>
-</tr>
-<tr>
-<td><code>on_success</code></td>
-<td>String</td>
-<td>No</td>
-<td>Command to run after rule succeeds</td>
-</tr>
-<tr>
-<td><code>on_failure</code></td>
-<td>String</td>
-<td>No</td>
-<td>Command to run after rule fails (all retries exhausted)</td>
-</tr>
-<tr>
-<td><code>retries</code></td>
-<td>Integer</td>
-<td>No</td>
-<td>Number of retry attempts on failure (default: 0)</td>
-</tr>
-<tr>
-<td><code>interpreter</code></td>
-<td>String</td>
-<td>No</td>
-<td>Explicit interpreter for script execution</td>
-</tr>
-<tr>
-<td><code>checkpoint</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Enable checkpoint re-entry after this rule completes (requires <code>checkpoint_manifest</code>)</td>
-</tr>
-<tr>
-<td><code>checkpoint_manifest</code></td>
-<td>String</td>
-<td>No</td>
-<td>Path (relative to workdir, <code>{config.x}</code>-expanded) of the TOML manifest the checkpoint rule writes at runtime to declare new samples</td>
-</tr>
-<tr>
-<td><code>scatter</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Fan-out parallel execution over a variable with optional gather</td>
-</tr>
-<tr>
-<td><code>expand_inputs</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Cartesian product expansion of input patterns</td>
-</tr>
-<tr>
-<td><code>input_groups</code></td>
-<td>Array of tables</td>
-<td>No</td>
-<td>Group files by a pattern wildcard into one per-group instance (the Nextflow <code>groupTuple</code> pattern) — see <a href="#input-groups-input_groups">Input Groups</a></td>
-</tr>
-<tr>
-<td><code>priority</code></td>
-<td>Integer</td>
-<td>No</td>
-<td>Execution priority (higher = runs first; default: 0)</td>
-</tr>
-<tr>
-<td><code>target</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Default target: <code>run</code>/<code>dry-run</code> without an explicit <code>-t</code>/<code>--module</code> builds the rules marked <code>target = true</code> <strong>and their transitive producers</strong>; with no marked rule the full DAG runs (an explicit <code>-t</code> always wins)</td>
-</tr>
-<tr>
-<td><code>required</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Pipeline fails if this rule fails, even without downstream deps</td>
-</tr>
-<tr>
-<td><code>optional</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing</td>
-</tr>
-<tr>
-<td><code>benchmark</code></td>
-<td>String</td>
-<td>No</td>
-<td>Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule</td>
-</tr>
-<tr>
-<td><code>log</code></td>
-<td>String</td>
-<td>No</td>
-<td>Log file path for rule execution output</td>
-</tr>
-<tr>
-<td><code>group</code></td>
-<td>String</td>
-<td>No</td>
-<td>Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling</td>
-</tr>
-<tr>
-<td><code>cache_key</code></td>
-<td>String</td>
-<td>No</td>
-<td>Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3)</td>
-</tr>
-<tr>
-<td><code>input_function</code></td>
-<td>String</td>
-<td>No</td>
-<td>Parsed but <strong>not yet called</strong> — no dynamic input resolution is performed today</td>
-</tr>
-<tr>
-<td><code>rule_metadata</code></td>
-<td>Table</td>
-<td>No</td>
-<td>Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it</td>
-</tr>
-<tr>
-<td><code>env_group</code></td>
-<td>String</td>
-<td>No</td>
-<td>Reference to a named environment in <code>[env_groups]</code></td>
-</tr>
-<tr>
-<td><code>depends_on</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Explicit rule-level dependencies (by rule name)</td>
-</tr>
-<tr>
-<td><code>extends</code></td>
-<td>String</td>
-<td>No</td>
-<td>Inherit settings from a base rule</td>
-</tr>
-<tr>
-<td><code>retry_delay</code></td>
-<td>String</td>
-<td>No</td>
-<td>Delay between retries (e.g., <code>"5s"</code>, <code>"30s"</code>, <code>"2m"</code>)</td>
-</tr>
-<tr>
-<td><code>temp_output</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Scratch artifacts the rule itself overwrites (e.g. <code>.tmp.bam</code>). Cleaned when the rule <strong>fails</strong> (so a stale partial never masquerades as a completed run); they persist on success — mark <code>temporary = true</code> for success-path deletion</td>
-</tr>
-<tr>
-<td><code>temporary</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs)</td>
-</tr>
-<tr>
-<td><code>scratch</code></td>
-<td>Boolean</td>
-<td>No</td>
-<td>Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir</td>
-</tr>
-<tr>
-<td><code>protected_output</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to <code>&lt;name&gt;.oxo-failed</code>) and <code>oxo-flow clean</code> refuses them with a <code>(protected — skipped)</code> diagnostic, even with <code>--force</code>. Three pattern forms are honored: exact paths, <code>{wildcard}</code> patterns (<code>results/{sample}.bam</code>), and shell globs (<code>results/*.bam</code> — <code>*</code> does not cross <code>/</code>). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun</td>
-</tr>
-<tr>
-<td><code>tags</code></td>
-<td>Array</td>
-<td>No</td>
-<td>Categorization tags (e.g., <code>["qc", "alignment"]</code>)</td>
-</tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Run-path field validation (#523).</strong> Rule <em>names</em> (charset:
+alphanumeric, <code>_</code>, <code>-</code>, <code>:</code>), <code>resources.memory</code>/<code>memory</code> formats
+(<code>&lt;number&gt;&lt;G|M|K|T&gt;</code>), thread counts and <code>retry_delay</code> formats are
+validated when the workflow is parsed — an invalid value fails the run
+before any expansion or rendering, so values from a third-party
+<code>[[include]]</code> can never reach the rendered docker/scheduler/shell
+command line. Design-level checks (GPU/backend pairing,
+<code>output_pattern</code> consistency) stay at expansion time where their
+context-aware diagnostics run.
+| <code>environment</code> | Table | No | Environment specification |
+| <code>transform</code> | Table | No | Unified scatter-gather operator (split → map → combine) |
+| <code>when</code> | String | No | Conditional expression — skip rule when <code>false</code>. May call read-only runtime functions (<code>reads_count</code>, <code>wc_lines</code>, <code>file_size</code>, <code>file_exists</code>, <code>regex_extract</code>) that inspect files in the run workdir; see <a href="#data-dependent-when-gates">Data-Dependent <code>when</code> Gates</a> |
+| <code>envvars</code> | Table | No | Dictionary of environment variables to inject |
+| <code>params</code> | Table | No | User-defined parameters for shell templates |
+| <code>pre_exec</code> | String | No | Command to run <em>before</em> the main shell command |
+| <code>on_success</code> | String | No | Command to run after rule succeeds |
+| <code>on_failure</code> | String | No | Command to run after rule fails (all retries exhausted) |
+| <code>retries</code> | Integer | No | Number of retry attempts on failure (default: 0) |
+| <code>interpreter</code> | String | No | Explicit interpreter for script execution |
+| <code>checkpoint</code> | Boolean | No | Enable checkpoint re-entry after this rule completes (requires <code>checkpoint_manifest</code>) |
+| <code>checkpoint_manifest</code> | String | No | Path (relative to workdir, <code>{config.x}</code>-expanded) of the TOML manifest the checkpoint rule writes at runtime to declare new samples |
+| <code>scatter</code> | Table | No | Fan-out parallel execution over a variable with optional gather |
+| <code>expand_inputs</code> | Table | No | Cartesian product expansion of input patterns |
+| <code>input_groups</code> | Array of tables | No | Group files by a pattern wildcard into one per-group instance (the Nextflow <code>groupTuple</code> pattern) — see <a href="#input-groups-input_groups">Input Groups</a> |
+| <code>priority</code> | Integer | No | Execution priority (higher = runs first; default: 0) |
+| <code>target</code> | Boolean | No | Default target: <code>run</code>/<code>dry-run</code> without an explicit <code>-t</code>/<code>--module</code> builds the rules marked <code>target = true</code> <strong>and their transitive producers</strong>; with no marked rule the full DAG runs (an explicit <code>-t</code> always wins) |
+| <code>required</code> | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
+| <code>optional</code> | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
+| <code>benchmark</code> | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
+| <code>log</code> | String | No | Log file path for rule execution output |
+| <code>group</code> | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
+| <code>cache_key</code> | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
+| <code>input_function</code> | String | No | Parsed but <strong>not yet called</strong> — no dynamic input resolution is performed today |
+| <code>rule_metadata</code> | Table | No | Domain-specific metadata (assay, organism, etc.) — a round-tripped surface for external tooling; the engine itself does not render it |
+| <code>env_group</code> | String | No | Reference to a named environment in <code>[env_groups]</code> |
+| <code>depends_on</code> | Array | No | Explicit rule-level dependencies (by rule name) |
+| <code>extends</code> | String | No | Inherit settings from a base rule |
+| <code>retry_delay</code> | String | No | Delay between retries (e.g., <code>"5s"</code>, <code>"30s"</code>, <code>"2m"</code>) |
+| <code>temp_output</code> | Array | No | Scratch artifacts the rule itself overwrites (e.g. <code>.tmp.bam</code>). Cleaned when the rule <strong>fails</strong> (so a stale partial never masquerades as a completed run); they persist on success — mark <code>temporary = true</code> for success-path deletion |
+| <code>temporary</code> | Boolean | No | Delete the rule's outputs after a fully successful run once every dependent has completed, recording a tombstone so a future run regenerates them on demand (leaf rules keep their outputs) |
+| <code>scratch</code> | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
+| <code>protected_output</code> | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to <code>&lt;name&gt;.oxo-failed</code>) and <code>oxo-flow clean</code> refuses them with a <code>(protected — skipped)</code> diagnostic, even with <code>--force</code>. Three pattern forms are honored: exact paths, <code>{wildcard}</code> patterns (<code>results/{sample}.bam</code>), and shell globs (<code>results/*.bam</code> — <code>*</code> does not cross <code>/</code>). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
+| <code>tags</code> | Array | No | Categorization tags (e.g., <code>["qc", "alignment"]</code>) |</p>
+</blockquote>
 <p>| <code>ancient</code> | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
 | <code>localrule</code> | Boolean | No | Parsed but <strong>not enforced yet</strong> — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see <a href="../../how-to/resource-tuning/">Resource Tuning</a>) |
 | <code>format_hint</code> | Array | No | Parsed and validated but <strong>not yet used</strong> by the engine (planned for I/O optimization) |
