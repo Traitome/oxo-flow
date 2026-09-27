@@ -663,6 +663,94 @@ pub const PG_CAPABILITY_MATRIX: &str = "PostgreSQL deployment capability matrix:
      gated 503 RUNS_REQUIRE_SQLITE: every /api/runs* endpoint \
      (run execution is SQLite-only)";
 
+/// Whether a database URL selects the PostgreSQL backend.
+pub fn is_postgres_url(url: &str) -> bool {
+    url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
+/// Initialize the database layer from `DATABASE_URL` — shared startup step
+/// for every serving entry point (standalone binary, `oxo-flow serve`,
+/// desktop shell).
+///
+/// A `postgres://`/`postgresql://` URL selects the PostgreSQL backend on
+/// builds with the `postgres` feature (issue #207's capability matrix is
+/// logged so operators see the served/gated split before the first 503);
+/// anything else is treated as a SQLite URL, defaulting to
+/// `sqlite://oxo-flow.db` in the working directory.
+pub async fn init_database() -> anyhow::Result<()> {
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://oxo-flow.db".to_string());
+
+    if is_postgres_url(&database_url) {
+        #[cfg(feature = "postgres")]
+        {
+            tracing::info!("Initializing PostgreSQL backend");
+            crate::infra::db::postgres::init_pool(&database_url).await;
+            tracing::warn!("{}", PG_CAPABILITY_MATRIX);
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            let _ = database_url;
+            tracing::error!(
+                "DATABASE_URL is a PostgreSQL URL but the 'postgres' feature is not enabled. \
+                 Rebuild with: cargo build --features postgres"
+            );
+            anyhow::bail!("PostgreSQL support not compiled in — rebuild with --features postgres");
+        }
+    } else {
+        crate::db::init_db(&database_url).await?;
+        crate::db::recover_orphaned_runs().await?;
+        // Also initialize the v0.8 domain-driven DB pool for domain handlers.
+        crate::infra::db::sqlite::init_pool(&database_url).await;
+    }
+    Ok(())
+}
+
+/// Initialize the AI provider stack — shared startup step.
+///
+/// Tier order: environment variables → at-rest-encryption notice →
+/// DB-persisted settings (when env did not configure a provider) → platform
+/// config file (lowest; secrets stay in env vars referenced by
+/// `api_key_env`, never inline). Issue #569: this sequence was previously
+/// standalone-binary-only, so `oxo-flow serve` and the desktop shell lost
+/// saved provider keys on every restart.
+pub async fn init_ai_provider(platform_config: Option<&crate::config::WebConfig>) {
+    crate::ai_provider::AiProviderRegistry::global().init_from_env();
+    // Issue #205: at-rest encryption is opt-in. The shared notice lives in
+    // infra::crypto so every entry point emits the same warning.
+    crate::infra::crypto::warn_if_plaintext_key();
+    // Restore the DB-persisted tier (settings UI) when env did not configure
+    // a provider — otherwise a saved key would be lost on restart.
+    crate::domains::ai::handlers::restore_ai_config_from_db().await;
+    if let Some(cfg) = platform_config
+        && crate::ai_provider::AiProviderRegistry::global()
+            .get_config()
+            .provider
+            == "disabled"
+        && let Some(provider) = cfg.ai.provider.as_deref()
+    {
+        let api_key = cfg
+            .ai
+            .api_key_env
+            .as_deref()
+            .and_then(|key_env| std::env::var(key_env).ok());
+        if let Err(e) = crate::ai_provider::AiProviderRegistry::global().reconfigure(
+            provider,
+            api_key,
+            cfg.ai.api_url.clone(),
+            cfg.ai.model.clone(),
+        ) {
+            tracing::warn!("AI config file tier rejected: {e}");
+        }
+    }
+    tracing::info!(
+        "AI provider: {}",
+        crate::ai_provider::AiProviderRegistry::global()
+            .get_config()
+            .provider
+    );
+}
+
 pub async fn start_server_with_mode(
     mode: &str,
     host: &str,
@@ -671,14 +759,13 @@ pub async fn start_server_with_mode(
 ) -> anyhow::Result<()> {
     // Auth-boundary enforcement (shared with the standalone binary).
     let host = effective_bind_host(mode, host)?;
-    crate::db::init_db("sqlite://oxo-flow.db").await?;
-    crate::db::recover_orphaned_runs().await?;
-    crate::infra::db::sqlite::init_pool("sqlite://oxo-flow.db").await;
+    crate::init_database().await?;
 
     // Cluster definitions from the platform config file are imported by both
     // serving entry points (this one and the standalone web binary), each
     // calling the same idempotent import — existing DB rows win.
-    if let Some(cfg) = crate::config::load() {
+    let platform_config = crate::config::load();
+    if let Some(cfg) = &platform_config {
         crate::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
     }
 
@@ -688,8 +775,9 @@ pub async fn start_server_with_mode(
         tracing::warn!("Failed to initialize structured logging: {e}");
     }
 
-    // Initialize AI provider
-    crate::ai_provider::AiProviderRegistry::global().init_from_env();
+    // Initialize AI provider (env → DB → config file tiers; shared with the
+    // standalone binary via the hoisted helper — issue #569).
+    crate::init_ai_provider(platform_config.as_ref()).await;
 
     // Normalize defensively: axum's nest() panics on a mount path without a
     // leading slash, so whatever the caller passed must become "/x" or "".
@@ -715,6 +803,10 @@ pub async fn start_server_with_mode(
     start_background_tasks();
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    // Share URLs report the real bound port (issue #82 P0-6): with port 0
+    // or an already-taken port the requested number is not what we got.
+    let bound = listener.local_addr()?.port();
+    crate::server::set_bound_port(bound);
     // The connect-info service feeds the rate limiter's peer-address key;
     // without it the limiter can only fall back to one shared bucket.
     axum::serve(
@@ -873,5 +965,20 @@ mod effective_bind_host_tests {
         );
         assert!(effective_bind_host_with("team", "0.0.0.0", true).is_err());
         assert!(effective_bind_host_with("team", "127.0.0.1", true).is_ok());
+    }
+
+    /// Both prefixes accepted by the postgres gate; anything else —
+    /// including URLs that merely mention postgres — stays SQLite.
+    /// Bare `"postgres://"` matches the prefix and routes to PG, same as
+    /// the standalone binary's gate this helper mirrors.
+    #[test]
+    fn postgres_url_detection_matches_standalone_gate() {
+        assert!(is_postgres_url("postgres://u:p@db:5432/oxo"));
+        assert!(is_postgres_url("postgresql://u:p@db:5432/oxo"));
+        assert!(is_postgres_url("postgres://"));
+        assert!(!is_postgres_url("sqlite://oxo-flow.db"));
+        assert!(!is_postgres_url("sqlite::memory:"));
+        // A SQLite file named like postgres must not be misrouted.
+        assert!(!is_postgres_url("sqlite:postgres://weird.db"));
     }
 }
