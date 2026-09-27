@@ -221,6 +221,12 @@ impl WebhookClient {
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(self.config.timeout_secs))
+            // Webhook URLs carry credentials and the request carries
+            // signature/auth headers bound to THIS endpoint — never replay
+            // them to a redirect target (issue #574). `redirect::Policy::none`
+            // surfaces 3xx through `status()`; the non-success branch below
+            // reports it with the final URL redacted.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| OxoFlowError::Validation {
                 message: format!("failed to build HTTP client: {}", e),
@@ -252,17 +258,31 @@ impl WebhookClient {
                 .body(body.to_string());
         }
 
-        let response = request.send().await.map_err(|e| OxoFlowError::Validation {
-            message: format!("webhook request failed: {}", e),
-            rule: None,
-            suggestion: Some("Check webhook URL and network connectivity".to_string()),
+        let response = request.send().await.map_err(|e| {
+            // reqwest's Display appends the full request URL — for a Slack/
+            // Discord webhook that is the bearer token itself (issue #574).
+            // Strip the URL before the error escapes into any log line; the
+            // module's own tracing uses `redact_webhook_url` instead.
+            OxoFlowError::Validation {
+                message: format!("webhook request failed: {}", e.without_url()),
+                rule: None,
+                suggestion: Some("Check webhook URL and network connectivity".to_string()),
+            }
         })?;
 
         if !response.status().is_success() {
+            // With redirects disabled a 3xx lands here: report it as the
+            // misconfiguration it is, without echoing the (credentialed) URL.
             return Err(OxoFlowError::Validation {
-                message: format!("webhook returned non-success status: {}", response.status()),
+                message: format!(
+                    "webhook returned non-success status: {} (redirects are not followed)",
+                    response.status()
+                ),
                 rule: None,
-                suggestion: Some("Verify webhook endpoint accepts the payload format".to_string()),
+                suggestion: Some(
+                    "Verify webhook endpoint accepts the payload format; configure the final URL directly"
+                        .to_string(),
+                ),
             });
         }
 
