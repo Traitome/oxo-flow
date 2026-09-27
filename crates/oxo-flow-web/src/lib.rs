@@ -871,7 +871,7 @@ fn spawn_daily_quota_reset() {
 /// SIGKILLs it after its grace period (issue #572).
 static SHUTDOWN_TX: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
 
-/// Subscribe to the process shutdown signal (see [`SHUTDOWN_TX`]).
+/// Subscribe to the process shutdown signal.
 pub fn shutdown_rx() -> tokio::sync::watch::Receiver<bool> {
     SHUTDOWN_TX
         .get_or_init(|| tokio::sync::watch::channel(false).0)
