@@ -1840,9 +1840,15 @@ jobs:
       # #551: MD032 (blank line before a list) is the repo's documented
       # markdown invariant (AGENTS.md "Markdown lists") — gate it on the
       # docs deploy so it cannot rot again. Config: MD032 only.
+      # Traps (both live-verified): markdownlint-cli2 rejects process-
+      # substitution paths (/dev/fd/N has no recognized extension), and a
+      # *.markdownlint-cli2.jsonc file is parsed as an OPTIONS object (needs
+      # a "config" wrapper) — a plain *.jsonc file is parsed as a rules
+      # config, which is what we want here.
       - name: Lint docs lists (MD032)
         run: |
-          npx --yes markdownlint-cli2 --config <(printf '%s' '{"default":false,"MD032":true}') "docs/guide/src/**/*.md"
+          printf '%s' '{"default":false,"MD032":true}' > "$RUNNER_TEMP/md032.jsonc"
+          npx --yes markdownlint-cli2 --config "$RUNNER_TEMP/md032.jsonc" "docs/guide/src/**/*.md"
 
       - name: Configure git identity (mike pushes the gh-pages branch)
         run: |
