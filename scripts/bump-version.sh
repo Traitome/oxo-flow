@@ -36,6 +36,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) MODE="check"; shift ;;
     --self-test) MODE="self-test"; shift ;;
+    --print) MODE="print"; shift ;;
     --set) MODE="set"; shift; NEW_VERSION="${1:-}"; if [ $# -gt 0 ]; then shift; fi ;;
     --root) shift; ROOT="${1:-}"; if [ $# -gt 0 ]; then shift; fi ;;
     -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -43,7 +44,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$MODE" ] || { echo "usage: $0 --check | --set X.Y.Z | --self-test [--root DIR]" >&2; exit 2; }
+[ -n "$MODE" ] || { echo "usage: $0 --check | --set X.Y.Z | --self-test | --print [--root DIR]" >&2; exit 2; }
 ROOT="$(cd "$ROOT" && pwd)"
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -55,6 +56,13 @@ canonical_version() {
 }
 
 major_minor() { printf '%s' "${1%.*}"; }
+
+# --print: emit the canonical version (the ONE sed reader, #556) so
+# Makefile/CI never re-type their own.
+if [ "$MODE" = "print" ]; then
+  canonical_version
+  exit 0
+fi
 
 # Regex-escape the dots of a version so it can be interpolated into -E.
 re_dots() { printf '%s' "$1" | sed 's/[.]/\\./g'; }

@@ -1055,7 +1055,8 @@ jobs:
           set -euo pipefail
           # Keep the OCI version LABEL in lockstep with workspace Cargo.toml
           # (Dockerfile default is only a local-dev fallback).
-          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          # Single source (#556): bump-version.sh --print is the one reader.
+          VERSION=$(bash scripts/bump-version.sh --print)
           if [ -z "$VERSION" ]; then
             echo "::error::could not read workspace.package version from Cargo.toml"
             exit 1
@@ -1174,7 +1175,8 @@ jobs:
       - name: Resolve VERSION from Cargo.toml
         run: |
           set -euo pipefail
-          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          # Single source (#556): bump-version.sh --print is the one reader.
+          VERSION=$(bash scripts/bump-version.sh --print)
           if [ -z "$VERSION" ]; then
             echo "::error::could not read workspace.package version from Cargo.toml"
             exit 1
@@ -1239,7 +1241,8 @@ jobs:
       - name: Resolve VERSION from Cargo.toml
         run: |
           set -euo pipefail
-          VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml | head -1)
+          # Single source (#556): bump-version.sh --print is the one reader.
+          VERSION=$(bash scripts/bump-version.sh --print)
           if [ -z "$VERSION" ]; then
             echo "::error::could not read workspace.package version from Cargo.toml"
             exit 1

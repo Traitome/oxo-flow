@@ -82,7 +82,8 @@ contributors:
 	@git log --format="%aN" --all | grep -v "Claude\|noreply\|bot\|Copilot" | sort -u
 
 # ── Desktop packaging (docs/guide/src/how-to/desktop-app.md) ──────────────
-VERSION := $(shell sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' Cargo.toml | head -1)
+# Single source (#556): bump-version.sh --print is the one implementation.
+VERSION := $(shell bash scripts/bump-version.sh --print)
 
 # The SPA build output is copied into the CLI crate so the bundle carries it
 # without ".." resource paths (cargo-bundle mangles those). Frontend must be
