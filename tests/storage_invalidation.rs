@@ -4,26 +4,10 @@
 //! the run completes, the remote entry is skipped from the manifest with a
 //! warning, and local manifest entries still work as before.
 
-use std::path::PathBuf;
-use std::process::Command;
+mod common;
+use common::workspace_bin;
 
-/// Locate a workspace binary (mirrors the helper in cli_integration.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; run `cargo build --workspace` first"
-    );
-}
+use std::process::Command;
 
 #[test]
 fn remote_input_without_backend_degrades_gracefully() {

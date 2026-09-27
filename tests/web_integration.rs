@@ -5,47 +5,13 @@
 //! the CLI's config-change impact analysis delivers precise rebuilds:
 //! affected rules re-execute, the rest are reused.
 
+mod common;
+use common::free_port;
+use common::workspace_bin;
+
 use std::path::PathBuf;
 use std::process::{Child, Command as StdCommand, Stdio};
 use std::time::{Duration, Instant};
-
-/// Locate a workspace binary by name from the target directory
-/// (mirrors the helper in cli_integration.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let mut target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    let candidate_exe = target_dir.join(format!("{name}.exe"));
-    if candidate_exe.exists() {
-        return candidate_exe;
-    }
-    target_dir = target_dir.join("deps");
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// Running web server for one test; killed on drop.
 struct TestServer {
     child: Child,

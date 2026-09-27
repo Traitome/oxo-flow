@@ -6,127 +6,12 @@
 //! to avoid id probing), never leaks the victim's execution log, workdir
 //! listing, or private pipeline TOML.
 
+mod common;
+use common::free_port;
+use common::spawn_web_server;
+
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-
-fn workspace_bin(name: &str) -> PathBuf {
-    let mut target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    let candidate_exe = target_dir.join(format!("{name}.exe"));
-    if candidate_exe.exists() {
-        return candidate_exe;
-    }
-    target_dir = target_dir.join("deps");
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-struct Server {
-    child: Child,
-    base: String,
-    log_path: PathBuf,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn spawn_server_once(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
-    let log_path = dir.join("web-server.log");
-    let log_file = std::fs::File::create(&log_path).expect("create server log");
-    let mut cmd = Command::new(workspace_bin("oxo-flow-web"));
-    cmd.current_dir(dir)
-        .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
-        .env("OXO_FLOW_HOST", "127.0.0.1")
-        .env("OXO_FLOW_PORT", port.to_string())
-        .env(
-            "OXO_FLOW_FRONTEND_DIR",
-            dir.join("missing-frontend").to_str().unwrap(),
-        );
-    for (k, v) in extra_envs {
-        cmd.env(k, v);
-    }
-    let child = cmd
-        .stdout(Stdio::from(log_file.try_clone().unwrap()))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .expect("web server must start");
-    Server {
-        child,
-        base: format!("http://127.0.0.1:{port}"),
-        log_path,
-    }
-}
-
-fn log_tail(s: &Server) -> String {
-    match std::fs::read(&s.log_path) {
-        Ok(bytes) => {
-            let tail = if bytes.len() > 4096 {
-                &bytes[bytes.len() - 4096..]
-            } else {
-                &bytes[..]
-            };
-            String::from_utf8_lossy(tail).into_owned()
-        }
-        Err(_) => "(no server log)".to_string(),
-    }
-}
-
-fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
-    let mut last_log = String::new();
-    for attempt in 1..=5 {
-        let port = if attempt == 1 { port } else { free_port() };
-        let mut server = spawn_server_once(dir, port, extra_envs);
-        let needle = format!(
-            "Listening on http://{}",
-            server.base.trim_start_matches("http://")
-        );
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if std::fs::read_to_string(&server.log_path).is_ok_and(|log| log.contains(&needle)) {
-                return server;
-            }
-            if matches!(server.child.try_wait(), Ok(Some(_))) {
-                break;
-            }
-            if Instant::now() > deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        last_log = log_tail(&server);
-    }
-    panic!("web server could not bind a free port after 5 attempts\n{last_log}");
-}
 
 async fn put(base: &str, path: &str, token: &str, body: Value) -> (reqwest::StatusCode, Value) {
     let client = Client::new();
@@ -165,7 +50,7 @@ async fn post(
 #[tokio::test]
 async fn user_ai_config_advanced_fields_round_trip() {
     let dir = tempfile::tempdir().unwrap();
-    let server = spawn_server(
+    let server = spawn_web_server(
         dir.path(),
         free_port(),
         &[
@@ -250,7 +135,7 @@ async fn user_ai_config_advanced_fields_round_trip() {
 #[tokio::test]
 async fn ai_endpoints_enforce_run_and_pipeline_ownership() {
     let dir = tempfile::tempdir().unwrap();
-    let server = spawn_server(
+    let server = spawn_web_server(
         dir.path(),
         free_port(),
         &[

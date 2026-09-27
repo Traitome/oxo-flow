@@ -6,51 +6,12 @@
 //! own `cli_integration.rs` independently (each integration-test crate
 //! compiles and links on its own).
 
+mod common;
+use common::workspace_bin;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use std::path::PathBuf;
-
-/// Locate a workspace binary by name from the target directory.
-///
-/// This handles the case where binaries are defined in workspace sub-crates
-/// rather than the root package, which means `CARGO_BIN_EXE_*` env vars
-/// are not automatically set.
-fn workspace_bin(name: &str) -> PathBuf {
-    // Cargo sets OUT_DIR for build scripts and CARGO_MANIFEST_DIR for the package.
-    // For integration tests, we can derive the target dir from the test binary location.
-    let mut target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-
-    // Try the binary directly in the target/debug (or target/release) directory.
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-
-    // On Windows, binaries have a .exe extension.
-    let candidate_exe = target_dir.join(format!("{name}.exe"));
-    if candidate_exe.exists() {
-        return candidate_exe;
-    }
-
-    // Fall back to the deps subdirectory.
-    target_dir = target_dir.join("deps");
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
 
 fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))

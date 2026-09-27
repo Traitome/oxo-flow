@@ -18,41 +18,13 @@
 //! change to `run`'s invalidation or skip semantics that forgets to update
 //! the preview turns CI red immediately.
 
+mod common;
+use common::workspace_bin;
+
 use assert_cmd::Command;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Locate a workspace binary from the target directory (same approach as
-/// `cli_integration.rs` — binaries live in sub-crates, so `CARGO_BIN_EXE_*`
-/// is not set for the root integration-test package).
-fn workspace_bin(name: &str) -> PathBuf {
-    let mut target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    let candidate_exe = target_dir.join(format!("{name}.exe"));
-    if candidate_exe.exists() {
-        return candidate_exe;
-    }
-    target_dir = target_dir.join("deps");
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
 
 fn oxo_flow() -> Command {
     Command::new(workspace_bin("oxo-flow"))

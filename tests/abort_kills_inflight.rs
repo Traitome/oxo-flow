@@ -3,17 +3,11 @@
 //! but orphans the OS children (live: auto-sra v40 exited while 5 merges
 //! and 2 STAR kept running).
 
+mod common;
+use common::workspace_bin;
+
 use std::fs;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-fn workspace_bin(name: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target/debug");
-    path.push(name);
-    path
-}
-
 fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))
 }

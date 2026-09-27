@@ -6,6 +6,9 @@
 //! 3. Poll-timeout cancels in-flight jobs; failures propagate.
 //! 4. `cluster submit` output stays byte-identical through the trait render.
 
+mod common;
+use common::workspace_bin;
+
 use oxo_flow_core::backend::ScheduledPlan;
 use oxo_flow_core::backend::cluster::ClusterExecutor;
 use oxo_flow_core::backend::driver::{BackendDriver, DriverConfig, DriverOptions};
@@ -96,24 +99,6 @@ fn fast_driver_config() -> DriverConfig {
         poll_timeout: Some(std::time::Duration::from_secs(30)),
         unknown_settle_grace: std::time::Duration::from_secs(90),
     }
-}
-
-/// Locate a workspace binary (mirrors the helper in cli_integration.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; run `cargo build --workspace` first"
-    );
 }
 
 fn fixtures_dir() -> PathBuf {

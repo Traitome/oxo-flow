@@ -1,17 +1,11 @@
 //! Issue #118: failed rules must not leave partial outputs behind, and
 //! pre-existing user files at declared output paths must survive untouched.
 
+mod common;
+use common::workspace_bin;
+
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
-
-fn workspace_bin(name: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target/debug");
-    path.push(name);
-    path
-}
-
 fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))
 }
