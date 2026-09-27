@@ -774,7 +774,7 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
         }
         // Same stance for a scatter rule with zero fan-out (issue #616):
         // declared `values` win; an unresolvable `values_from` keeps the
-        // rule checked because the executor still schedules it once.
+        // rule checked so the typo surfaces instead of passing silently.
         if rule.scatter.as_ref().is_some_and(|scatter| {
             if !scatter.values.is_empty() {
                 return false;

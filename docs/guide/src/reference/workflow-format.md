@@ -1439,9 +1439,10 @@ output templates from the W033 output-collision lint, mirroring the
 `when`-gated-off exemption: a rule that cannot run must not fail validation
 over inputs it will never read. An **unresolvable** `values_from` (missing
 config key, non-string/array value) is deliberately NOT treated as empty —
-the executor still schedules the rule once in that case, so a typo in
-`values_from` keeps surfacing as a missing-input diagnostic instead of
-silently passing validate (issue #616).
+the executor expands zero instances silently in that case, so validate keeps
+the input-existence check to surface the typo as a missing-input diagnostic
+instead of silently passing (issue #616; the stricter `[[values]]` tables and
+`transform.split` reject an unresolvable reference outright).
 
 ### Expand Inputs
 

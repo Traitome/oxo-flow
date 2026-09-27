@@ -824,9 +824,11 @@ pub fn validate_format(config: &WorkflowConfig) -> ValidationResult {
         // declared `values` win, an empty list falls back to
         // `resolve_config_list(values_from)`. An UNRESOLVABLE
         // `values_from` (missing key, non-string/array → `None`) is NOT
-        // empty: the executor still schedules the rule once in that case,
-        // and a typo in `values_from` must surface instead of silently
-        // passing validate.
+        // empty: the executor expands zero instances silently in that
+        // case, so validate keeps the existence check on purpose — a
+        // typo in `values_from` must surface instead of silently
+        // passing (the stricter cousins, `[[values]]` tables and
+        // `transform.split`, reject an unresolvable reference outright).
         let rule_scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
             if !scatter.values.is_empty() {
                 return false;
@@ -1791,8 +1793,9 @@ pub fn lint_format(
         // rule's is noise (9 W033 hits in the enrichment repo came from
         // this), and the "gate one with `when`" suggestion cannot apply.
         // Same semantics as the E010/W020 gate above: declared `values`
-        // win, an unresolvable `values_from` conservatively keeps the
-        // rule in the comparison (the executor still schedules it).
+        // win, and an unresolvable `values_from` conservatively keeps
+        // the rule in the comparison (validate treats it as a typo to
+        // surface, not as an empty fan-out).
         let scatter_empty = rule.scatter.as_ref().is_some_and(|scatter| {
             if !scatter.values.is_empty() {
                 return false;
@@ -5216,9 +5219,10 @@ values = []
             "a values = [] scatter rule must skip the existence check: {result:?}"
         );
 
-        // 4. UNRESOLVABLE `values_from` (missing config key) → the
-        //    executor still schedules the rule once, so the check MUST
-        //    stay active — a typo in `values_from` must surface.
+        // 4. UNRESOLVABLE `values_from` (missing config key) → NOT
+        //    empty: the executor expands zero instances silently, so
+        //    the check MUST stay active — a typo in `values_from` must
+        //    surface instead of silently passing validate.
         let toml_unresolved = r#"
 [workflow]
 name = "test"
