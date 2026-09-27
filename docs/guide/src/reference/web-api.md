@@ -113,6 +113,11 @@ extracted from the execution log — config changes, edited rule definitions,
 and input-set changes that invalidated checkpoint records this run
 (`null` when the run had no invalidation activity).
 
+The stream ends when the server shuts down (SIGTERM/Ctrl+C): the response
+is closed as part of the graceful drain, so an `EventSource` sees its
+`error`/close at shutdown rather than a hung connection (#572). Clients
+should reconnect with backoff after an unexpected close.
+
 ---
 
 ## Authentication & Authorization
