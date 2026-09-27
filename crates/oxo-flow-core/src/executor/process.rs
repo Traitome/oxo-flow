@@ -3030,7 +3030,7 @@ async fn remove_tree(path: &Path) -> std::io::Result<()> {
 /// (checkpoint, report, AI recovery, web). Every NON-EMPTY value is
 /// masked — 3-character credentials are rare but real, and masking has no
 /// false-positive cost for keys the user declared sensitive (issue #136).
-/// Values of [`MASK_VARIANT_MIN_LEN`]+ characters also mask their encoded
+/// Values of 4+ characters (`MASK_VARIANT_MIN_LEN`) also mask their encoded
 /// forms — base64 (standard and URL-safe), percent-encoding, and JSON
 /// string escaping — so a secret embedded in structured output is
 /// redacted too (issue #194 §1.4).
@@ -3075,8 +3075,9 @@ fn sensitive_env_name(index: usize) -> String {
 ///
 /// Occurrences inside single quotes are spliced out of the quoting span
 /// (`'x'"${VAR}"'y'`) because `$VAR` would not expand there. Values shorter
-/// than [`MASK_VARIANT_MIN_LEN`] stay on the command line: a 2-3 character
-/// secret collides with ordinary command text too easily to rewrite safely.
+/// than the 4-character `MASK_VARIANT_MIN_LEN` floor stay on the command
+/// line: a 2-3 character secret collides with ordinary command text too
+/// easily to rewrite safely.
 pub(crate) fn route_sensitive_values_through_env(
     cmd: &str,
     values: &[String],

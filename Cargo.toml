@@ -4,6 +4,14 @@ version = "0.20.1"
 edition.workspace = true
 publish = false
 
+# The root package's lib exists only so the top-level tests/ directory can
+# use dev-dependencies; it is a stub with no consumers. Its rustdoc output
+# collides with the `oxo-flow` CLI binary's docs (both would emit
+# target/doc/oxo_flow/index.html), so doc generation is disabled (#557).
+[lib]
+path = "src/lib.rs"
+doc = false
+
 [workspace]
 # oxo-flow-desktop is the native window shell (wry) around the web server;
 # it is deliberately EXCLUDED (see `exclude` below) so headless builds and

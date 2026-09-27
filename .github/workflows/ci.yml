@@ -329,6 +329,12 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      # Issue #557: doc builds were never gated, so broken intra-doc links and
+      # the oxo_flow bin/lib filename collision rotted silently. -D warnings
+      # makes every broken link a hard error.
+      - name: Docs (rustdoc -D warnings)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
       - name: Test
         run: |
           export PATH="$PWD/target/debug:$PATH"
@@ -407,6 +413,33 @@ jobs:
 
       - name: Security audit
         run: cargo audit
+
+      # Mirrors `make deny`: license allowlist, bans and source policy from
+      # deny.toml (#557).
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Dependency policy check
+        run: cargo deny check
+
+      # Mirrors `make secrets`: gitleaks over the git history and the working
+      # tree, with fixture allowlists from .gitleaks.toml (#557). gitleaks is
+      # not in the taiki-e manifest, so install straight from the release
+      # tarball. `gitleaks detect` must run from the repo root — it
+      # auto-discovers .gitleaks.toml there but not above a --source directory.
+      # The checkout is shallow, so git mode only sees recent history here;
+      # the tree scan (working tree via `detect`) is the part that gates.
+      - name: Install gitleaks
+        run: |
+          curl -sSfL \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Secret scan
+        run: gitleaks detect
 
   # ─── Build Linux binaries ──────────────────────────────────────────────────
   build-linux:
@@ -1737,20 +1770,26 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
+          # No server is up at this point — Playwright's webServer only
+          # spawns in the NEXT step, and reuseExistingServer is false in
+          # CI, so it needs :3000 free. Start our own instance from the
+          # prebuilt binary, assert, and kill it via trap before e2e
+          # (initially it polled a :3000 nobody listened on — always
+          # failed; live: run 36291734981).
+          export OXO_FLOW_FRONTEND_DIR="$GITHUB_WORKSPACE/crates/oxo-flow-web/static"
+          ../target/debug/oxo-flow-web --port 3000 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           FRESH_ASSET=$(ls ../crates/oxo-flow-web/static/assets | grep '^index-.*\.js$' | head -1)
           for i in $(seq 1 30); do
             if curl -sf http://localhost:3000/ | grep -F "$FRESH_ASSET" >/dev/null 2>&1; then
               echo "served SPA references $FRESH_ASSET — fresh build confirmed"
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
-              exit 1
+              exit 0
             fi
             sleep 2
           done
-        env:
-          FRESH_ASSET_PLACEHOLDER: ""
+          echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
+          exit 1
 
       - name: Run e2e tests
         working-directory: frontend

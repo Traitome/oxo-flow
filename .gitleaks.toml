@@ -1,0 +1,73 @@
+# Gitleaks configuration (#557).
+#
+# Extends gitleaks' default rule set and allowlists the repo's own
+# secret-scanner test fixtures — placeholder strings in detector tests, docs
+# examples and data files that merely look like API keys. The fixtures
+# themselves stay intact (issue #563 note 3: they are the secret-scanner's
+# own test data; deleting or "neutralizing" them would gut detector coverage).
+#
+# `gitleaks detect` (git mode) scans the full commit history, where line
+# numbers drift as files move, and `--no-git --source <dir>` reports paths
+# relative to <dir> — so every allow below is scoped by a prefix-agnostic
+# file path + the exact fixture string, never by line number.
+#
+# Gate: `make secrets` locally / the "Secret scan" step in ci.yml.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "detector-test fixtures in format.rs: fake tokens exercising scan_for_secrets"
+paths = ['''oxo-flow-core/src/format\.rs$''']
+regexes = [
+  '''sk-test123456789''',
+  '''ghp_1234567890abcdef''',
+  '''glpat-1234567890abcdef''',
+]
+
+[[allowlists]]
+description = "curl fixtures in process.rs tests: dummy bearer token pointed at api.invalid"
+paths = ['''oxo-flow-core/src/executor/process\.rs$''']
+regexes = [
+  '''s3cr3t-token-42''',
+]
+
+[[allowlists]]
+description = "share-token round-trip test in collaboration/service.rs: placeholder token"
+paths = ['''oxo-flow-web/src/domains/collaboration/service\.rs$''']
+regexes = [
+  '''abc123-def456''',
+]
+
+[[allowlists]]
+description = "skills_index.jsonl: the 'api' substring inside BSgenome.Hsapiens.UCSC.hg38 false-arms generic-api-key"
+paths = ['''oxo-flow-ai/src/knowledge/skills_index\.jsonl$''']
+regexes = [
+  '''BSgenome\.Hsapiens\.UCSC\.hg38''',
+]
+
+# ── History-only paths ────────────────────────────────────────────────────
+# Files no longer in the tree but still present in past commits; git-mode
+# scans full history, so these keeps `gitleaks detect` green.
+
+[[allowlists]]
+description = "deleted test-suite doc: sk-* placeholders in paste examples"
+paths = ['''docs/testing/COMPREHENSIVE_TEST_SUITE\.md$''']
+regexes = [
+  '''sk-proj-abc123def456''',
+  '''sk-test123456789''',
+]
+
+[[allowlists]]
+description = "deleted design doc: sk-* placeholder in a config example"
+paths = ['''docs/design/EXPERT_REVIEW_VALIDATION\.md$''']
+regexes = [
+  '''sk-1234567890abcdef''',
+]
+
+[[allowlists]]
+description = "security.rs fixture from a past refactor: OPENAI_API_KEY placeholder"
+paths = ['''oxo-flow-core/src/executor/security\.rs$''']
+regexes = [
+  '''sk-1234567890abcdef1234567890abcdef''',
+]

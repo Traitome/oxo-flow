@@ -641,7 +641,7 @@ fn external_bind_mounts(command: &str, workdir: &str) -> Vec<String> {
 ///
 /// A spec like `bwa:0.7.17` or `biocontainers/bwa:0.7.17` carries no
 /// registry host, so `docker run` resolves it against docker.io (plus this
-/// engine's single [`quay_biocontainers_fallback`] retry) — never against
+/// engine's single `quay.io/biocontainers` fallback retry) — never against
 /// the registry the author may have meant. Backends accept it silently, so
 /// validate/lint is the place to say it; this predicate is that check.
 ///

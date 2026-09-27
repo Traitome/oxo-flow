@@ -2,7 +2,9 @@
 //!
 //! Every surface that turns a natural-language intent into an `.oxoflow`
 //! pipeline — CLI `template --ai`, `POST /api/ai/translate`, and the web
-//! chat agent — runs THIS agent through the shared [`Orchestrator`]. The
+//! chat agent — runs THIS agent through the shared
+//! [`Orchestrator`](super::orchestrator::Orchestrator). The persona owns
+//! three things that previously existed as divergent copies:
 //! persona owns three things that previously existed as divergent copies:
 //!
 //! 1. the engine-accurate system prompt (the web paths' short prompts
@@ -332,7 +334,7 @@ fn floor_errors(value: &toml::Value) -> Vec<String> {
 /// Structural floor for workflow text: with no engine validator injected
 /// this is the sole acceptance check for generated TOML, and it gates
 /// `raw_workflow`'s salvage even when a validator is in play. Parseable
-/// input is checked per rule via [`floor_errors`]; unparseable input
+/// input is checked per rule via `floor_errors`; unparseable input
 /// falls back to substring probes so the caller still learns which
 /// skeleton pieces are absent.
 pub fn basic_structure_errors(toml: &str) -> Vec<String> {

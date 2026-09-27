@@ -469,7 +469,7 @@ pub fn discover_wildcards_from_pattern_tree(
     discover_wildcards_from_pattern_tree_with(dir, pattern, &re)
 }
 
-/// [`Self::discover_wildcards_from_pattern_tree`] with a caller-built
+/// [`discover_wildcards_from_pattern_tree`] with a caller-built
 /// matcher — the glob-aware input_groups face (issue #246) passes
 /// [`pattern_to_regex_glob`] here and re-verifies matches with
 /// [`expand_pattern_with_glob`].

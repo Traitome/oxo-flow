@@ -183,7 +183,9 @@ pub fn activated_skill_context(project_dir: Option<&Path>, config: &AiConfig) ->
 }
 
 /// Interactive human approval for a non-read-only tool call, in the sync
-/// form the shared [`ToolApprover`] closure requires. Prompts on stderr
+/// form the shared
+/// [`ToolApprover`](oxo_flow_ai::agent::ToolApprover) closure requires.
+/// Prompts on stderr
 /// and reads stdin; non-interactive sessions are denied (the safe
 /// default — matching the trust boundary: AI never executes autonomously).
 pub fn prompt_tool_approval_blocking(tool_name: &str, arguments: &str) -> bool {

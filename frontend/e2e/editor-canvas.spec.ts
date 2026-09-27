@@ -122,9 +122,11 @@ test.describe('Graphical workflow editor (canvas)', () => {
     await page.locator('.inspector-dialog .btn-run').click();
     await expect(page.locator('.val-badge')).toContainText('Valid', { timeout: 10_000 });
     // File-inferred edge is dashed (svg path with stroke-dasharray on the
-    // path element rendered by React Flow).
+    // path element rendered by React Flow). A straight horizontal edge has a
+    // zero-height bounding box, which toBeVisible() treats as hidden — assert
+    // the computed dash style instead (it also implies the edge is attached).
     const dashedEdge = page.locator('.react-flow__edge-path[style*="dasharray"]');
-    await expect(dashedEdge.first()).toBeVisible();
+    await expect(dashedEdge.first()).toHaveCSS('stroke-dasharray', '5px, 4px');
   });
 
   test('run dialog and dry-run still work from the editor', async ({ page }) => {
