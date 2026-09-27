@@ -137,7 +137,11 @@ template = "report.html"        # the built-in template (the default)
 
 The scaffolded `report-template.tera` (from
 `oxo-flow report --init-template`) is a good starting point. The built-in
-template IS `report.html`; custom template files whose names do not end in
+template IS `report.html` and renders every `ReportContent` variant —
+Text, Markdown, Html (as raw markup), Table, KeyValue, Json, Chart (bars
+scaled to the max value), QcStatus, QcIndicatorGroup, Hierarchy, and
+ScatterPlot — in both top-level sections and subsections; custom template
+files whose names do not end in
 `.html`/`.htm`/`.xml` (like the scaffold) are registered under
 `custom.html` so Tera HTML-escapes `{{ variables }}` exactly like the
 built-in template. With `-f json`/`-f md`/`-f pdf` the template is skipped
