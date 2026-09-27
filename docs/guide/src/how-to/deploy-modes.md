@@ -330,6 +330,16 @@ re-attach them on the next start (see [Run Control Truth](#run-control-truth-all
 
 ### nginx reverse proxy
 
+Behind a reverse proxy every request arrives at oxo-flow with the
+proxy's own IP as the transport peer — the rate limiter would key all
+clients into one shared bucket (a single abuser locks everyone out).
+Set `OXO_FLOW_TRUSTED_PROXY=1` so the limiter keys on the forwarded
+`X-Forwarded-For` / `X-Real-IP` headers instead. Only enable this when
+the proxy in front **overwrites** those headers on every request (both
+recipes below do, via `X-Real-IP $remote_addr`); if clients can reach
+the server without passing through it, a caller could spoof the header
+and bypass the limiter.
+
 ```nginx
 server {
     listen 80;
@@ -349,10 +359,16 @@ server {
 }
 ```
 
-Start the app with the matching mount point:
+Start the app with the matching mount point and the trusted-proxy flag
+(the headers the recipe sets above are what the limiter then reads):
 
 ```bash
 oxo-flow serve --mode team --base-path /oxo-flow
+```
+
+```bash
+# /etc/oxo-flow/server.env (append)
+OXO_FLOW_TRUSTED_PROXY=1
 ```
 
 ## Performance
