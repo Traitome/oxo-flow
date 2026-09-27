@@ -12,72 +12,15 @@
 //!  - a latency profile (POST completion → terminal event on the
 //!    measuring reader) is printed with `--nocapture`.
 
+mod common;
+use common::free_port;
+use common::{log_tail, spawn_web_server};
+
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    for candidate in [
-        target_dir.join(name),
-        target_dir.join("deps").join(name),
-        target_dir.join(format!("{name}.exe")),
-    ] {
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-struct Server {
-    child: Child,
-    base: String,
-    log_path: PathBuf,
-}
-
-fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
-    let log_path = dir.join(format!("server-{port}.log"));
-    let mut cmd = Command::new(workspace_bin("oxo-flow-web"));
-    cmd.env("OXO_FLOW_PORT", port.to_string())
-        .stdout(Stdio::from(std::fs::File::create(&log_path).unwrap()))
-        .stderr(Stdio::from(std::fs::File::create(&log_path).unwrap()));
-    for (k, v) in extra_envs {
-        cmd.env(k, v);
-    }
-    let child = cmd.spawn().expect("failed to spawn web server");
-    Server {
-        child,
-        base: format!("http://127.0.0.1:{port}"),
-        log_path,
-    }
-}
-
-fn log_tail(server: &Server) -> String {
-    std::fs::read_to_string(&server.log_path).unwrap_or_default()
-}
-
 fn parse_sse_frame(frame: &str) -> Option<(String, String)> {
     let line = frame.lines().find(|l| l.starts_with("data:"))?;
     let json: Value = serde_json::from_str(line.trim_start_matches("data:").trim()).ok()?;
@@ -172,7 +115,7 @@ const N_READERS: usize = 8;
 async fn sse_production_scale_stress_profile() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
-    let mut server = spawn_server(
+    let mut server = spawn_web_server(
         dir.path(),
         port,
         &[

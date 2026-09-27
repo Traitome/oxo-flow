@@ -5,26 +5,11 @@
 //! round-2 instances in the same run. Resumes replay recorded re-entries
 //! deterministically; invalidating the checkpoint rule revokes its samples.
 
+mod common;
+use common::workspace_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Locate a workspace binary (mirrors the helper in cli_integration.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; run `cargo build --workspace` first"
-    );
-}
 
 fn write_workflow(dir: &Path, manifest_body: &str, discover_input: &str) {
     let workflow = format!(

@@ -6,6 +6,9 @@
 //! executor actually runs from identical state. If the two ever diverge,
 //! this goes red rather than a cluster run silently skipping work.
 
+mod common;
+use common::workspace_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
@@ -37,24 +40,6 @@ partition = "compute"
 max_submitted = 2
 poll_interval = "1s"
 "#;
-
-/// Locate a workspace binary (mirrors the helper in cluster_backend.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; run `cargo build --workspace` first"
-    );
-}
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock-scheduler")

@@ -6,6 +6,9 @@
 //!    chaining raw submit output into `--dependency=afterok:`.
 //! 3. `--walltime` / `--extra-arg` reach the generated directives.
 
+mod common;
+use common::workspace_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
@@ -29,24 +32,6 @@ input = ["aln/{sample}.bam"]
 output = ["stats/{sample}.txt"]
 shell = "mkdir -p stats && wc -l aln/{sample}.bam > stats/{sample}.txt"
 "#;
-
-/// Locate a workspace binary (mirrors the helper in cluster_backend.rs).
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    let candidate = target_dir.join(name);
-    if candidate.exists() {
-        return candidate;
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; run `cargo build --workspace` first"
-    );
-}
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock-scheduler")

@@ -11,132 +11,14 @@
 //!
 //! Single sequential test to avoid parallel-server flakiness.
 
+mod common;
+use common::free_port;
+use common::{log_tail, spawn_web_server};
+
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-
-fn workspace_bin(name: &str) -> PathBuf {
-    let target_dir = std::env::current_exe()
-        .expect("cannot find current test executable path")
-        .parent()
-        .expect("no parent dir for test exe")
-        .parent()
-        .expect("no grandparent dir for test exe")
-        .to_path_buf();
-    for candidate in [
-        target_dir.join(name),
-        target_dir.join("deps").join(name),
-        target_dir.join(format!("{name}.exe")),
-    ] {
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!(
-        "could not find binary '{name}' in target directory; \
-         run `cargo build --workspace` first"
-    );
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-struct Server {
-    child: Child,
-    base: String,
-    log_path: PathBuf,
-}
-
-/// Spawn the web server, retrying on a fresh port when the child dies before
-/// binding. `free_port` releases its probe listener before the child binds,
-/// so a parallel test can steal the port (TOCTOU) and the child then exits
-/// on the bind error.
-fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
-    let mut last_log = String::new();
-    for attempt in 1..=5 {
-        let port = if attempt == 1 { port } else { free_port() };
-        let mut server = spawn_server_once(dir, port, extra_envs);
-        if wait_for_bind(&mut server, Duration::from_secs(15)) {
-            return server;
-        }
-        last_log = log_tail(&server);
-        // Drop kills a child that is somehow still alive.
-    }
-    panic!("web server could not bind a free port after 5 attempts\n{last_log}");
-}
-
-/// Wait until THIS child has bound its port, proved by its own
-/// "Listening on http://host:port" line — a different process squatting on
-/// the port cannot be mistaken for ours.
-fn wait_for_bind(server: &mut Server, timeout: Duration) -> bool {
-    let needle = format!(
-        "Listening on http://{}",
-        server.base.trim_start_matches("http://")
-    );
-    let deadline = Instant::now() + timeout;
-    loop {
-        if std::fs::read_to_string(&server.log_path).is_ok_and(|log| log.contains(&needle)) {
-            return true;
-        }
-        if matches!(server.child.try_wait(), Ok(Some(_))) {
-            return false;
-        }
-        if Instant::now() > deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn spawn_server_once(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Server {
-    let log_path = dir.join("web-server.log");
-    let log_file = std::fs::File::create(&log_path).expect("create server log");
-    let mut cmd = Command::new(workspace_bin("oxo-flow-web"));
-    cmd.current_dir(dir)
-        .env("OXO_FLOW_BIN", workspace_bin("oxo-flow"))
-        .env("OXO_FLOW_HOST", "127.0.0.1")
-        .env("OXO_FLOW_PORT", port.to_string())
-        .env(
-            "OXO_FLOW_FRONTEND_DIR",
-            dir.join("missing-frontend").to_str().unwrap(),
-        );
-    for (k, v) in extra_envs {
-        cmd.env(k, v);
-    }
-    let child = cmd
-        .stdout(Stdio::from(log_file.try_clone().unwrap()))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .expect("web server must start");
-    Server {
-        child,
-        base: format!("http://127.0.0.1:{port}"),
-        log_path,
-    }
-}
-
-fn log_tail(s: &Server) -> String {
-    match std::fs::read(&s.log_path) {
-        Ok(bytes) => {
-            let tail = if bytes.len() > 4096 {
-                &bytes[bytes.len() - 4096..]
-            } else {
-                &bytes[..]
-            };
-            String::from_utf8_lossy(tail).into_owned()
-        }
-        Err(_) => "(no server log)".to_string(),
-    }
-}
-
 async fn wait_ready(base: &str) {
     let client = Client::new();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -226,7 +108,7 @@ const BAD_RUN: &str = "[workflow]\nname = \"bad\"\n\n[[rules]]\nname = \"fail\"\
 async fn sse_terminal_events_under_load() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
-    let mut server = spawn_server(
+    let mut server = spawn_web_server(
         dir.path(),
         port,
         &[
@@ -290,7 +172,7 @@ async fn sse_terminal_events_under_load() {
 async fn sse_terminal_event_survives_server_restart() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
-    let mut server = spawn_server(dir.path(), port, &[("OXO_FLOW_MODE", "personal")]);
+    let mut server = spawn_web_server(dir.path(), port, &[("OXO_FLOW_MODE", "personal")]);
     wait_ready(&server.base).await;
 
     let slow_toml = "[workflow]\nname = \"slow\"\n\n[[rules]]\nname = \"wait\"\noutput = [\"later.txt\"]\nshell = \"sleep 25; echo ok > {output}\"\n";
@@ -305,7 +187,7 @@ async fn sse_terminal_event_survives_server_restart() {
     // Restart on the same working dir: startup re-attach (db.rs) must
     // resume monitoring the executing run.
     let port2 = free_port();
-    let mut server2 = spawn_server(dir.path(), port2, &[("OXO_FLOW_MODE", "personal")]);
+    let mut server2 = spawn_web_server(dir.path(), port2, &[("OXO_FLOW_MODE", "personal")]);
     wait_ready(&server2.base).await;
 
     let (tx, mut rx) = mpsc::channel::<(String, String)>(16);
