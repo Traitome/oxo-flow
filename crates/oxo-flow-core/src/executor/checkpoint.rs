@@ -965,6 +965,19 @@ pub fn snapshot_input_manifest(
     let mut saw_resolvable = false;
     for pattern in rule.input.to_vec() {
         let expanded = expand_config_in_path(&pattern, wildcard_values);
+        if expanded.is_empty() {
+            // Config-optional input resolved to the empty string (e.g.
+            // `input = ["{config.annotation_gtf}"]` with an empty default
+            // for the download branch). `workdir.join("")` is the workdir
+            // root — walking it would record the ENTIRE workdir (logs,
+            // .git, other rules' outputs) as the rule's input manifest,
+            // making every volatile file change spuriously invalidate the
+            // rule and its whole downstream DAG. The empty pattern
+            // contributes nothing to snapshot; skip it (live: rnaseq-sd
+            // get_annotation/get_genome cascaded 121 rules into a ~96-min
+            // star_index rebuild).
+            continue;
+        }
         if expanded.contains('{') || input_is_ancient(rule, &expanded, wildcard_values) {
             // Engine wildcard ({sample}, {threads}, …) — expanded per
             // instance before checkpointing, not resolvable here.
@@ -1064,7 +1077,10 @@ pub fn missing_input_patterns(
     let mut missing = Vec::new();
     for pattern in rule.input.to_vec() {
         let expanded = expand_config_in_path(&pattern, wildcard_values);
-        if expanded.contains('{') || expanded.starts_with(".oxo-flow/chunks") {
+        if expanded.is_empty() || expanded.contains('{') || expanded.starts_with(".oxo-flow/chunks")
+        {
+            // Same skip rules as snapshot_input_manifest — an empty
+            // config-optional input is not a missing file.
             continue;
         }
         let mut entries = std::collections::BTreeMap::new();
@@ -2572,6 +2588,50 @@ mod tests {
         // Engine wildcards and chunk paths are skipped, like the snapshot walk.
         let wildcard_rule = list_rule("w", &["{sample}.fq", ".oxo-flow/chunks/x.bam"]);
         assert!(missing_input_patterns(&wildcard_rule, &wd, &HashMap::new()).is_empty());
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_empty_config_input_does_not_walk_the_workdir() {
+        // Live failure (rnaseq-sd get_annotation/get_genome): a rule declares
+        // `input = ["{config.annotation_gtf}"]` whose default is "" for the
+        // download branch. The expanded empty string reached
+        // collect_pattern_entries, where `workdir.join("")` is the workdir
+        // ROOT — the manifest then recorded every file in the workdir
+        // (.git, logs, other rules' outputs), and any volatile change
+        // cascaded into a full-DAG invalidation (121 rules → ~96-min
+        // star_index rebuild).
+        let wd = temp_workdir("empty-config-input");
+        write_file(&wd, "some/volatile.log", "grows across runs");
+        let mut wildcard_values = HashMap::new();
+        wildcard_values.insert("config.annotation_gtf".to_string(), String::new());
+        let rule = list_rule("get_annotation", &["{config.annotation_gtf}"]);
+
+        let manifest =
+            snapshot_input_manifest(&rule, &wd, &wildcard_values, &StorageResolver::with_local())
+                .unwrap();
+        // The empty pattern is not a resolvable input: no manifest at all —
+        // NOT a workdir-wide entry list.
+        assert!(
+            manifest.is_none(),
+            "empty config-optional input must not produce a workdir walk; got {} entries",
+            manifest.map(|m| m.len()).unwrap_or(0)
+        );
+        // And it is not reported missing either (same skip rules as the
+        // snapshot walk — missing_input_patterns mirrors it).
+        assert!(missing_input_patterns(&rule, &wd, &wildcard_values).is_empty());
+
+        // Contrast: a NON-empty config value still snapshots the real file.
+        write_file(&wd, "refs/genes.gtf", "chr1\tsrc\texon\t1\t9\t.\t+\t.\t");
+        let mut filled = HashMap::new();
+        filled.insert(
+            "config.annotation_gtf".to_string(),
+            "refs/genes.gtf".to_string(),
+        );
+        let manifest =
+            snapshot_input_manifest(&rule, &wd, &filled, &StorageResolver::with_local()).unwrap();
+        assert_eq!(manifest.as_ref().map(|m| m.len()), Some(1));
+        assert_eq!(manifest.unwrap()[0].path, "refs/genes.gtf");
         let _ = std::fs::remove_dir_all(&wd);
     }
 
