@@ -655,8 +655,10 @@ fn effective_bind_host_with(mode: &str, host: &str, dev_mode: bool) -> anyhow::R
 /// instead needs a `SocketAddr`, and a bare `IpAddr` parse rejects the
 /// "localhost" that `effective_bind_host` deliberately passes through
 /// (issue #573). IPs parse directly; anything else resolves via
-/// `ToSocketAddrs`, taking the first address; unresolvable hosts fail
-/// with an actionable message.
+/// `ToSocketAddrs`, preferring IPv4 so the bind stays deterministic —
+/// Linux resolves "localhost" to `::1` first, which silently locks out
+/// IPv4 clients (and the IPv4-based integration checks); unresolvable
+/// hosts fail with an actionable message.
 pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::SocketAddr> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return Ok(std::net::SocketAddr::new(ip, port));
@@ -668,7 +670,8 @@ pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::Sock
              machine"
         )
     })?;
-    addrs.next().ok_or_else(|| {
+    let pick = addrs.find(|addr| addr.is_ipv4()).or_else(|| addrs.next());
+    pick.ok_or_else(|| {
         anyhow::anyhow!(
             "bind host {host:?} resolved to no addresses — \
              use an IP address such as 127.0.0.1 or 0.0.0.0"
@@ -1039,8 +1042,9 @@ mod effective_bind_host_tests {
 
     /// `resolve_bind_addr` must accept what `effective_bind_host` passes
     /// through: IPs parse directly, and "localhost" — deliberately not
-    /// rewritten — resolves via `ToSocketAddrs` instead of dying on a
-    /// bare IP parse (issue #573, parity with `oxo-flow serve`).
+    /// rewritten — resolves via `ToSocketAddrs` with IPv4 preferred, so
+    /// the loopback bind is deterministic even where Linux resolves
+    /// "localhost" to `::1` first (issue #573, parity with `oxo-flow serve`).
     #[test]
     fn resolve_bind_addr_accepts_ips_and_localhost() {
         assert_eq!(
@@ -1055,7 +1059,8 @@ mod effective_bind_host_tests {
             resolve_bind_addr("::1", 8080).unwrap(),
             std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 8080))
         );
-        // The regression: "localhost" must resolve, not fail an IP parse.
+        // The regression: "localhost" must resolve, not fail an IP parse,
+        // and prefer the IPv4 loopback over a `::1` first-hit.
         assert_eq!(
             resolve_bind_addr("localhost", 8080).unwrap(),
             std::net::SocketAddr::from(([127, 0, 0, 1], 8080))
