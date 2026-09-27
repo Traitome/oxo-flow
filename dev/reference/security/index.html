@@ -3427,6 +3427,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dependency-auditing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Auditing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#layer-4-rate-limiting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3840,6 +3851,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dependency-auditing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Auditing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#layer-4-rate-limiting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4105,6 +4127,36 @@ survive — review the flagged lines yourself:</p>
 </tbody>
 </table>
 <p>Additionally, workflow config values declared with <code>sensitive = true</code> in a <code>[config]</code> definition are masked as <code>***</code> in logs, <code>--help</code>, and error output.</p>
+<hr />
+<h2 id="dependency-auditing">Dependency Auditing<a class="headerlink" href="#dependency-auditing" title="Permanent link">#</a></h2>
+<p>CI runs <code>cargo audit</code> (via <code>make ci</code>) against <code>Cargo.lock</code> files. When interpreting
+audit results, note how the tools differ:</p>
+<ul>
+<li><strong><code>cargo audit</code> is graph-aware.</strong> It resolves the lockfile against the actual
+  dependency graph, so an entry that no crate can reach is not reported.</li>
+<li><strong><code>osv-scanner</code> (and similar lockfile scanners) are not.</strong> They match every
+  entry in the lockfile text. Some entries can therefore be false positives:
+  optional dependencies recorded because <em>some</em> feature combination of a
+  dependency activates them, even though the workspace's own feature set never
+  builds them. Verify with <code>cargo tree -i &lt;crate&gt;@&lt;version&gt; --all-features</code>
+  (add <code>--target all</code> for target-gated deps) before treating a lockfile hit as
+  a real vulnerability. If no path exists, the entry is compile-inert — it
+  cannot ship in a binary — and there is nothing to upgrade.</li>
+</ul>
+<p>Two long-lived accepted risks, re-check after any major GUI-stack upgrade:</p>
+<ul>
+<li><strong>Desktop <code>glib 0.18</code> / <code>proc-macro-error 1.0</code></strong> (RUSTSEC-2024-0429 and the
+  unmaintained advisory on <code>proc-macro-error</code>): <code>oxo-flow-desktop</code> is excluded
+  from the workspace and its code never touches <code>glib</code> directly — the crate
+  arrives through the Linux-only <code>tao 0.37 → gtk 0.18 → glib 0.18</code> chain of
+  the windowing stack. Fixing requires a major <code>wry</code>/<code>tao</code> upgrade (glib
+  0.20+), which is a deliberate, separately-scheduled migration. The affected
+  symbols are unreachable from desktop's own code.</li>
+<li><strong>Desktop <code>toml 0.8.2</code></strong>: pinned exactly (via <code>proc-macro-crate 2.0</code>, required
+  by <code>glib-macros 0.18</code>) to <code>toml_edit =0.20.2</code> / <code>toml_datetime =0.6.3</code>, which
+  forces the older <code>toml</code> line into the desktop lockfile. Same resolution path
+  as above; unfixable without the GUI-stack upgrade.</li>
+</ul>
 <hr />
 <h2 id="layer-4-rate-limiting">Layer 4 — Rate Limiting<a class="headerlink" href="#layer-4-rate-limiting" title="Permanent link">#</a></h2>
 <p>The web server applies per-IP rate limiting across all API endpoints:</p>

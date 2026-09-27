@@ -4864,16 +4864,20 @@
 <hr />
 <h3 id="pairs"><code>[[pairs]]</code><a class="headerlink" href="#pairs" title="Permanent link">#</a></h3>
 <p>A section defining experiment-control sample pairs for comparative analyses like tumor-normal variant calling.</p>
-<p><strong>Fields</strong>:
-- <code>pair_id</code>: Unique identifier for the pair
-- <code>experiment</code>: Sample name (e.g., tumor)
-- <code>control</code>: Matched control sample (e.g., normal)</p>
+<p><strong>Fields</strong>:</p>
+<ul>
+<li><code>pair_id</code>: Unique identifier for the pair</li>
+<li><code>experiment</code>: Sample name (e.g., tumor)</li>
+<li><code>control</code>: Matched control sample (e.g., normal)</li>
+</ul>
 <hr />
 <h3 id="sample_groups"><code>[[sample_groups]]</code><a class="headerlink" href="#sample_groups" title="Permanent link">#</a></h3>
 <p>A section organizing samples into named groups for cohort studies.</p>
-<p><strong>Fields</strong>:
-- <code>name</code>: Group name (e.g., "treatment", "control")
-- <code>samples</code>: Array of sample identifiers</p>
+<p><strong>Fields</strong>:</p>
+<ul>
+<li><code>name</code>: Group name (e.g., "treatment", "control")</li>
+<li><code>samples</code>: Array of sample identifiers</li>
+</ul>
 <hr />
 <h3 id="transform"><code>transform</code><a class="headerlink" href="#transform" title="Permanent link">#</a></h3>
 <p>An operator that unifies scatter (split) → map (process) → gather (combine) patterns in a single rule declaration.</p>

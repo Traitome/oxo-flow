@@ -4769,6 +4769,9 @@ format.</p>
 <h3 id="scaffold-the-built-in-template">Scaffold the built-in template<a class="headerlink" href="#scaffold-the-built-in-template" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--init-template<span class="w">   </span><span class="c1"># writes ./report-template.tera</span>
 </span></code></pre></div>
+<p>The built-in template covers every <code>ReportContent</code> variant (Text, Markdown,
+Html, Table, KeyValue, Json, Chart, QcStatus, QcIndicatorGroup, Hierarchy,
+ScatterPlot) in both top-level sections and subsections.</p>
 <h3 id="export-r-friendly-tables">Export R-friendly tables<a class="headerlink" href="#export-r-friendly-tables" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>report<span class="w"> </span>--run<span class="w"> </span>results/experiment1<span class="w"> </span>--r-data<span class="w"> </span>analysis/
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># writes analysis/sample_table.tsv (sample, group) and</span>

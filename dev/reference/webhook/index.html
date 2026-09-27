@@ -3980,6 +3980,14 @@ test vectors):</p>
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">{</span><span class="nt">"event"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rule_failed"</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">}</span>
 </span></code></pre></div>
 <p>Your receiving endpoint can use this signature to verify that the webhook request genuinely originated from your oxo-flow execution and that the payload was not tampered with in transit.</p>
+<p><strong>Redirects are not followed.</strong> Webhook URLs typically embed a credential
+(a Slack/Discord incoming-webhook token sits in the path), and the request
+headers are bound to that one endpoint — the <code>X-OxoFlow-Signature</code> HMAC and
+any custom <code>headers</code> you configured. oxo-flow therefore never replays a
+request to a redirect target: a 3xx response is reported as a
+non-success status, and request errors never echo the configured URL
+(the credential) in their messages. If your endpoint moves, configure the
+final URL directly.</p>
 <p><strong>Legacy scheme.</strong> The original implementation signed with a non-standard
 keyed SHA-256 (<code>sha256=hex(sha256(secret‖body))</code>), which is <em>not</em>
 HMAC-SHA256 despite the header name. It remains available via

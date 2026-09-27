@@ -4673,10 +4673,12 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <p>The scheduler can prioritize rules on the critical path so they execute before non-critical rules at the same level:</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">ready</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">state</span><span class="p">.</span><span class="n">ready_rules_critical_path</span><span class="p">(</span><span class="o">&amp;</span><span class="n">dag</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rules</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 </span></code></pre></div>
-<p>Sort order:
-1. <strong>Critical path membership</strong> — critical rules first
-2. <strong>Explicit priority</strong> (<code>priority</code> field, higher first)
-3. <strong>Alphabetical name</strong> (deterministic tie-breaker)</p>
+<p>Sort order:</p>
+<ol>
+<li><strong>Critical path membership</strong> — critical rules first</li>
+<li><strong>Explicit priority</strong> (<code>priority</code> field, higher first)</li>
+<li><strong>Alphabetical name</strong> (deterministic tie-breaker)</li>
+</ol>
 <p>This minimizes total workflow wall-clock time by ensuring the bottleneck chain never waits.</p>
 <h4 id="example">Example<a class="headerlink" href="#example" title="Permanent link">#</a></h4>
 <p>In a diamond DAG (<code>source → left, source → right → merge</code>):</p>
@@ -5008,11 +5010,13 @@ flags these with warning W019).</p>
 <li>The dependency count in <code>oxo-flow graph</code> header counts all edges — a high number is expected for complex workflows</li>
 </ul>
 <h3 id="my-cycle-error-shows-a-confusing-path">"My cycle error shows a confusing path"<a class="headerlink" href="#my-cycle-error-shows-a-confusing-path" title="Permanent link">#</a></h3>
-<p>The cycle path <code>A → B → C → A</code> shows you the circular chain. To break it:
-1. Pick one edge in the cycle (e.g., <code>C → A</code>)
-2. If it's file-based: rename one of the files so they don't match
-3. If it's <code>depends_on</code>: remove the explicit dependency
-4. Re-validate with <code>oxo-flow validate</code></p>
+<p>The cycle path <code>A → B → C → A</code> shows you the circular chain. To break it:</p>
+<ol>
+<li>Pick one edge in the cycle (e.g., <code>C → A</code>)</li>
+<li>If it's file-based: rename one of the files so they don't match</li>
+<li>If it's <code>depends_on</code>: remove the explicit dependency</li>
+<li>Re-validate with <code>oxo-flow validate</code></li>
+</ol>
 <hr />
 <h2 id="design-notes">Design Notes<a class="headerlink" href="#design-notes" title="Permanent link">#</a></h2>
 <ul>

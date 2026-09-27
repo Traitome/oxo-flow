@@ -6610,20 +6610,22 @@ config key can be overridden from the CLI.</p>
 <p>Values are TOML strings, integers, booleans, or arrays. String interpolation
 in rules uses <code>{config.key}</code> syntax; array values render as space-joined
 lists in the shell.</p>
-<p>Several keys are <strong>engine-injected</strong>:
-- <code>config.samples_list</code> (all sample names, comma-joined) and
+<p>Several keys are <strong>engine-injected</strong>:</p>
+<ul>
+<li><code>config.samples_list</code> (all sample names, comma-joined) and
   <code>config.pairs_list</code> (all pair ids, comma-joined) — use them in
   <code>expand_inputs</code> to gather across samples or pairs without maintaining a
   parallel list by hand. A user-declared <code>config.samples_list</code> is
   union-merged with the discovered samples, and the two lists are also
-  rewritten by <code>--samples</code> filtering.
-- <code>config.samples_&lt;group&gt;</code> (one per <code>[[sample_groups]]</code> entry).
-- <code>config.&lt;reference name&gt;</code> (each <code>[[references]]</code> entry's <code>output</code>) and,
+  rewritten by <code>--samples</code> filtering.</li>
+<li><code>config.samples_&lt;group&gt;</code> (one per <code>[[sample_groups]]</code> entry).</li>
+<li><code>config.&lt;reference name&gt;</code> (each <code>[[references]]</code> entry's <code>output</code>) and,
   with <code>reference_dir</code>, the ten derived paths (<code>reference_fasta</code>,
   <code>gene_annotation</code>, <code>bwa_index</code>, <code>bwamem2_index</code>, <code>bowtie2_index</code>,
   <code>star_index</code>, <code>hisat2_index</code>, <code>minimap2_index</code>, <code>gatk_dict</code>,
   <code>samtools_faidx</code>). Explicit <code>[config]</code> entries with the same names are
-  never overwritten.</p>
+  never overwritten.</li>
+</ul>
 <h3 id="declarative-form-inline-table">Declarative Form (inline table)<a class="headerlink" href="#declarative-form-inline-table" title="Permanent link">#</a></h3>
 <p>For user-facing parameters, use the declarative inline-table form. Declared
 keys become automatic CLI flags (<code>--&lt;key&gt; &lt;value&gt;</code>), can be required, and
@@ -7352,10 +7354,12 @@ named group. The <code>env_group</code> spec takes precedence over an inline
 </span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">script</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"scripts/analysis.py --min-quality {params.q}"</span>
 </span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="n">interpreter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python3"</span><span class="w"> </span><span class="c1"># Optional: overrides auto-detection</span>
 </span></code></pre></div>
-<p><strong>Interpreter Detection Order:</strong>
-1.  <strong>Explicit <code>interpreter</code> field</strong> on the rule.
-2.  <strong>Custom <code>[workflow.interpreter_map]</code></strong> in the metadata.
-3.  <strong>Built-in defaults</strong> based on file extension.</p>
+<p><strong>Interpreter Detection Order:</strong></p>
+<ol>
+<li><strong>Explicit <code>interpreter</code> field</strong> on the rule.</li>
+<li><strong>Custom <code>[workflow.interpreter_map]</code></strong> in the metadata.</li>
+<li><strong>Built-in defaults</strong> based on file extension.</li>
+</ol>
 <h3 id="lifecycle-hooks">Lifecycle Hooks<a class="headerlink" href="#lifecycle-hooks" title="Permanent link">#</a></h3>
 <p>Hooks allow you to run auxiliary logic at different stages of a rule's life:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">[[rules]]</span>
@@ -7455,13 +7459,17 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 <h2 id="resource-management">Resource Management<a class="headerlink" href="#resource-management" title="Permanent link">#</a></h2>
 <h3 id="declaration-vs-enforcement">Declaration vs Enforcement<a class="headerlink" href="#declaration-vs-enforcement" title="Permanent link">#</a></h3>
 <p>oxo-flow tracks declared resources for scheduling but does not strictly enforce them in local execution. On HPC clusters, resources are enforced by the scheduler.</p>
-<p><strong>Local execution:</strong>
-- Resources are tracked to prevent over-allocation
-- Warnings emitted when declaring resources exceeding system capacity
-- Jobs may oversubscribe if user intentionally requests more than available</p>
-<p><strong>HPC clusters:</strong>
-- Resources translated to scheduler directives (SLURM, PBS, SGE, LSF)
-- Scheduler enforces limits - jobs requesting more than allocated will fail</p>
+<p><strong>Local execution:</strong></p>
+<ul>
+<li>Resources are tracked to prevent over-allocation</li>
+<li>Warnings emitted when declaring resources exceeding system capacity</li>
+<li>Jobs may oversubscribe if user intentionally requests more than available</li>
+</ul>
+<p><strong>HPC clusters:</strong></p>
+<ul>
+<li>Resources translated to scheduler directives (SLURM, PBS, SGE, LSF)</li>
+<li>Scheduler enforces limits - jobs requesting more than allocated will fail</li>
+</ul>
 <h3 id="platform-detection">Platform Detection<a class="headerlink" href="#platform-detection" title="Permanent link">#</a></h3>
 <table>
 <thead>
@@ -8181,6 +8189,18 @@ gather. For new workflows, prefer the unified
 </span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"per_chr"</span>
 </span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a><span class="n">scatter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">variable</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"chr"</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"chr1"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr2"</span><span class="p">,</span><span class="w"> </span><span class="s2">"chr3"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div>
+<p>A rule whose scatter fans out over <strong>zero values</strong> — declared <code>values = []</code>, or
+<code>values_from</code> referencing a config key that resolves to an empty list —
+produces zero instances and can never run. <code>oxo-flow validate</code> therefore
+skips the input-existence check (E010/W020) for such rules and excludes their
+output templates from the W033 output-collision lint, mirroring the
+<code>when</code>-gated-off exemption: a rule that cannot run must not fail validation
+over inputs it will never read. An <strong>unresolvable</strong> <code>values_from</code> (missing
+config key, non-string/array value) is deliberately NOT treated as empty —
+the executor expands zero instances silently in that case, so validate keeps
+the input-existence check to surface the typo as a missing-input diagnostic
+instead of silently passing (issue #616; the stricter <code>[[values]]</code> tables and
+<code>transform.split</code> reject an unresolvable reference outright).</p>
 <h3 id="expand-inputs">Expand Inputs<a class="headerlink" href="#expand-inputs" title="Permanent link">#</a></h3>
 <p>The <code>expand_inputs</code> field generates additional input combinations via Cartesian
 product expansion.</p>
@@ -8404,10 +8424,12 @@ inline map (<code>FilePatterns::Map</code>) and reference the entries with
 the map is the value of <code>input</code>/<code>output</code> itself (a sub-table named
 <code>named_input</code> fails validation with E017).</p>
 <h3 id="custom-wildcards">Custom Wildcards<a class="headerlink" href="#custom-wildcards" title="Permanent link">#</a></h3>
-<p>Any <code>{name}</code> pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:
-1. <strong>File discovery</strong>: Scanning for matching files in the <code>input</code> path.
-2. <strong>Explicit lists</strong>: Defined in <a href="#pairs-experiment-control-pairing-wc-01"><code>[[pairs]]</code></a> or <a href="#sample_groups-multi-sample-cohorts-wc-02"><code>[[sample_groups]]</code></a>.
-3. <strong>Parameter lists</strong>: Defined in <a href="#values-parameter-fan-out-wc-03"><code>[[values]]</code></a>.</p>
+<p>Any <code>{name}</code> pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:</p>
+<ol>
+<li><strong>File discovery</strong>: Scanning for matching files in the <code>input</code> path.</li>
+<li><strong>Explicit lists</strong>: Defined in <a href="#pairs-experiment-control-pairing-wc-01"><code>[[pairs]]</code></a> or <a href="#sample_groups-multi-sample-cohorts-wc-02"><code>[[sample_groups]]</code></a>.</li>
+<li><strong>Parameter lists</strong>: Defined in <a href="#values-parameter-fan-out-wc-03"><code>[[values]]</code></a>.</li>
+</ol>
 <h2 id="values-parameter-fan-out-wc-03"><code>[[values]]</code> — Parameter Fan-out (WC-03)<a class="headerlink" href="#values-parameter-fan-out-wc-03" title="Permanent link">#</a></h2>
 <p><code>[[values]]</code> declares parameter lists that fan rules out the same way
 sample groups do — the oxo-flow equivalent of an upstream
@@ -8572,10 +8594,12 @@ plan-time warning naming the offending key.</p>
 <li><code>experiment = EXP_01</code></li>
 <li><code>control = CTRL_01</code></li>
 </ul>
-<p><strong>Pattern requirements:</strong>
-- Must contain <code>{pair_id}</code>, <code>{experiment}</code>, and <code>{control}</code> wildcards
-- Optional <code>{experiment_type}</code> wildcard also extracted
-- Pattern is converted to glob (<code>*</code>) for filesystem scan</p>
+<p><strong>Pattern requirements:</strong></p>
+<ul>
+<li>Must contain <code>{pair_id}</code>, <code>{experiment}</code>, and <code>{control}</code> wildcards</li>
+<li>Optional <code>{experiment_type}</code> wildcard also extracted</li>
+<li>Pattern is converted to glob (<code>*</code>) for filesystem scan</li>
+</ul>
 <p>This eliminates the need for manual pair lists or external files when working with pre-organized directory structures.</p>
 <h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">#</a></h3>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a><span class="k">[[pairs]]</span>

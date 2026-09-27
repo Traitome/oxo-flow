@@ -4596,11 +4596,13 @@ then SIGKILL after a 10-second grace window (deepest descendants first).</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>graph<span class="w"> </span>pipeline.oxoflow
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># Depth: 3, Width: 2, Critical path: source → left → merge</span>
 </span></code></pre></div>
-<p>Insights:
-- Maximum parallelism is 2 (width) — <code>-j 2</code> is sufficient
-- The critical path is <code>source → left → merge</code> — <code>right</code> is not on it
-- If <code>left</code> takes 2 hours, that's your bottleneck regardless of <code>right</code>'s speed
-- Optimize <code>left</code> (more threads, faster tool) before worrying about <code>right</code></p>
+<p>Insights:</p>
+<ul>
+<li>Maximum parallelism is 2 (width) — <code>-j 2</code> is sufficient</li>
+<li>The critical path is <code>source → left → merge</code> — <code>right</code> is not on it</li>
+<li>If <code>left</code> takes 2 hours, that's your bottleneck regardless of <code>right</code>'s speed</li>
+<li>Optimize <code>left</code> (more threads, faster tool) before worrying about <code>right</code></li>
+</ul>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../reference/workflow-format/">Workflow Format Reference</a></li>

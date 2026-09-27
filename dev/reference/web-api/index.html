@@ -3985,6 +3985,10 @@ id, or <code>null</code> for system-wide events).</p>
 extracted from the execution log — config changes, edited rule definitions,
 and input-set changes that invalidated checkpoint records this run
 (<code>null</code> when the run had no invalidation activity).</p>
+<p>The stream ends when the server shuts down (SIGTERM/Ctrl+C): the response
+is closed as part of the graceful drain, so an <code>EventSource</code> sees its
+<code>error</code>/close at shutdown rather than a hung connection (#572). Clients
+should reconnect with backoff after an unexpected close.</p>
 <hr />
 <h2 id="authentication-authorization">Authentication &amp; Authorization<a class="headerlink" href="#authentication-authorization" title="Permanent link">#</a></h2>
 <h3 id="login">Login<a class="headerlink" href="#login" title="Permanent link">#</a></h3>
@@ -4380,8 +4384,9 @@ which level supplied each field. API keys are stored encrypted at rest
 <div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
 </span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
 </span></code></pre></div>
-<p>The redirect URI is <code>OAUTH_REDIRECT_URI</code> when set, derived from the
-request host otherwise (see the environment table in <code>AGENTS.md</code>).</p>
+<p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
+fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
+environment table in <code>AGENTS.md</code>).</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)

@@ -3971,11 +3971,13 @@ goes through the <a href="#import">import API</a> below.</p>
 </span></code></pre></div>
 <p>The <code>oxo+https://</code> protocol prefix makes share links explicit and unambiguous —
 you can paste them into any tool and the intent is clear.</p>
-<p><strong>Import behavior</strong>:
-- Creates a full copy of the shared pipeline
-- Records the source via <code>forked_from</code>
-- Sets visibility to <code>private</code> by default
-- Checks share expiration before allowing import</p>
+<p><strong>Import behavior</strong>:</p>
+<ul>
+<li>Creates a full copy of the shared pipeline</li>
+<li>Records the source via <code>forked_from</code></li>
+<li>Sets visibility to <code>private</code> by default</li>
+<li>Checks share expiration before allowing import</li>
+</ul>
 <h2 id="permissions-model">Permissions Model<a class="headerlink" href="#permissions-model" title="Permanent link">#</a></h2>
 <p>A simple three-state visibility model:</p>
 <table>

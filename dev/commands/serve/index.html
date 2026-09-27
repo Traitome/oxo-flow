@@ -4283,8 +4283,8 @@ fields are optional: <code>max_jobs</code> (default 4, becomes <code>-j</code>),
 and reuse its persistent workdir), and <code>cluster_id</code> (execute on a configured
 SSH cluster). <code>GET /api/runs</code> is paginated by <strong>cursor</strong> — the <code>created_at</code>
 of the previous page's last row — and returns <code>{ items, next_cursor, total }</code>,
-not numbered pages. See the <a href="../../reference/web-api/#create-run">Web API reference</a>.
-| <code>GET</code> | <code>/api/runs/{id}</code> | Run detail |
+not numbered pages. See the <a href="../../reference/web-api/#create-run">Web API reference</a>.</p>
+<p>| <code>GET</code> | <code>/api/runs/{id}</code> | Run detail |
 | <code>GET</code> | <code>/api/runs/{id}/status</code> | Real-time status (nodes, timeline, resources) |
 | <code>GET</code> | <code>/api/runs/{id}/dag-status</code> | DAG JSON + per-node live status |
 | <code>GET</code> | <code>/api/runs/{id}/diagnostics</code> | Diagnostic engine results (30+ error patterns) |

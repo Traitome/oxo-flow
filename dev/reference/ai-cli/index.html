@@ -4959,20 +4959,22 @@ repository.</p>
 <li><strong>Tool Reference Table</strong>: 40 curated bioinformatics tools with resource allocations (threads, memory)</li>
 <li><strong>Bioconda Tool Database</strong>: 6,525 curated CLI tools with current versions and descriptions (<code>knowledge_meta.json</code>: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via <code>lookup_tool</code></li>
 <li><strong>bioSkills Library</strong>: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via <code>lookup_skill</code></li>
-<li><strong>Pipeline Knowledge Graph</strong>: 78 workflow skills and 465 literature-backed data-flow transitions (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
+<li><strong>Pipeline Knowledge Graph</strong>: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
 </ol>
 <p>Token efficiency: embedded data is <strong>never added to the LLM context wholesale</strong>. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.</p>
-<p>The agent:
-1. Analyzes your intent (assay type, tools mentioned)
-2. Matches relevant bioSkills domains and injects curated expertise
-3. Selects tools from the reference table, verifying current versions via the Bioconda database
-4. Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)
-5. Sets resource allocations based on tool requirements
-6. Generates valid <code>.oxoflow</code> TOML
-7. Validates against the engine schema; on failure the errors feed back
+<p>The agent:</p>
+<ol>
+<li>Analyzes your intent (assay type, tools mentioned)</li>
+<li>Matches relevant bioSkills domains and injects curated expertise</li>
+<li>Selects tools from the reference table, verifying current versions via the Bioconda database</li>
+<li>Designs a DAG with proper dependencies (optionally consulting the pipeline graph for topology)</li>
+<li>Sets resource allocations based on tool requirements</li>
+<li>Generates valid <code>.oxoflow</code> TOML</li>
+<li>Validates against the engine schema; on failure the errors feed back
    into the correction loop (bounded by <code>--ai-max-retries</code>), so
    wrong-dialect output is repaired instead of written with a warning
-   (one shared generation persona across CLI and web)</p>
+   (one shared generation persona across CLI and web)</li>
+</ol>
 <h3 id="custom-skills">Custom Skills<a class="headerlink" href="#custom-skills" title="Permanent link">#</a></h3>
 <p>User-defined <code>.skill.toml</code> files (discovered from <code>~/.oxo-flow/skills</code> and
 <code>&lt;project&gt;/.oxo-flow/skills</code>) can be activated per workflow via
@@ -5196,12 +5198,14 @@ prompt. See <a href="../custom-skills/">Custom Skills</a>.</p>
 <p>Validate workflow correctness, safety, and resource allocation before running:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>oxo-flow<span class="w"> </span>dry-run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai
 </span></code></pre></div>
-<p>The AI checks:
-- Resource allocations vs. tool recommendations
-- DAG structure (missing dependencies, invalid edges)
-- Safety violations (destructive commands)
-- Environment declarations
-- Best practice adherence</p>
+<p>The AI checks:</p>
+<ul>
+<li>Resource allocations vs. tool recommendations</li>
+<li>DAG structure (missing dependencies, invalid edges)</li>
+<li>Safety violations (destructive commands)</li>
+<li>Environment declarations</li>
+<li>Best practice adherence</li>
+</ul>
 <p>Output includes severity ratings: <code>[ERROR]</code>, <code>[WARNING]</code>, <code>[INFO]</code>.</p>
 <hr />
 <h2 id="ai-semantic-validation-validate-ai">AI Semantic Validation (<code>validate --ai</code>)<a class="headerlink" href="#ai-semantic-validation-validate-ai" title="Permanent link">#</a></h2>
@@ -5213,12 +5217,14 @@ prompt. See <a href="../custom-skills/">Custom Skills</a>.</p>
 <p>When a workflow fails, the AI diagnoses the error and proposes a fix:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>--ai-recover
 </span></code></pre></div>
-<p><strong>Recovery flow:</strong>
-1. Rule fails → capture error signature
-2. AI matches against known error patterns (OOM, segfault, missing files, etc.)
-3. AI proposes root cause + specific fix
-4. If safe to auto-apply: original archived, fix applied
-5. Run can be retried with corrected workflow</p>
+<p><strong>Recovery flow:</strong></p>
+<ol>
+<li>Rule fails → capture error signature</li>
+<li>AI matches against known error patterns (OOM, segfault, missing files, etc.)</li>
+<li>AI proposes root cause + specific fix</li>
+<li>If safe to auto-apply: original archived, fix applied</li>
+<li>Run can be retried with corrected workflow</li>
+</ol>
 <hr />
 <h2 id="embedded-knowledge-freshness">Embedded Knowledge Freshness<a class="headerlink" href="#embedded-knowledge-freshness" title="Permanent link">#</a></h2>
 <p>The four knowledge sources are compiled into the binary at build time, so

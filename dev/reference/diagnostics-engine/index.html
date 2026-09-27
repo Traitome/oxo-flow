@@ -3891,11 +3891,13 @@
 Every diagnosis is reproducible given the same inputs.</p>
 </blockquote>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">#</a></h2>
-<p>The Diagnostics Engine analyzes failed pipeline runs and returns:
-- <strong>Error pattern</strong> identified (e.g., OOM, command not found, file missing)
-- <strong>Likely cause</strong> with evidence
-- <strong>Fix suggestions</strong> (auto-fixable or manual)
-- <strong>Relevant log lines</strong> for context</p>
+<p>The Diagnostics Engine analyzes failed pipeline runs and returns:</p>
+<ul>
+<li><strong>Error pattern</strong> identified (e.g., OOM, command not found, file missing)</li>
+<li><strong>Likely cause</strong> with evidence</li>
+<li><strong>Fix suggestions</strong> (auto-fixable or manual)</li>
+<li><strong>Relevant log lines</strong> for context</li>
+</ul>
 <p>It does NOT use AI. It matches error signatures (log keywords, exit codes)
 against a curated library of 30 error patterns (tool, resource, data,
 system, and config classes — see
