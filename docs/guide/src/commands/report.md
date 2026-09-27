@@ -188,6 +188,10 @@ oxo-flow report --list-templates
 oxo-flow report --init-template   # writes ./report-template.tera
 ```
 
+The built-in template covers every `ReportContent` variant (Text, Markdown,
+Html, Table, KeyValue, Json, Chart, QcStatus, QcIndicatorGroup, Hierarchy,
+ScatterPlot) in both top-level sections and subsections.
+
 ### Export R-friendly tables
 
 ```bash

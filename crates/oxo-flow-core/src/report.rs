@@ -1079,7 +1079,7 @@ impl ReportBuilder {
 // Default Tera template (embedded as a constant)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
+const DEFAULT_REPORT_TEMPLATE: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -1106,6 +1106,22 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
     dd { margin: 0; }
     pre { background: #edf2f7; padding: 1rem; overflow-x: auto; border-radius: 4px; font-size: 0.85rem; }
     p { margin-bottom: 0.5rem; }
+    .disclaimer { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px; margin: 1rem 0; }
+    .qc-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; margin: 0.5rem 0; }
+    .qc-icon { font-size: 1.2rem; }
+    .qc-threshold { color: #4a5568; }
+    .qc-group { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+    .qc-card { flex: 1; min-width: 200px; border: 1px solid; border-radius: 8px; padding: 1rem; }
+    .qc-card-icon { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    .qc-card-value { font-size: 1.8rem; font-weight: 700; }
+    .qc-card-label { color: #4b5563; font-size: 0.85rem; }
+    .qc-card-desc { color: #6b7280; font-size: 0.75rem; margin-top: 0.25rem; }
+    .chart-title { font-weight: 600; margin: 0.5rem 0; }
+    .chart { margin: 0.5rem 0; }
+    .chart-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0; }
+    .chart-label { width: 140px; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chart-bar { height: 1.2rem; background: #4a90d9; border-radius: 3px; }
+    .chart-value { font-size: 0.8rem; color: #4a5568; white-space: nowrap; }
     footer { margin-top: 3rem; border-top: 1px solid #e2e8f0; padding-top: 0.5rem; color: #a0aec0; font-size: 0.75rem; }
   </style>
 </head>
@@ -1126,7 +1142,7 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
     {% elif section.content.type == "Markdown" %}
       <pre>{{ section.content.markdown }}</pre>
     {% elif section.content.type == "Html" %}
-      {{ section.content.html }}
+      {{ section.content.html | safe }}
     {% elif section.content.type == "Table" %}
       <table>
         <thead><tr>
@@ -1146,6 +1162,89 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
       </dl>
     {% elif section.content.type == "Json" %}
       <pre><code>{{ section.content.data }}</code></pre>
+    {% elif section.content.type == "Chart" %}
+      <p class="chart-title">{{ section.content.title }}</p>
+      {% if section.content.values | length > 0 %}
+        {% set_global chart_max = section.content.values | first %}
+        {% for v in section.content.values %}
+          {% if v > chart_max %}{% set_global chart_max = v %}{% endif %}
+        {% endfor %}
+        <div class="chart">
+          {% for label in section.content.labels %}
+          {% set v = section.content.values[loop.index0] | default(value=0) %}
+          {% if chart_max > 0 %}
+          <div class="chart-row">
+            <span class="chart-label">{{ label }}</span>
+            <span class="chart-bar" style="width: {{ (v / chart_max * 100) | round | int }}%"></span>
+            <span class="chart-value">{{ v }} {{ section.content.unit }}</span>
+          </div>
+          {% else %}
+          <div class="chart-row">
+            <span class="chart-label">{{ label }}</span>
+            <span class="chart-value">{{ v }} {{ section.content.unit }}</span>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% elif section.content.type == "QcStatus" %}
+      {% if section.content.status == "pass" %}
+        {% set qc_icon = "✓" %}{% set qc_color = "#047857" %}
+      {% elif section.content.status == "warn" %}
+        {% set qc_icon = "⚠" %}{% set qc_color = "#b45309" %}
+      {% elif section.content.status == "fail" %}
+        {% set qc_icon = "✗" %}{% set qc_color = "#b91c1c" %}
+      {% else %}
+        {% set qc_icon = "ℹ" %}{% set qc_color = "#1d4ed8" %}
+      {% endif %}
+      <div class="qc-status" style="border-left: 4px solid {{ qc_color }}">
+        <span class="qc-icon" style="color: {{ qc_color }}">{{ qc_icon }}</span>
+        <span><strong>{{ section.content.metric }}</strong> {{ section.content.value }}
+          <span class="qc-threshold">(threshold: {{ section.content.threshold }})</span></span>
+      </div>
+    {% elif section.content.type == "QcIndicatorGroup" %}
+      <div class="qc-group">
+        {% for item in section.content.items %}
+        {% if item.status == "pass" %}
+          {% set qi_icon = "✓" %}{% set qi_bg = "#ecfdf5" %}{% set qi_border = "#047857" %}
+        {% elif item.status == "warn" %}
+          {% set qi_icon = "⚠" %}{% set qi_bg = "#fffbeb" %}{% set qi_border = "#b45309" %}
+        {% elif item.status == "fail" %}
+          {% set qi_icon = "✗" %}{% set qi_bg = "#fef2f2" %}{% set qi_border = "#b91c1c" %}
+        {% else %}
+          {% set qi_icon = "ℹ" %}{% set qi_bg = "#eff6ff" %}{% set qi_border = "#1d4ed8" %}
+        {% endif %}
+        <div class="qc-card" style="background: {{ qi_bg }}; border-color: {{ qi_border }}">
+          <div class="qc-card-icon" style="color: {{ qi_border }}">{{ qi_icon }}</div>
+          <div class="qc-card-value">{{ item.value }}</div>
+          <div class="qc-card-label">{{ item.label }}</div>
+          <div class="qc-card-desc">{{ item.description }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    {% elif section.content.type == "Hierarchy" %}
+      <table>
+        <thead><tr><th>Node</th><th>Value</th><th>Children</th></tr></thead>
+        <tbody>
+          <tr><td>{{ section.content.name }}</td><td>{{ section.content.value }}</td><td>{{ section.content.children | length }}</td></tr>
+          {% for child in section.content.children %}
+          <tr><td>{{ child.name }}</td><td>{{ child.value }}</td><td>{{ child.children | length }}</td></tr>
+          {% for grandchild in child.children %}
+          <tr><td>{{ grandchild.name }}</td><td>{{ grandchild.value }}</td><td>{{ grandchild.children | length }}</td></tr>
+          {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% elif section.content.type == "ScatterPlot" %}
+      <p><strong>{{ section.content.title }}</strong> — {{ section.content.x_label }} vs {{ section.content.y_label }}</p>
+      <table>
+        <thead><tr><th>{{ section.content.x_label }}</th><th>{{ section.content.y_label }}</th></tr></thead>
+        <tbody>
+          {% for point in section.content.points %}
+          <tr><td>{{ point.x }}</td><td>{{ point.y }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
     {% endif %}
 
     {% for sub in section.subsections %}
@@ -1153,6 +1252,10 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
       <h2>{{ sub.title }}</h2>
       {% if sub.content.type == "Text" %}
         <p>{{ sub.content.text }}</p>
+      {% elif sub.content.type == "Markdown" %}
+        <pre>{{ sub.content.markdown }}</pre>
+      {% elif sub.content.type == "Html" %}
+        {{ sub.content.html | safe }}
       {% elif sub.content.type == "Table" %}
         <table>
           <thead><tr>
@@ -1170,6 +1273,91 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
             <dt>{{ pair[0] }}</dt><dd>{{ pair[1] }}</dd>
           {% endfor %}
         </dl>
+      {% elif sub.content.type == "Json" %}
+        <pre><code>{{ sub.content.data }}</code></pre>
+      {% elif sub.content.type == "Chart" %}
+        <p class="chart-title">{{ sub.content.title }}</p>
+        {% if sub.content.values | length > 0 %}
+          {% set_global chart_max = sub.content.values | first %}
+          {% for v in sub.content.values %}
+            {% if v > chart_max %}{% set_global chart_max = v %}{% endif %}
+          {% endfor %}
+          <div class="chart">
+            {% for label in sub.content.labels %}
+            {% set v = sub.content.values[loop.index0] | default(value=0) %}
+            {% if chart_max > 0 %}
+            <div class="chart-row">
+              <span class="chart-label">{{ label }}</span>
+              <span class="chart-bar" style="width: {{ (v / chart_max * 100) | round | int }}%"></span>
+              <span class="chart-value">{{ v }} {{ sub.content.unit }}</span>
+            </div>
+            {% else %}
+            <div class="chart-row">
+              <span class="chart-label">{{ label }}</span>
+              <span class="chart-value">{{ v }} {{ sub.content.unit }}</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% elif sub.content.type == "QcStatus" %}
+        {% if sub.content.status == "pass" %}
+          {% set qc_icon = "✓" %}{% set qc_color = "#047857" %}
+        {% elif sub.content.status == "warn" %}
+          {% set qc_icon = "⚠" %}{% set qc_color = "#b45309" %}
+        {% elif sub.content.status == "fail" %}
+          {% set qc_icon = "✗" %}{% set qc_color = "#b91c1c" %}
+        {% else %}
+          {% set qc_icon = "ℹ" %}{% set qc_color = "#1d4ed8" %}
+        {% endif %}
+        <div class="qc-status" style="border-left: 4px solid {{ qc_color }}">
+          <span class="qc-icon" style="color: {{ qc_color }}">{{ qc_icon }}</span>
+          <span><strong>{{ sub.content.metric }}</strong> {{ sub.content.value }}
+            <span class="qc-threshold">(threshold: {{ sub.content.threshold }})</span></span>
+        </div>
+      {% elif sub.content.type == "QcIndicatorGroup" %}
+        <div class="qc-group">
+          {% for item in sub.content.items %}
+          {% if item.status == "pass" %}
+            {% set qi_icon = "✓" %}{% set qi_bg = "#ecfdf5" %}{% set qi_border = "#047857" %}
+          {% elif item.status == "warn" %}
+            {% set qi_icon = "⚠" %}{% set qi_bg = "#fffbeb" %}{% set qi_border = "#b45309" %}
+          {% elif item.status == "fail" %}
+            {% set qi_icon = "✗" %}{% set qi_bg = "#fef2f2" %}{% set qi_border = "#b91c1c" %}
+          {% else %}
+            {% set qi_icon = "ℹ" %}{% set qi_bg = "#eff6ff" %}{% set qi_border = "#1d4ed8" %}
+          {% endif %}
+          <div class="qc-card" style="background: {{ qi_bg }}; border-color: {{ qi_border }}">
+            <div class="qc-card-icon" style="color: {{ qi_border }}">{{ qi_icon }}</div>
+            <div class="qc-card-value">{{ item.value }}</div>
+            <div class="qc-card-label">{{ item.label }}</div>
+            <div class="qc-card-desc">{{ item.description }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      {% elif sub.content.type == "Hierarchy" %}
+        <table>
+          <thead><tr><th>Node</th><th>Value</th><th>Children</th></tr></thead>
+          <tbody>
+            <tr><td>{{ sub.content.name }}</td><td>{{ sub.content.value }}</td><td>{{ sub.content.children | length }}</td></tr>
+            {% for child in sub.content.children %}
+            <tr><td>{{ child.name }}</td><td>{{ child.value }}</td><td>{{ child.children | length }}</td></tr>
+            {% for grandchild in child.children %}
+            <tr><td>{{ grandchild.name }}</td><td>{{ grandchild.value }}</td><td>{{ grandchild.children | length }}</td></tr>
+            {% endfor %}
+            {% endfor %}
+          </tbody>
+        </table>
+      {% elif sub.content.type == "ScatterPlot" %}
+        <p><strong>{{ sub.content.title }}</strong> — {{ sub.content.x_label }} vs {{ sub.content.y_label }}</p>
+        <table>
+          <thead><tr><th>{{ sub.content.x_label }}</th><th>{{ sub.content.y_label }}</th></tr></thead>
+          <tbody>
+            {% for point in sub.content.points %}
+            <tr><td>{{ point.x }}</td><td>{{ point.y }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
       {% endif %}
     </section>
     {% endfor %}
@@ -1178,7 +1366,7 @@ const DEFAULT_REPORT_TEMPLATE: &str = r#"<!DOCTYPE html>
 
   <footer>Generated by oxo-flow</footer>
 </body>
-</html>"#;
+</html>"##;
 
 /// The embedded default Tera report template — the scaffold source for
 /// `oxo-flow report --init-template` (issue #83 WS5): users copy it to
@@ -3576,6 +3764,200 @@ mod tests {
         assert!(html.contains("Full Report"));
         assert!(html.contains("Everything passed."));
         assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn builtin_template_renders_every_content_type() {
+        // Issue #576: the built-in template must produce visible bodies for
+        // every ReportContent variant (main sections AND subsections), and
+        // Html content must render as markup (| safe), not escaped text.
+        let engine = TemplateEngine::new().unwrap();
+        let mut report = Report::new("All Types", "wf", "1.0.0");
+
+        report.add_section(ReportSection {
+            title: "Txt".to_string(),
+            id: "s-text".to_string(),
+            content: ReportContent::Text {
+                text: "plain & <b>bold</b>".to_string(),
+            },
+            subsections: vec![],
+        });
+        report.add_section(clinical_disclaimer_section());
+        report.add_section(ReportSection {
+            title: "Chart".to_string(),
+            id: "s-chart".to_string(),
+            content: ReportContent::Chart {
+                title: "Depth".to_string(),
+                labels: vec!["S1".to_string(), "S2".to_string()],
+                values: vec![3.0, 7.5],
+                unit: "x".to_string(),
+            },
+            subsections: vec![ReportSection {
+                title: "Zero Chart".to_string(),
+                id: "s-sub-zero".to_string(),
+                content: ReportContent::Chart {
+                    title: "Zero".to_string(),
+                    labels: vec!["A".to_string()],
+                    values: vec![0.0],
+                    unit: "x".to_string(),
+                },
+                subsections: vec![],
+            }],
+        });
+        report.add_section(ReportSection {
+            title: "QC".to_string(),
+            id: "s-qc".to_string(),
+            content: ReportContent::QcStatus {
+                metric: "dup".to_string(),
+                value: "12%".to_string(),
+                status: "warn".to_string(),
+                threshold: "< 10%".to_string(),
+            },
+            subsections: vec![ReportSection {
+                title: "Sub QC".to_string(),
+                id: "s-sub-qc".to_string(),
+                content: ReportContent::QcStatus {
+                    metric: "m".to_string(),
+                    value: "9".to_string(),
+                    status: "pass".to_string(),
+                    threshold: "t".to_string(),
+                },
+                subsections: vec![],
+            }],
+        });
+        report.add_section(ReportSection {
+            title: "Group".to_string(),
+            id: "s-group".to_string(),
+            content: ReportContent::QcIndicatorGroup {
+                items: vec![
+                    QcIndicator {
+                        label: "L1".to_string(),
+                        value: "1".to_string(),
+                        status: QcStatusLevel::Pass,
+                        description: "d1".to_string(),
+                    },
+                    QcIndicator {
+                        label: "L3".to_string(),
+                        value: "3".to_string(),
+                        status: QcStatusLevel::Fail,
+                        description: "d3".to_string(),
+                    },
+                ],
+            },
+            subsections: vec![],
+        });
+        report.add_section(ReportSection {
+            title: "Hier".to_string(),
+            id: "s-hier".to_string(),
+            content: ReportContent::Hierarchy {
+                name: "root".to_string(),
+                value: 10.0,
+                children: vec![HierarchyNode {
+                    name: "kid".to_string(),
+                    value: 6.0,
+                    children: vec![HierarchyNode {
+                        name: "gk".to_string(),
+                        value: 2.0,
+                        children: vec![],
+                    }],
+                }],
+            },
+            subsections: vec![],
+        });
+        report.add_section(ReportSection {
+            title: "Scatter".to_string(),
+            id: "s-scatter".to_string(),
+            content: ReportContent::ScatterPlot {
+                title: "TP".to_string(),
+                x_label: "X".to_string(),
+                y_label: "Y".to_string(),
+                points: vec![ScatterPoint {
+                    x: 1.0,
+                    y: 2.0,
+                    label: None,
+                    group: None,
+                    size: None,
+                }],
+            },
+            subsections: vec![],
+        });
+        report.add_section(ReportSection {
+            title: "Sub Types".to_string(),
+            id: "s-parent".to_string(),
+            content: ReportContent::Text {
+                text: "parent body".to_string(),
+            },
+            subsections: vec![
+                ReportSection {
+                    title: "Sub MD".to_string(),
+                    id: "s-sub-md".to_string(),
+                    content: ReportContent::Markdown {
+                        markdown: "# md".to_string(),
+                    },
+                    subsections: vec![],
+                },
+                ReportSection {
+                    title: "Sub KV".to_string(),
+                    id: "s-sub-kv".to_string(),
+                    content: ReportContent::KeyValue {
+                        pairs: vec![("k".to_string(), "v".to_string())],
+                    },
+                    subsections: vec![],
+                },
+                ReportSection {
+                    title: "Sub Json".to_string(),
+                    id: "s-sub-json".to_string(),
+                    content: ReportContent::Json {
+                        data: serde_json::json!({"x": 1}),
+                    },
+                    subsections: vec![],
+                },
+                ReportSection {
+                    title: "Sub Chart".to_string(),
+                    id: "s-sub-chart".to_string(),
+                    content: ReportContent::Chart {
+                        title: "SubChart".to_string(),
+                        labels: vec!["x".to_string()],
+                        values: vec![4.0],
+                        unit: "u".to_string(),
+                    },
+                    subsections: vec![],
+                },
+            ],
+        });
+
+        let html = engine.render_report(&report).unwrap();
+
+        // Html renders as markup, not escaped text (the #576 bug).
+        assert!(
+            html.contains("<div class=\"disclaimer\">"),
+            "disclaimer must render as raw HTML"
+        );
+        assert!(!html.contains("&lt;div class="));
+        // Text content stays autoescaped.
+        assert!(html.contains("plain &amp; &lt;b&gt;bold&lt;/b&gt;"));
+        // Chart bars scale to the max value.
+        assert!(html.contains("width: 40%"));
+        assert!(html.contains("width: 100%"));
+        // All-zero chart renders without div-by-zero.
+        assert!(html.contains("Zero"));
+        // QcStatus badges.
+        assert!(html.contains("⚠"));
+        assert!(html.contains("(threshold: &lt; 10%)"));
+        assert!(html.contains("<strong>m</strong> 9"));
+        // QcIndicatorGroup cards.
+        assert!(html.contains("background: #ecfdf5"));
+        assert!(html.contains("background: #fef2f2"));
+        // Hierarchy floats render via Display ("10.0", not "10").
+        assert!(html.contains("<td>root</td><td>10.0</td><td>1</td>"));
+        assert!(html.contains("<td>gk</td><td>2.0</td><td>0</td>"));
+        // ScatterPlot table.
+        assert!(html.contains("<td>1.0</td><td>2.0</td>"));
+        // Subsection-only types: Markdown/KeyValue/Json/Chart all render.
+        assert!(html.contains("Sub MD"));
+        assert!(html.contains("<dt>k</dt><dd>v</dd>"));
+        assert!(html.contains("SubChart"));
+        assert!(html.contains("<pre><code>"));
     }
 
     #[test]
