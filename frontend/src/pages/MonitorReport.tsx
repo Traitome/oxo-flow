@@ -67,11 +67,34 @@ export default function MonitorReport() {
   // editSeq), and a new selection aborts the previous one in flight.
   const selectSeq = useRef(0);
   const selectAbort = useRef<AbortController | null>(null);
+
+  // The five detail panes, fetched together: both the selection and the SSE
+  // terminal-event refetch (#577) go through this loader, so a run that
+  // finishes while watched updates every open pane instead of freezing the
+  // at-selection snapshot. A response landing under a newer selection is
+  // dropped (same monotonic-seq pattern as the editor's editSeq).
+  const fetchDetail = useCallback(async (id: string, signal: AbortSignal) => {
+    const seq = selectSeq.current;
+    const [status, report, dag, diag, prev] = await Promise.allSettled([
+      api.aiStatus(id, signal),
+      api.runReport(id, signal),
+      api.getDagStatus(id, signal),
+      api.getDiagnostics(id, signal),
+      api.getRunPreview(id, signal),
+    ]);
+    if (seq !== selectSeq.current) return; // superseded by a newer selection
+    setMonitorStatus(status.status === 'fulfilled' ? status.value : null);
+    setReportData(report.status === 'fulfilled' ? report.value : null);
+    setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
+    setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
+    setPreview(prev.status === 'fulfilled' ? prev.value : null);
+  }, []);
+
   const selectRun = useCallback(async (id: string) => {
-    const seq = ++selectSeq.current;
     selectAbort.current?.abort();
     const ctrl = new AbortController();
     selectAbort.current = ctrl;
+    selectSeq.current += 1;
     setSelId(id);
     setTab('monitor');
     setQaAnswer(null);
@@ -81,23 +104,11 @@ export default function MonitorReport() {
     setInstances(null);
     session.setActiveRunId(id);
     session.setChatContext('monitor');
-    const [status, report, dag, diag, prev] = await Promise.allSettled([
-      api.aiStatus(id, ctrl.signal),
-      api.runReport(id, ctrl.signal),
-      api.getDagStatus(id, ctrl.signal),
-      api.getDiagnostics(id, ctrl.signal),
-      api.getRunPreview(id, ctrl.signal),
-    ]);
-    if (seq !== selectSeq.current) return; // superseded by a newer selection
-    setMonitorStatus(status.status === 'fulfilled' ? status.value : null);
-    setReportData(report.status === 'fulfilled' ? report.value : null);
-    setDagStatus(dag.status === 'fulfilled' ? dag.value : null);
-    setDiagnostics(diag.status === 'fulfilled' ? diag.value : null);
-    setPreview(prev.status === 'fulfilled' ? prev.value : null);
+    await fetchDetail(id, ctrl.signal);
     // A row click means the user wants the detail — bring it into view
     // instead of leaving it below a long list (issue #79 P2).
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-  }, [session]);
+  }, [fetchDetail, session]);
 
   // Abort in-flight detail loads when the page unmounts.
   useEffect(() => () => selectAbort.current?.abort(), []);
@@ -184,8 +195,24 @@ export default function MonitorReport() {
           const owner = runsRef.current.find((r) => r.id === selId)?.user_id;
           const mine = !event.user || !owner || event.user === owner;
           if (mine && event.data?.run_id === selId) {
-            if (event.type === 'run_completed' || event.type === 'run_failed') {
+            // Terminal events (run_cancelled included — it was previously
+            // not handled at all) make the at-selection snapshot of every
+            // pane stale (#577): refresh the list, then refetch the detail
+            // panes in place — same tab, QA answer and scroll untouched.
+            // Clearing logs/instances re-arms their null-guarded loaders so
+            // an open tab refetches instead of showing the old content.
+            if (
+              event.type === 'run_completed' ||
+              event.type === 'run_failed' ||
+              event.type === 'run_cancelled'
+            ) {
               void refreshRuns();
+              setLogs(null);
+              setInstances(null);
+              selectAbort.current?.abort();
+              const ctrl = new AbortController();
+              selectAbort.current = ctrl;
+              void fetchDetail(selId, ctrl.signal);
             }
           }
         } catch { /* ignore */ }
@@ -208,7 +235,7 @@ export default function MonitorReport() {
       if (interval) clearInterval(interval);
       es?.close();
     };
-  }, [selId, tab, refreshRuns]);
+  }, [selId, tab, refreshRuns, fetchDetail]);
 
 
 
