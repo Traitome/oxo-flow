@@ -134,7 +134,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
 | `DATABASE_URL` | No | `sqlite://oxo-flow.db` | Database selection shared by `oxo-flow serve`, `oxo-flow-web`, and desktop: a `postgres://`/`postgresql://` URL enables PostgreSQL for library/AI/auth (requires the `postgres` compile feature; the published Docker image omits it), anything else stays SQLite. Run execution is SQLite-only regardless (#207) |
 | `OXO_FLOW_PORT` | No | `8080` | Web server port (also settable via `--port`). The standalone `oxo-flow-web` binary defaults to `3000` |
-| `OXO_FLOW_ADMIN_PASSWORD` | Team/HPC | — | Admin sign-in password. Without at least one of ADMIN/USER/VIEWER_PASSWORD in team/hpc mode the server refuses weak setups (see below) |
+| `OXO_FLOW_ADMIN_PASSWORD` | Team/HPC | — | Admin sign-in password. Without at least one of ADMIN/USER/VIEWER_PASSWORD in team/hpc mode the server still starts but every login is rejected until one is set (warned at startup) |
 | `OXO_FLOW_USER_PASSWORD` | Team/HPC | — | Standard-user sign-in password |
 | `OXO_FLOW_VIEWER_PASSWORD` | Team/HPC | — | Read-only sign-in password |
 | `OXO_FLOW_DEV_MODE` | No | unset | `"1"` accepts `password == username` logins for any user (local development only); the server refuses to start on a non-loopback bind with it set |
@@ -144,7 +144,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_AI_FETCH_ALLOW` | No | — | Comma-separated hostnames/IP literals exempted from the AI fetch/MCP SSRF guard (#204, #518); use only for trusted internal endpoints |
 | `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
 | `OXO_FLOW_RUNS_RATE_LIMIT` | No | `5` | Run-creation allowance per identity per minute on POST /api/runs (#213); `0` disables the dedicated limiter |
-| `OXO_FLOW_TRUSTED_PROXY` | No | unset | `"1"` makes the rate limiter and audit trail trust the client-supplied `X-Forwarded-For` / `X-Real-IP` headers. Leave unset unless the server sits behind a proxy that overwrites them — otherwise a client can spoof its identity and bypass the login limiter |
+| `OXO_FLOW_TRUSTED_PROXY` | No | unset | `"1"` makes the rate limiter trust the client-supplied `X-Forwarded-For` / `X-Real-IP` headers when keying clients (the audit trail records no IP at all). Leave unset unless the server sits behind a proxy that overwrites them — otherwise a client can spoof its identity and bypass the login limiter |
 
 ### AI Provider Examples
 
