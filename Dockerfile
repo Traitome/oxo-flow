@@ -51,14 +51,21 @@ RUN mkdir -p /app/data && \
 
 USER 1000:1000
 
-# Both entrypoints default their SQLite DB to ./oxo-flow.db in the CWD
-# (the standalone binary honors DATABASE_URL, but `serve` hardcodes the
-# relative path) — so run from /app/data: state lands on the mounted
-# volume and survives container restarts. Binary paths stay absolute.
+# Both entrypoints initialize SQLite at ./oxo-flow.db in the CWD
+# (DATABASE_URL overrides the location, but the published image builds
+# without the `postgres` feature — a postgres:// URL refuses to start;
+# see docker-compose.yml) — so run from /app/data: state lands on the
+# mounted volume and survives container restarts. Binary paths stay absolute.
 WORKDIR /app/data
 
+# Deployment knobs are environment-only, never CMD flags: the binary reads
+# OXO_FLOW_MODE/HOST/PORT through clap env bindings, and flags baked into
+# CMD would outrank them (CLI flag > env var precedence) — overriding
+# OXO_FLOW_PORT then changes neither the bind nor the healthcheck below.
 ENV OXO_FLOW_FRONTEND_DIR=/app/frontend/dist \
-    OXO_FLOW_MODE=team
+    OXO_FLOW_MODE=team \
+    OXO_FLOW_HOST=0.0.0.0 \
+    OXO_FLOW_PORT=3000
 
 EXPOSE 3000
 
@@ -69,7 +76,11 @@ LABEL org.opencontainers.image.title="oxo-flow" \
       org.opencontainers.image.vendor="Traitome" \
       org.opencontainers.image.authors="Shixiang Wang <w_shixiang@163.com>"
 
+# Shell form is required here: exec form cannot expand ${OXO_FLOW_PORT},
+# so the healthcheck port would stay frozen at 3000 even if the env moved
+# the bind elsewhere. The endpoint itself reports "ok" only when the
+# database answers — a degraded DB fails the check.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"' || exit 1
+    CMD curl -sf http://localhost:${OXO_FLOW_PORT:-3000}/api/health | grep -q '"status":"ok"' || exit 1
 
-CMD ["/app/oxo-flow-web", "--host", "0.0.0.0", "--port", "3000", "--mode", "team"]
+CMD ["/app/oxo-flow-web"]
