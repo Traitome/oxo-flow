@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   oxo-flow:
     build: .
@@ -20,11 +18,33 @@ services:
       - OXO_FLOW_FRONTEND_DIR=/app/frontend/dist
       # Authentication — CHANGE THESE in production:
       - OXO_FLOW_ADMIN_PASSWORD=changeme
-      # AI Provider Configuration (optional)
-      # - OXO_FLOW_AI_PROVIDER=openai
-      # - OXO_FLOW_AI_API_KEY=sk-your-key
-      # - OXO_FLOW_AI_API_URL=https://api.deepseek.com/v1/chat/completions
-      # - OXO_FLOW_AI_MODEL=deepseek-chat
+      # AI provider passthrough — the README/AGENTS one-liners
+      # (`OXO_FLOW_AI_PROVIDER=... docker compose up -d`) rely on these
+      # value-less entries to forward host env into the container.
+      - OXO_FLOW_AI_PROVIDER
+      - OXO_FLOW_AI_API_KEY
+      - OXO_FLOW_AI_API_URL
+      - OXO_FLOW_AI_MODEL
+      - OXO_FLOW_AI_MAX_TOKENS
+      - OXO_FLOW_AI_TIMEOUT_SECS
+      - OXO_FLOW_MASTER_KEY
+      - ANTHROPIC_AUTH_TOKEN
+      - ANTHROPIC_BASE_URL
+      - ANTHROPIC_MODEL
+      - OPENAI_API_KEY
+      - OPENAI_BASE_URL
+      - OPENAI_MODEL
+      - DEEPSEEK_API_KEY
+      # Other deployment knobs the server reads (all optional):
+      - OXO_FLOW_TRUSTED_PROXY
+      - OXO_FLOW_RUNS_RATE_LIMIT
+      - OXO_FLOW_ALLOWED_ORIGINS
+      - OXO_FLOW_OAUTH_REDIRECT_URI
+      - ORCID_CLIENT_ID
+      - ORCID_CLIENT_SECRET
+      - GITHUB_CLIENT_ID
+      - GITHUB_CLIENT_SECRET
+      - OXO_FLOW_LICENSE
       # PostgreSQL (optional — uncomment to use instead of SQLite)
       # - DATABASE_URL=postgres://user:pass@postgres:5432/oxoflow
     restart: unless-stopped
