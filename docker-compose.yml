@@ -45,7 +45,13 @@ services:
       - GITHUB_CLIENT_ID
       - GITHUB_CLIENT_SECRET
       - OXO_FLOW_LICENSE
-      # PostgreSQL (optional — uncomment to use instead of SQLite)
+      # PostgreSQL (optional): the published image builds WITHOUT the
+      # `postgres` compile feature, so uncommenting this line crash-loops
+      # the container at startup (it refuses a postgres:// URL and
+      # restart: unless-stopped retries forever). Library/AI/auth work on
+      # PostgreSQL, but run execution stays SQLite-only (issue #207) —
+      # switching here also requires a SQLite run DB. Custom builds opt in
+      # with: cargo build --release -p oxo-flow-web --features postgres
       # - DATABASE_URL=postgres://user:pass@postgres:5432/oxoflow
     restart: unless-stopped
     deploy:
