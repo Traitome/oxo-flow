@@ -5,7 +5,6 @@
 //! chat agent — runs THIS agent through the shared
 //! [`Orchestrator`](super::orchestrator::Orchestrator). The persona owns
 //! three things that previously existed as divergent copies:
-//! persona owns three things that previously existed as divergent copies:
 //!
 //! 1. the engine-accurate system prompt (the web paths' short prompts
 //!    taught a Snakemake-style dialect that the engine rejects with E017);
