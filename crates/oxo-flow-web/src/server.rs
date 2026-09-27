@@ -383,26 +383,10 @@ pub fn build_router(mode: &str) -> Router {
         req: axum::extract::Request,
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, (StatusCode, axum::Json<ApiError>)> {
-        if crate::infra::db::sqlite::try_pool().is_ok() {
-            return Ok(next.run(req).await);
+        match runs_gate_verdict(crate::infra::db::sqlite::try_pool().is_ok()) {
+            Ok(()) => Ok(next.run(req).await),
+            Err(response) => Err(response),
         }
-        Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(ApiError {
-                code: "RUNS_REQUIRE_SQLITE".into(),
-                message: "Workflow run execution is not available on this deployment.".into(),
-                detail: Some(
-                    "Run lifecycle bookkeeping uses the embedded SQLite store; \
-                 PostgreSQL servers serve library/AI/auth features only."
-                        .into(),
-                ),
-                suggestion: Some(
-                    "Execute via `oxo-flow run` from the CLI, or use a personal-mode \
-                 server backed by SQLite."
-                        .into(),
-                ),
-            }),
-        ))
     }
 
     // ---- File service routes (issue #82 P0-1/P0-2) ----
@@ -1009,6 +993,47 @@ async fn require_auth(
         })),
     )
         .into_response()
+}
+
+/// Pure decision for the #207 runs gate — extracted so the 503 contract
+/// (code + status) is unit-testable without a database (issue #554): the
+/// middleware above is the only caller.
+fn runs_gate_verdict(sqlite_ready: bool) -> Result<(), (StatusCode, axum::Json<ApiError>)> {
+    if sqlite_ready {
+        return Ok(());
+    }
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        axum::Json(ApiError {
+            code: "RUNS_REQUIRE_SQLITE".into(),
+            message: "Workflow run execution is not available on this deployment.".into(),
+            detail: Some(
+                "Run lifecycle bookkeeping uses the embedded SQLite store; \
+                 PostgreSQL servers serve library/AI/auth features only."
+                    .into(),
+            ),
+            suggestion: Some(
+                "Execute via `oxo-flow run` from the CLI, or use a personal-mode \
+                 server backed by SQLite."
+                    .into(),
+            ),
+        }),
+    ))
+}
+
+#[cfg(test)]
+mod runs_gate_tests {
+    use super::*;
+
+    #[test]
+    fn runs_gate_503_contract() {
+        // #554: the PG-mode 503 contract pinned without a database —
+        // status SERVICE_UNAVAILABLE + code RUNS_REQUIRE_SQLITE.
+        let err = runs_gate_verdict(false).unwrap_err();
+        assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.1.code, "RUNS_REQUIRE_SQLITE");
+        assert!(runs_gate_verdict(true).is_ok());
+    }
 }
 
 #[cfg(test)]
