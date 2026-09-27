@@ -247,7 +247,7 @@ oxo-flow run workflow.oxoflow --ai-recover --ai-max-retries 3
 - **DAG Visualization**: React Flow (`@xyflow/react`)
 - **API Integration**: Fetch-based client with structured error handling
 - **Real-time**: SSE via EventSource for run lifecycle events
-- **Styling**: CSS custom properties, light theme, responsive layout
+- **Styling**: CSS custom properties, dark theme default (light is a toggle), responsive layout
 
 ### Pages
 | Route | Page | Description |
