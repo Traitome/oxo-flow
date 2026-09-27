@@ -353,6 +353,20 @@ select.search-input{padding-right:1.75rem}
   50% { box-shadow: 0 0 0 5px rgba(8, 145, 178, 0.08); }
 }
 
+/* ── React Flow controls theming (issue #578) ──
+   xyflow's stock controls are hard-coded white; in the dark theme they clash
+   with the canvas. index.css is imported after @xyflow/react/dist/style.css
+   (see main.tsx), so these rules win the cascade. Dark only — the light theme
+   already matches xyflow's stock look. */
+:root[data-theme="dark"] .react-flow__controls { box-shadow: var(--shadow-card); border-radius: var(--radius-sm); overflow: hidden; }
+:root[data-theme="dark"] .react-flow__controls-button {
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+:root[data-theme="dark"] .react-flow__controls-button:hover { background: var(--color-bg-secondary); }
+:root[data-theme="dark"] .react-flow__controls-button:disabled { background: var(--color-bg-secondary); color: var(--color-text-tertiary); }
+
 .rf-rule-name { font-weight: 600; font-size: 0.85rem; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rf-rule-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-family: var(--font-sans); font-size: 0.68rem; color: var(--color-text-tertiary); }
 .rf-env-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
@@ -511,7 +525,10 @@ select.search-input{padding-right:1.75rem}
   outline: none;
 }
 .inspector-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--color-text); }
-.inspector-check input { accent-color: var(--color-primary); }
+/* Issue #578: .modal-dialog input's width:100%/margin rules stretch the
+   checkbox and detach it from its label — restore native sizing here
+   (this block loads after the modal rule, so it wins the cascade). */
+.inspector-check input { accent-color: var(--color-primary); width: auto; margin-bottom: 0; padding: 0; border: none; }
 
 /* ── Chat ── */
 .chat-container { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border); overflow: hidden; }

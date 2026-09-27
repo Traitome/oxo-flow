@@ -19,6 +19,23 @@ function StatCard({ value, label, color }: { value: string; label: string; color
   );
 }
 
+// Issue #578: forecast cards hard-coded per-card accent colors, so "normal"
+// disk usage rendered red while "normal" CPU rendered teal. Derive the color
+// from the value the backend reports instead (monitor_agent.rs: cpu_trend
+// "high"/"normal", memory_trend "rising (X%)"/"stable", disk_trend
+// "critical (X%)"/"normal").
+function trendColor(trend: string): string {
+  if (trend.includes('critical')) return 'var(--color-error)';
+  if (trend.includes('rising') || trend.includes('high')) return 'var(--color-warning)';
+  return 'var(--color-text)';
+}
+
+// Issue #578: the CLI narrates ANSI-colored "Running:" lines into
+// execution.log; strip the escape sequences for display only — the download
+// button keeps the raw text. The ESC byte is built from its char code so the
+// regex stays clear of the no-control-regex lint.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
 export default function MonitorReport() {
   const session = usePipelineSession();
   const { t, lang } = useI18n();
@@ -363,8 +380,12 @@ export default function MonitorReport() {
         <pre className="log-view">
           {filteredSections.map((sec, i) => {
             const failed = /✗|failed|Error:/.test(sec);
+            // #578: the CLI narrates ANSI-colored "Running:" lines into
+            // execution.log; strip the escape sequences for display only —
+            // the download button keeps the raw text.
+            const text = sec.trimEnd().replace(ANSI_PATTERN, '');
             return (
-              <div key={i} className={failed ? 'log-line-failed' : undefined}>{sec.trimEnd()}</div>
+              <div key={i} className={failed ? 'log-line-failed' : undefined}>{text}</div>
             );
           })}
         </pre>
@@ -549,9 +570,9 @@ export default function MonitorReport() {
             <BarChart3 size={14} /> {t('monitor.resourceForecast')}
           </h4>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem' }}>
-            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label={t('monitor.cpuTrend')} color="var(--color-info)" />
-            <StatCard value={monitorStatus.resource_forecast.memory_trend} label={t('monitor.memoryTrend')} color="var(--color-warning)" />
-            <StatCard value={monitorStatus.resource_forecast.disk_trend} label={t('monitor.diskTrend')} color="var(--color-error)" />
+            <StatCard value={monitorStatus.resource_forecast.cpu_trend} label={t('monitor.cpuTrend')} color={trendColor(monitorStatus.resource_forecast.cpu_trend)} />
+            <StatCard value={monitorStatus.resource_forecast.memory_trend} label={t('monitor.memoryTrend')} color={trendColor(monitorStatus.resource_forecast.memory_trend)} />
+            <StatCard value={monitorStatus.resource_forecast.disk_trend} label={t('monitor.diskTrend')} color={trendColor(monitorStatus.resource_forecast.disk_trend)} />
             <StatCard value={`${(monitorStatus.resource_forecast.oom_risk * 100).toFixed(0)}%`} label={t('monitor.oomRisk')} color={monitorStatus.resource_forecast.oom_risk > 0.5  ? 'var(--color-error)' : 'var(--color-success)'} />
             <StatCard value={`${(monitorStatus.resource_forecast.timeout_risk * 100).toFixed(0)}%`} label={t('monitor.timeoutRisk')} color={monitorStatus.resource_forecast.timeout_risk > 0.5 ? 'var(--color-warning)' : 'var(--color-success)'} />
           </div>
@@ -822,29 +843,33 @@ export default function MonitorReport() {
           <h2 className="section-title">{t('monitor.runHistory')}</h2>
           <button className="btn-sm" onClick={() => void refreshRuns()}>{t('monitor.refresh')}</button>
         </div>
-        <table className="run-table">
-          <thead><tr><th>{t('monitor.id')}</th><th>{t('monitor.status')}</th><th>{t('monitor.phase')}</th><th>{t('monitor.created')}</th><th>{t('monitor.monitor')}</th></tr></thead>
-          <tbody>
-            {runs.slice(0, visibleCount).map((r) => (
-              <tr
-                key={r.id}
-                onClick={() => navigate(`/runs/${r.id}`)}
-                style={selId === r.id ? { background: 'var(--color-primary-light)', cursor: 'pointer' } : { cursor: 'pointer' }}
-              >
-                <td className="mono">{r.id.slice(0, 8)}</td>
-                <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
-                <td>{r.phase || '-'}</td>
-                <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString(locale) : '-'}</td>
-                <td>
-                  <button className="btn-sm" onClick={() => navigate(`/runs/${r.id}`)}>
-                    {r.status === 'running' ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : null}
-                    {r.status === 'completed' ? t('monitor.report') : r.status === 'failed' ? t('monitor.diagnose') : t('monitor.monitor')}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {runs.length === 0 ? (
+          <div className="empty-state">{t('monitor.noRuns')}</div>
+        ) : (
+          <table className="run-table">
+            <thead><tr><th>{t('monitor.id')}</th><th>{t('monitor.status')}</th><th>{t('monitor.phase')}</th><th>{t('monitor.created')}</th><th>{t('monitor.monitor')}</th></tr></thead>
+            <tbody>
+              {runs.slice(0, visibleCount).map((r) => (
+                <tr
+                  key={r.id}
+                  onClick={() => navigate(`/runs/${r.id}`)}
+                  style={selId === r.id ? { background: 'var(--color-primary-light)', cursor: 'pointer' } : { cursor: 'pointer' }}
+                >
+                  <td className="mono">{r.id.slice(0, 8)}</td>
+                  <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
+                  <td>{r.phase || '-'}</td>
+                  <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString(locale) : '-'}</td>
+                  <td>
+                    <button className="btn-sm" onClick={() => navigate(`/runs/${r.id}`)}>
+                      {r.status === 'running' ? <Loader2 size={12} className="spin" style={{ marginRight: 4 }} /> : null}
+                      {r.status === 'completed' ? t('monitor.report') : r.status === 'failed' ? t('monitor.diagnose') : t('monitor.monitor')}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
         {(runs.length > visibleCount || nextCursor) && (
           <div className="row" style={{ marginTop: '0.5rem', gap: '0.5rem' }}>
             {runs.length > visibleCount && (
@@ -906,7 +931,7 @@ export default function MonitorReport() {
         <div className="dash-card" ref={detailRef}>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <div>
-              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 12)}...</h3>
+              <h3 style={{ fontSize: '1rem', fontFamily: 'var(--font-mono)' }}>Run {selId.slice(0, 8)}...</h3>
               <div className="muted">
                 Status: <span className={`status-badge ${selectedRun?.status || 'unknown'}`}>{selectedRun?.status || 'unknown'}</span>
                 · Phase: {selectedRun?.phase || '-'}
