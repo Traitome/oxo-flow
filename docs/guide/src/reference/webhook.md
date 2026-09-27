@@ -102,6 +102,15 @@ X-OxoFlow-Signature: hmac-sha256=abcdef1234567890abcdef1234567890abcdef123456789
 
 Your receiving endpoint can use this signature to verify that the webhook request genuinely originated from your oxo-flow execution and that the payload was not tampered with in transit.
 
+**Redirects are not followed.** Webhook URLs typically embed a credential
+(a Slack/Discord incoming-webhook token sits in the path), and the request
+headers are bound to that one endpoint — the `X-OxoFlow-Signature` HMAC and
+any custom `headers` you configured. oxo-flow therefore never replays a
+request to a redirect target: a 3xx response is reported as a
+non-success status, and request errors never echo the configured URL
+(the credential) in their messages. If your endpoint moves, configure the
+final URL directly.
+
 **Legacy scheme.** The original implementation signed with a non-standard
 keyed SHA-256 (`sha256=hex(sha256(secret‖body))`), which is *not*
 HMAC-SHA256 despite the header name. It remains available via
