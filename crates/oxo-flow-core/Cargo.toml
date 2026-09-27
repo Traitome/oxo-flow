@@ -27,7 +27,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-uuid = { workspace = true }
 petgraph = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }

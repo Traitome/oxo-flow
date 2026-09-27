@@ -65,7 +65,9 @@ regex = "1"
 tempfile = "3"
 num_cpus = "1"
 sysinfo = "0.39"
+rand = "0.10.1"
 nix = { version = "0.31", features = ["signal", "process"] }
+tokio-util = { version = "0.7", features = ["io"] }
 fs2 = "0.4"
 
 # Crypto

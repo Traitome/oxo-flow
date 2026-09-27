@@ -108,6 +108,38 @@ Additionally, workflow config values declared with `sensitive = true` in a `[con
 
 ---
 
+## Dependency Auditing
+
+CI runs `cargo audit` (via `make ci`) against `Cargo.lock` files. When interpreting
+audit results, note how the tools differ:
+
+- **`cargo audit` is graph-aware.** It resolves the lockfile against the actual
+  dependency graph, so an entry that no crate can reach is not reported.
+- **`osv-scanner` (and similar lockfile scanners) are not.** They match every
+  entry in the lockfile text. Some entries can therefore be false positives:
+  optional dependencies recorded because *some* feature combination of a
+  dependency activates them, even though the workspace's own feature set never
+  builds them. Verify with `cargo tree -i <crate>@<version> --all-features`
+  (add `--target all` for target-gated deps) before treating a lockfile hit as
+  a real vulnerability. If no path exists, the entry is compile-inert — it
+  cannot ship in a binary — and there is nothing to upgrade.
+
+Two long-lived accepted risks, re-check after any major GUI-stack upgrade:
+
+- **Desktop `glib 0.18` / `proc-macro-error 1.0`** (RUSTSEC-2024-0429 and the
+  unmaintained advisory on `proc-macro-error`): `oxo-flow-desktop` is excluded
+  from the workspace and its code never touches `glib` directly — the crate
+  arrives through the Linux-only `tao 0.37 → gtk 0.18 → glib 0.18` chain of
+  the windowing stack. Fixing requires a major `wry`/`tao` upgrade (glib
+  0.20+), which is a deliberate, separately-scheduled migration. The affected
+  symbols are unreachable from desktop's own code.
+- **Desktop `toml 0.8.2`**: pinned exactly (via `proc-macro-crate 2.0`, required
+  by `glib-macros 0.18`) to `toml_edit =0.20.2` / `toml_datetime =0.6.3`, which
+  forces the older `toml` line into the desktop lockfile. Same resolution path
+  as above; unfixable without the GUI-stack upgrade.
+
+---
+
 ## Layer 4 — Rate Limiting
 
 The web server applies per-IP rate limiting across all API endpoints:
