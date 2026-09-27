@@ -862,6 +862,29 @@ fn spawn_daily_quota_reset() {
     });
 }
 
+/// Process-global shutdown broadcast: fired once when [`shutdown_signal`]
+/// resolves (SIGTERM/Ctrl+C), before the axum graceful drain begins.
+///
+/// Endpoints holding a connection open indefinitely — the `/api/events`
+/// SSE stream — must end on shutdown, otherwise `.with_graceful_shutdown`
+/// waits for them forever and the process only dies when the supervisor
+/// SIGKILLs it after its grace period (issue #572).
+static SHUTDOWN_TX: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+
+/// Subscribe to the process shutdown signal.
+pub fn shutdown_rx() -> tokio::sync::watch::Receiver<bool> {
+    SHUTDOWN_TX
+        .get_or_init(|| tokio::sync::watch::channel(false).0)
+        .subscribe()
+}
+
+fn fire_shutdown() {
+    // `send` only fails with no receivers — nothing to notify then.
+    let _ = SHUTDOWN_TX
+        .get_or_init(|| tokio::sync::watch::channel(false).0)
+        .send(true);
+}
+
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
 pub async fn shutdown_signal() {
     let ctrl_c = async {
@@ -889,6 +912,9 @@ pub async fn shutdown_signal() {
             tracing::info!("Received SIGTERM, shutting down gracefully...");
         },
     }
+    // Release long-lived connections before the drain starts, so
+    // `.with_graceful_shutdown` can actually finish (#572).
+    fire_shutdown();
 }
 
 // ---------------------------------------------------------------------------

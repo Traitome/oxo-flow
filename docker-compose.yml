@@ -54,6 +54,9 @@ services:
       # with: cargo build --release -p oxo-flow-web --features postgres
       # - DATABASE_URL=postgres://user:pass@postgres:5432/oxoflow
     restart: unless-stopped
+    # The graceful drain ends open SSE streams (issue #572); this bounds
+    # how long Docker waits for in-flight HTTP requests before SIGKILL.
+    stop_grace_period: 30s
     deploy:
       resources:
         limits:

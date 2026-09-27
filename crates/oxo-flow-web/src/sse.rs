@@ -222,37 +222,55 @@ pub async fn sse_events(ApiQuery(params): ApiQuery<HashMap<String, String>>) -> 
     };
 
     let mut rx = event_tx().subscribe();
+    let mut shutdown_rx = crate::shutdown_rx();
 
     // Stream that yields events from the broadcast channel, filtered by
     // ownership: userless events reach everyone; user-scoped events reach
     // their owner and admins only. The owner id travels beside the payload,
     // so the filter is a string compare — no per-subscriber JSON re-parse.
+    //
+    // The stream also ends when the process shuts down: without this the
+    // infinite stream pins the graceful drain open and the supervisor's
+    // SIGKILL is what actually stops the server (issue #572).
     let event_stream = async_stream::stream! {
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if let Some(me) = &me {
-                        let user_ok = event.user.is_none()
-                            || event.user.as_deref() == Some(me.id.as_str())
-                            || me.is_admin();
-                        if !user_ok {
-                            continue;
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => {
+                    // Shutdown fired (or the sender was dropped) — end the
+                    // response so the drain can complete.
+                    if *shutdown_rx.borrow() || shutdown_rx.has_changed().is_err() {
+                        break;
+                    }
+                    // Spurious wakeup with the flag still false: keep going.
+                }
+                recv = rx.recv() => {
+                    match recv {
+                        Ok(event) => {
+                            if let Some(me) = &me {
+                                let user_ok = event.user.is_none()
+                                    || event.user.as_deref() == Some(me.id.as_str())
+                                    || me.is_admin();
+                                if !user_ok {
+                                    continue;
+                                }
+                            }
+                            yield Ok::<_, Infallible>(Event::default().data(event.payload));
+                        }
+                        Err(broadcast::error::RecvError::Lagged(missed)) => {
+                            // The client fell behind the 100-slot ring buffer and
+                            // silently lost events. Emit a synthetic marker so the
+                            // frontend can refetch/invalidate instead of missing
+                            // run state transitions.
+                            yield Ok::<_, Infallible>(Event::default().data(format!(
+                                r#"{{"type":"lagged","time":"{}","data":{{"missed":{missed}}}}}"#,
+                                Utc::now().to_rfc3339()
+                            )));
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
                         }
                     }
-                    yield Ok::<_, Infallible>(Event::default().data(event.payload));
-                }
-                Err(broadcast::error::RecvError::Lagged(missed)) => {
-                    // The client fell behind the 100-slot ring buffer and
-                    // silently lost events. Emit a synthetic marker so the
-                    // frontend can refetch/invalidate instead of missing
-                    // run state transitions.
-                    yield Ok::<_, Infallible>(Event::default().data(format!(
-                        r#"{{"type":"lagged","time":"{}","data":{{"missed":{missed}}}}}"#,
-                        Utc::now().to_rfc3339()
-                    )));
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    break;
                 }
             }
         }
