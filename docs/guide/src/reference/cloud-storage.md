@@ -43,6 +43,24 @@ resolved **from environment variables only** — the SDK's broader chain
 (shared credentials files, web identity tokens, instance metadata) is not
 consulted.
 
+### Large objects and timeouts
+
+- **Multipart upload above 5 GiB** — a single `PutObject` is capped at
+  5 GiB by S3, so `upload` automatically switches to a multipart upload
+  for larger files: 64 MiB parts by default, with the part size doubling
+  (up to the 5 GiB per-part maximum) when needed to stay within S3's
+  10,000-part ceiling (~48.8 TiB, the hard object limit). Parts stream
+  from disk in ranged reads — the file is never buffered whole — and a
+  failed transfer is aborted server-side so orphaned parts are not
+  billed.
+- **Timeouts** — the client uses a 30 s connect timeout and a 30-minute
+  per-attempt timeout (matching the GCS backend), so a slow multi-GiB
+  transfer is not killed mid-flight by the SDK default.
+- **Errors carry context** — failures are rendered through
+  `DisplayErrorContext` (service message + request id, not the bare
+  "service error" line), and 404s are detected on the typed error
+  (`HeadObjectError::is_not_found`), never by string-matching.
+
 When using MinIO or LocalStack for testing, set `AWS_ENDPOINT_URL` to
 point to your local S3-compatible service:
 

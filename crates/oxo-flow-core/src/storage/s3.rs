@@ -8,6 +8,14 @@
 //! LocalStack, also set `AWS_ENDPOINT_URL` and `OXO_S3_FORCE_PATH_STYLE=1`
 //! (path-style addressing; the SDK has no env knob of its own for it).
 //!
+//! Timeouts are bounded like the GCS backend: connect 30 s, per-attempt
+//! 30 min — generous for multi-GB object bodies streamed without a buffer,
+//! but a stalled transfer can no longer hang a rule forever. 404s are
+//! detected through the SDK's typed errors, never by string-matching
+//! `Display` (which truncates to "service error" and made the old check
+//! dead code, issue #575). Uploads above the 5 GiB single-PUT limit
+//! switch to a multipart transfer automatically.
+//!
 //! # Testing
 //!
 //! The constructor accepts an optional pre-configured client, which makes
@@ -15,12 +23,59 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::error::{OxoFlowError, Result};
 use crate::storage::{RemoteStat, StorageBackend, StoragePath};
 
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::config::timeout::TimeoutConfig;
+use aws_sdk_s3::error::DisplayErrorContext;
+use aws_sdk_s3::primitives::{ByteStream, Length};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+
+// ---------------------------------------------------------------------------
+// Transfer sizing
+// ---------------------------------------------------------------------------
+
+/// Single-PUT limit on real S3; objects at or above this size must use
+/// multipart upload.
+const MULTIPART_THRESHOLD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// Part size for multipart uploads: 64 MiB — 160 parts per GiB, well
+/// under the 10,000-part ceiling for any object a pipeline produces.
+const MULTIPART_PART_SIZE: u64 = 64 * 1024 * 1024;
+/// Connect timeout: dead peers must surface quickly (mirrors GCS).
+const CONNECT_TIMEOUT_SECS: u64 = 30;
+/// Per-attempt cap for whole operations (connect + send + receive).
+/// Object bodies stream, so the ceiling must cover a multi-GB transfer
+/// over a slow link, not a metadata call (mirrors GCS's total timeout).
+const OPERATION_ATTEMPT_TIMEOUT_SECS: u64 = 30 * 60;
+
+/// Plan the multipart layout for `len` bytes.
+///
+/// Returns `(part_size, part_count)` or `None` when the object fits a
+/// single PUT (below [`MULTIPART_THRESHOLD_BYTES`]). Part size grows on the
+/// 64 MiB base up to the 5 GiB per-part maximum so any object up to the
+/// ~48.8 TiB multipart ceiling (5 GiB × 10,000 parts) stays under the
+/// 10,000-part limit; larger objects have no valid layout and are rejected
+/// by the caller.
+fn multipart_plan(len: u64) -> Option<(u64, usize)> {
+    if len < MULTIPART_THRESHOLD_BYTES {
+        return None;
+    }
+    // 10,000 parts max: scale the part size up, capped at the 5 GiB
+    // per-part limit S3 itself enforces.
+    let mut part_size = MULTIPART_PART_SIZE.max(1);
+    while len.div_ceil(part_size) > 10_000 {
+        if part_size >= MULTIPART_THRESHOLD_BYTES {
+            // 5 GiB × 10,000 parts ≈ 48.8 TiB — no valid layout exists.
+            return None;
+        }
+        part_size = (part_size.saturating_mul(2)).min(MULTIPART_THRESHOLD_BYTES);
+    }
+    let count = len.div_ceil(part_size) as usize;
+    Some((part_size, count))
+}
 
 // ---------------------------------------------------------------------------
 // Lazily-initialised default client
@@ -102,6 +157,16 @@ impl S3Storage {
         {
             builder = builder.force_path_style(true);
         }
+        // The SDK default ships no operation timeout — a stalled transfer
+        // (dead NAT, throttled peer) would block the executor's await
+        // forever (issue #575). Bound it like the GCS backend: quick
+        // connect failure, generous per-attempt ceiling for streamed
+        // multi-GB bodies.
+        let timeouts = TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .operation_attempt_timeout(Duration::from_secs(OPERATION_ATTEMPT_TIMEOUT_SECS))
+            .build();
+        builder = builder.timeout_config(timeouts);
         S3Client::from_conf(builder.build())
     }
 
@@ -118,17 +183,18 @@ impl S3Storage {
     pub async fn ensure_bucket(&self, bucket: &str) -> Result<()> {
         match self.client.create_bucket().bucket(bucket).send().await {
             Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("BucketAlreadyOwnedByYou")
-                    || msg.contains("BucketAlreadyExists")
-                    || msg.contains("BucketAlreadyOwned")
-                {
-                    Ok(())
-                } else {
-                    Err(s3_error(format!("S3 create_bucket error: {e:?}")))
-                }
+            // Typed predicates — never string-match Display (issue #575).
+            Err(e)
+                if e.as_service_error().is_some_and(|se| {
+                    se.is_bucket_already_exists() || se.is_bucket_already_owned_by_you()
+                }) =>
+            {
+                Ok(())
             }
+            Err(e) => Err(s3_error(format!(
+                "S3 create_bucket error: {}",
+                s3_display(&e)
+            ))),
         }
     }
 
@@ -145,7 +211,7 @@ impl S3Storage {
             .send()
             .await
             .map(|_| ())
-            .map_err(|e| s3_error(format!("S3 delete_object error: {e:?}")))
+            .map_err(|e| s3_error(format!("S3 delete_object error: {}", s3_display(&e))))
     }
 }
 
@@ -172,6 +238,23 @@ fn s3_error(msg: impl Into<String>) -> OxoFlowError {
     OxoFlowError::Config {
         message: msg.into(),
     }
+}
+
+/// Map an SdkError to a context-rich string via [`DisplayErrorContext`]
+/// (Display alone truncates to "service error", hiding the service
+/// message and request id — issue #575).
+fn s3_display<E: std::error::Error + 'static>(e: &aws_sdk_s3::error::SdkError<E>) -> String {
+    DisplayErrorContext(e).to_string()
+}
+
+/// Typed 404 detection for HEAD: HEAD responses may carry no body, so the
+/// check must run on the typed error, never on a Display string-match
+/// (the old `contains("NotFound")` was dead code — Display truncates to
+/// "service error", issue #575).
+fn is_not_found(
+    e: &aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::head_object::HeadObjectError>,
+) -> bool {
+    e.as_service_error().is_some_and(|se| se.is_not_found())
 }
 
 // ---------------------------------------------------------------------------
@@ -205,16 +288,15 @@ impl StorageBackend for S3Storage {
                 size: resp.content_length().unwrap_or(0) as u64,
                 etag: resp.e_tag().map(str::to_string),
             })),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("NotFound") || msg.contains("404") {
-                    Ok(None)
-                } else {
-                    // Debug includes the full error chain (service message,
-                    // request id) that Display truncates.
-                    Err(s3_error(format!("S3 head_object error: {e:?}")))
-                }
-            }
+            // Typed 404 detection: HEAD responses may carry no body, so
+            // the check must run on the typed error, not on a Display
+            // string-match (the old contains("NotFound") was dead code —
+            // Display truncates to "service error", issue #575).
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(s3_error(format!(
+                "S3 head_object error: {}",
+                s3_display(&e)
+            ))),
         }
     }
 
@@ -230,7 +312,7 @@ impl StorageBackend for S3Storage {
             .key(&path.key)
             .send()
             .await
-            .map_err(|e| s3_error(format!("S3 get_object error: {e}")))?;
+            .map_err(|e| s3_error(format!("S3 get_object error: {}", s3_display(&e))))?;
 
         let bytes = resp
             .body
@@ -256,7 +338,7 @@ impl StorageBackend for S3Storage {
             .body(body)
             .send()
             .await
-            .map_err(|e| s3_error(format!("S3 put_object error: {e}")))?;
+            .map_err(|e| s3_error(format!("S3 put_object error: {}", s3_display(&e))))?;
 
         Ok(())
     }
@@ -284,7 +366,9 @@ impl StorageBackend for S3Storage {
                     .key(key)
                     .send()
                     .await
-                    .map_err(|e| s3_error(format!("S3 stage get_object error: {e:?}")))?;
+                    .map_err(|e| {
+                        s3_error(format!("S3 stage get_object error: {}", s3_display(&e)))
+                    })?;
                 let mut body = resp.body.into_async_read();
                 tokio::io::copy(&mut body, &mut file)
                     .await
@@ -297,8 +381,30 @@ impl StorageBackend for S3Storage {
     }
 
     /// Upload a local file to a remote S3 location.
+    ///
+    /// Files below the 5 GiB single-PUT limit go through `put_object`;
+    /// anything larger switches to a multipart upload — real S3 rejects a
+    /// single PUT above the limit outright, and a 20 GB CRAM output must
+    /// not fail the rule (issue #575). Any multipart failure aborts the
+    /// server-side transfer so orphaned parts are not billed.
     async fn upload(&self, local: &Path, remote: &StoragePath) -> Result<()> {
         let bucket = require_bucket(remote)?;
+
+        let len = tokio::fs::metadata(local)
+            .await
+            .map_err(|e| {
+                s3_error(format!(
+                    "failed to stat local file '{}': {e}",
+                    local.display()
+                ))
+            })?
+            .len();
+
+        if let Some((part_size, part_count)) = multipart_plan(len) {
+            return self
+                .upload_multipart(local, bucket, &remote.key, len, part_size, part_count)
+                .await;
+        }
 
         let body = ByteStream::from_path(local).await.map_err(|e| {
             s3_error(format!(
@@ -314,7 +420,7 @@ impl StorageBackend for S3Storage {
             .body(body)
             .send()
             .await
-            .map_err(|e| s3_error(format!("S3 put_object upload error: {e}")))?;
+            .map_err(|e| s3_error(format!("S3 put_object upload error: {}", s3_display(&e))))?;
 
         Ok(())
     }
@@ -324,7 +430,124 @@ impl StorageBackend for S3Storage {
     }
 }
 
-// ---------------------------------------------------------------------------
+impl S3Storage {
+    /// Multipart upload of `local` in `part_count` chunks of `part_size`
+    /// bytes (layout from [`multipart_plan`]). Ranged parts stream from
+    /// disk (`ByteStream::read_from` with offset + length) — the file is
+    /// never buffered whole. On any failure the server-side transfer is
+    /// aborted so orphaned parts are not billed; abort errors are logged,
+    /// never masked over the original failure.
+    async fn upload_multipart(
+        &self,
+        local: &Path,
+        bucket: &str,
+        key: &str,
+        len: u64,
+        part_size: u64,
+        part_count: usize,
+    ) -> Result<()> {
+        let upload_id = self
+            .client
+            .create_multipart_upload()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                s3_error(format!(
+                    "S3 create_multipart_upload error for '{}': {}",
+                    local.display(),
+                    s3_display(&e)
+                ))
+            })?
+            .upload_id()
+            .ok_or_else(|| s3_error("S3 create_multipart_upload returned no upload id"))?
+            .to_string();
+
+        let mut parts: Vec<CompletedPart> = Vec::with_capacity(part_count);
+        let result = async {
+            for part_number in 1..=part_count {
+                let offset = (part_number as u64 - 1) * part_size;
+                // Length::Exact fails on a truncated file — exactly what we
+                // want if the file shrank since the stat.
+                let body = ByteStream::read_from()
+                    .path(local)
+                    .offset(offset)
+                    .length(Length::Exact(part_size.min(len - offset)))
+                    .build()
+                    .await
+                    .map_err(|e| {
+                        s3_error(format!(
+                            "failed to read part {part_number} of '{}': {e}",
+                            local.display()
+                        ))
+                    })?;
+                let out = self
+                    .client
+                    .upload_part()
+                    .bucket(bucket)
+                    .key(key)
+                    .upload_id(&upload_id)
+                    .part_number(part_number as i32)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        s3_error(format!(
+                            "S3 upload_part {part_number}/{part_count} error: {}",
+                            s3_display(&e)
+                        ))
+                    })?;
+                parts.push(
+                    CompletedPart::builder()
+                        .set_e_tag(out.e_tag().map(str::to_string))
+                        .part_number(part_number as i32)
+                        .build(),
+                );
+            }
+            self.client
+                .complete_multipart_upload()
+                .bucket(bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .multipart_upload(
+                    CompletedMultipartUpload::builder()
+                        .set_parts(Some(parts))
+                        .build(),
+                )
+                .send()
+                .await
+                .map_err(|e| {
+                    s3_error(format!(
+                        "S3 complete_multipart_upload error: {}",
+                        s3_display(&e)
+                    ))
+                })?;
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = result {
+            if let Err(abort_err) = self
+                .client
+                .abort_multipart_upload()
+                .bucket(bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .send()
+                .await
+            {
+                tracing::warn!(
+                    error = %abort_err,
+                    key,
+                    "failed to abort interrupted multipart upload"
+                );
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -421,5 +644,52 @@ mod tests {
         let remote = StoragePath::parse("s3://nope");
         let err = backend.upload(local, &remote).await.unwrap_err();
         assert!(err.to_string().contains("bucket"));
+    }
+
+    // ── multipart planning (issue #575) ───────────────────────────────────
+
+    #[test]
+    fn multipart_plan_below_threshold_is_single_put() {
+        assert_eq!(multipart_plan(0), None);
+        assert_eq!(multipart_plan(MULTIPART_THRESHOLD_BYTES - 1), None);
+    }
+
+    #[test]
+    fn multipart_plan_at_threshold_uses_base_part_size() {
+        let (part_size, count) = multipart_plan(MULTIPART_THRESHOLD_BYTES).expect(">= 5 GiB");
+        assert_eq!(part_size, MULTIPART_PART_SIZE);
+        assert_eq!(
+            count as u64,
+            MULTIPART_THRESHOLD_BYTES.div_ceil(MULTIPART_PART_SIZE)
+        );
+    }
+
+    #[test]
+    fn multipart_plan_huge_object_grows_part_size_within_limits() {
+        // Far beyond 64 MiB × 10,000 = 625 GiB: the plan must grow the part
+        // size so the count stays within the 10,000-part ceiling.
+        let len = 20 * 1024 * 1024 * 1024 * 1024; // 20 TiB
+        let (part_size, count) = multipart_plan(len).expect("<= ~48.8 TiB ceiling");
+        assert!(part_size <= MULTIPART_THRESHOLD_BYTES, "≤ 5 GiB per part");
+        assert!(count <= 10_000, "≤ 10,000 parts, got {count}");
+        assert!(count as u64 * part_size >= len, "layout covers len");
+    }
+
+    #[test]
+    fn multipart_plan_beyond_ceiling_is_unplannable() {
+        // 5 GiB × 10,000 parts ≈ 48.8 TiB — anything above has no valid
+        // multipart layout and must be rejected rather than sent.
+        let len = MULTIPART_THRESHOLD_BYTES * 10_000 + 1;
+        assert_eq!(multipart_plan(len), None);
+    }
+
+    #[test]
+    fn multipart_plan_last_part_covers_remainder() {
+        // Not a multiple of the part size: count must round up and the
+        // final ranged read must stay within bounds.
+        let len = MULTIPART_THRESHOLD_BYTES + 1;
+        let (part_size, count) = multipart_plan(len).expect(">= 5 GiB");
+        assert_eq!(count as u64, len.div_ceil(part_size));
+        assert!((count as u64 - 1) * part_size < len);
     }
 }
