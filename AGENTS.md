@@ -147,6 +147,8 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 
 ### AI Provider Examples
 
+Compose passes AI/deployment env through: `docker-compose.yml` declares the variables below as value-less `environment:` entries, so host-exported vars flow into the container (`OXO_FLOW_AI_PROVIDER=... docker compose up -d` works as written). Unset vars are simply absent inside the container.
+
 **Claude (Anthropic):**
 ```bash
 OXO_FLOW_AI_PROVIDER=claude ANTHROPIC_AUTH_TOKEN=sk-ant-<YOUR-KEY> docker compose up -d
