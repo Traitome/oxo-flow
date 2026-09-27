@@ -1431,6 +1431,19 @@ name = "per_chr"
 scatter = { variable = "chr", values = ["chr1", "chr2", "chr3"] }
 ```
 
+A rule whose scatter fans out over **zero values** — declared `values = []`, or
+`values_from` referencing a config key that resolves to an empty list —
+produces zero instances and can never run. `oxo-flow validate` therefore
+skips the input-existence check (E010/W020) for such rules and excludes their
+output templates from the W033 output-collision lint, mirroring the
+`when`-gated-off exemption: a rule that cannot run must not fail validation
+over inputs it will never read. An **unresolvable** `values_from` (missing
+config key, non-string/array value) is deliberately NOT treated as empty —
+the executor expands zero instances silently in that case, so validate keeps
+the input-existence check to surface the typo as a missing-input diagnostic
+instead of silently passing (issue #616; the stricter `[[values]]` tables and
+`transform.split` reject an unresolvable reference outright).
+
 ### Expand Inputs
 
 The `expand_inputs` field generates additional input combinations via Cartesian
