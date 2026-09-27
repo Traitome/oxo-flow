@@ -59,8 +59,8 @@ pub fn list_domains() -> Vec<(String, usize)> {
 /// field hit (name/primary_tool > domain > description), then name.
 /// Skills matching all searchable terms rank first; partial matches
 /// backfill the remaining slots, so multi-term queries never die because
-/// one term is missing everywhere. Queries are capped at
-/// [`MAX_QUERY_TERMS`] tokens — the lexicographically first survive, since
+/// one term is missing everywhere. Queries are capped at 32 tokens
+/// (`MAX_QUERY_TERMS`) — the lexicographically first survive, since
 /// term order carries no relevance signal.
 pub fn search_skills(query: &str, limit: usize) -> Vec<&'static SkillRecord> {
     let mut terms = tokenize(query);

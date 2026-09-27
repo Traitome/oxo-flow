@@ -472,9 +472,9 @@ pub fn classify_http_error(provider: &str, status: u16, body: &str) -> AiError {
     classify_http_error_with_retry_after(provider, status, body, None)
 }
 
-/// [`classify_http_error`] carrying the response's `Retry-After` value (see
-/// [`retry_after_header`]) so callers can honor the endpoint's back-off
-/// instead of guessing.
+/// [`classify_http_error`] carrying the response's `Retry-After` value (as
+/// extracted by the private `retry_after_header` helper) so callers can
+/// honor the endpoint's back-off instead of guessing.
 pub fn classify_http_error_with_retry_after(
     provider: &str,
     status: u16,

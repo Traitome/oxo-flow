@@ -1084,7 +1084,7 @@ pub struct Rule {
     /// item 3): files discovered on disk are grouped by the `group_by`
     /// wildcard and each group fans into ONE instance whose `{input}`
     /// renders all of the group's files. Consumed by
-    /// [`WorkflowConfig::expand_wildcards`]; cleared on the generated
+    /// [`crate::config::WorkflowConfig::expand_wildcards`]; cleared on the generated
     /// instances so they never re-expand.
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]

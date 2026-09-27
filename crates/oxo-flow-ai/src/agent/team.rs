@@ -1,4 +1,5 @@
-//! Scientist Team — optional roles around the shared [`PipelineGenAgent`].
+//! Scientist Team — optional roles around the shared
+//! [`PipelineGenAgent`](super::pipeline_gen::PipelineGenAgent).
 //!
 //! The compact profile (default) is one generation agent over the shared
 //! orchestrator with engine-gate feedback. The full profile adds the

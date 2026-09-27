@@ -239,8 +239,8 @@ pub fn parse_job_listing(
         .collect()
 }
 
-/// The command that cancels a job, matching [`ClusterExecutor::cancel`] so
-/// the standalone `cluster cancel` command and the driver agree.
+/// The command that cancels a job, matching [`super::ExecutorBackend::cancel`]
+/// so the standalone `cluster cancel` command and the driver agree.
 pub fn cancel_command(backend: &ClusterBackend) -> &'static str {
     match backend {
         ClusterBackend::Slurm => "scancel",

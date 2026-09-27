@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny secrets docs frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit frontend-lint
+ci: fmt clippy build test schema-drift version-check audit deny secrets docs frontend-lint
 
 fmt:
 	cargo fmt -- --check
@@ -20,6 +20,23 @@ test:
 
 audit:
 	cargo audit --no-fetch 2>&1 || cargo audit
+
+## Dependency-policy gate: license allowlist, duplicate/wildcard bans and
+## crate-source checks (config in deny.toml, #557).
+deny:
+	cargo deny check
+
+## Secret-scanning gate over the git history and working tree (config in
+## .gitleaks.toml, #557). Run from the repo root: gitleaks auto-discovers
+## the config there but not above a --source directory.
+secrets:
+	gitleaks detect
+
+## Build rustdoc for the workspace with warnings denied (#557). Doc builds
+## were never gated, so broken intra-doc links and name collisions rotted
+## silently; -D warnings makes this a real gate.
+docs:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 ## Lint and type-check the frontend SPA (same gate as the "Frontend" job in
 ## ci.yml; uses `npm install` rather than CI's `npm ci`).

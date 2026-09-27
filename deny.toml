@@ -1,0 +1,77 @@
+# cargo-deny configuration (#557).
+#
+# `cargo deny check` with no config fails licenses outright (every
+# dual-licensed crate lands as "not explicitly allowed"). This file states
+# the project's license allowlist — derived from an inventory of every
+# expression in the workspace metadata at the time of writing — and gates CI.
+#
+# Scope: the full `cargo deny check` (advisories/bans/licenses/sources) runs
+# in `make ci` and ci.yml, mirroring how `cargo audit` is wired.
+
+[licenses]
+version = 2
+# Everything in the dependency tree, from the inventory in #557:
+# - Permissive classics: MIT, Apache-2.0, BSD-3-Clause, ISC, Zlib, 0BSD,
+#   Unlicense, Unicode-3.0.
+# - Slash and dual notations (`X/Y` == `X OR Y`) plus the triple expressions
+#   in-tree: Apache-2.0 WITH LLVM-exception (rustix/linux-raw-sys/wasi),
+#   CDLA-Permissive-2.0 (webpki-roots, Mozilla's permissive data license),
+#   LGPL-2.1-or-later inside r-efi's triple (UEFI-only code).
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "Unlicense",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "LGPL-2.1-or-later",
+]
+
+# Confidence threshold for license detection (cargo-deny default 0.93).
+confidence-threshold = 0.93
+
+# The workspace's own crates: oxo-flow-web ships a custom academic license
+# file and the root/desktop packages declare none, so SPDX sees LicenseRef-*
+# placeholders; declare them explicitly.
+[[licenses.clarify]]
+name = "oxo-flow-web"
+expression = "LicenseRef-Oxo-Flow-Academic"
+license-files = [
+  { path = "../../LICENSE-ACADEMIC", hash = 0x0 },
+]
+
+[[licenses.clarify]]
+name = "oxo-flow"
+expression = "Apache-2.0"
+license-files = []
+
+[[licenses.clarify]]
+name = "oxo-license"
+expression = "Apache-2.0"
+license-files = []
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+# Duplicates warn only: a full dedupe would chase transitive bumps in
+# unrelated crates; `cargo audit` + dependabot keep real drift in check.
+multiple-versions = "warn"
+# No bare "*" version requirements in our own manifests (the root package's
+# path dependency is version-exact via [workspace.package], so nothing in
+# the tree ships an unpinned dep).
+wildcards = "deny"
+# The root package's path dependency on oxo-flow-core carries no version
+# requirement (workspace member, published through the workspace table).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

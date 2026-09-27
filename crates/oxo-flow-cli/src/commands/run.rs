@@ -214,7 +214,9 @@ fn strip_ansi(text: &str) -> String {
     plain
 }
 
-/// Emit a structured [`ExecutionEvent`] as one JSON line in the tracing
+/// Emit a structured
+/// [`ExecutionEvent`](oxo_flow_core::executor::ExecutionEvent) as one JSON
+/// line in the tracing
 /// stream (issue #194 B3): the event schema stops being dead code and the
 /// run log gains a machine-readable execution timeline alongside the prose.
 /// Background runs skip it for the same reason as [`progress_narrate`] —

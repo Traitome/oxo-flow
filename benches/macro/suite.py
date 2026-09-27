@@ -23,6 +23,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,11 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # 管线生成器
 # ---------------------------------------------------------------------------
+
+# 单条命令的超时上限：超时按 FAIL 计入结果，而不是让异常击穿整个套件、
+# 把临时目录留在磁盘上 (#557)。
+COMMAND_TIMEOUT_SEC = 120
+
 
 def _toml_escape(s: str) -> str:
     """将 TOML 值中的特殊字符转义"""
@@ -143,10 +149,18 @@ def generate_scatter_gather(sample_count: int) -> str:
 # 基准运行器
 # ---------------------------------------------------------------------------
 
-def _run_command(cmd: list[str]) -> float:
-    """运行命令并返回 wall time (秒)。"""
+class CommandTimedOut(Exception):
+    """命令超出 COMMAND_TIMEOUT_SEC — 记为 FAIL 而不是击穿套件 (#557)。"""
+
+
+def _run_command(cmd: list[str]) -> tuple[float, int, str, str]:
+    """运行命令并返回 (wall time 秒, exit code, stdout, stderr)。"""
     start = time.perf_counter()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=COMMAND_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        raise CommandTimedOut(f"{' '.join(cmd)} timed out after {COMMAND_TIMEOUT_SEC}s")
     elapsed = time.perf_counter() - start
     return elapsed, result.returncode, result.stdout, result.stderr
 
@@ -162,129 +176,131 @@ def _format_duration(seconds: float) -> str:
 def benchmark_lifecycle(oxo_bin: str, counts: list[int], output: dict[str, Any], iterations: int = 1):
     """测量 validate / dry-run / lint 在不同管线规模下的性能。"""
     print("\n  ── 生命周期基准 ──")
-    for count in counts:
-        toml = generate_hello(count)
-        tmp = Path(f"/tmp/oxo_bench_hello_{count}.oxoflow")
-        tmp.write_text(toml)
+    # 临时目录集中创建、with 块统一清理：固定 /tmp 路径会在多用户/并行
+    # 运行间互相覆盖，异常路径还会把 fixture 留在磁盘上 (#557)。
+    with tempfile.TemporaryDirectory(prefix="oxo_bench_") as tmpdir:
+        for count in counts:
+            tmp = Path(tmpdir) / f"hello_{count}.oxoflow"
+            tmp.write_text(generate_hello(count))
 
-        for cmd_name, args in [("validate", ["validate", str(tmp)]),
-                                ("dry-run", ["dry-run", str(tmp)]),
-                                ("lint", ["lint", str(tmp)])]:
-            full_cmd = [oxo_bin] + args
-            # 多次迭代取最小值（降低系统噪声），与 hyperfine 的 min 语义一致
-            elapsed, rc, stdout, stderr = float("inf"), 1, "", ""
-            for _ in range(iterations):
-                e, r, so, se = _run_command(full_cmd)
-                if e < elapsed:
-                    elapsed, rc, stdout, stderr = e, r, so, se
-            status = "OK" if rc == 0 else "FAIL"
-            print(f"    {cmd_name:10s}  {count:5d} rules  {_format_duration(elapsed):>10s}  [{status}]")
-            output.setdefault("lifecycle", []).append({
-                "command": cmd_name,
-                "rule_count": count,
-                "wall_time_sec": round(elapsed, 4),
-                "exit_code": rc,
-                "iterations": iterations,
-            })
-            if rc != 0 and stderr:
-                print(f"      stderr: {stderr[:200]}")
-
-        tmp.unlink()
+            for cmd_name, args in [("validate", ["validate", str(tmp)]),
+                                    ("dry-run", ["dry-run", str(tmp)]),
+                                    ("lint", ["lint", str(tmp)])]:
+                full_cmd = [oxo_bin] + args
+                # 多次迭代取最小值（降低系统噪声），与 hyperfine 的 min 语义一致
+                elapsed, rc, stdout, stderr = float("inf"), 1, "", ""
+                for _ in range(iterations):
+                    e, r, so, se = _run_command(full_cmd)
+                    if e < elapsed:
+                        elapsed, rc, stdout, stderr = e, r, so, se
+                status = "OK" if rc == 0 else "FAIL"
+                print(f"    {cmd_name:10s}  {count:5d} rules  {_format_duration(elapsed):>10s}  [{status}]")
+                output.setdefault("lifecycle", []).append({
+                    "command": cmd_name,
+                    "rule_count": count,
+                    "wall_time_sec": round(elapsed, 4),
+                    "exit_code": rc,
+                    "iterations": iterations,
+                })
+                if rc != 0 and stderr:
+                    print(f"      stderr: {stderr[:200]}")
 
 
 def benchmark_scaling(oxo_bin: str, sample_counts: list[int], output: dict[str, Any],
                        iterations: int = 1):
     """测量并行管线中随样本数增加的扩展性。"""
     print("\n  ── 扩展性基准 ──")
-    for sc in sample_counts:
-        toml = generate_parallel(sc)
-        tmp = Path(f"/tmp/oxo_bench_parallel_{sc}.oxoflow")
-        tmp.write_text(toml)
+    # 同 lifecycle：TemporaryDirectory 统一清理，不再写固定 /tmp 路径 (#557)。
+    with tempfile.TemporaryDirectory(prefix="oxo_bench_") as tmpdir:
+        for sc in sample_counts:
+            tmp = Path(tmpdir) / f"parallel_{sc}.oxoflow"
+            tmp.write_text(generate_parallel(sc))
 
-        for cmd_name, args in [("validate", ["validate", str(tmp)]),
-                                ("dry-run", ["dry-run", str(tmp)])]:
-            full_cmd = [oxo_bin] + args
-            elapsed, rc, _, _ = float("inf"), 1, "", ""
-            for _ in range(iterations):
-                e, r, _, _ = _run_command(full_cmd)
-                if e < elapsed:
-                    elapsed, rc = e, r
+            for cmd_name, args in [("validate", ["validate", str(tmp)]),
+                                    ("dry-run", ["dry-run", str(tmp)])]:
+                full_cmd = [oxo_bin] + args
+                elapsed, rc, _, _ = float("inf"), 1, "", ""
+                for _ in range(iterations):
+                    e, r, _, _ = _run_command(full_cmd)
+                    if e < elapsed:
+                        elapsed, rc = e, r
+                status = "OK" if rc == 0 else "FAIL"
+                print(f"    {cmd_name:10s}  {sc:5d} samples  {_format_duration(elapsed):>10s}  [{status}]")
+                output.setdefault("scaling", []).append({
+                    "command": cmd_name,
+                    "sample_count": sc,
+                    "wall_time_sec": round(elapsed, 4),
+                    "exit_code": rc,
+                    "iterations": iterations,
+                })
+
+        # scatter-gather 基准
+        for sc in [10, 50]:
+            tmp = Path(tmpdir) / f"scatter_{sc}.oxoflow"
+            tmp.write_text(generate_scatter_gather(sc))
+            elapsed, rc, _, _ = _run_command([oxo_bin, "validate", str(tmp)])
             status = "OK" if rc == 0 else "FAIL"
-            print(f"    {cmd_name:10s}  {sc:5d} samples  {_format_duration(elapsed):>10s}  [{status}]")
+            print(f"    scatter    {sc:5d} chunks  {_format_duration(elapsed):>10s}  [{status}]")
             output.setdefault("scaling", []).append({
-                "command": cmd_name,
+                "command": "validate_scatter_gather",
                 "sample_count": sc,
                 "wall_time_sec": round(elapsed, 4),
                 "exit_code": rc,
-                "iterations": iterations,
             })
-
-        tmp.unlink()
-
-    # scatter-gather 基准
-    for sc in [10, 50]:
-        toml = generate_scatter_gather(sc)
-        tmp = Path(f"/tmp/oxo_bench_scatter_{sc}.oxoflow")
-        tmp.write_text(toml)
-        elapsed, rc, _, _ = _run_command([oxo_bin, "validate", str(tmp)])
-        status = "OK" if rc == 0 else "FAIL"
-        print(f"    scatter    {sc:5d} chunks  {_format_duration(elapsed):>10s}  [{status}]")
-        output.setdefault("scaling", []).append({
-            "command": "validate_scatter_gather",
-            "sample_count": sc,
-            "wall_time_sec": round(elapsed, 4),
-            "exit_code": rc,
-        })
-        tmp.unlink()
 
 
 def benchmark_reliability(oxo_bin: str, output: dict[str, Any], iterations: int = 1):
     """验证基准可靠性:
-    1. 管线定义 checksum 确定性
+    1. 执行时间稳定性（低方差 → 引擎行为可复现）
     2. lint 诊断一致性
     """
     print("\n  ── 可靠性基准 ──")
 
-    # 1. Checksum 确定性
-    toml = generate_hello(50)
-    tmp = Path("/tmp/oxo_bench_reliable.oxoflow")
-    tmp.write_text(toml)
+    # 1. 执行时间稳定性：没有可解析的 CLI checksum 表面，这里按 JSON 键
+    #    execution_time_stability 的本义测量同一命令多次运行的耗时方差
+    #    (#557)。
+    with tempfile.TemporaryDirectory(prefix="oxo_bench_") as tmpdir:
+        toml = generate_hello(50)
+        tmp = Path(tmpdir) / "reliable.oxoflow"
+        tmp.write_text(toml)
 
-    checksums = []
-    for _ in range(max(3, iterations)):
-        elapsed, rc, stdout, _ = _run_command(
-            [oxo_bin, "lint", str(tmp)])
-        if rc == 0:
-            # 从 lint 输出中提取 checksum（如果有）
-            pass
-        # 比较 validate 的执行时间一致性（低方差表示可靠）
-        checksums.append(elapsed)
+        run_times = []
+        for i in range(max(3, iterations)):
+            elapsed, rc, _, _ = _run_command([oxo_bin, "lint", str(tmp)])
+            if i > 0 and rc == 0:  # 首次运行为预热（冷启动），不计入方差
+                run_times.append(elapsed)
 
-    stable = max(checksums) - min(checksums) < 0.5  # <500ms 方差
-    print(f"    checksum stability: {'PASS' if stable else 'CHECK'}  "
-          f"(range: {max(checksums) - min(checksums):.3f}s)")
-    output.setdefault("reliability", []).append({
-        "test": "execution_time_stability",
-        "run_times_sec": [round(c, 4) for c in checksums],
-        "stable": stable,
-    })
+        if not run_times:
+            print("    execution time stability: FAIL  (lint never exited 0)")
+            output.setdefault("reliability", []).append({
+                "test": "execution_time_stability",
+                "run_times_sec": [],
+                "stable": False,
+            })
+        else:
+            stable = max(run_times) - min(run_times) < 0.5  # <500ms 方差
+            print(f"    execution time stability: {'PASS' if stable else 'CHECK'}  "
+                  f"(range: {max(run_times) - min(run_times):.3f}s)")
+            output.setdefault("reliability", []).append({
+                "test": "execution_time_stability",
+                "run_times_sec": [round(c, 4) for c in run_times],
+                "stable": stable,
+            })
 
-    # 2. 错误检测
-    bad_toml = generate_hello(5) + '\n[[rules]]\nname = "step_0"\n'
-    tmp_bad = Path("/tmp/oxo_bench_bad.oxoflow")
-    tmp_bad.write_text(bad_toml)
-    elapsed, rc, stdout, stderr = _run_command(
-        [oxo_bin, "validate", str(tmp_bad)])
-    detects_errors = rc != 0
-    print(f"    duplicate detection: {'PASS' if detects_errors else 'FAIL'}  "
-          f"(exit={rc})")
-    output.setdefault("reliability", []).append({
-        "test": "duplicate_rule_detection",
-        "detected": detects_errors,
-        "exit_code": rc,
-    })
-    tmp_bad.unlink()
-    tmp.unlink()
+        # 2. 错误检测
+        bad_toml = generate_hello(5) + '\n[[rules]]\nname = "step_0"\n'
+        tmp_bad = Path(tmpdir) / "bad.oxoflow"
+        tmp_bad.write_text(bad_toml)
+        elapsed, rc, stdout, stderr = _run_command(
+            [oxo_bin, "validate", str(tmp_bad)])
+        detects_errors = rc != 0
+        print(f"    duplicate detection: {'PASS' if detects_errors else 'FAIL'}  "
+              f"(exit={rc})")
+        output.setdefault("reliability", []).append({
+            "test": "duplicate_rule_detection",
+            "detected": detects_errors,
+            "exit_code": rc,
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -360,4 +376,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except CommandTimedOut as exc:
+        # 超时已在单条结果里如实计为 FAIL；这里兜底防止异常击穿主流程、
+        # 把已跑完的结果一起丢掉 (#557)。
+        print(f"\nBENCHMARK TIMEOUT: {exc}", file=sys.stderr)
+        sys.exit(2)
