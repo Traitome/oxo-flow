@@ -137,38 +137,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Database initialization: PostgreSQL if DATABASE_URL starts with postgres://,
-    // otherwise SQLite (default).
-    let database_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://oxo-flow.db".to_string());
-
-    let is_postgres =
-        database_url.starts_with("postgres://") || database_url.starts_with("postgresql://");
-
-    if is_postgres {
-        #[cfg(feature = "postgres")]
-        {
-            tracing::info!("Initializing PostgreSQL backend");
-            oxo_flow_web::infra::db::postgres::init_pool(&database_url).await;
-            // Issue #207 acceptance: an explicit capability matrix at startup,
-            // so operators see the served/gated split before the first 503.
-            // Shared const so the log cannot drift from the tested contract.
-            tracing::warn!("{}", oxo_flow_web::PG_CAPABILITY_MATRIX);
-        }
-        #[cfg(not(feature = "postgres"))]
-        {
-            tracing::error!(
-                "DATABASE_URL is a PostgreSQL URL but the 'postgres' feature is not enabled. \
-                 Rebuild with: cargo build --features postgres"
-            );
-            anyhow::bail!("PostgreSQL support not compiled in — rebuild with --features postgres");
-        }
-    } else {
-        oxo_flow_web::db::init_db(&database_url).await?;
-        oxo_flow_web::db::recover_orphaned_runs().await?;
-        // Also initialize the new v0.8 domain-driven DB pool for domain handlers
-        oxo_flow_web::infra::db::sqlite::init_pool(&database_url).await;
-    }
+    // Database initialization: PostgreSQL if DATABASE_URL starts with
+    // postgres://, otherwise SQLite (default) — shared with `oxo-flow serve`
+    // so the two entry points cannot drift (issue #569).
+    oxo_flow_web::init_database().await?;
 
     // Initialize structured logging (three-layer logging per v0.8 spec)
     let log_dir = std::path::PathBuf::from("logs");
@@ -178,50 +150,15 @@ async fn main() -> Result<()> {
         tracing::info!("Structured logging initialized at {}", log_dir.display());
     }
 
-    // Initialize AI provider from environment variables
-    oxo_flow_web::ai_provider::AiProviderRegistry::global().init_from_env();
-    // Issue #205: at-rest encryption is opt-in. The shared notice lives in
-    // infra::crypto so `oxo-flow serve` emits the same warning.
-    oxo_flow_web::infra::crypto::warn_if_plaintext_key();
-    // Restore the DB-persisted tier (settings UI) when env did not configure
-    // a provider — otherwise a saved key would be lost on restart.
-    oxo_flow_web::domains::ai::handlers::restore_ai_config_from_db().await;
-    // AI file tier (lowest): applies when neither env nor the DB user
-    // settings configured a provider. Secrets stay in env vars referenced
-    // by api_key_env — never inline in the file.
-    if let Some(cfg) = &platform_config
-        && oxo_flow_web::ai_provider::AiProviderRegistry::global()
-            .get_config()
-            .provider
-            == "disabled"
-        && let Some(provider) = cfg.ai.provider.as_deref()
-    {
-        let api_key = cfg
-            .ai
-            .api_key_env
-            .as_deref()
-            .and_then(|key_env| std::env::var(key_env).ok());
-        if let Err(e) = oxo_flow_web::ai_provider::AiProviderRegistry::global().reconfigure(
-            provider,
-            api_key,
-            cfg.ai.api_url.clone(),
-            cfg.ai.model.clone(),
-        ) {
-            tracing::warn!("AI config file tier rejected: {e}");
-        }
-    }
+    // Initialize AI provider (env → DB → config file tiers) — shared with
+    // `oxo-flow serve` via the hoisted helper (issue #569).
+    oxo_flow_web::init_ai_provider(platform_config.as_ref()).await;
     // Cluster definitions from the platform config file are imported by
     // BOTH entry points (here and in start_server_with_mode) — idempotent,
     // existing DB rows win, and a no-op when the SQLite pool is absent.
     if let Some(cfg) = &platform_config {
         oxo_flow_web::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
     }
-    tracing::info!(
-        "AI provider: {}",
-        oxo_flow_web::ai_provider::AiProviderRegistry::global()
-            .get_config()
-            .provider
-    );
 
     let addr = SocketAddr::new(effective_host.parse()?, cli.port);
     tracing::info!("Starting oxo-flow-web server on {}", addr);

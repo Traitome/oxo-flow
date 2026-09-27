@@ -327,13 +327,15 @@ Serve flags: `--mode` (`personal` | `team` | `hpc`), `--host` (default
 environment-variable form, plus a platform config file layer — see
 [Deployment Modes](docs/guide/src/how-to/deploy-modes.md).
 
-**PostgreSQL:** `oxo-flow serve` is SQLite-only (`sqlite://oxo-flow.db` in
-the working directory). The standalone `oxo-flow-web` binary instead reads
-the `DATABASE_URL` environment variable — a `postgres://` URL (on a build
-with the `postgres` feature) enables the PostgreSQL backend for the
-library/AI/auth domains. Run execution stays SQLite-only either way: on a
-PostgreSQL server every `/api/runs*` endpoint answers
-`503 RUNS_REQUIRE_SQLITE`.
+**PostgreSQL:** both `oxo-flow serve` and the standalone `oxo-flow-web`
+binary read the `DATABASE_URL` environment variable — a `postgres://` URL
+(on a build with the `postgres` feature) enables the PostgreSQL backend for
+the library/AI/auth domains; the default (`sqlite://oxo-flow.db` in the
+working directory) stays SQLite. Note that the published Docker image is
+built WITHOUT the `postgres` feature — rebuild with
+`cargo build --features postgres` to enable it. Run execution stays
+SQLite-only either way: on a PostgreSQL server every `/api/runs*` endpoint
+answers `503 RUNS_REQUIRE_SQLITE`.
 
 ## Documentation
 

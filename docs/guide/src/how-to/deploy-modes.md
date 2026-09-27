@@ -23,7 +23,7 @@ oxo-flow serve --mode hpc
 | Setting | Value |
 |---------|-------|
 | Network | `127.0.0.1:8080` (localhost only) |
-| Database | SQLite file (`oxo-flow.db`) |
+| Database | SQLite file (`oxo-flow.db`) — override with `DATABASE_URL` |
 | Auth | None (single user) — management endpoints (Users, Audit) follow the same localhost trust model |
 | Workspace | `workspace/users/local_user/runs/<run_id>` |
 
@@ -45,7 +45,7 @@ open http://localhost:8080
 | Setting | Value |
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
-| Database | SQLite (default) or PostgreSQL |
+| Database | SQLite (default) or PostgreSQL — see [Database Selection](#database-selection-database_url) |
 | Run execution | SQLite-backed servers only — with PostgreSQL the whole `/api/runs*` surface answers `503 RUNS_REQUIRE_SQLITE`; library/AI/auth keep working |
 | Auth | Password env vars (`OXO_FLOW_ADMIN_PASSWORD` / `OXO_FLOW_USER_PASSWORD` / `OXO_FLOW_VIEWER_PASSWORD`) + optional ORCID/GitHub OAuth |
 | Workspace | `workspace/users/<username>/runs/<run_id>` |
@@ -95,7 +95,7 @@ workspace/
 | Setting | Value |
 |---------|-------|
 | Network | `127.0.0.1:8080` by default — pass `--host 0.0.0.0` to bind all interfaces |
-| Database | SQLite or PostgreSQL |
+| Database | SQLite or PostgreSQL — see [Database Selection](#database-selection-database_url) |
 | Auth | Same as Team mode |
 | Executor | SLURM / PBS / LSF / SGE |
 | Resources | Scheduler-managed |
@@ -138,6 +138,32 @@ oxo-flow cluster submit workflow.oxoflow -b slurm
 export OXO_FLOW_MODE=team
 oxo-flow serve
 ```
+
+## Database Selection (`DATABASE_URL`)
+
+All serving entry points — `oxo-flow serve`, the standalone
+`oxo-flow-web` binary, and the desktop app — share one database-selection
+rule: `DATABASE_URL` starting with `postgres://` (or `postgresql://`)
+selects the PostgreSQL backend; anything else (including unset, which
+defaults to `sqlite://oxo-flow.db` in the working directory) stays SQLite.
+
+```bash
+# PostgreSQL (library/AI/auth domains; run execution stays SQLite-only)
+export DATABASE_URL=postgres://oxo:secret@db.lab.example.edu:5432/oxo_flow
+oxo-flow serve --mode team --host 0.0.0.0
+```
+
+Two constraints apply:
+
+- **Build feature**: PostgreSQL support is a compile-time feature. The
+  published Docker image is built WITHOUT it — rebuild with
+  `cargo build --features postgres` (or the equivalent in your own
+  image). On a build without the feature, a `postgres://` `DATABASE_URL`
+  aborts startup with a clear error instead of silently falling back.
+- **Run-execution boundary**: with PostgreSQL, run execution and its
+  lifecycle bookkeeping stay SQLite-only — every `/api/runs*` request
+  answers `503 RUNS_REQUIRE_SQLITE`. Library/AI/auth domains keep
+  working (see [web-system-architecture](../reference/web-system-architecture.md)).
 
 ## Startup Verification
 
