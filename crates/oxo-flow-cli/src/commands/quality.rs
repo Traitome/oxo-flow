@@ -772,6 +772,22 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
         }) {
             continue;
         }
+        // Same stance for a scatter rule with zero fan-out (issue #616):
+        // declared `values` win; an unresolvable `values_from` keeps the
+        // rule checked because the executor still schedules it once.
+        if rule.scatter.as_ref().is_some_and(|scatter| {
+            if !scatter.values.is_empty() {
+                return false;
+            }
+            match scatter.values_from.as_deref() {
+                Option::None => true,
+                Some(v_from) => cfg
+                    .resolve_config_list(v_from)
+                    .is_some_and(|values| values.is_empty()),
+            }
+        }) {
+            continue;
+        }
         for input in &rule.input {
             let expanded = expand(input);
             if expanded.contains('{') {
@@ -858,6 +874,56 @@ shell = "true"
             "config-routed generated input and existing config-routed input must pass; \
              only the genuinely missing file may be flagged; the when-gated-off rule's \
              missing sidecar must stay silent (issue #493): {missing:?}"
+        );
+    }
+
+    #[test]
+    fn missing_inputs_skip_empty_scatter_rules() {
+        use super::collect_missing_inputs;
+        // Issue #616: a scatter rule with zero fan-out can never run —
+        // dry-run's missing-input audit must mirror validate and stay
+        // silent, while a non-empty scatter keeps the rule checked.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = |items: &str, reference: &str| {
+            format!(
+                r#"
+[workflow]
+name = "t"
+
+[config]
+items = {0}
+reference = "{1}"
+
+[[rules]]
+name = "enrich"
+input = ["{{config.reference}}"]
+output = ["enrich/{{item}}.tsv"]
+shell = "Rscript enrich.R"
+
+[rules.scatter]
+variable = "item"
+values_from = "config.items"
+"#,
+                items, reference
+            )
+        };
+        // Empty list → zero instances → silent.
+        let cfg =
+            oxo_flow_core::config::WorkflowConfig::parse(&toml("[]", "missing/ref.fa")).unwrap();
+        let missing = collect_missing_inputs(&cfg, dir.path());
+        assert!(
+            missing.is_empty(),
+            "an empty-scatter rule's missing inputs must stay silent: {missing:?}"
+        );
+        // Non-empty list → the rule can run → the missing input is flagged.
+        let cfg =
+            oxo_flow_core::config::WorkflowConfig::parse(&toml(r#"["item-a"]"#, "missing/ref.fa"))
+                .unwrap();
+        let missing = collect_missing_inputs(&cfg, dir.path());
+        assert_eq!(
+            missing,
+            vec!["missing/ref.fa".to_string()],
+            "a non-empty scatter must keep its inputs existence-checked: {missing:?}"
         );
     }
 
