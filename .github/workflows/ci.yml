@@ -836,6 +836,10 @@ jobs:
       - name: Generate SHA256 checksums
         shell: bash
         run: |
+          # #555: the pipeline's exit status used to be sort's — one failed
+          # sha256sum mid-loop shipped a TRUNCATED checksum file with a
+          # green gate. set -euo pipefail + a line-count assertion.
+          set -euo pipefail
           mkdir -p artifacts/checksums
           cd artifacts
           find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -print0 \
@@ -843,7 +847,13 @@ jobs:
                 sha256sum "$f" | awk -v name="$(basename "$f")" '{print $1 "  " name}'
               done \
             | sort -k2 > checksums/SHA256SUMS.txt
-          echo "=== SHA256SUMS ==="
+          FILE_COUNT=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) | wc -l | tr -d ' ')
+          LINE_COUNT=$(wc -l < checksums/SHA256SUMS.txt | tr -d ' ')
+          if [ "$FILE_COUNT" != "$LINE_COUNT" ]; then
+            echo "::error::SHA256SUMS.txt has $LINE_COUNT lines for $FILE_COUNT artifacts — a hash failed mid-loop"
+            exit 1
+          fi
+          echo "=== SHA256SUMS ($LINE_COUNT artifacts) ==="
           cat checksums/SHA256SUMS.txt
 
       - name: Generate full CHANGELOG.md
@@ -1716,9 +1726,43 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
+      # #555: nothing distinguished the FRESH SPA artifact from a stale
+      # one — combined with reuseExistingServer the e2e job could validate
+      # a wrong/stale server vacuously. Assert the served index references
+      # the just-built bundle before running.
+      - name: Assert the served SPA is the fresh build
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          FRESH_ASSET=$(ls ../crates/oxo-flow-web/static/assets | grep '^index-.*\.js$' | head -1)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ | grep -F "$FRESH_ASSET" >/dev/null 2>&1; then
+              echo "served SPA references $FRESH_ASSET — fresh build confirmed"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
+              exit 1
+            fi
+            sleep 2
+          done
+        env:
+          FRESH_ASSET_PLACEHOLDER: ""
+
       - name: Run e2e tests
         working-directory: frontend
         run: npx playwright test
+
+      # #555: scripts/deploy-smoke.sh existed but was wired into NO gate —
+      # scenario 1 (source build serves API + SPA) is exactly what a wrong
+      # Dockerfile COPY would break. The script spawns its own servers in
+      # temp dirs; both binaries are already in target/debug (build the
+      # CLI too — the e2e webServer only needed the web one).
+      - name: Build the CLI binary (deploy-smoke needs it)
+        run: cargo build -p oxo-flow-cli
+
+      - name: Deploy smoke suite
+        run: bash scripts/deploy-smoke.sh
 
   # ─── Deploy GitHub Pages (landing page + MkDocs documentation) ─────────────
   deploy-pages:
