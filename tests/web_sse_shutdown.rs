@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 fn wait_ready(server: &common::WebServer) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if let Ok(resp) = reqwest::blocking::get(format!("{}/api/health", server.base)) {
-            if resp.status().is_success() {
-                return;
-            }
+        if let Ok(resp) = reqwest::blocking::get(format!("{}/api/health", server.base))
+            && resp.status().is_success()
+        {
+            return;
         }
         assert!(
             Instant::now() < deadline,
