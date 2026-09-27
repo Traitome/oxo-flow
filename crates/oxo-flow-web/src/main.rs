@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
-use std::net::SocketAddr;
 
 /// Server operation mode.
 #[derive(Debug, Clone, ValueEnum)]
@@ -160,7 +159,7 @@ async fn main() -> Result<()> {
         oxo_flow_web::domains::clusters::handlers::import_from_config(&cfg.clusters).await;
     }
 
-    let addr = SocketAddr::new(effective_host.parse()?, cli.port);
+    let addr = oxo_flow_web::resolve_bind_addr(&effective_host, cli.port)?;
     tracing::info!("Starting oxo-flow-web server on {}", addr);
 
     // Use the domain-driven router from server.rs, merged with frontend

@@ -27,6 +27,7 @@ pub mod workspace;
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 
 use serde::{Deserialize, Serialize};
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -647,6 +648,37 @@ fn effective_bind_host_with(mode: &str, host: &str, dev_mode: bool) -> anyhow::R
     Ok(host.to_string())
 }
 
+/// Resolve the effective host into a concrete [`std::net::SocketAddr`].
+///
+/// `oxo-flow serve` binds `TcpListener::bind(format!("{host}:{port}"))`,
+/// which accepts hostnames ("localhost") as-is; the standalone binary
+/// instead needs a `SocketAddr`, and a bare `IpAddr` parse rejects the
+/// "localhost" that `effective_bind_host` deliberately passes through
+/// (issue #573). IPs parse directly; anything else resolves via
+/// `ToSocketAddrs`, preferring IPv4 so the bind stays deterministic —
+/// Linux resolves "localhost" to `::1` first, which silently locks out
+/// IPv4 clients (and the IPv4-based integration checks); unresolvable
+/// hosts fail with an actionable message.
+pub fn resolve_bind_addr(host: &str, port: u16) -> anyhow::Result<std::net::SocketAddr> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(std::net::SocketAddr::new(ip, port));
+    }
+    let mut addrs = (host, port).to_socket_addrs().map_err(|e| {
+        anyhow::anyhow!(
+            "failed to resolve bind host {host:?}: {e} — use an IP address \
+             such as 127.0.0.1 or 0.0.0.0, or a hostname resolvable on this \
+             machine"
+        )
+    })?;
+    let pick = addrs.find(|addr| addr.is_ipv4()).or_else(|| addrs.next());
+    pick.ok_or_else(|| {
+        anyhow::anyhow!(
+            "bind host {host:?} resolved to no addresses — \
+             use an IP address such as 127.0.0.1 or 0.0.0.0"
+        )
+    })
+}
+
 /// Capability matrix advertised at startup when `DATABASE_URL` selects
 /// PostgreSQL.
 ///
@@ -1006,5 +1038,47 @@ mod effective_bind_host_tests {
         assert!(!is_postgres_url("sqlite::memory:"));
         // A SQLite file named like postgres must not be misrouted.
         assert!(!is_postgres_url("sqlite:postgres://weird.db"));
+    }
+
+    /// `resolve_bind_addr` must accept what `effective_bind_host` passes
+    /// through: IPs parse directly, and "localhost" — deliberately not
+    /// rewritten — resolves via `ToSocketAddrs` with IPv4 preferred, so
+    /// the loopback bind is deterministic even where Linux resolves
+    /// "localhost" to `::1` first (issue #573, parity with `oxo-flow serve`).
+    #[test]
+    fn resolve_bind_addr_accepts_ips_and_localhost() {
+        assert_eq!(
+            resolve_bind_addr("127.0.0.1", 8080).unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 8080))
+        );
+        assert_eq!(
+            resolve_bind_addr("0.0.0.0", 3000).unwrap(),
+            std::net::SocketAddr::from(([0, 0, 0, 0], 3000))
+        );
+        assert_eq!(
+            resolve_bind_addr("::1", 8080).unwrap(),
+            std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 8080))
+        );
+        // The regression: "localhost" must resolve, not fail an IP parse,
+        // and prefer the IPv4 loopback over a `::1` first-hit.
+        assert_eq!(
+            resolve_bind_addr("localhost", 8080).unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 8080))
+        );
+    }
+
+    /// Unresolvable hosts fail with the actionable message the issue
+    /// asks for, not a bare parse error. An empty host is rejected by
+    /// getaddrinfo itself, so the assertion holds on machines whose DNS
+    /// wildcard-resolves bogus names (fake-ip VPN tunnels).
+    #[test]
+    fn resolve_bind_addr_names_unresolvable_hosts_actionably() {
+        let err = resolve_bind_addr("", 8080).expect_err("empty host must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("resolve"), "message should say why: {msg}");
+        assert!(
+            msg.contains("127.0.0.1") && msg.contains("0.0.0.0"),
+            "message must point at usable alternatives: {msg}"
+        );
     }
 }

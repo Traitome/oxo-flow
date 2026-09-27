@@ -108,13 +108,20 @@ pub fn log_tail(s: &WebServer) -> String {
 }
 
 fn wait_for_bind(server: &mut WebServer, timeout: Duration) -> bool {
-    let needle = format!(
-        "Listening on http://{}",
-        server.base.trim_start_matches("http://")
-    );
+    // Match on the port only: the bind host string in the log line can
+    // differ from the probe (`--host localhost` resolves to `[::1]`, not
+    // `127.0.0.1`), and the port is what uniquely identifies this child —
+    // other tests may be logging their own binds concurrently.
+    let port = server
+        .base
+        .trim_start_matches("http://127.0.0.1:")
+        .to_string();
+    let needle = format!(":{port}");
     let deadline = Instant::now() + timeout;
     loop {
-        if std::fs::read_to_string(&server.log_path).is_ok_and(|log| log.contains(&needle)) {
+        if std::fs::read_to_string(&server.log_path)
+            .is_ok_and(|log| log.contains("Listening on http://") && log.contains(&needle))
+        {
             return true;
         }
         if matches!(server.child.try_wait(), Ok(Some(_))) {
