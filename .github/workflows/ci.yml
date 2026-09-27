@@ -1770,20 +1770,26 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
+          # No server is up at this point — Playwright's webServer only
+          # spawns in the NEXT step, and reuseExistingServer is false in
+          # CI, so it needs :3000 free. Start our own instance from the
+          # prebuilt binary, assert, and kill it via trap before e2e
+          # (initially it polled a :3000 nobody listened on — always
+          # failed; live: run 36291734981).
+          export OXO_FLOW_FRONTEND_DIR="$GITHUB_WORKSPACE/crates/oxo-flow-web/static"
+          ../target/debug/oxo-flow-web --port 3000 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           FRESH_ASSET=$(ls ../crates/oxo-flow-web/static/assets | grep '^index-.*\.js$' | head -1)
           for i in $(seq 1 30); do
             if curl -sf http://localhost:3000/ | grep -F "$FRESH_ASSET" >/dev/null 2>&1; then
               echo "served SPA references $FRESH_ASSET — fresh build confirmed"
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
-              exit 1
+              exit 0
             fi
             sleep 2
           done
-        env:
-          FRESH_ASSET_PLACEHOLDER: ""
+          echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
+          exit 1
 
       - name: Run e2e tests
         working-directory: frontend
