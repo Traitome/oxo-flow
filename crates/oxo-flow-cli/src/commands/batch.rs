@@ -49,6 +49,14 @@ pub async fn batch_command(
     if generate_workflow {
         return generate_batch_workflow(&template, &items, output.as_ref(), environment.as_ref());
     }
+    if output.is_some() {
+        // The flag is consumed only by the --generate-workflow branch —
+        // silently ignoring it made callers wait on a results file that is
+        // never written (audit #670).
+        anyhow::bail!(
+            "-o/--output only applies to --generate-workflow; batch results print to stdout"
+        );
+    }
 
     // Dry-run: print expanded commands
     if dry_run {

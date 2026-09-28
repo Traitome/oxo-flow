@@ -173,9 +173,16 @@ pub async fn validate_command(
                 }
             }
 
-            // Exit with error if validation failed
+            // Exit with error if validation failed. Returning Err (not
+            // process::exit) lets `test --json` compose steps into ONE
+            // aggregate document — an inner exit bypassed emit_test_json
+            // entirely on exactly the failure paths the command exists to
+            // report (audit #666). The top-level dispatcher still exits 1.
             if error_count > 0 {
-                std::process::exit(1);
+                anyhow::bail!(
+                    "validation failed: {error_count} error(s) in {}",
+                    workflow.display()
+                );
             }
         }
         Err(e) => {
@@ -193,7 +200,7 @@ pub async fn validate_command(
             } else {
                 eprintln!("{} {} — {}", "✗".red().bold(), workflow.display(), e);
             }
-            std::process::exit(1);
+            anyhow::bail!("workflow parse failed: {e}");
         }
     }
     Ok(())
@@ -337,13 +344,17 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
         if error_count > 0 || (strict && warning_count > 0) {
-            std::process::exit(1);
+            // Return Err instead of process::exit so `test --json` can
+            // compose this step into its aggregate document (audit #666).
+            anyhow::bail!(
+                "lint failed: {error_count} error(s), {warning_count} warning(s)"
+            );
         }
         return Ok(());
     }
 
     if error_count > 0 || (strict && warning_count > 0) {
-        std::process::exit(1);
+        anyhow::bail!("lint failed: {error_count} error(s), {warning_count} warning(s)");
     }
     Ok(())
 }
@@ -612,6 +623,7 @@ pub fn touch_command(
     };
 
     let mut touched = 0usize;
+    let mut failed_touched = 0usize;
     let mut skipped = 0usize;
     let mut skipped_patterns: Vec<(String, String)> = Vec::new(); // (rule_name, pattern)
 
@@ -650,6 +662,7 @@ pub fn touch_command(
                     }
                     Err(e) => {
                         eprintln!("  {} {} ({})", "✗".red(), output, e);
+                        failed_touched += 1;
                     }
                 }
             } else {
@@ -663,6 +676,7 @@ pub fn touch_command(
                         output,
                         e
                     );
+                    failed_touched += 1;
                     continue;
                 }
                 match std::fs::write(&path, "") {
@@ -672,6 +686,7 @@ pub fn touch_command(
                     }
                     Err(e) => {
                         eprintln!("  {} {} (failed: {})", "✗".red(), output, e);
+                        failed_touched += 1;
                     }
                 }
             }
@@ -721,6 +736,16 @@ pub fn touch_command(
              Run `oxo-flow dry-run {}` to list the expanded rule names.",
             unknown_rules.len(),
             workflow.display(),
+            workflow.display()
+        );
+    }
+
+    // Per-file I/O failures are usage failures too (#540 semantics):
+    // exiting 0 while every touch failed made calling pipelines record
+    // "outputs marked up-to-date" when nothing was marked (audit #668).
+    if failed_touched > 0 {
+        anyhow::bail!(
+            "touch: {failed_touched} output path(s) failed to mark in {}",
             workflow.display()
         );
     }

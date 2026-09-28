@@ -105,6 +105,12 @@ pub fn extract_and_verify_bundle(bundle_path: &Path) -> Result<(PathBuf, PathBuf
     let entrypoint = manifest["entrypoint"]
         .as_str()
         .context("manifest missing 'entrypoint' field")?;
+    // The consumer-side reciprocal of publish's path containment (#297
+    // item 7 fixed the write side; audit #669): a crafted manifest must
+    // not escape the verified archive via the entrypoint — an absolute
+    // path or `..` would execute a file OUTSIDE the checksum-verified
+    // bundle with verified-bundle trust.
+    crate::commands::publish::ensure_safe_bundle_path(entrypoint)?;
     let workflow_path = extract_dir.path().join(entrypoint);
     if !workflow_path.exists() {
         anyhow::bail!(

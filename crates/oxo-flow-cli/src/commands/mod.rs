@@ -141,7 +141,14 @@ pub fn collect_batch_items(items: &[String], file: Option<&PathBuf>) -> Result<V
     if items.is_empty() {
         use std::io::{self, BufRead};
         let stdin = io::stdin();
-        let lines: Vec<String> = stdin.lock().lines().map_while(Result::ok).collect();
+        // A non-UTF-8 byte in piped input must ERROR, not silently
+        // truncate the item list to the prefix before it (audit #671) —
+        // batch then ran on fewer files than piped, all succeeding, exit 0.
+        let lines: Vec<String> = stdin
+            .lock()
+            .lines()
+            .collect::<io::Result<Vec<_>>>()
+            .map_err(|e| anyhow::anyhow!("reading batch items from stdin failed: {e}"))?;
         if !lines.is_empty() {
             return Ok(parse_item_lines(&lines.join("\n")));
         }
