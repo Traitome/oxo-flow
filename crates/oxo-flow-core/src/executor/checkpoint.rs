@@ -215,6 +215,15 @@ pub struct CheckpointState {
     pub completed_rules: BTreeSet<String>,
     /// Rules that failed during execution.
     pub failed_rules: BTreeSet<String>,
+    /// Rules submitted to the scheduler whose process had not finished when
+    /// the checkpoint was last written (issue #685). Persisted at spawn time
+    /// so an interrupted run's resume sees an honest in-flight set instead of
+    /// treating those rules as "not yet executed". Entries are transient:
+    /// every terminal transition removes the rule, and a resume clears stale
+    /// entries once (the processes they describe died with the run).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub running: BTreeSet<String>,
     /// Benchmark records keyed by rule name.
     pub benchmarks: BTreeMap<String, BenchmarkRecord>,
     /// Path to the workflow file that generated this checkpoint.
@@ -408,6 +417,7 @@ impl CheckpointState {
         Self {
             completed_rules: BTreeSet::new(),
             failed_rules: BTreeSet::new(),
+            running: BTreeSet::new(),
             benchmarks: BTreeMap::new(),
             workflow_path: None,
             workflow_git_sha: None,
@@ -502,6 +512,9 @@ impl CheckpointState {
     pub fn invalidate_reuse_records(&mut self) {
         self.completed_rules.clear();
         self.failed_rules.clear();
+        // A foreign checkpoint's running entries describe processes from a
+        // different workflow's run — meaningless here (issue #685).
+        self.running.clear();
         self.benchmarks.clear();
         self.checksums.clear();
         self.config_snapshot.clear();
@@ -545,10 +558,37 @@ impl CheckpointState {
         self.workdir = Some(path.to_string_lossy().to_string());
     }
 
+    /// Record that a rule's process has been submitted for execution
+    /// (issue #685). Written at spawn time, NOT plan time, so the persisted
+    /// running set is authoritative: a checkpoint written after spawn always
+    /// lists the rule until a terminal transition removes it.
+    pub fn mark_running(&mut self, rule: &str) {
+        self.running.insert(rule.to_string());
+    }
+
+    /// Whether the rule is currently recorded as in-flight (issue #685).
+    pub fn is_running(&self, rule: &str) -> bool {
+        self.running.contains(rule)
+    }
+
+    /// The set of rules recorded as in-flight (issue #685).
+    pub fn running_rules(&self) -> &BTreeSet<String> {
+        &self.running
+    }
+
+    /// Remove a rule from the running set without a terminal verdict
+    /// (issue #685). Used on resume to clear stale entries left by an
+    /// interrupted run — those processes died with the run, so carrying
+    /// them forward would be a lie.
+    pub fn clear_running(&mut self, rule: &str) {
+        self.running.remove(rule);
+    }
+
     /// Mark a rule as successfully completed and store its benchmark.
     pub fn mark_completed(&mut self, rule: &str, benchmark: BenchmarkRecord) {
         self.completed_rules.insert(rule.to_string());
         self.failed_rules.remove(rule);
+        self.running.remove(rule);
         self.benchmarks.insert(rule.to_string(), benchmark);
     }
 
@@ -560,12 +600,14 @@ impl CheckpointState {
     pub fn mark_completed_quiet(&mut self, rule: &str) {
         self.completed_rules.insert(rule.to_string());
         self.failed_rules.remove(rule);
+        self.running.remove(rule);
     }
 
     /// Mark a rule as failed.
     pub fn mark_failed(&mut self, rule: &str) {
         self.failed_rules.insert(rule.to_string());
         self.completed_rules.remove(rule);
+        self.running.remove(rule);
     }
 
     /// Persist execution detail for reporting (issue #83 WS2): the exit
@@ -2514,6 +2556,68 @@ mod tests {
         let loaded: CheckpointState = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.workdir, None);
         assert_eq!(loaded.workflow_path.as_deref(), Some("/wf/p.oxoflow"));
+    }
+
+    #[test]
+    fn running_set_roundtrip_and_mutator_cleanup() {
+        // issue #685: the running set is written at spawn time so a crashed
+        // run leaves an honest record. Every terminal mutator must clear
+        // the entry — a stale running mark must never survive a completed
+        // or failed transition.
+        let mut ck = CheckpointState::new();
+        ck.mark_running("trim_S1");
+        ck.mark_running("align_S1");
+        assert!(ck.is_running("trim_S1"));
+        assert_eq!(ck.running_rules().len(), 2);
+
+        let json = serde_json::to_string(&ck).unwrap();
+        assert!(json.contains("\"running\""));
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert!(loaded.is_running("align_S1"));
+
+        // Terminal transitions remove the running mark.
+        ck.mark_completed_quiet("trim_S1");
+        assert!(!ck.is_running("trim_S1"));
+        ck.mark_failed("align_S1");
+        assert!(!ck.is_running("align_S1"));
+        assert!(ck.running_rules().is_empty());
+
+        // mark_completed (full variant) clears it too, and clear_running is
+        // available for the resume-time stale cleanup.
+        ck.mark_running("qc_S1");
+        ck.mark_completed(
+            "qc_S1",
+            BenchmarkRecord {
+                rule: "qc_S1".into(),
+                wall_time_secs: 1.0,
+                max_memory_mb: None,
+                memory_limit_mb: None,
+                cpu_seconds: None,
+                retries: 0,
+                recorded_as: None,
+            },
+        );
+        assert!(!ck.is_running("qc_S1"));
+        ck.mark_running("qc_S1");
+        ck.clear_running("qc_S1");
+        assert!(!ck.is_running("qc_S1"));
+    }
+
+    #[test]
+    fn running_set_skipped_when_empty_and_legacy_loads_empty() {
+        // Empty running set stays out of the persisted JSON (smaller
+        // artifacts, order-independent persistence invariant), and legacy
+        // checkpoints without the field deserialize to an empty set.
+        let mut state = CheckpointState::new();
+        state.mark_running("a");
+        state.clear_running("a");
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("\"running\""));
+
+        let legacy: CheckpointState =
+            serde_json::from_str(r#"{"completed_rules":["x"],"failed_rules":[],"benchmarks":{}}"#)
+                .unwrap();
+        assert!(legacy.running_rules().is_empty());
     }
 
     #[test]

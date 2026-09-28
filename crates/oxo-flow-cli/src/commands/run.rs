@@ -181,6 +181,37 @@ fn diagnostic_narrate(msg: std::fmt::Arguments<'_>, run_log: Option<&SharedRunLo
     }
 }
 
+// ── Spawn watchdog (issue #685) ─────────────────────────────────────────────
+// A rule can end up marked Running in the scheduler while its task never
+// reaches a child spawn (lost wakeup in the wait/dispatch path). The engine
+// then wedges: nothing completes, nothing fails, the process idles in a
+// futex wait. The watchdog compares the scheduler's running set against the
+// executor's live child pids on a fixed tick and reports stragglers.
+
+/// How often the watchdog compares running rules against live pids.
+const SPAWN_WATCHDOG_TICK_SECS: u64 = 30;
+/// Default age at which a Running rule with no live child process is
+/// reported. Generous: legitimate env setup can take tens of minutes, and
+/// the watchdog only logs — it never kills.
+const DEFAULT_SPAWN_WATCHDOG_SECS: u64 = 600;
+const SPAWN_WATCHDOG_ENV: &str = "OXO_FLOW_SPAWN_WATCHDOG_SECS";
+
+/// Parse the watchdog threshold from the environment. Extracted as a pure
+/// function of the env so tests exercise it without process-global mutation.
+fn spawn_watchdog_threshold() -> std::time::Duration {
+    parse_spawn_watchdog_threshold(std::env::var(SPAWN_WATCHDOG_ENV).ok().as_deref())
+}
+
+/// Pure derivation: `None`/unparseable/`0` fall back to the default — `0`
+/// matches the `OXO_ENV_LOCK_TIMEOUT_SECS` convention rather than meaning
+/// "disable", so a typo can never silently turn the watchdog off.
+fn parse_spawn_watchdog_threshold(raw: Option<&str>) -> std::time::Duration {
+    raw.and_then(|v| v.parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(std::time::Duration::from_secs(DEFAULT_SPAWN_WATCHDOG_SECS))
+}
+
 /// Strip ANSI escape sequences: run-log files are plain text. Mirrors the
 /// file-side filter of `crate::logging`, which exposes no public writer.
 fn strip_ansi(text: &str) -> String {
@@ -1539,6 +1570,29 @@ pub async fn run_command(
         CheckpointState::default()
     };
     adopt_checkpoint_for_workflow(&mut loaded_checkpoint, &workflow_abs, Some(&run_log));
+    // Stale running-set cleanup (issue #685): persisted `running` entries
+    // mean the previous run died (crash / signal) between spawn and any
+    // terminal state. No task is executing those rules now — clear them
+    // once so the reuse block and resume accounting stay honest, loudly.
+    let stale_running: Vec<String> = loaded_checkpoint.running_rules().iter().cloned().collect();
+    if !stale_running.is_empty() {
+        for rule in &stale_running {
+            loaded_checkpoint.clear_running(rule);
+        }
+        diagnostic_narrate(
+            format_args!(
+                "  {} checkpoint lists {} rule(s) as running from a previous run \
+                 ({}): they died with it and will re-run.",
+                "!".yellow(),
+                stale_running.len(),
+                stale_running.join(", ")
+            ),
+            Some(&run_log),
+        );
+        if let Err(e) = loaded_checkpoint.save_to_file(&checkpoint_path) {
+            tracing::warn!("Failed to persist cleaned checkpoint: {e}");
+        }
+    }
     let checkpoint: Arc<Mutex<CheckpointState>> = Arc::new(Mutex::new(loaded_checkpoint));
 
     // Sensitive keys are needed by the snapshot-drift warning below and by
@@ -2756,6 +2810,13 @@ pub async fn run_command(
     {
         let ck = checkpoint.lock().await;
         for rule_name in &order {
+            // A rule still marked running (issue #685) is never "already
+            // completed": the previous run died with it mid-flight, its
+            // outputs may be half-written, and treating it as done would
+            // silently skip real work.
+            if ck.is_running(rule_name) {
+                continue;
+            }
             if ck.is_completed(rule_name)
                 && !rerun
                 && order_set.contains(rule_name.as_str())
@@ -2834,6 +2895,18 @@ pub async fn run_command(
     // immediately and the relative order is unchanged.
     const AGING_STEP: i32 = 1;
     let mut waited_rounds: std::collections::HashMap<String, i32> = Default::default();
+
+    // Spawn watchdog (issue #685): wall-clock time each rule was marked
+    // running, used to detect rules stuck in Running without ever spawning
+    // a child process (lost wakeup wedge). Entries are removed in the
+    // common completion funnel below; cleanup on every terminal path.
+    let mut running_since: std::collections::HashMap<String, std::time::Instant> =
+        Default::default();
+    // Rules the watchdog has already reported — one ERROR per rule per run.
+    let mut watchdog_reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let watchdog_threshold = spawn_watchdog_threshold();
+    let mut watchdog_tick =
+        tokio::time::interval(std::time::Duration::from_secs(SPAWN_WATCHDOG_TICK_SECS));
 
     // ---- main event loop -------------------------------------------------
 
@@ -2951,6 +3024,17 @@ pub async fn run_command(
 
             submitted.insert(rule_name.clone());
             sched.mark_running(rule_name);
+            // Spawn-time persistence (issue #685, ask 3): the checkpoint's
+            // running set is written when the rule actually enters flight,
+            // so a crashed run leaves an honest record for the next start.
+            {
+                let mut ck = checkpoint.lock().await;
+                ck.mark_running(rule_name);
+                if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
+                    tracing::warn!("Failed to save checkpoint (running mark): {e}");
+                }
+            }
+            running_since.insert(rule_name.clone(), std::time::Instant::now());
 
             // ---- spawn task (identical logic to pre-scheduler version) -----
             let Some(rule) = config.get_rule(rule_name).cloned() else {
@@ -3490,6 +3574,44 @@ pub async fn run_command(
                 // the signals' default dispositions.
                 None => None,
             },
+            // Spawn watchdog (issue #685): a rule stuck in Running without
+            // ever spawning a child process wedged the engine in a futex
+            // wait (empty checkpoint running-set, zero completions). Every
+            // SPAWN_WATCHDOG_TICK_SECS, compare the scheduler's running set
+            // with the executor's live child pids: any rule running longer
+            // than the threshold with NO pid at all gets one ERROR naming
+            // it. This only logs — benign waits (env setup, resource pool)
+            // are possible and the message says so.
+            _ = watchdog_tick.tick() => {
+                let live_rules: std::collections::HashSet<String> = executor
+                    .active_pids()
+                    .into_iter()
+                    .map(|(rule, _)| rule)
+                    .collect();
+                for rule in sched.running_rules() {
+                    if live_rules.contains(&rule) || watchdog_reported.contains(&rule) {
+                        continue;
+                    }
+                    let Some(started) = running_since.get(&rule) else {
+                        continue;
+                    };
+                    if started.elapsed() < watchdog_threshold {
+                        continue;
+                    }
+                    watchdog_reported.insert(rule.clone());
+                    tracing::error!(
+                        rule = %rule,
+                        running_secs = started.elapsed().as_secs(),
+                        "rule has been Running for over {}s but never spawned a child \
+                         process — likely causes: environment setup still in progress, \
+                         waiting on the resource pool, or a lost scheduler wakeup \
+                         (issue #685). The engine will keep waiting; if the rule never \
+                         starts, capture the run log and file an issue.",
+                        watchdog_threshold.as_secs()
+                    );
+                }
+                None
+            }
         };
         let Some(join_result) = join_result else {
             continue;
@@ -3592,6 +3714,7 @@ pub async fn run_command(
         };
 
         sched.mark_completed(record);
+        running_since.remove(&completed_rule);
         progress.inc(1);
 
         // ── Checkpoint re-entry processing (issue #78 P3) ───────────────────
@@ -6589,6 +6712,14 @@ pub async fn resume_command(
         .map(|cfg| cfg.rules.len().saturating_sub(completed))
         .unwrap_or(failed);
     eprintln!("  State: {completed} completed, {failed} failed, {remaining} remaining");
+    // Issue #685: entries persisting in the running set mean the prior run
+    // died mid-flight; run_command clears them (with a warning) on start.
+    if !state.running_rules().is_empty() {
+        eprintln!(
+            "  Note: {} rule(s) were still running when the previous run died; they will re-run.",
+            state.running_rules().len()
+        );
+    }
 
     if completed == 0 && failed == 0 {
         eprintln!(
@@ -6655,7 +6786,8 @@ pub async fn resume_command(
 mod tests {
     use super::{
         age_ready_list, ai_attempts, cleanup_cache_dir, closest_declared_key, known_modules_hint,
-        parse_cli_overrides, substitute_source_placeholder, suggest_jobs,
+        parse_cli_overrides, parse_spawn_watchdog_threshold, substitute_source_placeholder,
+        suggest_jobs,
     };
     use std::collections::HashSet;
 
@@ -7248,6 +7380,30 @@ shell = "cp stage1.txt stage2.txt"
         assert!(
             consumer["detail"].as_str().unwrap().contains("manifest"),
             "input-changed detail must explain the manifest mismatch, got: {consumer}"
+        );
+    }
+
+    #[test]
+    fn spawn_watchdog_threshold_parsing() {
+        // issue #685: unset, garbage, and `0` all fall back to the default
+        // — `0` matches the OXO_ENV_LOCK_TIMEOUT_SECS convention rather
+        // than meaning "disable", so a typo can never silently turn the
+        // watchdog off. The derivation is pure: no env mutation needed.
+        assert_eq!(
+            parse_spawn_watchdog_threshold(None),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("abc")),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("0")),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            parse_spawn_watchdog_threshold(Some("120")),
+            std::time::Duration::from_secs(120)
         );
     }
 }

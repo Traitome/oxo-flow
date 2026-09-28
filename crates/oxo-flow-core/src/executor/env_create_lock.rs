@@ -53,7 +53,9 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
-fn lock_timeout() -> Duration {
+// `pub(crate)`: the in-process setup mutex in `process.rs` reuses the same
+// bounded-wait derivation — one env-var, one default, no retyped copy.
+pub(crate) fn lock_timeout() -> Duration {
     std::env::var("OXO_ENV_LOCK_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
