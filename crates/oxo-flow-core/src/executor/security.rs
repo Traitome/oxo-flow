@@ -210,7 +210,19 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// bioinformatics pipelines for error handling and streaming.
 #[must_use = "shell safety validation returns a Result that must be checked"]
 pub fn validate_shell_safety(cmd: &str) -> Result<()> {
-    for (re, _name, description) in COMPILED_BLOCK_PATTERNS.iter() {
+    validate_shell_safety_categories(cmd, true)
+}
+
+/// Category scan shared by [`validate_shell_safety`] and the workdir-aware
+/// variant. `include_recursive_deletion = false` skips ONLY the
+/// `RECURSIVE_DELETION` category: the workdir variant replaces that single
+/// category with its per-target analysis, while every other danger category
+/// still applies to the whole command.
+fn validate_shell_safety_categories(cmd: &str, include_recursive_deletion: bool) -> Result<()> {
+    for (re, name, description) in COMPILED_BLOCK_PATTERNS.iter() {
+        if !include_recursive_deletion && *name == "RECURSIVE_DELETION" {
+            continue;
+        }
         if re.is_match(cmd) {
             return Err(OxoFlowError::Validation {
                 message: format!(
@@ -257,128 +269,179 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
     // operand can never contain it). Without the `)` boundary the segment
     // swallows the closing paren plus the redirect target and then fails
     // closed, false-blocking the idiom.
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
+    static FLAGS_FIRST: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"rm\s+(-\S+(?:\s+-\S+)*)\s+([^;&|<>\n)]+)").expect("static regex")
     });
     let mut targets = Vec::new();
-    for caps in RE.captures_iter(cmd) {
+    for caps in FLAGS_FIRST.captures_iter(cmd) {
         let flags: &str = caps.get(1).map_or("", |m| m.as_str());
-        let is_recursive = flags.split_whitespace().any(|f| {
-            let body = f.strip_prefix('-').unwrap_or(f);
-            // `--recursive` (after one strip) or short flags whose letter
-            // set contains r/R in ANY position: -rf, -fr, -r, -R, -rfv.
-            body == "-recursive"
-                || (body.chars().all(|c| c.is_ascii_alphabetic()) && body.contains(['r', 'R']))
-        });
-        if !is_recursive {
+        if !flags.split_whitespace().any(flag_token_is_recursive) {
             continue;
         }
         let segment = caps.get(2).map_or("", |m| m.as_str());
-        // Command substitution ($(...) and backticks) can smuggle arbitrary
-        // text into the operand list — fail closed. Bare variable
-        // expansions (`$prefix`, `${prefix}`) stay allowed: they were
-        // tokenized-as-is before this extractor existed and expand to a
-        // single path word in the cleanup idioms pipelines actually use.
-        // Balanced *surrounding* double quotes are likewise the standard
-        // defensive spelling of a single path (`rm -rf "$prefix"` in a
-        // for-loop) and carry no substitution content of their own: they
-        // are stripped below and the plain operand analyzed (issue #513:
-        // mag's prokka cleanup `rm -rf $prefix "$prefix.fa"` tripped the
-        // old blanket reject).
-        if segment.contains("$(") || segment.contains('`') {
-            return Err(OxoFlowError::Validation {
-                message: format!(
-                    "Shell command blocked: unparseable recursive deletion in '{}'",
-                    cmd
-                ),
-                rule: None,
-                suggestion: Some(
-                    "Recursive deletions must be plainly spelled out; remove substitution from \
-                     rm operands, or use a script file instead"
-                        .to_string(),
-                ),
-            });
+        targets.extend(parse_deletion_operands(segment, cmd)?);
+    }
+    // Operands-first spelling (GNU-permuted options): `rm <targets> -rf`.
+    // Both FLAGS_FIRST and the base RECURSIVE_DELETION category regexes
+    // require the flags to follow `rm` immediately, so this spelling used
+    // to fail open — silently unparsed (audit #641). Segments starting
+    // with a flag are the flags-first shape, already handled above; for
+    // the rest only a TRAILING flag cluster counts (scanning every token
+    // would misread bare all-alpha operands like `rm /a/f.txt results` as
+    // flags). Same `)` boundary as FLAGS_FIRST: without it, an
+    // operands-first `rm` inside a subshell swallows `)` plus the redirect
+    // target, the last token stops being a flag, and the invocation is
+    // missed entirely.
+    static SEGMENT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"rm\s+([^;&|<>\n)]+)").expect("static regex"));
+    for caps in SEGMENT.captures_iter(cmd) {
+        let segment = caps.get(1).map_or("", |m| m.as_str());
+        let first = segment.split_whitespace().next().unwrap_or("");
+        // A real flags-first invocation (segment starts with `-flag`) is
+        // FLAGS_FIRST's job. A leading `--` is the end-of-flags marker, not
+        // a flag — the operands-first analysis still applies to what
+        // follows (`rm -- /etc -rf`).
+        if first.starts_with('-') && first != "--" {
+            continue;
         }
-        let quote_count = segment.matches('"').count();
-        let mut apostrophes = segment.matches('\'').count();
-        // #637: the `trap 'rm -rf "$dir"' EXIT` cleanup idiom leaves the trap
-        // string's closing apostrophe at the END of the last captured operand
-        // — the segment regex stops at whitespace, not at the outer quote
-        // boundary, so the stray quote reads as unbalanced even though the
-        // rm operands themselves are fine. When exactly one token ends with
-        // `'` and dropping that trailing apostrophe restores even parity, it
-        // is that artifact: strip it and parse the remaining operands
-        // normally. Any other unbalanced shape (apostrophe mid-token, several
-        // tokens ending in quotes, odd double quotes — including the
-        // `trap "rm -rf '$dir'"` variant) still fails closed below.
-        let mut segment = segment.to_string();
-        if apostrophes % 2 != 0 && quote_count % 2 == 0 {
-            let tokens: Vec<&str> = segment.split_whitespace().collect();
-            let stray: Vec<usize> = tokens
+        let tokens: Vec<&str> = segment.split_whitespace().collect();
+        let trailing_flags = tokens
+            .iter()
+            .rev()
+            .take_while(|t| t.starts_with('-'))
+            .count();
+        if trailing_flags == 0 {
+            continue;
+        }
+        if !tokens[tokens.len() - trailing_flags..]
+            .iter()
+            .any(|t| flag_token_is_recursive(t))
+        {
+            continue;
+        }
+        targets.extend(parse_deletion_operands(segment, cmd)?);
+    }
+    Ok(targets)
+}
+
+/// Whether a single `rm` argument token is a recursive-deletion flag:
+/// `--recursive` (after one dash strip) or a short-flag cluster whose
+/// letter set contains r/R in ANY position: -rf, -fr, -r, -R, -rfv.
+fn flag_token_is_recursive(flag: &str) -> bool {
+    let body = flag.strip_prefix('-').unwrap_or(flag);
+    body == "-recursive"
+        || (body.chars().all(|c| c.is_ascii_alphabetic()) && body.contains(['r', 'R']))
+}
+
+/// Parse the operand segment of a recursive `rm` invocation into its
+/// deletion targets, failing closed on shapes that cannot be tokenized
+/// reliably (shared by the flags-first and operands-first passes).
+fn parse_deletion_operands(segment: &str, cmd: &str) -> Result<Vec<DeletionTarget>> {
+    // Command substitution ($(...) and backticks) can smuggle arbitrary
+    // text into the operand list — fail closed. Bare variable
+    // expansions (`$prefix`, `${prefix}`) stay allowed: they were
+    // tokenized-as-is before this extractor existed and expand to a
+    // single path word in the cleanup idioms pipelines actually use.
+    // Balanced *surrounding* double quotes are likewise the standard
+    // defensive spelling of a single path (`rm -rf "$prefix"` in a
+    // for-loop) and carry no substitution content of their own: they
+    // are stripped below and the plain operand analyzed (issue #513:
+    // mag's prokka cleanup `rm -rf $prefix "$prefix.fa"` tripped the
+    // old blanket reject).
+    if segment.contains("$(") || segment.contains('`') {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Shell command blocked: unparseable recursive deletion in '{}'",
+                cmd
+            ),
+            rule: None,
+            suggestion: Some(
+                "Recursive deletions must be plainly spelled out; remove substitution from \
+                     rm operands, or use a script file instead"
+                    .to_string(),
+            ),
+        });
+    }
+    let quote_count = segment.matches('"').count();
+    let mut apostrophes = segment.matches('\'').count();
+    // #637: the `trap 'rm -rf "$dir"' EXIT` cleanup idiom leaves the trap
+    // string's closing apostrophe at the END of the last captured operand
+    // — the segment regex stops at whitespace, not at the outer quote
+    // boundary, so the stray quote reads as unbalanced even though the
+    // rm operands themselves are fine. When exactly one token ends with
+    // `'` and dropping that trailing apostrophe restores even parity, it
+    // is that artifact: strip it and parse the remaining operands
+    // normally. Any other unbalanced shape (apostrophe mid-token, several
+    // tokens ending in quotes, odd double quotes — including the
+    // `trap "rm -rf '$dir'"` variant) still fails closed below.
+    let mut segment = segment.to_string();
+    if !apostrophes.is_multiple_of(2) && quote_count.is_multiple_of(2) {
+        let tokens: Vec<&str> = segment.split_whitespace().collect();
+        let stray: Vec<usize> = tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, tok)| tok.ends_with('\''))
+            .map(|(idx, _)| idx)
+            .collect();
+        if let [idx] = stray[..] {
+            let repaired = tokens
                 .iter()
                 .enumerate()
-                .filter(|(_, tok)| tok.ends_with('\''))
-                .map(|(idx, _)| idx)
-                .collect();
-            if let [idx] = stray[..] {
-                let repaired = tokens
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tok)| if i == idx { &tok[..tok.len() - 1] } else { tok })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                segment = repaired;
-                apostrophes -= 1;
-            }
+                .map(|(i, tok)| if i == idx { &tok[..tok.len() - 1] } else { tok })
+                .collect::<Vec<_>>()
+                .join(" ");
+            segment = repaired;
+            apostrophes -= 1;
         }
-        if quote_count % 2 != 0 || apostrophes % 2 != 0 {
-            return Err(OxoFlowError::Validation {
-                message: format!(
-                    "Shell command blocked: unparseable recursive deletion in '{}'",
-                    cmd
-                ),
-                rule: None,
-                suggestion: Some(
-                    "Recursive deletions must be plainly spelled out: quote each rm operand \
+    }
+    if !quote_count.is_multiple_of(2) || !apostrophes.is_multiple_of(2) {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Shell command blocked: unparseable recursive deletion in '{}'",
+                cmd
+            ),
+            rule: None,
+            suggestion: Some(
+                "Recursive deletions must be plainly spelled out: quote each rm operand \
                      individually and keep quote pairs balanced — a stray apostrophe (e.g. \
                      from a trap 'rm ...' SIGNAL string) leaves the operands unparseable; \
                      or use a script file instead"
-                        .to_string(),
-                ),
-            });
-        }
-        // A segment whose quote pairs enclose MULTIPLE operands
-        // (`rm -rf "a b" c`) still defeats whitespace tokenization: the
-        // shell sees 2 operands, a naive split sees 3. Only the form where
-        // every operand is individually fully quoted (or bare) is safe to
-        // split: `rm -rf $prefix "$prefix.fa"` → [$prefix, $prefix.fa].
-        // Any quote that survives wrapper-stripping (interior quotes,
-        // multi-operand groups) fails closed below.
-        let unquoted = strip_surrounding_quote_pairs(&segment);
-        if unquoted.contains('"') || unquoted.contains('\'') {
-            return Err(OxoFlowError::Validation {
-                message: format!(
-                    "Shell command blocked: unparseable recursive deletion in '{}'",
-                    cmd
-                ),
-                rule: None,
-                suggestion: Some(
-                    "Quote each rm operand individually (\"$dir/file a\" spans one operand); \
-                     or use a script file instead"
-                        .to_string(),
-                ),
-            });
-        }
-        for operand in unquoted.split_whitespace() {
-            if operand.starts_with('-') {
-                continue; // trailing flags after the first operand
-            }
-            targets.push(DeletionTarget {
-                target: operand.to_string(),
-            });
-        }
+                    .to_string(),
+            ),
+        });
     }
-    Ok(targets)
+    // A segment whose quote pairs enclose MULTIPLE operands
+    // (`rm -rf "a b" c`) still defeats whitespace tokenization: the
+    // shell sees 2 operands, a naive split sees 3. Only the form where
+    // every operand is individually fully quoted (or bare) is safe to
+    // split: `rm -rf $prefix "$prefix.fa"` → [$prefix, $prefix.fa].
+    // Any quote that survives wrapper-stripping (interior quotes,
+    // multi-operand groups) fails closed below.
+    let unquoted = strip_surrounding_quote_pairs(&segment);
+    if unquoted.contains('"') || unquoted.contains('\'') {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Shell command blocked: unparseable recursive deletion in '{}'",
+                cmd
+            ),
+            rule: None,
+            suggestion: Some(
+                "Quote each rm operand individually (\"$dir/file a\" spans one operand); \
+                     or use a script file instead"
+                    .to_string(),
+            ),
+        });
+    }
+    let mut operands = Vec::new();
+    for operand in unquoted.split_whitespace() {
+        if operand.starts_with('-') {
+            continue; // flags among the operands (either spelling)
+        }
+        operands.push(DeletionTarget {
+            target: operand.to_string(),
+        });
+    }
+    Ok(operands)
 }
 
 /// Remove quote characters that PAIR UP as full operand wrappers.
@@ -450,7 +513,28 @@ fn deletion_target_in_workdir(target: &str, workdir: &Path) -> bool {
         if expanded.contains("/../") || expanded.ends_with("/..") {
             return false;
         }
-        return true;
+        // A workdir-internal path may still TRAVERSE a symlink whose target
+        // sits outside the workdir (`ln -s / $WORKDIR/l` then
+        // `rm -rf $WORKDIR/l/etc`): lexical containment cannot see that.
+        // Canonicalize the deepest EXISTING ancestor and require it to stay
+        // inside; a target that does not exist yet cannot traverse anything
+        // beyond what lexical containment already vouched for.
+        let mut probe: &Path = path;
+        loop {
+            // Walking at-or-above the workdir itself cannot learn anything
+            // new: from here to the target everything is plain lexical
+            // containment, so non-existent prefixes stay allowed.
+            if probe == workdir || workdir.starts_with(probe) {
+                return true;
+            }
+            match probe.canonicalize() {
+                Ok(canonical) => return canonical.starts_with(&canonical_workdir),
+                Err(_) => match probe.parent() {
+                    Some(parent) if parent != probe => probe = parent,
+                    _ => return true,
+                },
+            }
+        }
     }
 
     // Fall back to filesystem resolution (symlinks, `.` components).
@@ -486,6 +570,12 @@ pub fn validate_shell_safety_in_workdir(cmd: &str, workdir: &Path) -> Result<()>
     match recursive_deletion_targets(cmd) {
         Ok(targets) if targets.is_empty() => validate_shell_safety(cmd),
         Ok(targets) => {
+            // The per-target verdicts below replace ONLY the
+            // RECURSIVE_DELETION category — every other danger category
+            // still applies to the whole command (audit #640: an in-workdir
+            // `rm` used to short-circuit the remaining checks, letting
+            // `rm -rf ./tmp && curl ... | sh` through).
+            validate_shell_safety_categories(cmd, false)?;
             for target in targets {
                 if !deletion_target_in_workdir(&target.target, workdir) {
                     return Err(OxoFlowError::Validation {
@@ -647,10 +737,18 @@ fn validate_wildcard_injection_inner(
 /// Returns `Ok(())` if the path is safe, or an error if traversal is detected.
 #[must_use = "path safety validation returns a Result that must be checked"]
 pub fn validate_path_safety(workdir: &Path, path: &str) -> Result<()> {
+    // Canonicalize the workdir once so the containment checks below compare
+    // like-for-like: on macOS `/tmp` is a symlink to `/private/tmp`, and
+    // comparing a canonicalized candidate against the RAW workdir falsely
+    // rejects legitimate `..` paths (audit #656). Falls back to the raw
+    // path when the workdir does not exist yet.
+    let canonical_workdir = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
     // Block absolute paths outside workdir
     if path.starts_with('/') {
         let abs_path = Path::new(path);
-        if !abs_path.starts_with(workdir) {
+        if !abs_path.starts_with(workdir) && !abs_path.starts_with(&canonical_workdir) {
             return Err(OxoFlowError::Validation {
                 message: format!("Absolute path '{}' outside working directory", path),
                 rule: None,
@@ -664,7 +762,7 @@ pub fn validate_path_safety(workdir: &Path, path: &str) -> Result<()> {
     if path.contains("..") {
         // Attempt canonicalization to see if it escapes
         if let Ok(canonical) = resolved.canonicalize() {
-            if !canonical.starts_with(workdir) {
+            if !canonical.starts_with(&canonical_workdir) {
                 return Err(OxoFlowError::Validation {
                     message: format!("Path '{}' escapes the working directory", path),
                     rule: None,
