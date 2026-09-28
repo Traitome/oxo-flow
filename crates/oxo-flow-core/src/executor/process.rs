@@ -578,17 +578,18 @@ impl LocalExecutor {
         let stderr_lower = stderr.to_lowercase();
         match kind {
             "mamba" => {
-                if stderr_lower.contains("command not found")
-                    || stderr_lower.contains("no such file")
-                {
+                // Order matters. Link-stage failures (post-link/pre-link
+                // scripts) are checked first because conda prints them with a
+                // ClobberError "path collision" wall whose pip paths contain
+                // the substring "solver" (resolver.pyc), which used to trigger
+                // a misleading dependency-conflict hint.
+                if let Some(h) = Self::conda_link_stage_hint(&stderr_lower) {
+                    Some(h)
+                } else if stderr_lower.contains("command not found") {
                     Some("mamba / micromamba is not installed or not in PATH. Install Mambaforge: https://github.com/conda-forge/miniforge".into())
                 } else if stderr_lower.contains("prefix already exists") {
                     Some("environment already exists — this should have been caught by the cache. Try running with a clean cache directory.".into())
-                } else if stderr_lower.contains("solver") || stderr_lower.contains("conflict") {
-                    Some("dependency solver conflict. Try relaxing version pins in the environment YAML, or add 'conda-forge' channel.".into())
-                } else if stderr_lower.contains("environmentfilenotfound")
-                    || stderr_lower.contains("no such file")
-                {
+                } else if stderr_lower.contains("environmentfilenotfound") {
                     Some("environment YAML file not found. Check that the path is correct and relative to the workflow file.".into())
                 } else if stderr_lower.contains("permission denied")
                     || stderr_lower.contains("operation not permitted")
@@ -598,21 +599,17 @@ impl LocalExecutor {
                             .into(),
                     )
                 } else {
-                    None
+                    Self::conda_solver_hint(&stderr_lower)
                 }
             }
             "conda" => {
-                if stderr_lower.contains("command not found")
-                    || stderr_lower.contains("no such file")
-                {
+                if let Some(h) = Self::conda_link_stage_hint(&stderr_lower) {
+                    Some(h)
+                } else if stderr_lower.contains("command not found") {
                     Some("conda is not installed or not in PATH. Install Miniconda: https://docs.conda.io/en/latest/miniconda.html".into())
                 } else if stderr_lower.contains("prefix already exists") {
                     Some("environment already exists — this should have been caught by the cache. Try running with a clean cache directory.".into())
-                } else if stderr_lower.contains("solver") || stderr_lower.contains("conflict") {
-                    Some("dependency solver conflict. Try relaxing version pins in the environment YAML, or add 'conda-forge' channel.".into())
-                } else if stderr_lower.contains("environmentfilenotfound")
-                    || stderr_lower.contains("no such file")
-                {
+                } else if stderr_lower.contains("environmentfilenotfound") {
                     Some("environment YAML file not found. Check that the path is correct and relative to the workflow file.".into())
                 } else if stderr_lower.contains("permission denied")
                     || stderr_lower.contains("operation not permitted")
@@ -622,7 +619,7 @@ impl LocalExecutor {
                             .into(),
                     )
                 } else {
-                    None
+                    Self::conda_solver_hint(&stderr_lower)
                 }
             }
             "docker" => {
@@ -665,6 +662,38 @@ impl LocalExecutor {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Detect conda/mamba link-stage failures (post-link/pre-link scripts).
+    /// These print a ClobberError "path collision" wall whose pip paths
+    /// contain "solver" as a substring of "resolver", so they must be
+    /// classified before any solver-conflict heuristic.
+    fn conda_link_stage_hint(stderr_lower: &str) -> Option<String> {
+        if stderr_lower.contains("linkerror")
+            || stderr_lower.contains("post-link")
+            || stderr_lower.contains("pre-link")
+        {
+            Some("package post-link/pre-link script failed during environment setup — usually a data-download or script failure inside the package itself, not a dependency problem; check the script output above for curl/network errors.".into())
+        } else {
+            None
+        }
+    }
+
+    /// Solver-conflict detection with tightened keywords. The old bare
+    /// "solver" substring also matched the word "resolver" inside pip
+    /// __pycache__ paths printed by ClobberError noise; these keywords
+    /// only appear in genuine dependency-resolution failures.
+    fn conda_solver_hint(stderr_lower: &str) -> Option<String> {
+        if stderr_lower.contains("unsatisfiable")
+            || stderr_lower.contains("conflicts with")
+            || stderr_lower.contains("packagesnotfound")
+            || stderr_lower.contains("could not solve")
+            || stderr_lower.contains("package(s) not found")
+        {
+            Some("dependency solver conflict. Try relaxing version pins in the environment YAML, or add 'conda-forge' channel.".into())
+        } else {
+            None
         }
     }
     async fn ensure_environment_ready(&self, rule: &Rule) -> Result<()> {
@@ -5501,5 +5530,104 @@ mod tests {
         let raw_script = build_execution_command(&rule, &values, &HashMap::new(), limits)
             .expect("script rule renders");
         assert!(raw_script.contains("scripts/calc.py") && !raw_script.contains("/wf/"));
+    }
+
+    // --- env_setup_hint classification (real stderr shapes from live runs) ---
+
+    #[test]
+    fn hint_link_stage_failure_beats_resolver_clobber_noise() {
+        // Real shape: bioconductor-genomeinfodbdata post-link curl failure
+        // wrapped in ClobberError "path collision" noise whose pip paths
+        // contain "solver" as a substring of "resolver". Must classify as a
+        // link-stage failure, NOT a dependency solver conflict.
+        let stderr = r#"ClobberError: The package 'conda-forge/noarch::sysroot_linux-64-2.34-h087de78_3' cannot be installed due to a
+path collision for 'lib/python3.14/site-packages/pip/_internal/resolver.cpython-314.pyc'.
+
+ERROR conda.core.link:_execute(1033): An error occurred while installing package 'bioconda::bioconductor-genomeinfodbdata-1.2.9-r42hdfd78af_0'.
+
+LinkError: post-link script failed for package bioconda::bioconductor-genomeinfodbdata-1.2.9-r42hdfd78af_0
+location of failed script: /opt/conda/envs/amp/bin/.bioconductor-genomeinfodbdata-post-link.sh
+==> script output <==
+stderr: + curl -L file:///tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
+curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
+"#;
+        for kind in ["mamba", "conda"] {
+            let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
+            assert!(
+                hint.contains("post-link/pre-link script failed"),
+                "{kind}: got {hint}"
+            );
+            assert!(
+                !hint.contains("dependency solver conflict"),
+                "{kind}: solver hint leaked: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn hint_clean_post_link_failure_without_noise() {
+        // Clean repro: post-link LinkError with zero ClobberError/solver
+        // keywords — previously fell through to no hint at all.
+        let stderr = "ERROR conda.core.link:_execute(1033): An error occurred while installing package 'bioconda::bioconductor-genomeinfodbdata-1.2.9-r42hdfd78af_0'.\n\nLinkError: post-link script failed for package bioconda::bioconductor-genomeinfodbdata-1.2.9-r42hdfd78af_0\ncurl: (37) Could not open file\n";
+        for kind in ["mamba", "conda"] {
+            let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
+            assert!(
+                hint.contains("data-download or script failure"),
+                "{kind}: got {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn hint_true_solver_conflict_still_fires() {
+        // Real LibMambaUnsatisfiableError (bcftools vs curl pin clash):
+        // the solver hint must keep firing.
+        let stderr = "LibMambaUnsatisfiableError: Encountered problems while solving:\n  - package bcftools-1.22-h3a4d415_0 requires htslib >=1.22,<1.25.0a0, but none of the providers can be installed\n\nCould not solve for environment specs\n└─ curl =7.86.0 * is not installable because there are no viable options\n   └─ libcurl ==7.86.0 h7bff187_0, which conflicts with any installable versions previously reported.\n";
+        for kind in ["mamba", "conda"] {
+            let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
+            assert!(
+                hint.contains("dependency solver conflict"),
+                "{kind}: got {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn hint_resolver_word_alone_does_not_trigger_solver_hint() {
+        // "resolver" (pip internals) alone must not read as a solver error.
+        let stderr = "path collision for 'lib/python3.14/site-packages/pip/_internal/resolver.cpython-314.pyc'.\n";
+        for kind in ["mamba", "conda"] {
+            assert!(LocalExecutor::env_setup_hint(kind, stderr).is_none());
+        }
+    }
+
+    #[test]
+    fn hint_existing_arms_unchanged() {
+        let cases: [(&str, &str, &str); 4] = [
+            (
+                "conda",
+                "zsh: command not found: conda",
+                "conda is not installed",
+            ),
+            (
+                "mamba",
+                "CondaError: prefix already exists: /tmp/env-abc",
+                "already exists",
+            ),
+            (
+                "conda",
+                "EnvironmentFileNotFound: '/wf/envs/x.yaml' file not found",
+                "YAML file not found",
+            ),
+            (
+                "mamba",
+                "mkdir /wf/.oxo-flow/env: permission denied",
+                "permission denied",
+            ),
+        ];
+        for (kind, stderr, expect) in cases {
+            let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
+            assert!(hint.contains(expect), "{kind}: {hint} lacks {expect}");
+        }
     }
 }
