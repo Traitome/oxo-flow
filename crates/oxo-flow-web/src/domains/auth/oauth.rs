@@ -178,8 +178,16 @@ impl OAuthConfig {
 
                 // Use the ORCID iD as the URL path, access token in the Authorization header.
                 // Previously the access token was embedded in the URL path, which leaked it
-                // into proxy logs, browser history, and referrer headers.
-                let orcid_path = orcid_id.unwrap_or(access_token);
+                // into proxy logs, browser history, and referrer headers —
+                // a token response WITHOUT the iD must error out, never
+                // fall back to substituting the token into the path
+                // (audit #663: that fallback silently reintroduced the leak).
+                let Some(orcid_path) = orcid_id else {
+                    return Err(
+                        "ORCID token response did not include an ORCID iD; cannot resolve the identity"
+                            .to_string(),
+                    );
+                };
 
                 let resp = client
                     .get(format!("{orcid_api}/{orcid_path}/record"))

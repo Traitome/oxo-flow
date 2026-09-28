@@ -575,25 +575,30 @@ pub async fn list_runs(
         binds.push(pattern.clone());
         binds.push(pattern);
     }
+    // The cursor is a page bound, not a filter: it applies to the row
+    // SELECT but NOT to the total COUNT, which reports the whole matching
+    // population and must not shrink with every page (audit #665).
+    let mut page_clauses = where_clauses.clone();
+    let mut page_binds = binds.clone();
     if let Some(cursor) = &params.cursor {
-        where_clauses.push("created_at < ?".to_string());
-        binds.push(cursor.clone());
+        page_clauses.push("created_at < ?".to_string());
+        page_binds.push(cursor.clone());
     }
-    let where_sql = if where_clauses.is_empty() {
+    let page_where_sql = if page_clauses.is_empty() {
         String::new()
     } else {
-        format!(" WHERE {}", where_clauses.join(" AND "))
+        format!(" WHERE {}", page_clauses.join(" AND "))
     };
 
-    // where_sql only ever contains the static fragments pushed above
-    // (column names and `?` placeholders) — all user input rides in `binds`.
-    // Fetch limit+1 to detect a next page without a COUNT(*).
+    // page_where_sql only ever contains the static fragments pushed above
+    // (column names and `?` placeholders) — all user input rides in the
+    // binds. Fetch limit+1 to detect a next page without a COUNT(*).
     let sql = format!(
-        "SELECT * FROM runs{where_sql} ORDER BY created_at DESC LIMIT {}",
+        "SELECT * FROM runs{page_where_sql} ORDER BY created_at DESC LIMIT {}",
         limit + 1
     );
     let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
-    for bind in &binds {
+    for bind in &page_binds {
         query = query.bind(bind);
     }
     let rows: Vec<models::RunRow> = query.fetch_all(pool).await.map_err(|e| {
@@ -611,11 +616,23 @@ pub async fn list_runs(
     } else {
         &rows[..]
     };
-    let next_cursor = rows.last().map(|r| r.created_at.clone());
+    // `next_cursor: null` means "last page" (the documented contract, and
+    // what the frontend Load More relies on) — only emit it when another
+    // page actually exists (audit #651).
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.created_at.clone())
+    } else {
+        None
+    };
 
-    // Total = number of rows matching the filters (no LIMIT). Bounded by
-    // SQLite's rowid; fine for a per-deployment run log.
-    let count_sql = format!("SELECT COUNT(*) FROM runs{where_sql}");
+    // Total = number of rows matching the FILTERS (no LIMIT, no cursor).
+    // Bounded by SQLite's rowid; fine for a per-deployment run log.
+    let filter_where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_clauses.join(" AND "))
+    };
+    let count_sql = format!("SELECT COUNT(*) FROM runs{filter_where_sql}");
     let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
     for bind in &binds {
         count_query = count_query.bind(bind);
@@ -2134,6 +2151,22 @@ pub async fn resume_checkpoint(
     // and retry (#519).
     let quota_usage = quota_usage_for(&run.pipeline_snapshot);
     check_spawn_budget(&user.id, quota_usage)?;
+
+    // The resume spawns a second CLI into the SAME workdir; an active run
+    // would put two CLIs on one checkpoint concurrently — the exact hazard
+    // retry_run guards against. Only terminal runs can be resumed
+    // (audit #661).
+    if matches!(run.status.as_str(), "running" | "queued" | "paused") {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "RUN_NOT_TERMINAL",
+            format!(
+                "Run {id} is still {} — wait for it to finish (or cancel it) before resuming from its checkpoint",
+                run.status
+            ),
+        ));
+    }
+
     let workdir = run.workdir.clone().ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,

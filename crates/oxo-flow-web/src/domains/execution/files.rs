@@ -620,11 +620,7 @@ pub async fn get_run_file(
                 };
                 let mut headers = HeaderMap::new();
                 headers.insert("content-type", HeaderValue::from_static("application/zip"));
-                headers.insert(
-                    "content-disposition",
-                    HeaderValue::from_str(&format!("attachment; filename=\"{dir_name}.zip\""))
-                        .unwrap(),
-                );
+                headers.insert("content-disposition", zip_content_disposition(&dir_name));
                 headers.insert(
                     "cache-control",
                     HeaderValue::from_static("private, max-age=60"),
@@ -646,6 +642,23 @@ pub async fn get_run_file(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
     serve_file(&target, q.preview.unwrap_or(false), range).await
+}
+
+/// `content-disposition` for a directory zip download. Directory names are
+/// filesystem data and are NOT guaranteed to be printable ASCII: control
+/// bytes are legal filename characters on Linux, and `HeaderValue::from_str`
+/// rejects them — fall back to a stable name instead of panicking the
+/// handler (audit #643; the single-file download path has the same
+/// fallback). Non-ASCII but http-legal names (CJK, em-dash — the crate
+/// accepts obs-text bytes) would "send" fine yet arrive mojibake'd through
+/// every header-decoding browser, so they get the ASCII fallback too.
+fn zip_content_disposition(dir_name: &str) -> HeaderValue {
+    if dir_name.is_ascii() {
+        HeaderValue::from_str(&format!("attachment; filename=\"{dir_name}.zip\""))
+            .unwrap_or(HeaderValue::from_static("attachment; filename=\"run.zip\""))
+    } else {
+        HeaderValue::from_static("attachment; filename=\"run.zip\"")
+    }
 }
 
 #[utoipa::path(
@@ -884,6 +897,27 @@ pub async fn list_uploaded_files(authenticated: Option<Extension<CurrentUser>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A directory whose name is not visible ASCII (CJK, em-dash, ...) must
+    /// produce a fallback header, not a panicked handler (audit #643).
+    #[test]
+    fn zip_disposition_falls_back_for_non_ascii_names() {
+        assert_eq!(
+            zip_content_disposition("结果").as_bytes(),
+            &b"attachment; filename=\"run.zip\""[..]
+        );
+        assert_eq!(
+            zip_content_disposition("2026\u{2014}09\u{2014}28").as_bytes(),
+            &b"attachment; filename=\"run.zip\""[..]
+        );
+        assert!(
+            zip_content_disposition("sample-1")
+                .to_str()
+                .unwrap()
+                .contains("sample-1.zip"),
+            "ASCII names keep the real directory name"
+        );
+    }
 
     /// A preview of a file far larger than the cap must return only the
     /// capped prefix (the read itself is streamed — reading the whole file
