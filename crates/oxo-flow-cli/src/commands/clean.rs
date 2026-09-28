@@ -187,6 +187,12 @@ pub fn clean_command(
                 deleted,
                 failed
             );
+            if failed > 0 {
+                // #540 semantics (scripts read the exit code) apply to the
+                // orphan branch too (audit #667) — exit non-zero so a
+                // reclaim script knows `.oxo-flow/chunks` is not clean.
+                anyhow::bail!("clean: {failed} orphan director(y/ies) failed to delete");
+            }
         }
         return Ok(());
     }
@@ -373,7 +379,11 @@ pub fn clean_command(
                 );
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).ok();
-                if !input.trim().eq_ignore_ascii_case("y") {
+                // Accept `y` AND `yes`, matching the bundle-run and AI-tool
+                // approval prompts — muscle memory typing `yes` here used to
+                // silently cancel with exit 0 (audit #671).
+                let answer = input.trim();
+                if !answer.eq_ignore_ascii_case("y") && !answer.eq_ignore_ascii_case("yes") {
                     eprintln!("  Cancelled.");
                     return Ok(());
                 }

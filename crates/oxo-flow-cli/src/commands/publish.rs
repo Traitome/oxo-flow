@@ -311,7 +311,7 @@ pub fn publish_command(
 /// staging dir on the publisher's machine, or plant `../` entry names the
 /// consumer-side extractor would follow (issue #297 item 7; POSIX-only —
 /// oxo-flow targets Linux/macOS).
-fn ensure_safe_bundle_path(rel_path: &str) -> Result<()> {
+pub(crate) fn ensure_safe_bundle_path(rel_path: &str) -> Result<()> {
     if rel_path.is_empty() {
         anyhow::bail!("bundle path is empty");
     }
