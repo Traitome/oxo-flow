@@ -8401,6 +8401,19 @@ waiter logs every 60s and a timeout fails the rule with the lock path
 in the diagnostic instead of hanging the run. The holder's pid is
 written into the lock file for diagnosis. On shared accounts, one
 user's slow solve only blocks creators of that same environment.</p>
+<p><strong>Spawn watchdog</strong> — a rule can in principle sit in the <em>Running</em> state
+without ever spawning a child process (a lost scheduler wakeup, an
+environment still being set up, or waiting on the resource pool).
+Every 30s the engine compares rules it considers running against the
+processes it can actually see; a rule that has been Running for over
+<code>OXO_FLOW_SPAWN_WATCHDOG_SECS</code> (default 600) with no child process at
+all is reported by name with a <code>tracing::error!</code> entry. The watchdog
+only logs — it never kills — because the common causes are benign and
+self-resolving; if a named rule never starts, capture the run log and
+file an issue. Relatedly, the in-process environment-setup mutex now
+waits on the same bounded schedule as the cross-process lock
+(<code>OXO_ENV_LOCK_TIMEOUT_SECS</code>, logging every 60s) so a task stuck behind
+another task's env creation becomes visible instead of hanging silently.</p>
 <p><strong>Array-valued <code>{config.*}</code></strong> — a <code>[config]</code> key holding an array renders
 as a space-joined list in the shell (<code>["a", "b"]</code> → <code>a b</code>), matching the
 <code>{input}</code> convention; iterate with <code>for x in {config.tools}</code>.</p>
