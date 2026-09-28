@@ -346,9 +346,7 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         if error_count > 0 || (strict && warning_count > 0) {
             // Return Err instead of process::exit so `test --json` can
             // compose this step into its aggregate document (audit #666).
-            anyhow::bail!(
-                "lint failed: {error_count} error(s), {warning_count} warning(s)"
-            );
+            anyhow::bail!("lint failed: {error_count} error(s), {warning_count} warning(s)");
         }
         return Ok(());
     }
