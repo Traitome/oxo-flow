@@ -190,16 +190,29 @@ pub fn spawn_remote_run(
             return;
         };
 
+        // Only a still-queued run may transition to running: a cancel that
+        // lands between create and launch must WIN, not be overwritten back
+        // to running (audit #659; mirrors the local executor's
+        // `AND status = 'queued'` predicate).
         let started = chrono::Utc::now();
-        if let Err(e) = sqlx::query(
-            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? WHERE id = ?",
+        match sqlx::query(
+            "UPDATE runs SET status = 'running', phase = 'executing', started_at = ? \
+             WHERE id = ? AND status = 'queued'",
         )
         .bind(started)
         .bind(&run_id)
         .execute(pool)
         .await
         {
-            tracing::error!("Failed to update remote run {run_id} to running: {e}");
+            Ok(res) if res.rows_affected() == 0 => {
+                tracing::info!("remote run {run_id} was cancelled before launch — not starting");
+                unregister_remote(&run_id);
+                return;
+            }
+            Err(e) => {
+                tracing::error!("Failed to update remote run {run_id} to running: {e}");
+            }
+            Ok(_) => {}
         }
         broadcast_event_for(
             "run_started",
@@ -214,6 +227,22 @@ pub fn spawn_remote_run(
                 &format!("staging to {} failed: {e}", cluster.ssh_host),
             )
             .await;
+            return;
+        }
+
+        // A cancel landing DURING staging must win too: re-check before the
+        // wrapper is written and launched, or the cancel that already
+        // returned 200 silently executes anyway (audit #659).
+        let cancelled_during_staging: Option<String> =
+            sqlx::query_scalar("SELECT status FROM runs WHERE id = ? AND status = 'cancelled'")
+                .bind(&run_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+        if cancelled_during_staging.is_some() {
+            tracing::info!("remote run {run_id} was cancelled during staging — not launching");
+            unregister_remote(&run_id);
             return;
         }
 
@@ -241,7 +270,12 @@ pub fn spawn_remote_run(
             }
         }
 
-        // 3. poll .exit-code every 5s.
+        // 3. poll .exit-code every 5s. One transient SSH error (login-node
+        // restart, network blip) must not permanently fail the run while
+        // the wrapper keeps executing remotely — tolerate a few consecutive
+        // errors before giving up (audit #662).
+        const POLL_ERROR_TOLERANCE: u32 = 5;
+        let mut poll_errors: u32 = 0;
         let poll_cmd = format!(
             "cat {}/.exit-code 2>/dev/null || echo __RUNNING__",
             shell_quote(&remote_dir)
@@ -255,11 +289,20 @@ pub fn spawn_remote_run(
                     .await
                     .ok();
             if cancelled.is_some() {
+                // The wrapper is live on the login node by now — a bare
+                // unregister would orphan it (audit #659). Kill it first;
+                // best-effort: the run row is already terminal either way.
+                if let Err(e) = cancel_remote(&cluster, &run_id).await {
+                    tracing::warn!("remote cancel pkill for {run_id} failed: {e}");
+                }
                 unregister_remote(&run_id);
                 return;
             }
             match remote_exec(&cluster, &poll_cmd).await {
-                Ok((_, out)) if out.trim() == "__RUNNING__" => continue,
+                Ok((_, out)) if out.trim() == "__RUNNING__" => {
+                    poll_errors = 0;
+                    continue;
+                }
                 Ok((_, out)) => {
                     let code = out.trim().parse::<i32>().unwrap_or(1);
                     // 4. pull results back so the local file layer serves
@@ -277,7 +320,26 @@ pub fn spawn_remote_run(
                     return;
                 }
                 Err(e) => {
-                    mark_failed(&run_id, &format!("remote poll failed: {e}")).await;
+                    poll_errors += 1;
+                    if poll_errors < POLL_ERROR_TOLERANCE {
+                        tracing::warn!(
+                            "remote poll for {run_id} failed ({poll_errors}/{POLL_ERROR_TOLERANCE} consecutive): {e}"
+                        );
+                        continue;
+                    }
+                    // Give up — but do not orphan the remote workflow: kill
+                    // the wrapper before failing the row, so a retry cannot
+                    // collide with the still-live first invocation (#662).
+                    if let Err(e) = cancel_remote(&cluster, &run_id).await {
+                        tracing::warn!("remote cancel pkill for {run_id} failed: {e}");
+                    }
+                    mark_failed(
+                        &run_id,
+                        &format!(
+                            "remote poll failed {poll_errors} times in a row (last error: {e})"
+                        ),
+                    )
+                    .await;
                     return;
                 }
             }
