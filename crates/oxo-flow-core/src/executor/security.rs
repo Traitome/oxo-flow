@@ -285,13 +285,10 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
     // Both FLAGS_FIRST and the base RECURSIVE_DELETION category regexes
     // require the flags to follow `rm` immediately, so this spelling used
     // to fail open — silently unparsed (audit #641). Segments starting
-    // with a flag are the flags-first shape, already handled above; for
-    // the rest only a TRAILING flag cluster counts (scanning every token
-    // would misread bare all-alpha operands like `rm /a/f.txt results` as
-    // flags). Same `)` boundary as FLAGS_FIRST: without it, an
-    // operands-first `rm` inside a subshell swallows `)` plus the redirect
-    // target, the last token stops being a flag, and the invocation is
-    // missed entirely.
+    // with a flag are the flags-first shape, already handled above. Same
+    // `)` boundary as FLAGS_FIRST: without it, an operands-first `rm`
+    // inside a subshell swallows `)` plus the redirect target and the
+    // invocation is missed entirely (#675).
     static SEGMENT: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"rm\s+([^;&|<>\n)]+)").expect("static regex"));
     for caps in SEGMENT.captures_iter(cmd) {
@@ -305,17 +302,16 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
             continue;
         }
         let tokens: Vec<&str> = segment.split_whitespace().collect();
-        let trailing_flags = tokens
+        // GNU rm permutes options, so a recursive flag is recognized in ANY
+        // position (`rm <in> -rf <out>` is a real out-of-workdir deletion —
+        // a trailing-cluster-only scan missed it). Only a DASH-MARKED token
+        // counts: a bare all-alpha operand like `results` is never a flag,
+        // and a file literally named `-r` must be spelled `./-r` or
+        // `rm -- -r`, where the end-of-flags marker keeps the operand parse
+        // honest.
+        if !tokens
             .iter()
-            .rev()
-            .take_while(|t| t.starts_with('-'))
-            .count();
-        if trailing_flags == 0 {
-            continue;
-        }
-        if !tokens[tokens.len() - trailing_flags..]
-            .iter()
-            .any(|t| flag_token_is_recursive(t))
+            .any(|t| t.starts_with('-') && flag_token_is_recursive(t))
         {
             continue;
         }

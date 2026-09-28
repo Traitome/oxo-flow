@@ -1950,6 +1950,31 @@ fn workdir_safety_blocks_options_after_operands_outside_workdir() {
     );
 }
 
+#[test]
+fn workdir_safety_blocks_interleaved_flags_outside_workdir() {
+    // GNU rm permutes options, so `rm <in> -rf <out>` is a REAL recursive
+    // deletion of the outside path — the operands-first extractor must
+    // recognize dash-marked flags in any position, not only trailing
+    // (follow-up to #641's trailing-cluster scan).
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("rm /data/run/a -rf /etc", workdir).is_err(),
+        "interleaved flags with an outside target must block"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm /data/run/a -r b /etc", workdir).is_err(),
+        "interleaved -r with an outside operand must block"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm /data/run/a -rf /data/run/b", workdir).is_ok(),
+        "interleaved flags with all targets inside stay allowed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -- -r /etc", workdir).is_err(),
+        "end-of-flags marker keeps the recursive detection honest"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn workdir_safety_blocks_deletion_through_workdir_symlink() {
