@@ -637,6 +637,39 @@
           "type": "integer"
         }
       }
+    },
+    "ai": {
+      "type": "object",
+      "description": "AI companion activation and tuning (issue #634); credentials stay in env/config files, never here",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "max_retries": {
+          "type": "integer"
+        },
+        "auto_fix": {
+          "type": "string"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "team_profile": {
+          "type": "string"
+        }
+      }
     }
   },
   "$defs": {

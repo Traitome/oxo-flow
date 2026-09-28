@@ -26,6 +26,7 @@ use crate::error::{OxoFlowError, Result};
 /// (a documented flagship section) was flagged "unknown" by S006 while
 /// parsing fine (E017 accepted it).
 pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
+    "ai",
     "citation",
     "cluster",
     "config",
@@ -52,6 +53,7 @@ pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
 /// What a top-level typo most likely meant: a top-level section, or the
 /// `[workflow]` key the author wrote as a section of its own.
 const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
+    "ai",
     "citation",
     "cluster",
     "config",
@@ -136,6 +138,21 @@ const INCLUDE_KEYS: &[&str] = &[
 
 /// Keys of the `[citation]` table.
 const CITATION_KEYS: &[&str] = &["authors", "doi", "title", "url"];
+
+/// Keys of the `[ai]` table (issue #634) — mirrors the keys
+/// `oxo_flow_ai::config::AiConfig::from_workflow_toml` reads. `api_key` and
+/// `api_url` are deliberately absent: that reader never takes credentials
+/// from workflow files.
+const AI_KEYS: &[&str] = &[
+    "auto_fix",
+    "enabled",
+    "max_retries",
+    "model",
+    "provider",
+    "skills",
+    "team_profile",
+    "temperature",
+];
 
 /// Keys of the `[webhook]` table (issue #227 item 1) — mirrors
 /// `crate::webhook::WebhookConfig`.
@@ -404,6 +421,7 @@ fn unknown(location: &str, key: &str, candidates: &[&str]) -> UnknownKey {
 /// A known key whose value is a table with its own whitelist.
 fn nested_table(key: &str) -> Option<&'static [&'static str]> {
     match key {
+        "ai" => Some(AI_KEYS),
         "citation" => Some(CITATION_KEYS),
         "cluster" => Some(CLUSTER_KEYS),
         "combine" => Some(COMBINE_KEYS),
@@ -712,6 +730,51 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 16, "expected the full 16-workflow gallery");
+    }
+
+    #[test]
+    fn accepts_the_documented_ai_section() {
+        // Issue #634: `[ai] enabled = true` is the documented activation
+        // path (AGENTS.md, docs/guide/src/reference/ai-cli.md) but the
+        // whitelist rejected it with E017 before the AI config reader ever
+        // saw the file.
+        let toml = r#"
+            [workflow]
+            name = "wf"
+
+            [ai]
+            enabled = true
+            provider = "deepseek"
+            model = "deepseek-chat"
+            max_retries = 6
+            auto_fix = "suggest"
+            temperature = 0.2
+            skills = ["my-skill"]
+            team_profile = "compact"
+
+            [[rules]]
+            name = "r"
+            shell = "true"
+        "#;
+        assert!(errors(toml).is_empty(), "{:?}", errors(toml));
+    }
+
+    #[test]
+    fn reports_an_ai_section_key_typo() {
+        let toml = r#"
+            [ai]
+            enable = true
+
+            [[rules]]
+            name = "r"
+            shell = "true"
+        "#;
+        let errs = errors(toml);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0].contains("'enable'") && errs[0].contains("'enabled'"),
+            "{errs:?}"
+        );
     }
 
     // ---- typo'd keys ---------------------------------------------------------
@@ -1093,6 +1156,7 @@ mod tests {
             );
         }
         for (keys, pointer) in [
+            (AI_KEYS, "/properties/ai"),
             (DEFAULTS_KEYS, "/properties/defaults"),
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
