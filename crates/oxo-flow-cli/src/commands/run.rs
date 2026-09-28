@@ -3014,16 +3014,36 @@ pub async fn run_command(
                 // Remote inputs record (scheme, key, size, etag) when a cloud
                 // backend is registered (issue #78 P2); without one they
                 // degrade gracefully (warning + entry skipped).
+                // A failed snapshot is narrated, not swallowed (issue #633):
+                // with no manifest recorded, every later run re-invalidates
+                // this rule — the least the user can expect is to be told.
                 let input_manifest =
-                    oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
+                    match oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
                         &rule,
                         workdir_actual.as_ref(),
                         &wildcard_values,
                         &crate::commands::run_preview::storage_resolver(),
                     )
                     .await
-                    .ok()
-                    .flatten();
+                    {
+                        Ok(manifest) => manifest,
+                        Err(e) => {
+                            let msg = format!("could not snapshot inputs: {e}");
+                            diagnostic_narrate(
+                                format_args!(
+                                    "  {} could not snapshot inputs of rule '{}' — {} (no manifest recorded; later runs may re-execute it)",
+                                    "⚠".yellow(),
+                                    rule_name,
+                                    oxo_flow_core::executor::process::mask_sensitive(
+                                        &msg,
+                                        &sensitive_values,
+                                    )
+                                ),
+                                Some(&task_run_log),
+                            );
+                            None
+                        }
+                    };
 
                 let result = executor
                     .execute_rule_with_bindings(&rule, &wildcard_values, &typed_config, &instance_bindings)
@@ -3108,15 +3128,33 @@ pub async fn run_command(
                             // then sees the mismatch and re-executes this
                             // rule instead of serving outputs built from a
                             // mixed file state.
-                            let post_manifest = oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
-                                &rule,
-                                workdir_actual.as_ref(),
-                                &wildcard_values,
-                                &crate::commands::run_preview::storage_resolver(),
-                            )
-                .await
-                            .ok()
-                            .flatten();
+                            let post_result =
+                                oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
+                                    &rule,
+                                    workdir_actual.as_ref(),
+                                    &wildcard_values,
+                                    &crate::commands::run_preview::storage_resolver(),
+                                )
+                                .await;
+                            let post_manifest = match post_result {
+                                Ok(manifest) => manifest,
+                                Err(e) => {
+                                    let msg = format!("could not re-snapshot inputs: {e}");
+                                    diagnostic_narrate(
+                                        format_args!(
+                                            "  {} could not re-snapshot inputs of rule '{}' — {} (mid-run input changes cannot be detected for it)",
+                                            "⚠".yellow(),
+                                            rule_name,
+                                            oxo_flow_core::executor::process::mask_sensitive(
+                                                &msg,
+                                                &sensitive_values,
+                                            )
+                                        ),
+                                        Some(&task_run_log),
+                                    );
+                                    None
+                                }
+                            };
                             if let (Some(pre), Some(post)) = (&input_manifest, &post_manifest) {
                                 let changes =
                                     oxo_flow_core::executor::checkpoint::manifest_changes(

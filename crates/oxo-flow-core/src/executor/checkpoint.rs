@@ -1025,7 +1025,29 @@ pub fn snapshot_input_manifest(
             }
             continue;
         }
-        collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries)?;
+        if let Err(e) =
+            collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries)
+        {
+            if rule.optional.is_optional() {
+                // Optional rule (`optional = true`/`"any"`, issue #633): a
+                // permanently-absent declared input — its producer was never
+                // instantiated (input_groups matched no files, or the
+                // endedness filter dropped it) — must not poison the whole
+                // snapshot. Skip the entry like the remote-path degradation
+                // above: the runtime skip semantics (`optional_inputs_missing`)
+                // already govern whether the rule may run, and a recorded
+                // partial manifest is what makes the completed rule stable
+                // across runs. Non-optional rules still propagate — a missing
+                // required input is genuine invalidation.
+                tracing::warn!(
+                    input = %expanded,
+                    error = %e,
+                    "optional input absent at snapshot time; entry skipped"
+                );
+                continue;
+            }
+            return Err(e);
+        }
     }
 
     if !saw_resolvable {
@@ -2738,6 +2760,63 @@ mod tests {
         assert!(
             snapshot_input_manifest(&rule, &wd, &HashMap::new(), &StorageResolver::with_local())
                 .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn manifest_optional_rule_records_partial_snapshot_for_absent_input() {
+        // Issue #633: an optional rule (`optional = true`/`"any"`) whose
+        // producer was never instantiated (input_groups matched no files /
+        // endedness filter) has a permanently-absent declared input. The
+        // snapshot must skip that entry and record the rest — otherwise no
+        // manifest is ever written and every run fully re-runs the rule.
+        let wd = temp_workdir("optional-absent");
+        write_file(&wd, "data/a.txt", "a");
+        let mut rule = list_rule("r", &["data/a.txt", "data/never_produced.txt"]);
+        rule.optional = crate::rule::OptionalMode::Any;
+        let manifest =
+            snapshot_input_manifest(&rule, &wd, &HashMap::new(), &StorageResolver::with_local())
+                .expect("optional rule with an absent input still snapshots");
+        let paths: Vec<&str> = manifest
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| e.path.as_str())
+            .collect();
+        assert_eq!(paths, ["data/a.txt"]);
+
+        // Same shape with `optional = true`.
+        let mut all_mode = list_rule("all_mode", &["data/never_produced.txt"]);
+        all_mode.optional = crate::rule::OptionalMode::All(true);
+        let all_manifest = snapshot_input_manifest(
+            &all_mode,
+            &wd,
+            &HashMap::new(),
+            &StorageResolver::with_local(),
+        )
+        .unwrap();
+        assert!(all_manifest.is_some());
+        assert!(all_manifest.unwrap().is_empty());
+
+        // And the detection side still names the absent pattern so
+        // tombstone-aware callers can find its (non-existent) producer.
+        assert_eq!(
+            missing_input_patterns(&rule, &wd, &HashMap::new()),
+            vec!["data/never_produced.txt".to_string()]
+        );
+
+        // A required rule with the same absent input still errs — a missing
+        // required input is genuine invalidation, not absence by design.
+        let required = list_rule("req", &["data/never_produced.txt"]);
+        assert!(
+            snapshot_input_manifest(
+                &required,
+                &wd,
+                &HashMap::new(),
+                &StorageResolver::with_local(),
+            )
+            .is_err()
         );
         let _ = std::fs::remove_dir_all(&wd);
     }
