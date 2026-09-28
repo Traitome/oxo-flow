@@ -1134,7 +1134,20 @@ fn emit(events: &mut std::fs::File, t: &str, rule: &str, job: Option<&str>, reas
     if let Some(r) = reason {
         obj["reason"] = serde_json::Value::String(r.to_string());
     }
-    let _ = writeln!(events, "{obj}");
+    if let Err(e) = writeln!(events, "{obj}") {
+        // The events stream is the cluster run's audit trail — silently
+        // swallowing write failures (full disk, closed handle) truncated
+        // the trail with no warning anywhere, defeating the post-mortem
+        // analysis this file exists for (audit #655). Warn once; the run
+        // itself continues unaffected.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static EMIT_WARNED: AtomicBool = AtomicBool::new(false);
+        if !EMIT_WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "cluster events.jsonl write failed — the event trail from here on is incomplete: {e}"
+            );
+        }
+    }
 }
 
 fn write_status(job_dir: &Path, job_id: &str, command: &str, state: &str) -> Result<()> {
