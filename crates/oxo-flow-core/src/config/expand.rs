@@ -470,6 +470,17 @@ impl WorkflowConfig {
         // used to print 30+ identical WARN lines.
         let mut missing_meta_columns: HashMap<String, Vec<String>> = HashMap::new();
 
+        // Rules that mention a pair wildcard but have no pair fan-out
+        // source left (issue #639 Behavior 1): `--samples` can drop every
+        // [[pairs]] entry (pairs-as-regions workflows carry non-sample
+        // names there), and pair-level `when` gates can exclude the whole
+        // table. Collected per rule and emitted once after the loop —
+        // these rules fall through the no-expansion branch and execute as
+        // unexpanded templates, which the execution-time residual-wildcard
+        // gate rejects with advice ("declare a value source") that does
+        // not fit the actual cause.
+        let mut pair_orphan_rules: Vec<String> = Vec::new();
+
         for rule in &self.rules {
             if !rule.input_groups.is_empty() {
                 // Per-sample multi-file grouping (issue #227 item 3 — the
@@ -563,6 +574,12 @@ impl WorkflowConfig {
                 })
             });
             let uses_pair_wildcard = !pair_combos.is_empty() && mentions_pair;
+            if mentions_pair && pair_combos.is_empty() {
+                // Collector before the fresh-wildcard `continue` below:
+                // deferred consumers that lost their pair source are
+                // flagged too (collectors never short-circuit).
+                pair_orphan_rules.push(rule.name.clone());
+            }
 
             let mentions_group = trigger_text.iter().any(|t| {
                 GROUP_WILDCARDS.iter().any(|w| {
@@ -1082,6 +1099,22 @@ impl WorkflowConfig {
                 }
                 expanded_rules.push(rule.clone());
             }
+        }
+
+        // Aggregated pair-orphan report (issue #639): one warn naming every
+        // rule whose pair fan-out source vanished (dropped by `--samples`
+        // filtering, excluded by pair-level `when`, or no [[pairs]] left at
+        // all). Without it the rule executes as an unexpanded template and
+        // the runtime residual-wildcard gate reports advice that does not
+        // match the cause.
+        if !pair_orphan_rules.is_empty() {
+            pair_orphan_rules.sort();
+            tracing::warn!(
+                rules = pair_orphan_rules.len(),
+                "{n} rule(s) reference a pair wildcard ({{pair_id}}/{{experiment}}/{{control}}, …) but no [[pairs]] entries remain after filtering — they will execute as unexpanded templates and fail the execution-time wildcard check: {rules}",
+                n = pair_orphan_rules.len(),
+                rules = pair_orphan_rules.join(", ")
+            );
         }
 
         // Aggregated `{meta.<column>}` typo report (issue #375 §1): one
