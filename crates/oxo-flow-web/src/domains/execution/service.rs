@@ -21,26 +21,18 @@ pub fn create_run(
     let execution_order = dag.execution_order().map_err(|e| format!("Order: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
 
-    // Estimate memory from rules
-    let max_memory: u64 = wf
+    // Estimate memory from rules. The engine's canonical parser
+    // (`scheduler::parse_memory_mb`) is the single source of truth for
+    // units: a heuristic guess (">1000 means already MB") silently
+    // misreported legal values like `memory = "2048M"` as 2 GB in MB
+    // (= 2,097,152 MB) and `memory = "8G"` as 8 MB.
+    let memory_mb: u64 = wf
         .rules
         .iter()
         .filter_map(|r| r.effective_memory())
-        .filter_map(|m| {
-            m.replace("GB", "")
-                .replace("G", "")
-                .replace("MB", "")
-                .replace("M", "")
-                .trim()
-                .parse::<f64>()
-                .ok()
-        })
-        .fold(0.0_f64, |a, b| a.max(b)) as u64;
-    let memory_mb = if max_memory > 1000 {
-        max_memory
-    } else {
-        max_memory * 1024
-    };
+        .filter_map(oxo_flow_core::scheduler::parse_memory_mb)
+        .max()
+        .unwrap_or(0);
 
     // Rough duration estimate: 5 min per rule with parallel execution
     let max_jobs = config.max_jobs.unwrap_or(4).max(1) as u64;
@@ -271,6 +263,57 @@ output = ["hi.txt"]
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(resp.execution_plan.total_rules, 1);
         assert_eq!(resp.estimated_resources.max_threads, 2);
+    }
+
+    #[test]
+    fn create_run_memory_estimate_uses_canonical_units() {
+        // Legal `8G` must report 8192 MB, not the heuristic's 8 MB
+        // (bare "8" parsed, <1000, multiplied by 1024 — units guessed
+        // from magnitude). Likewise `2048M` is 2048 MB, not 2 GB in MB.
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+[[rules]]
+name = "a"
+memory = "8G"
+shell = "true"
+output = ["a.txt"]
+[[rules]]
+name = "b"
+resources.memory = "2048M"
+shell = "true"
+output = ["b.txt"]
+"#;
+        let config = RunConfig {
+            max_jobs: Some(2),
+            dry_run: None,
+            keep_going: None,
+            resource_budget: None,
+        };
+        let resp = create_run(toml, &config, None).unwrap();
+        assert_eq!(resp.estimated_resources.max_memory_mb, 8192);
+    }
+
+    #[test]
+    fn create_run_memory_estimate_empty_workflow_floors_at_1gb() {
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+[[rules]]
+name = "hello"
+shell = "echo hi"
+output = ["hi.txt"]
+"#;
+        let config = RunConfig {
+            max_jobs: Some(2),
+            dry_run: None,
+            keep_going: None,
+            resource_budget: None,
+        };
+        let resp = create_run(toml, &config, None).unwrap();
+        assert_eq!(resp.estimated_resources.max_memory_mb, 1024);
     }
 
     #[test]
