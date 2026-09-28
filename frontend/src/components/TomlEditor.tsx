@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { StreamLanguage } from '@codemirror/language';
@@ -15,6 +15,11 @@ interface TomlEditorProps {
 export default function TomlEditor({ value, onChange, readOnly, highlightLine }: TomlEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // #580: CodeMirror catches plugin crashes internally (logException →
+  // window.onerror → console.error) before React's error boundaries ever
+  // see them, leaving a silently-dead editor. exceptionSink hands those
+  // crashes back to us so they can surface as visible UI degradation.
+  const [crashCount, setCrashCount] = useState(0);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -33,6 +38,10 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
         // editor rendered as one flat color.
         StreamLanguage.define(toml),
         updateListener,
+        EditorView.exceptionSink.of((error) => {
+          console.error('[TomlEditor] CodeMirror plugin crashed:', error);
+          setCrashCount((c) => c + 1);
+        }),
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px', fontFamily: '"Cascadia Code", "SF Mono", "Fira Code", monospace', backgroundColor: 'var(--color-bg)', color: 'var(--color-text)' },
           '.cm-scroller': { overflow: 'auto' },
@@ -89,6 +98,22 @@ export default function TomlEditor({ value, onChange, readOnly, highlightLine }:
       });
     }
   }, [value, onChange]);
+
+  if (crashCount > 0) {
+    return (
+      <div>
+        <div className="result-bar error" role="alert">
+          <span>
+            Editor extension crashed ({crashCount} {crashCount === 1 ? 'time' : 'times'}). Editing still works, but highlighting or autocompletion may be degraded — switch modes or reload to fully reset.
+          </span>
+        </div>
+        <div
+          ref={containerRef}
+          style={{ height: '100%', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
