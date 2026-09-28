@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny secrets docs frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny secrets docs frontend-lint eval-tests
+ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests
 
 fmt:
 	cargo fmt -- --check
@@ -25,6 +25,27 @@ audit:
 ## crate-source checks (config in deny.toml, #557).
 deny:
 	cargo deny check
+
+## AWS legacy-client tripwire (#658): the RUSTSEC ignores in
+## .cargo/audit.toml and deny.toml are valid only while BOTH hold — (a) the
+## legacy hyper-0.14 stack is merely compiled in under the opt-in
+## s3-storage feature, and (b) nothing in the engine references the legacy
+## connector at runtime. This gate fails — prompting removal of the
+## ignores — the day upstream drops `hyper-014` from the client defaults
+## (h2 0.3 leaves the graph), and fails if someone introduces runtime
+## reachability, invalidating the justification. Keep in lockstep with the
+## two config files.
+aws-legacy-tripwire:
+	@if cargo tree -p oxo-flow-core --features s3-storage -i h2@0.3.27 >/dev/null 2>&1; then \
+	  echo "aws-legacy-tripwire: legacy stack still linked — advisory ignores remain valid"; \
+	else \
+	  echo "aws-legacy-tripwire: h2 0.3 is GONE from the s3-storage graph — remove the RUSTSEC ignores from .cargo/audit.toml and deny.toml now (issue #658)"; \
+	  exit 1; \
+	fi
+	@if grep -rn "hyper_014" crates --include="*.rs"; then \
+	  echo "aws-legacy-tripwire: the legacy connector is referenced in engine code — the advisory ignores no longer hold; remove them and re-assess (issue #658)"; \
+	  exit 1; \
+	fi
 
 ## Secret-scanning gate over the git history and working tree (config in
 ## .gitleaks.toml, #557). Run from the repo root: gitleaks auto-discovers
