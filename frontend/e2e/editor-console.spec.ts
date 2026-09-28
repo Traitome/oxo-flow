@@ -12,6 +12,12 @@ import { test, expect } from '@playwright/test';
 // the last interaction.
 
 test.describe('Editor session is console-error free (#580)', () => {
+  // The editor defaults to Guided mode for new users (issue #82 P1-5);
+  // the canvas assertions below need the canvas view mounted.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('oxo_editor_mode', 'canvas'));
+  });
+
   test('template load + TOML edit + guided/canvas switches emit no console errors', async ({ page }) => {
     const consoleErrors: string[] = [];
     const pageErrors: string[] = [];
