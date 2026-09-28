@@ -58,6 +58,17 @@ license-files = []
 [advisories]
 version = 2
 yanked = "deny"
+# Only the AWS legacy-client stack is knowingly accepted (issue #658):
+# compile-time presence ONLY under the opt-in `s3-storage` feature,
+# runtime-unreachable, and unfixable downstream — see .cargo/audit.toml
+# for the full justification, the RUSTSEC-2023-0071 context, and the
+# re-evaluation rule. Keep this list in lockstep with audit.toml.
+ignore = [
+    "RUSTSEC-2026-0258",
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+]
 
 [bans]
 # Duplicates warn only: a full dedupe would chase transitive bumps in
