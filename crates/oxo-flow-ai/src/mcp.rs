@@ -171,6 +171,8 @@ pub struct McpHttpClient {
     session_id: std::sync::Mutex<Option<String>>,
     http: reqwest::Client,
     server_name: String,
+    /// Exemptions for per-hop SSRF screening of redirect targets (#642).
+    allow: Vec<String>,
 }
 
 /// SSRF-screen an MCP endpoint host:port (same policy as `fetch_url`):
@@ -263,10 +265,16 @@ impl McpHttpClient {
             .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
             .collect::<String>();
         // Bound every request: a hung MCP server must fail the tool call
-        // (fail-safe), never block the AI command indefinitely.
+        // (fail-safe), never block the AI command indefinitely. Redirects
+        // are followed MANUALLY in `rpc` (policy none + re-screen per hop):
+        // the default policy follows up to 10 hops blindly, letting a
+        // hostile endpoint 302 the client into internal address space and
+        // feed the fetched body back into the model transcript (#642 —
+        // same chain #518 closed for fetch_url).
         let http = reqwest::Client::builder()
             .connect_timeout(MCP_CONNECT_TIMEOUT)
             .timeout(MCP_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| AiError::Config {
                 message: format!("failed to build MCP HTTP client: {e}"),
@@ -276,6 +284,7 @@ impl McpHttpClient {
             session_id: std::sync::Mutex::new(None),
             http,
             server_name,
+            allow,
         })
     }
 
@@ -292,24 +301,56 @@ impl McpHttpClient {
             "method": method,
             "params": params,
         });
-        let mut req = self
-            .http
-            .post(&self.base_url)
-            .header("Accept", "application/json, text/event-stream")
-            .json(&body);
-        if let Some(sid) = self.session_id.lock().unwrap().clone() {
-            req = req.header("mcp-session-id", sid);
+        // Manual redirect loop: every hop re-runs the SSRF screen before
+        // the request is sent (#642).
+        const MAX_REDIRECTS: usize = 5;
+        let mut current_url = self.base_url.clone();
+        for _hop in 0..=MAX_REDIRECTS {
+            let mut req = self
+                .http
+                .post(&current_url)
+                .header("Accept", "application/json, text/event-stream")
+                .json(&body);
+            if let Some(sid) = self.session_id.lock().unwrap().clone() {
+                req = req.header("mcp-session-id", sid);
+            }
+            let response = req.send().await.map_err(|e| AiError::Transport {
+                message: format!("MCP request to {current_url} failed: {e}"),
+            })?;
+
+            if response.status().is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| AiError::Transport {
+                        message: format!(
+                            "MCP endpoint {current_url} redirected without a Location header"
+                        ),
+                    })?;
+                let next = reqwest::Url::parse(&current_url)
+                    .and_then(|base| base.join(location))
+                    .map_err(|e| AiError::Transport {
+                        message: format!("MCP redirect Location '{location}' is invalid: {e}"),
+                    })?;
+                let next_url = next.to_string();
+                screen_mcp_endpoint(&next_url, &self.allow)?;
+                tracing::info!("MCP endpoint {current_url} redirected to {next_url}");
+                current_url = next_url;
+                continue;
+            }
+
+            if let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str()) {
+                *self.session_id.lock().unwrap() = Some(v.to_string());
+            }
+            let text = response.text().await.map_err(|e| AiError::Transport {
+                message: format!("MCP response read failed: {e}"),
+            })?;
+            return parse_rpc_response(&text, id).map_err(|e| AiError::Protocol { message: e });
         }
-        let response = req.send().await.map_err(|e| AiError::Transport {
-            message: format!("MCP request to {} failed: {e}", self.base_url),
-        })?;
-        if let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str()) {
-            *self.session_id.lock().unwrap() = Some(v.to_string());
-        }
-        let text = response.text().await.map_err(|e| AiError::Transport {
-            message: format!("MCP response read failed: {e}"),
-        })?;
-        parse_rpc_response(&text, id).map_err(|e| AiError::Protocol { message: e })
+        Err(AiError::Transport {
+            message: format!("MCP endpoint {current_url} exceeded {MAX_REDIRECTS} redirects"),
+        })
     }
 }
 

@@ -1239,11 +1239,19 @@ fn parse_openai_sse(body: &str) -> Vec<SseEvent> {
 /// two chunks, because the `\r` is dropped wherever it lands. A raw CR can
 /// only be a line terminator here: any CR inside event data is escaped
 /// inside the JSON payload.
-fn push_sse_chunk(buffer: &mut String, chunk: &str) -> Vec<String> {
-    buffer.extend(chunk.chars().filter(|c| *c != '\r'));
+/// Byte-level SSE frame splitter for network streams:
+/// accumulate RAW bytes and convert only COMPLETE frames (`\n\n`-terminated)
+/// to UTF-8. Converting per network chunk instead (the old
+/// `from_utf8_lossy`-then-buffer shape) destroyed any multi-byte character
+/// that straddled a read boundary — streamed CJK corrupted at every split
+/// point (audit #647). `\r` is filtered at byte level: 0x0D never appears
+/// inside a multi-byte UTF-8 sequence, so this exactly mirrors
+/// `push_sse_chunk`'s char filter (CRLF-reframed SSE still splits).
+fn push_sse_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
+    buffer.extend(bytes.iter().copied().filter(|b| *b != b'\r'));
     let mut frames = Vec::new();
-    while let Some(pos) = buffer.find("\n\n") {
-        frames.push(buffer[..pos].to_string());
+    while let Some(pos) = buffer.windows(2).position(|w| w == b"\n\n") {
+        frames.push(String::from_utf8_lossy(&buffer[..pos]).into_owned());
         buffer.drain(..pos + 2);
     }
     frames
@@ -1339,7 +1347,9 @@ impl OpenAiBackend {
         let stream = resp.bytes_stream();
         let label = self.label.clone();
         let stream = async_stream::stream! {
-            let mut buffer = String::new();
+            // RAW bytes, not a String: frame boundaries are the only safe
+            // UTF-8 conversion points (audit #647).
+            let mut buffer: Vec<u8> = Vec::new();
             let mut content = String::new();
             let mut usage: Option<Usage> = None;
             for await chunk in stream {
@@ -1353,9 +1363,9 @@ impl OpenAiBackend {
                         return;
                     }
                 };
-                // SSE frames end with a blank line; `push_sse_chunk` keeps any
-                // trailing partial frame in the buffer for the next read.
-                for frame in push_sse_chunk(&mut buffer, &String::from_utf8_lossy(&bytes)) {
+                // SSE frames end with a blank line; `push_sse_bytes` keeps
+                // any trailing partial frame (raw bytes) for the next read.
+                for frame in push_sse_bytes(&mut buffer, &bytes) {
                     if let Some(u) = usage_from_frame(&frame) {
                         usage = Some(u);
                     }
@@ -1367,12 +1377,15 @@ impl OpenAiBackend {
                     }
                 }
             }
-            // Flush any remaining partial frame.
-            if !buffer.trim().is_empty() {
-                if let Some(u) = usage_from_frame(&buffer) {
+            // Flush any remaining partial frame. The stream is over, so
+            // from_utf8_lossy here only affects a genuinely truncated
+            // multi-byte character — there is no next chunk to complete it.
+            let tail = String::from_utf8_lossy(&buffer);
+            if !tail.trim().is_empty() {
+                if let Some(u) = usage_from_frame(&tail) {
                     usage = Some(u);
                 }
-                for event in parse_openai_sse(&buffer) {
+                for event in parse_openai_sse(&tail) {
                     if let SseEvent::Delta(d) = event {
                         content.push_str(&d);
                         yield Ok(ChatStreamChunk::Text(d));
@@ -1415,16 +1428,21 @@ fn create_provider_in(
     model: Option<String>,
     env: &EnvSnapshot,
 ) -> AiProvider {
-    let key = api_key.or_else(|| env.oxo_flow_api_key.clone());
     let url = api_url.or_else(|| env.oxo_flow_api_url.clone());
     let mdl = model.or_else(|| env.oxo_flow_model.clone());
 
     match kind {
         ProviderKind::Claude => {
-            let api_key = key
-                .or_else(|| env.anthropic_auth_token.clone())
-                .or_else(|| env.anthropic_api_key.clone())
-                .or_else(|| env.claude_api_key.clone())
+            // Per-provider credential variables beat the generic fallback —
+            // the documented contract is that e.g. ANTHROPIC_AUTH_TOKEN
+            // OVERRIDES OXO_FLOW_AI_API_KEY, so the generic tier sits last
+            // (audit #645: it used to sit first and shadow every specific
+            // variable).
+            let api_key = api_key
+                .or_else(|| usable_key(&env.anthropic_auth_token))
+                .or_else(|| usable_key(&env.anthropic_api_key))
+                .or_else(|| usable_key(&env.claude_api_key))
+                .or_else(|| usable_key(&env.oxo_flow_api_key))
                 // A whitespace-only key (shell-profile leftover like
                 // `ANTHROPIC_AUTH_TOKEN=" "`) is the same unfinished setup
                 // as an empty one, and padding would leak into the
@@ -1449,8 +1467,10 @@ fn create_provider_in(
             AiProvider::Claude(ClaudeBackend::new(api_key, model_name, Some(api_url)))
         }
         ProviderKind::OpenAi => {
-            let api_key = key
-                .or_else(|| env.openai_api_key.clone())
+            // Specific before generic — see the claude arm above (#645).
+            let api_key = api_key
+                .or_else(|| usable_key(&env.openai_api_key))
+                .or_else(|| usable_key(&env.oxo_flow_api_key))
                 .map(|k| k.trim().to_string())
                 .unwrap_or_default();
             // Same no-credential guard as the claude tier (above) and the
@@ -1467,8 +1487,10 @@ fn create_provider_in(
             AiProvider::OpenAi(OpenAiBackend::new(api_key, model_name, api_url))
         }
         ProviderKind::DeepSeek => {
-            let api_key = key
-                .or_else(|| env.deepseek_api_key.clone())
+            // Specific before generic — see the claude arm above (#645).
+            let api_key = api_key
+                .or_else(|| usable_key(&env.deepseek_api_key))
+                .or_else(|| usable_key(&env.oxo_flow_api_key))
                 .map(|k| k.trim().to_string())
                 .unwrap_or_default();
             // Same no-credential guard as the claude/openai tiers: an
@@ -1502,6 +1524,17 @@ fn create_provider_in(
             AiProvider::Ollama(OllamaBackend::new(mdl, url))
         }
     }
+}
+
+/// A credential only counts when it survives a trim (mirrors
+/// `detect_provider_from_env`): a whitespace-only export is an unfinished
+/// setup, not a working backend, so it must not shadow a usable tier
+/// further down the chain.
+fn usable_key(v: &Option<String>) -> Option<String> {
+    v.as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Create a provider from environment variables or persisted config.
@@ -2507,6 +2540,38 @@ mod tests {
     }
 
     #[test]
+    fn specific_credentials_win_over_the_generic_tier() {
+        // Audit #645: the generic OXO_FLOW_AI_API_KEY used to sit FIRST in
+        // the chain, so a stale generic key shadowed the documented
+        // override. A blank generic key + real specific key proves the
+        // order: under the old chain this resolved Noop, under the fixed
+        // chain the specific credential wins.
+        let env = EnvSnapshot {
+            anthropic_auth_token: Some("sk-gw".into()),
+            oxo_flow_api_key: Some("   ".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("claude", None, &env).name(),
+            "claude",
+            "ANTHROPIC_AUTH_TOKEN must win over the generic tier"
+        );
+        // ...and a whitespace-only specific variable must not shadow a
+        // usable generic key further down the chain (mirrors the blank-key
+        // semantics of the detection tier).
+        let blank_specific = EnvSnapshot {
+            openai_api_key: Some(" \t ".into()),
+            oxo_flow_api_key: Some("sk-generic".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("openai", None, &blank_specific).name(),
+            "openai",
+            "a blank specific key must fall through to the generic tier"
+        );
+    }
+
+    #[test]
     fn whitespace_only_keys_are_unconfigured() {
         // Live-observed on a gateway box: `ANTHROPIC_AUTH_TOKEN=" "` (a
         // shell-profile leftover) passed the empty-key guards and built a
@@ -3223,22 +3288,39 @@ mod tests {
         // A proxy that re-frames SSE with CRLF must still stream
         // incrementally: the frame boundary is a blank line in either
         // convention.
-        let mut buffer = String::new();
-        let frames = push_sse_chunk(
+        let mut buffer: Vec<u8> = Vec::new();
+        let frames = push_sse_bytes(
             &mut buffer,
-            "data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\r\n\r\n",
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"fast\"}}]}\r\n\r\n",
         );
         assert_eq!(frames.len(), 1);
         assert!(frames[0].contains("fast"));
         assert!(buffer.is_empty(), "no partial frame may remain");
 
         // The \r\n pair straddles two reads — the \r must not block the split.
-        let mut buffer = String::new();
-        assert!(push_sse_chunk(&mut buffer, "data: {\"a\":1}\r").is_empty());
-        let frames = push_sse_chunk(&mut buffer, "\n\r\ndata: {\"b\":2}\n\n");
+        let mut buffer: Vec<u8> = Vec::new();
+        assert!(push_sse_bytes(&mut buffer, b"data: {\"a\":1}\r").is_empty());
+        let frames = push_sse_bytes(&mut buffer, b"\n\r\ndata: {\"b\":2}\n\n");
         assert_eq!(frames.len(), 2, "got {frames:#?}");
         assert!(frames[0].contains("\"a\""));
         assert!(frames[1].contains("\"b\""));
+    }
+
+    #[test]
+    fn sse_bytes_survive_multibyte_split_across_reads() {
+        // A multi-byte character split across network reads must survive
+        // intact: conversion happens per COMPLETE frame only (audit #647).
+        let mut buffer: Vec<u8> = Vec::new();
+        let bytes = "data: {\"d\":\"测序\"}\n\n".as_bytes();
+        let split_at = bytes.len() - 4; // inside the last CJK character
+        assert!(push_sse_bytes(&mut buffer, &bytes[..split_at]).is_empty());
+        let frames = push_sse_bytes(&mut buffer, &bytes[split_at..]);
+        assert_eq!(frames.len(), 1, "{frames:?}");
+        assert!(
+            frames[0].contains("测序"),
+            "the CJK characters must round-trip: {:?}",
+            frames[0]
+        );
     }
 
     #[test]
