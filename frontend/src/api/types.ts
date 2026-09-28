@@ -1,4 +1,10 @@
 // ── Health & System ──
+export interface EngineBinaryInfo {
+  version: string;
+  path: string;
+  version_mismatch: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   version: string;
@@ -9,6 +15,8 @@ export interface HealthResponse {
     filesystem: { status: string; latency_ms: number | null };
     scheduler: { status: string; latency_ms: number | null } | null;
     ai_provider: { status: string; latency_ms: number | null } | null;
+    ai_key_storage?: string;
+    engine?: EngineBinaryInfo | null;
   };
   resources: { cpu_pct: number; memory_used_pct: number; disk_used_pct: number };
   license: { license_type: string; valid: boolean; commercial_use: string; contact: string; message: string };
@@ -21,6 +29,7 @@ export interface SystemInfo {
   arch: string;
   pid: number;
   uptime_secs: number;
+  engine?: EngineBinaryInfo | null;
 }
 
 export interface RuntimeMetrics {

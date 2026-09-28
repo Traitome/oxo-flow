@@ -862,6 +862,9 @@ pub fn start_background_tasks() {
     if BACKGROUND_TASKS_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    // One-time engine-binary version probe (issue #579): log the
+    // (server, engine) pair and warn on drift before the first run spawns.
+    executor::init_engine_version_probe();
     spawn_daily_quota_reset();
 }
 

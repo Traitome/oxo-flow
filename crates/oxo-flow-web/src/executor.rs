@@ -2,6 +2,7 @@ use chrono::Utc;
 use regex::Regex;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
@@ -42,6 +43,150 @@ pub(crate) fn find_oxo_flow_binary() -> PathBuf {
         }
     }
     PathBuf::from("oxo-flow")
+}
+
+/// How the engine binary was located — carried alongside the probed version
+/// so operators can tell a deliberate `OXO_FLOW_BIN` pin from a stale PATH
+/// fallback without reading the startup log again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BinarySource {
+    /// `OXO_FLOW_BIN` — explicit operator override.
+    EnvOverride,
+    /// Any of the target-dir locations (CARGO_BIN_EXE, sibling, parent).
+    TargetDir,
+    /// Bare `"oxo-flow"` resolved through PATH — the silently-stale case.
+    PathLookup,
+}
+
+/// One-shot result of the startup `--version` probe (issue #579).
+#[derive(Debug, Clone)]
+pub(crate) struct EngineProbe {
+    /// Version string the engine itself reported (e.g. `"0.20.1"`).
+    pub version: String,
+    /// Absolute (or PATH-bare) path of the binary that was probed.
+    pub binary: String,
+    pub source: BinarySource,
+}
+
+impl EngineProbe {
+    /// Whether the engine's major.minor differs from the server's — the
+    /// mismatch class the issue flags as silent semantic drift.
+    pub fn major_minor_mismatch(&self, server_version: &str) -> bool {
+        let major_minor = |v: &str| -> (u64, u64) {
+            let mut parts = v.split('.');
+            (
+                parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
+                parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
+            )
+        };
+        major_minor(&self.version) != major_minor(server_version)
+    }
+}
+
+static ENGINE_PROBE: OnceLock<Option<EngineProbe>> = OnceLock::new();
+
+/// Run `<binary> --version` once and cache the result (issue #579).
+///
+/// Returns `None` when the binary cannot be spawned or prints nothing
+/// parseable — the probe must never block serving; the run log header is
+/// the remaining version record in that case.
+pub(crate) fn probe_engine_binary(binary: &std::path::Path) -> Option<EngineProbe> {
+    let source = if std::env::var_os("OXO_FLOW_BIN").is_some() {
+        BinarySource::EnvOverride
+    } else if binary.file_name().is_some_and(|n| n == "oxo-flow")
+        && binary.parent().is_some_and(|p| !p.as_os_str().is_empty())
+    {
+        // A path with a real parent directory is one of the target-dir
+        // candidates; the bare PATH fallback is the file name alone.
+        BinarySource::TargetDir
+    } else {
+        BinarySource::PathLookup
+    };
+
+    let output = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    // The CLI prints `oxo-flow 0.20.1`; take the last whitespace token of
+    // the first line so a renamed binary still parses.
+    let version: String = text.lines().next()?.split_whitespace().next_back()?.into();
+    let looks_like_version = version
+        .split('.')
+        .take(2)
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    if !looks_like_version || version == "version" {
+        return None;
+    }
+    Some(EngineProbe {
+        version,
+        binary: binary.to_string_lossy().into_owned(),
+        source,
+    })
+}
+
+/// Probe once at startup and log the (server, engine) pair.
+///
+/// Called from `start_background_tasks`, so both serving entry points get
+/// it and tests that never call that stay probe-free. Warnings per issue
+/// #579: any parse failure, and a PATH-fallback binary older than the
+/// server (the resolved-v0.18.0-under-v0.20.1 case) even when the
+/// major.minor happens to match.
+pub(crate) fn init_engine_version_probe() {
+    let server_version = env!("CARGO_PKG_VERSION");
+    let binary = find_oxo_flow_binary();
+    let probe = ENGINE_PROBE.get_or_init(|| {
+        let probed = probe_engine_binary(&binary);
+        match &probed {
+            Some(p) => {
+                info!(
+                    server = server_version,
+                    engine = %p.version,
+                    binary = %p.binary,
+                    "engine CLI resolved for run execution"
+                );
+                let stale_path_fallback = p.source == BinarySource::PathLookup
+                    && version_less_than(&p.version, server_version);
+                if p.major_minor_mismatch(server_version) || stale_path_fallback {
+                    warn!(
+                        server = server_version,
+                        engine = %p.version,
+                        binary = %p.binary,
+                        "engine/server version drift: pipelines will run under the engine's semantics — set OXO_FLOW_BIN to pin the expected binary"
+                    );
+                }
+            }
+            None => warn!(
+                binary = %binary.display(),
+                "could not determine engine CLI version (`--version` failed); /api/health will not report engine_version"
+            ),
+        }
+        probed
+    });
+    // Tests call this with OXO_FLOW_BIN pointing at an echo stub; the probe
+    // result was already logged inside get_or_init, nothing more to do.
+    let _ = probe;
+}
+
+/// Whether version `a` is strictly older than `b` (plain release triples,
+/// non-numeric tails ignored) — mirrors the min_version gate semantics.
+fn version_less_than(a: &str, b: &str) -> bool {
+    fn triple(v: &str) -> [u64; 3] {
+        let mut out = [0u64; 3];
+        for (i, part) in v.split('.').take(3).enumerate() {
+            let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+            out[i] = digits.parse().unwrap_or(0);
+        }
+        out
+    }
+    triple(a) < triple(b)
+}
+
+/// The cached startup probe, for `/api/health` and `/api/system`.
+///
+/// `None` before `init_engine_version_probe` ran or when the probe failed.
+pub(crate) fn engine_version_probe() -> Option<&'static EngineProbe> {
+    ENGINE_PROBE.get().and_then(|probed| probed.as_ref())
 }
 
 /// Extract the invalidation summary lines the CLI writes into execution.log
@@ -1063,6 +1208,71 @@ mod tests {
         assert_eq!(kept.len(), 2000);
         assert_eq!(kept.last(), Some(&"new"));
         assert!(!kept.contains(&"old5"), "oldest lines are trimmed first");
+    }
+
+    #[test]
+    fn probe_parses_cli_version_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = dir.path().join("oxo-flow");
+        std::fs::write(&stub, "#!/bin/sh\necho 'oxo-flow 0.20.1'\n").unwrap();
+        make_executable(&stub);
+
+        let probe = probe_engine_binary(&stub).expect("probe must parse the stub output");
+        assert_eq!(probe.version, "0.20.1");
+        assert_eq!(probe.binary, stub.to_string_lossy());
+        // An explicit path with a parent directory counts as a target-dir hit.
+        assert_eq!(probe.source, BinarySource::TargetDir);
+    }
+
+    #[test]
+    fn probe_rejects_non_version_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = dir.path().join("oxo-flow");
+        std::fs::write(&stub, "#!/bin/sh\necho 'usage: oxo-flow <cmd>'\nexit 1\n").unwrap();
+        make_executable(&stub);
+
+        assert!(
+            probe_engine_binary(&stub).is_none(),
+            "non-numeric output must not become a version"
+        );
+    }
+
+    #[test]
+    fn probe_fails_soft_on_missing_binary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(probe_engine_binary(&dir.path().join("no-such-binary")).is_none());
+    }
+
+    #[test]
+    fn major_minor_mismatch_ignores_patch_and_tails() {
+        let probe = EngineProbe {
+            version: "0.20.9".into(),
+            binary: String::new(),
+            source: BinarySource::TargetDir,
+        };
+        assert!(!probe.major_minor_mismatch("0.20.1"));
+        assert!(probe.major_minor_mismatch("0.18.0"));
+        assert!(probe.major_minor_mismatch("1.0.0"));
+
+        // Malformed server versions degrade to (0, 0) rather than panicking.
+        assert!(probe.major_minor_mismatch(""));
+        assert!(!probe.major_minor_mismatch("0.20"));
+    }
+
+    #[test]
+    fn version_less_than_compares_release_triples() {
+        assert!(version_less_than("0.18.0", "0.20.1"));
+        assert!(!version_less_than("0.20.1", "0.20.1"));
+        assert!(!version_less_than("0.21.0", "0.20.1"));
+        // Non-numeric tails are ignored, not errors.
+        assert!(version_less_than("0.20.0-rc1", "0.20.1"));
+        assert!(!version_less_than("garbage", "0.20.1") || version_less_than("0.1", "0.20.1"));
+    }
+
+    /// Mark a stub script executable (ignore on filesystems without modes).
+    fn make_executable(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
     }
 }
 

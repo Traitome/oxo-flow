@@ -30,6 +30,17 @@ pub fn health_check(mode: &str, db_healthy: bool) -> HealthResponse {
 /// Pure core of [`health_check`] — `encrypted_keys` is injected so tests need
 /// no environment mutation (mirrors `effective_bind_host_with` in lib.rs).
 pub fn health_check_with(mode: &str, db_healthy: bool, encrypted_keys: bool) -> HealthResponse {
+    build_health(mode, db_healthy, encrypted_keys, engine_version_info())
+}
+
+/// Shared builder — `engine` is injected so the pure core stays testable
+/// without touching the process-global probe cache.
+fn build_health(
+    mode: &str,
+    db_healthy: bool,
+    encrypted_keys: bool,
+    engine: Option<EngineBinaryInfo>,
+) -> HealthResponse {
     let uptime = uptime_secs();
 
     HealthResponse {
@@ -71,6 +82,7 @@ pub fn health_check_with(mode: &str, db_healthy: bool, encrypted_keys: bool) -> 
             } else {
                 "plaintext".into()
             },
+            engine,
         },
         resources: ResourceInfo {
             cpu_pct: 0.0,
@@ -87,6 +99,17 @@ pub fn health_check_with(mode: &str, db_healthy: bool, encrypted_keys: bool) -> 
     }
 }
 
+/// The engine-binary info carried in `/api/health` and `/api/system`
+/// (issue #579), from the cached startup probe.
+pub fn engine_version_info() -> Option<EngineBinaryInfo> {
+    let probe = crate::executor::engine_version_probe()?;
+    Some(EngineBinaryInfo {
+        version: probe.version.clone(),
+        path: probe.binary.clone(),
+        version_mismatch: probe.major_minor_mismatch(env!("CARGO_PKG_VERSION")),
+    })
+}
+
 /// Build system info response.
 pub fn system_info() -> SystemInfoResponse {
     SystemInfoResponse {
@@ -98,6 +121,7 @@ pub fn system_info() -> SystemInfoResponse {
         arch: std::env::consts::ARCH.into(),
         pid: std::process::id(),
         uptime_secs: uptime_secs(),
+        engine: engine_version_info(),
     }
 }
 
@@ -136,5 +160,33 @@ mod tests {
         let info = system_info();
         assert!(!info.version.is_empty());
         assert!(!info.os.is_empty());
+    }
+
+    #[test]
+    fn test_engine_version_info_from_probe_cache() {
+        // A probe result injected into the builder surfaces as EngineBinaryInfo
+        // with the mismatch flag computed against the server version.
+        let engine = EngineBinaryInfo {
+            version: "0.18.0".into(),
+            path: "/usr/local/bin/oxo-flow".into(),
+            version_mismatch: true,
+        };
+        let h = build_health("personal", true, true, Some(engine.clone()));
+        assert_eq!(
+            h.components.engine.as_ref().expect("engine set").version,
+            "0.18.0"
+        );
+
+        // system_info always reflects the probe cache; in tests the probe has
+        // not run, so it must stay None rather than fabricating a version.
+        assert_eq!(system_info().engine, engine_version_info());
+        assert_eq!(engine_version_info(), None, "no init in this test binary");
+    }
+
+    #[test]
+    fn test_build_health_without_engine_probe() {
+        let h = build_health("personal", true, true, None);
+        assert!(h.components.engine.is_none());
+        assert_eq!(h.status, "ok");
     }
 }
