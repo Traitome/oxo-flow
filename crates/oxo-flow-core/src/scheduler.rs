@@ -50,6 +50,15 @@ impl SchedulerState {
         self.running.insert(rule.to_owned());
     }
 
+    /// Names of the rules currently marked running (issue #685 watchdog).
+    /// Sorted for deterministic diagnostics; `HashSet` iteration order is
+    /// per-process random.
+    pub fn running_rules(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.running.iter().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// Add a rule created mid-run (checkpoint re-entry, issue #78 P3).
     /// Unknown names are pending and become schedulable once their
     /// dependencies complete.
@@ -1765,5 +1774,42 @@ mod reentry_tests {
         sched.add_rule("b");
         let ready = sched.ready_rules(&dag).unwrap();
         assert!(ready.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn running_rules_reports_sorted_and_clears_on_completion() {
+        // issue #685: the watchdog compares this set against live child
+        // processes, so the output must be deterministic (sorted) and a
+        // rule must leave the set exactly when its job reaches a terminal
+        // state — otherwise it would be flagged as never-spawned forever.
+        let mut sched = SchedulerState::new(&["c", "a", "b"]);
+        sched.mark_running("c");
+        sched.mark_running("a");
+        sched.mark_running("b");
+        assert_eq!(
+            sched.running_rules(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+
+        sched.mark_completed(JobRecord {
+            signal: None,
+            rule: "b".to_string(),
+            status: JobStatus::Success,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+        });
+        assert_eq!(
+            sched.running_rules(),
+            vec!["a".to_string(), "c".to_string()]
+        );
     }
 }

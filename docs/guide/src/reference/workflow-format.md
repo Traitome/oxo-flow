@@ -1591,6 +1591,20 @@ in the diagnostic instead of hanging the run. The holder's pid is
 written into the lock file for diagnosis. On shared accounts, one
 user's slow solve only blocks creators of that same environment.
 
+**Spawn watchdog** — a rule can in principle sit in the *Running* state
+without ever spawning a child process (a lost scheduler wakeup, an
+environment still being set up, or waiting on the resource pool).
+Every 30s the engine compares rules it considers running against the
+processes it can actually see; a rule that has been Running for over
+`OXO_FLOW_SPAWN_WATCHDOG_SECS` (default 600) with no child process at
+all is reported by name with a `tracing::error!` entry. The watchdog
+only logs — it never kills — because the common causes are benign and
+self-resolving; if a named rule never starts, capture the run log and
+file an issue. Relatedly, the in-process environment-setup mutex now
+waits on the same bounded schedule as the cross-process lock
+(`OXO_ENV_LOCK_TIMEOUT_SECS`, logging every 60s) so a task stuck behind
+another task's env creation becomes visible instead of hanging silently.
+
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
 `{input}` convention; iterate with `for x in {config.tools}`.

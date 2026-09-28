@@ -360,6 +360,10 @@ impl Default for ExecutorConfig {
 /// keep the 60s default (issue #136).
 pub const DEFAULT_WAIT_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// How often a task blocked on the in-process env setup lock logs its wait
+/// (issue #685) — same cadence as the resource-wait diagnostics above.
+const SETUP_WAIT_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct LocalExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
@@ -739,7 +743,41 @@ impl LocalExecutor {
         // env history shows `+fq` followed by `-fq` 12s later, leaving an
         // empty env that the cache then marked ready).
         let setup_lock = self.env_resolver.setup_lock(&key);
-        let _setup_guard = setup_lock.lock().await;
+        // Bounded wait with periodic diagnostics (issue #685): the in-process
+        // mutex can be held for the full duration of another instance's env
+        // setup (tens of minutes for a fresh solve). A silent wait is
+        // indistinguishable from a lost scheduler wakeup, so log the env key
+        // every 60 s and time out with an actionable error — same timeout
+        // derivation as the cross-process EnvCreateLock (one env-var, one
+        // default). Each loop iteration re-polls the lock, so a holder
+        // releasing mid-interval is picked up on the next pass.
+        let setup_timeout = super::env_create_lock::lock_timeout();
+        let setup_deadline = tokio::time::Instant::now() + setup_timeout;
+        let setup_started = tokio::time::Instant::now();
+        let _setup_guard = loop {
+            match tokio::time::timeout(SETUP_WAIT_LOG_INTERVAL, setup_lock.lock()).await {
+                Ok(guard) => break guard,
+                Err(_elapsed) => {
+                    let now = tokio::time::Instant::now();
+                    if now >= setup_deadline {
+                        return Err(OxoFlowError::Environment {
+                            kind: env_spec.kind().to_string(),
+                            message: format!(
+                                "in-process env setup lock for '{key}' was not released within \
+                                 {}s; the holder task may be stuck — restart the run or raise \
+                                 OXO_ENV_LOCK_TIMEOUT_SECS",
+                                setup_timeout.as_secs()
+                            ),
+                        });
+                    }
+                    tracing::warn!(
+                        env = %key,
+                        waited_secs = (now - setup_started).as_secs(),
+                        "waiting for in-process env setup lock (another task may be creating this environment)"
+                    );
+                }
+            }
+        };
         // Double-check: another task may have completed the setup while we
         // waited for the lock.
         if self.env_resolver.cache_is_ready(&key).await {
