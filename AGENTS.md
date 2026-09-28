@@ -12,6 +12,7 @@ CHANGE MANAGEMENT: any structural change (new crate, new subcommand, renamed fla
 - `crates/oxo-flow-ai`: AI companion — provider abstraction, skill system, agent orchestration, MCP
 - `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 30 subcommands via clap derive
 - `crates/oxo-flow-web`: Axum web server + React 19 SPA, 100+ OpenAPI-documented endpoints across 9 domains
+- `crates/oxo-flow-desktop`: Native desktop shell (wry + tao) around the embedded web server. EXCLUDED from the workspace (`exclude` in the root Cargo.toml) because tao/wry need GUI toolchains headless CI must not pull in — build it with a separate `cargo build` invocation; its version is kept in lockstep by `scripts/bump-version.sh`
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality
 
@@ -118,7 +119,11 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OXO_FLOW_AI_PROVIDER` | No | `disabled` | `"claude"`, `"openai"`, `"deepseek"`, `"ollama"`, or `"disabled"` |
+| `OXO_FLOW_MODE` | No | `personal` | Serve mode for `oxo-flow serve`: `personal` (loopback, no auth), `team`, or `hpc` — same as `--mode` |
+| `OXO_FLOW_HOST` | No | `127.0.0.1` | Bind host for `oxo-flow serve` (same as `--host`) |
+| `OXO_FLOW_BASE_PATH` | No | `/` | Sub-path the app is mounted under (same as `--base-path`) |
+| `OXO_FLOW_ALLOWED_ORIGINS` | No | localhost origins | Comma-separated CORS allowlist for the web server; empty = only `localhost:3000`/`:5173` and `127.0.0.1:3000`/`:5173` |
+| `OXO_FLOW_AI_PROVIDER` | No | auto-detect | `"claude"`, `"openai"`, `"deepseek"`, `"ollama"`, or `"disabled"`. Unset = auto-detect from standard provider credentials (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OLLAMA_HOST`, …); `disabled` is only the outcome when nothing resolves, and an explicit `disabled` always wins |
 | `OXO_FLOW_AI_API_KEY` | No | — | Generic API key fallback |
 | `OXO_FLOW_AI_API_URL` | No | (provider default) | Custom API endpoint URL |
 | `OXO_FLOW_AI_MODEL` | No | (provider default) | Model name override |
@@ -187,8 +192,11 @@ The AI provider system supports four backends via an enum-based dispatcher:
 - **DeepSeek** — Native DeepSeek API (`DEEPSEEK_API_KEY`)
 - **Ollama** — Local Ollama API (default: `http://localhost:11434`)
 
-No provider is assumed by default — with `OXO_FLOW_AI_PROVIDER` unset,
-AI features stay disabled (config via env vars or `~/.oxo-flow/ai_config.json`).
+With `OXO_FLOW_AI_PROVIDER` unset, the provider is auto-detected from
+standard shell credentials (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
+`DEEPSEEK_API_KEY`, `OLLAMA_HOST`, …) — "disabled" is only the outcome when
+no provider/credential resolves, and an explicit `disabled` always wins
+(config via env vars or `~/.oxo-flow/ai_config.json`).
 
 Providers are selected at startup via `OXO_FLOW_AI_PROVIDER` env var and initialized once through `AiProviderRegistry::global()` (web crate, `src/ai_provider.rs`). Workflow generation is UNIFIED (issue #342): every surface — CLI `template --ai`, `POST /api/ai/translate`, and web chat — runs the shared `PipelineGenAgent` (oxo-flow-ai, `src/agent/pipeline_gen.rs`: engine-accurate prompt, canonical TOML extraction, injected validator) through the `Orchestrator` tool-calling + validation-feedback loop, differing only in provider resolution, tool policy, session destination, and presentation. The web keeps its deterministic template-keyword fallback and per-user provider/caching. The CLI additionally offers the opt-in Scientist Team profile (`--ai-team-profile full` / `[ai] team_profile`, oxo-flow-ai `src/agent/team.rs`: bounded task contract, deterministic Curator brief, independent review with one bounded fix); compact is the shipped default and the full profile's marginal value is measured in `eval/frontier/`.
 
