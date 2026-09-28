@@ -3972,7 +3972,7 @@ not provide cryptographic authentication — it protects against accidental
 corruption only.</p>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">#</a></h2>
 <blockquote>
-<p><strong>Inert as of v0.20.1</strong>: the <code>[plugins]</code> section, registry API, and
+<p><strong>Inert as of v0.21.0</strong>: the <code>[plugins]</code> section, registry API, and
 manifest discovery are parsed but nothing is executed from them yet —
 see the warning at the end of this page. The API below is the
 compile-time contract for engine-side wiring.</p>
@@ -4112,7 +4112,7 @@ plugins written in any language can produce it:</p>
 <div class="language-rust highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">use</span><span class="w"> </span><span class="n">oxo_flow_core</span><span class="p">::</span><span class="n">plugin</span><span class="p">::</span><span class="n">PluginOutput</span><span class="p">;</span>
 </span></code></pre></div>
 <p><code>success</code> and <code>command</code> are the fields the engine would act on; <code>errors</code>,
-<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.20.1 the
+<code>logs</code>, and <code>exit_code</code> carry diagnostics. Note that as of v0.21.0 the
 whole plugin surface is defined but inert: a workflow <code>[plugins]</code> section
 is parsed and logs a one-time warning ("parsed but not executed by this
 version"), and there is no engine-side runner that invokes plugin
