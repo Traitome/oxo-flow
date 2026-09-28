@@ -2200,11 +2200,8 @@ fn workdir_safety_allows_subshell_cleanup_with_trailing_paren() {
     // The segment must now END at the paren: the redirect target that used
     // to be swallowed no longer reaches the operand list.
     assert!(
-        validate_shell_safety_in_workdir(
-            "(rm -rf /data/run/x) 2> /etc/never-written",
-            workdir
-        )
-        .is_ok(),
+        validate_shell_safety_in_workdir("(rm -rf /data/run/x) 2> /etc/never-written", workdir)
+            .is_ok(),
         "redirect after subshell close is not an rm operand"
     );
 }
