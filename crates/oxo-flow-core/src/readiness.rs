@@ -12,8 +12,11 @@
 //! [`WorkflowConfig::expand_wildcards`]), so `{sample}` placeholders are already
 //! concrete and `expand_inputs` injections are visible. A sample is ready when
 //! every external input belonging to it exists; intermediate products are
-//! excluded (producing them is the DAG's job), and optional rules never block
-//! readiness (the executor skips them when their inputs are absent).
+//! excluded (producing them is the DAG's job), optional rules never block
+//! readiness (the executor skips them when their inputs are absent), and rules
+//! whose `when` gate is statically false under the current `[config]` never
+//! block readiness either (the DAG prunes those nodes and the executor skips
+//! them — their inputs would cite paths no rule will ever produce).
 
 use crate::config::WorkflowConfig;
 
@@ -75,6 +78,18 @@ pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) ->
     // the executor does at execution time.
     let wildcard_values = config_vars(config);
 
+    // Bare-key [config] values for `when` evaluation — the same shape
+    // `expand_wildcards` builds for its pair gate (keys WITHOUT the
+    // `config.` prefix, `toml::Value`-typed). Deliberately NOT
+    // [`config_vars`]: that map is `config.<key>` → String, the path-
+    // expansion namespace; the `when` evaluator resolves `config.x`
+    // references itself and would see no bare keys through it.
+    let config_values: std::collections::HashMap<String, toml::Value> = config
+        .config
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
     // Inputs produced by the workflow itself are not readiness gatekeepers —
     // producing them is the DAG's job.
     let mut produced: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -95,6 +110,24 @@ pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) ->
         // Optional rules are skipped by the executor when their inputs are
         // absent, so they must not block readiness.
         if rule.optional.is_optional() {
+            continue;
+        }
+        // A rule whose `when` gate is statically false under the current
+        // [config] never executes (the DAG prunes it; the executor would
+        // skip it), so its inputs must not be cited as missing. Config-only
+        // conditions survive expansion un-baked — expansion only bakes
+        // wildcard/meta-dependent `when` text — so they are evaluated here.
+        // Unbound references → false (#199) matches the executor's verdict;
+        // wildcard/meta conditions were already baked to concrete verdicts
+        // during expansion, so re-evaluating them reproduces the same result.
+        if let Some(when) = rule.when.as_deref()
+            && !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &config_values,
+                &std::collections::HashMap::new(),
+                Some(base_dir),
+            )
+        {
             continue;
         }
         let scoped: &[String] = config
@@ -621,6 +654,72 @@ mod tests {
         assert_eq!(report.ready.len(), 1, "{report:#?}");
         assert!(report.waiting.is_empty());
         assert!(report.missing_global.is_empty());
+    }
+
+    #[test]
+    fn when_false_rules_do_not_block_readiness() {
+        // A rule whose `when` gate is statically false under the current
+        // [config] never executes (the DAG prunes it), so its expanded
+        // input — a path NO rule produces under this config — must not be
+        // cited as missing. Mirrors the methylseq shape: default
+        // `aligner = "bismark"` keeps the bwameth-only `sort` rule off, and
+        // `results/bwameth/alignments/{sample}.bam` is a phantom.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("S1.fq"), b"x").unwrap();
+
+        let toml = format!(
+            r#"
+            [workflow]
+            name = "t"
+            version = "1.0.0"
+
+            [config]
+            out_dir = "results"
+            aligner = "bismark"
+
+            [[sample_groups]]
+            name = "cohort"
+            samples = ["S1"]
+
+            [[rules]]
+            name = "align"
+            input = ["{d}/data/{{sample}}.fq"]
+            output = ["{{config.out_dir}}/{{config.aligner}}/alignments/{{sample}}.bam"]
+            shell = "touch {{{{output}}}}"
+
+            [[rules]]
+            name = "sort"
+            depends_on = ["align"]
+            when = "config.aligner == \"bwameth\" || config.aligner == \"bwamem\""
+            input = ["{{config.out_dir}}/{{config.aligner}}/alignments/{{sample}}.bam"]
+            output = ["{{config.out_dir}}/{{config.aligner}}/alignments/{{sample}}.sorted.bam"]
+            shell = "touch {{{{output}}}}"
+        "#,
+            d = dir.path().display()
+        );
+
+        let report = readiness_for(&toml, dir.path());
+        assert_eq!(report.total, 1);
+        assert_eq!(
+            report.ready.len(),
+            1,
+            "when-false rule inputs must not block: {report:#?}"
+        );
+        assert_eq!(report.ready[0].name, "S1");
+        assert!(report.waiting.is_empty());
+        assert!(report.missing_global.is_empty());
+
+        // The mirrored true-config case: flipping the gate on makes the same
+        // rule's input a real gatekeeper again (the align output is produced
+        // by the workflow, so the sample stays ready — but the gate is live).
+        let toml_on = toml.replace("aligner = \"bismark\"", "aligner = \"bwameth\"");
+        let mut config = WorkflowConfig::parse(&toml_on).expect("parse workflow");
+        config.apply_defaults();
+        config.expand_wildcards().expect("expand wildcards");
+        let report = compute_readiness(&config, dir.path());
+        assert_eq!(report.ready.len(), 1, "{report:#?}");
     }
 
     #[test]
