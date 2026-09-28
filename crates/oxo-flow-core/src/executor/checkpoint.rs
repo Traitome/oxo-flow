@@ -182,6 +182,12 @@ pub struct RuleRunRecord {
     /// failure diagnosis. Absent when the rule produced no stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+    /// Tail of the rule's stdout (see the `STDOUT_TAIL_CHARS` constant,
+    /// issue #691): some tools print their root cause or key diagnostics on
+    /// stdout, which used to be visible only live in the terminal. Absent
+    /// when the rule produced no stdout or the record predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tail: Option<String>,
     /// The rule's resolved report caption (inline text or the content of its
     /// `report.file`), captured at execution time (issue #281). Absent in
     /// legacy checkpoints.
@@ -400,14 +406,25 @@ fn deserialize_output_pattern_domains<'de, D: serde::Deserializer<'de>>(
 /// diagnosis without growing unbounded on noisy tools.
 const STDERR_TAIL_CHARS: usize = 2048;
 
+/// Bound on the stdout excerpt persisted per rule (issue #691): some tools
+/// print their root cause or key diagnostics on stdout, so the checkpoint
+/// keeps a bounded excerpt with the same contract as `stderr_tail`.
+const STDOUT_TAIL_CHARS: usize = 2048;
+
 /// Last [`STDERR_TAIL_CHARS`] characters of a rule's stderr, prefixed with
 /// an ellipsis marker when truncated.
 fn stderr_tail(stderr: Option<&str>) -> Option<String> {
-    let stderr = stderr?;
+    tail_chars(stderr, STDERR_TAIL_CHARS)
+}
+
+/// Last `chars` characters of a stream capture, prefixed with an ellipsis
+/// marker when truncated.
+fn tail_chars(stream: Option<&str>, chars: usize) -> Option<String> {
+    let stream = stream?;
     // nth_back is 0-indexed from the end, so N-1 lands exactly N chars back.
-    match stderr.char_indices().nth_back(STDERR_TAIL_CHARS - 1) {
-        Some((start, _)) => Some(format!("…\n{}", &stderr[start..])),
-        None => Some(stderr.to_string()),
+    match stream.char_indices().nth_back(chars - 1) {
+        Some((start, _)) => Some(format!("…\n{}", &stream[start..])),
+        None => Some(stream.to_string()),
     }
 }
 
@@ -621,6 +638,7 @@ impl CheckpointState {
                 exit_code: record.exit_code,
                 command: record.command.clone(),
                 stderr_tail: stderr_tail(record.stderr.as_deref()),
+                stdout_tail: tail_chars(record.stdout.as_deref(), STDOUT_TAIL_CHARS),
                 caption: record.caption.clone(),
                 status: Some(record.status.to_string()),
                 skip_reason: record.skip_reason.clone(),
@@ -651,6 +669,7 @@ impl CheckpointState {
         if let Some(existing) = self.rule_runs.get(rule) {
             let command = existing.command.clone();
             let stderr_tail = existing.stderr_tail.clone();
+            let stdout_tail = existing.stdout_tail.clone();
             let caption = existing.caption.clone();
             let signal = existing.signal;
             self.rule_runs.insert(
@@ -659,6 +678,7 @@ impl CheckpointState {
                     exit_code: None,
                     command,
                     stderr_tail,
+                    stdout_tail,
                     caption,
                     status: Some(crate::executor::JobStatus::Cancelled.to_string()),
                     skip_reason: Some(skip_reason),
@@ -1781,6 +1801,7 @@ mod tests {
                 exit_code: None,
                 command: None,
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: None,
                 status: None,
                 skip_reason: None,

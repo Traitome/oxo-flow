@@ -1668,6 +1668,11 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
 /// this second bound keeps one pathological rule from dominating the prompt.
 const INTERPRET_STDERR_CHARS: usize = 400;
 
+/// Cap on the stdout excerpt carried per rule into the interpretation
+/// prompt (issue #691): tools that print their diagnostics on stdout used to
+/// be invisible to the interpreter.
+const INTERPRET_STDOUT_CHARS: usize = 400;
+
 /// Max rules carried into the interpretation prompt.
 const INTERPRET_MAX_RULES: usize = 12;
 
@@ -1678,7 +1683,8 @@ const INTERPRET_MAX_RULES: usize = 12;
 /// tail: without them a failed run is interpreted with no error text at all
 /// and the interpreter can only guess (issue #359 seeded-failure baseline:
 /// 0/4 fault seeds diagnosed; the model itself reported that no error text
-/// was included).
+/// was included). Since #691 the prompt also carries a bounded stdout tail —
+/// some tools print their root cause on stdout, not stderr.
 fn build_interpretation_prompt(
     config: &WorkflowConfig,
     checkpoint: Option<&oxo_flow_core::executor::CheckpointState>,
@@ -1725,6 +1731,13 @@ fn build_interpretation_prompt(
                     per_rule.push(format!("  stderr: {snippet}"));
                 }
             }
+            if let Some(stdout) = run.stdout_tail.as_deref() {
+                let stdout = stdout.trim();
+                if !stdout.is_empty() {
+                    let snippet: String = stdout.chars().take(INTERPRET_STDOUT_CHARS).collect();
+                    per_rule.push(format!("  stdout: {snippet}"));
+                }
+            }
         }
     }
 
@@ -1741,10 +1754,10 @@ Provide:
 
 ## Diagnosis rules
 - For a failed rule, name the actual cause and quote the decisive line from
-  its stderr excerpt. Do not speculate past the evidence.
-- A rule can report success while its stderr shows an error (for example, a
-  failed command inside a pipeline whose last stage succeeded). Surface such
-  stderr warnings as caveats even when the exit status is success.
+  its stderr or stdout excerpt. Do not speculate past the evidence.
+- A rule can report success while its stderr or stdout shows an error (for
+  example, a failed command inside a pipeline whose last stage succeeded).
+  Surface such warnings as caveats even when the exit status is success.
 - Make next steps address the diagnosed cause, not generic advice.
 
 Keep the total under 200 words. Use simple language; explain jargon.
@@ -1830,12 +1843,15 @@ mod tests {
                     "zcat: can't stat: data/reads/sample_R1.fastq.gz: No such file or directory\n"
                         .into(),
                 ),
+                stdout_tail: Some("Reads processed: 0 (input missing)\n".into()),
                 caption: None,
             },
         );
         let (system, user) = build_interpretation_prompt(&config, Some(&cp));
         assert!(user.contains("count_reads: FAILED, exit 1"));
         assert!(user.contains("zcat: can't stat"));
+        // Issue #691: stdout excerpt reaches the prompt too.
+        assert!(user.contains("Reads processed: 0 (input missing)"));
         // The model must be told to quote evidence, not guess.
         assert!(system.contains("Diagnosis rules"));
     }
@@ -1856,6 +1872,7 @@ mod tests {
                 exit_code: Some(0),
                 command: None,
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: None,
             },
         );

@@ -584,7 +584,7 @@ fn checkpoint_record_run_persists_diagnostics() {
         started_at: None,
         finished_at: None,
         exit_code: Some(127),
-        stdout: None,
+        stdout: Some("calling variants for chr1\n".to_string()),
         stderr: Some("gatk: command not found".to_string()),
         command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
         retries: 0,
@@ -606,6 +606,11 @@ fn checkpoint_record_run_persists_diagnostics() {
         Some("gatk HaplotypeCaller -I out.bam")
     );
     assert_eq!(run.stderr_tail.as_deref(), Some("gatk: command not found"));
+    // Issue #691: stdout is persisted alongside stderr.
+    assert_eq!(
+        run.stdout_tail.as_deref(),
+        Some("calling variants for chr1\n")
+    );
     assert_eq!(
         run.caption.as_deref(),
         Some("GATK germline variant calling (issue #281 caption).")
@@ -637,6 +642,54 @@ fn checkpoint_stderr_tail_is_bounded() {
     assert!(tail.starts_with('…'));
     // 2048 chars of content + the "…\n" truncation marker.
     assert!(tail.chars().count() <= 2048 + 2, "tail must stay bounded");
+}
+
+#[test]
+fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
+    // Issue #691: stdout persists with the same bounded-tail contract as
+    // stderr; a rule with stdout-only diagnostics leaves a trail.
+    let mut state = CheckpointState::new();
+    let long = "y".repeat(10_000);
+    let record = JobRecord {
+        signal: None,
+        rule: "verbose".to_string(),
+        status: JobStatus::Success,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(0),
+        stdout: Some(long),
+        stderr: None,
+        command: None,
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: None,
+    };
+    state.record_run(&record);
+    let tail = state.rule_runs["verbose"].stdout_tail.as_deref().unwrap();
+    assert!(tail.starts_with('…'));
+    assert!(tail.chars().count() <= 2048 + 2, "tail must stay bounded");
+    // And an empty-stdout rule persists no field.
+    let mut quiet = CheckpointState::new();
+    let quiet_record = JobRecord {
+        stdout: None,
+        stderr: None,
+        rule: "quiet".to_string(),
+        status: JobStatus::Success,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(0),
+        command: None,
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: None,
+        signal: None,
+    };
+    quiet.record_run(&quiet_record);
+    assert!(quiet.rule_runs["quiet"].stdout_tail.is_none());
 }
 
 #[test]
