@@ -560,10 +560,14 @@ fn cli_ai_status_lists_discovered_skills() {
     )
     .unwrap();
 
-    let out = oxo_flow_cmd()
+    // No AI provider configured in tests — the listing must still appear.
+    // The AI env vars must be stripped: a dev shell that exports a provider
+    // credential otherwise sends `ai status` down the configured-provider
+    // path, whose connectivity probe is a real network call that fails (and
+    // exits non-zero) whenever the endpoint is unreachable.
+    let out = oxo_flow_cmd_without_ai_env()
         .arg("ai")
         .current_dir(dir.path())
-        // No AI provider configured in tests — the listing must still appear.
         .output()
         .unwrap();
     assert!(out.status.success());
