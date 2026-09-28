@@ -1469,6 +1469,52 @@ fn filter_samples_invalid_spec() {
 }
 
 #[test]
+fn pairs_as_regions_survive_sample_filter_drop_for_expansion() {
+    // Issue #639 Behavior 1 (genome-tracks repro): a `[[pairs]]` entry can
+    // be a genomic region, not a sample pair — pair_id and experiment are
+    // the same non-sample name. `--samples first:1` allows only real
+    // samples, the retain drops the pair, and the {pair_id}-referencing
+    // rule loses its only wildcard source. Expansion must still succeed
+    // (the rule falls through the no-expansion branch unexpanded — the
+    // aggregated plan-time warn names it), never error on the orphan.
+    let toml = r#"
+        [workflow]
+        name = "test"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1", "S2"]
+
+        [[pairs]]
+        pair_id = "chr1-1000-2000"
+        experiment = "chr1-1000-2000"
+
+        [[rules]]
+        name = "plot_tracks"
+        input = ["bigWigs/{pair_id}.bw"]
+        output = ["tracks/{pair_id}.png"]
+        shell = "touch {output}"
+    "#;
+    let mut config = WorkflowConfig::parse(toml).unwrap();
+    // first:1 allows only S1 → the region pair is dropped entirely.
+    config.filter_samples(&["first:1".to_string()]).unwrap();
+    assert!(config.pairs.is_empty(), "region pair dropped by the filter");
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    // The rule stays as the unexpanded template (no expansion source) —
+    // the plan-time warn carries the diagnosis the runtime gate cannot.
+    assert_eq!(
+        config
+            .rules
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["plot_tracks"]
+    );
+}
+
+#[test]
 fn workflow_meta_hooks_parse() {
     // Workflow-level terminal hooks (issue #227 item 1): on_complete
     // fires after a fully successful run, on_error after any failure.

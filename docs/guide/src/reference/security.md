@@ -36,6 +36,16 @@ before the in-workdir check. Command substitution (`$(...)`, backticks),
 unbalanced quotes, and quote pairs spanning multiple operands
 (`rm -rf "a b" c`) still fail closed as unparseable.
 
+One unbalanced shape is repaired rather than rejected: the shell-trap idiom
+`trap 'rm -rf "$D"' EXIT` wraps the command in single quotes, and the closing
+apostrophe rides along inside the captured operand (`"..." ' — five quote
+characters, odd parity). When exactly one token carries that stray trailing
+apostrophe and the double-quote parity is intact, it is stripped as the trap
+artifact and the operand is judged normally — `trap 'rm -rf "$WORKDIR/interim"' EXIT` inside the workdir passes, outside fails with the usual
+outside-the-workdir error. Any other unbalanced-quote shape still fails
+closed, with the error's suggestion naming the trap apostrophe so the fix is
+obvious.
+
 ### Warning Patterns (Non-Blocking)
 
 These emit **warnings** but allow execution — the rule runs either way. The

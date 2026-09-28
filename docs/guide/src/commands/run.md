@@ -891,6 +891,19 @@ their outputs rebuild in the same run.
   (`transform.cleanup = true` chunk consumers) are not manifest-tracked:
   their inputs are engine-managed intermediates governed by the
   upstream-cascade invalidation instead.
+- **Optional rules with permanently-absent inputs** (`optional = true` or
+  `optional = "any"`, issue #633): when a declared input cannot be resolved
+  because its producer was never instantiated (an `input_groups` pattern
+  that matched no files, or an endedness-filtered branch that never ran),
+  the snapshot skips that entry and records a manifest for the inputs that
+  do exist — the rule stays skipped/completed across runs instead of
+  cascading a full re-run every invocation. The same grace applies during
+  invalidation detection: a missing input with no producer in the DAG is
+  absent by design for an optional rule, while a required rule with a
+  missing input still invalidates (a deleted raw data file must re-run).
+  A failed manifest snapshot is reported on stderr and in the run log
+  (`⚠ could not snapshot inputs of rule …`) instead of being silently
+  dropped.
 - A checkpoint written before input tracking was introduced adopts the
   current file set as a one-time baseline (the first post-upgrade run
   reuses everything); changes made before that baseline cannot be

@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
 import ChatUI from '../components/ChatUI';
+import ErrorBoundary from '../components/ErrorBoundary';
 import ToolPalette from '../components/ToolPalette';
 import RuleInspector from '../components/RuleInspector';
 import RunDialog from '../components/RunDialog';
@@ -592,7 +593,19 @@ export default function PipelineEditor() {
               ))}
             </div>
           )}
-          <TomlEditor value={toml} onChange={(v) => setToml(v)} highlightLine={highlightLine} />
+          {/* #580: a CodeMirror plugin crash is caught by CodeMirror itself
+              (logException), so React never sees it — the editor goes blank
+              instead. This boundary keeps the rest of the panel usable and
+              offers a remount. */}
+          <ErrorBoundary
+            fallback={
+              <div className="empty-state">
+                <p>The TOML editor crashed and was reset. Switch modes or reload to recover — your edits above are preserved in the pipeline state.</p>
+              </div>
+            }
+          >
+            <TomlEditor value={toml} onChange={(v) => setToml(v)} highlightLine={highlightLine} />
+          </ErrorBoundary>
         </div>
       </div>
       </Suspense>

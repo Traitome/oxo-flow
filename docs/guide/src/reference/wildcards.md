@@ -51,6 +51,9 @@ control = "NORMAL_01"
 
 Any rule referencing `{pair_id}`, `{experiment}`, or `{control}` is expanded once per defined pair.
 
+!!! warning "Pairs as regions: `--samples` drops them"
+    `[[pairs]]` entries whose `experiment`/`control` are **not** sample names (e.g. a genomic region: `pair_id = "chr1-1000-2000"`) are still filtered by `--samples`, which selects samples. A filter like `--samples first:1` keeps only real samples, so every region pair is dropped — and any rule referencing `{pair_id}` then loses its fan-out source. At plan time oxo-flow logs a warning naming each such rule ("reference a pair wildcard ... but no [[pairs]] entries remain after filtering"); without it the rule would execute as an unexpanded template and fail the runtime wildcard check with advice that does not match the cause. If your workflow uses pairs-as-regions, avoid `--samples` filters (or restructure to `[[values]]`), and don't feed the pair-derived `{config.samples_list}` into shells that build file paths — region names land in the merged list and the paths they produce are never generated (see below).
+
 ### 3. Sample Groups (`[[sample_groups]]`)
 
 For cohort studies, define groups of samples in `[[sample_groups]]`.
@@ -169,7 +172,7 @@ If a pattern contains multiple wildcards with explicit value lists, oxo-flow gen
 
 ### `config.samples_list` is engine-injected
 
-When the workflow defines `sample_pattern`, `[[pairs]]`, or `[[sample_groups]]`, oxo-flow merges every sample it finds into `config.samples_list` (a sorted, deduplicated, comma-joined string) before expansion. Referencing it in `expand_inputs` means the gather step always collects exactly the outputs of the per-sample rules — **no second copy of the sample list to maintain**:
+When the workflow defines `sample_pattern`, `[[pairs]]`, or `[[sample_groups]]`, oxo-flow merges every sample it finds into `config.samples_list` (a sorted, deduplicated, comma-joined string) before expansion. **This includes `[[pairs]]` members** — pair `experiment`/`control` names count as samples so that pairs-only workflows can fan out over `{config.samples_list}`. If your pairs are regions or gene IDs rather than samples, those names land in the list too: a shell that iterates `{config.samples_list}` to build paths will reference files no rule produces. Only reference `{config.samples_list}` when every name in it corresponds to a real per-sample output. Referencing it in `expand_inputs` means the gather step always collects exactly the outputs of the per-sample rules — **no second copy of the sample list to maintain**:
 
 ```toml
 [[sample_groups]]

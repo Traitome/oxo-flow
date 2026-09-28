@@ -553,24 +553,38 @@ pub fn detect_input_manifest_invalidations(
             Ok(None) => {}
             Err(_) => {
                 // Inputs cannot be resolved — files are missing. If every
-                // unresolvable input is the tombstone of a completed
-                // producer (a temporary rule deleted its outputs by design
-                // after all dependents finished), nothing needs to happen:
-                // the rule stays completed. Genuinely missing inputs
+                // unresolvable input is absent by design, nothing needs to
+                // happen: the rule stays completed. Genuinely missing inputs
                 // invalidate the rule and cascade up to the producers.
                 let missing = oxo_flow_core::executor::checkpoint::missing_input_patterns(
                     rule,
                     workdir,
                     wildcard_values,
                 );
-                let explained_by_tombstones = !missing.is_empty()
-                    && missing.iter().all(|pattern| {
-                        dag.producer_of(pattern).is_some_and(|producer| {
-                            ck.tombstones.contains_key(producer)
-                                && ck.completed_rules.contains(producer)
-                        })
-                    });
-                if !explained_by_tombstones {
+                let explained_by_absent_design = !missing.is_empty()
+                    && missing
+                        .iter()
+                        .all(|pattern| match dag.producer_of(pattern) {
+                            // Tombstone of a completed producer: a temporary
+                            // rule deleted its outputs by design after all
+                            // dependents finished.
+                            Some(producer) => {
+                                ck.tombstones.contains_key(producer)
+                                    && ck.completed_rules.contains(producer)
+                            }
+                            // No producer in the DAG at all: the pattern's
+                            // producer rule was never instantiated (input_groups
+                            // matched no files, or the endedness filter dropped
+                            // the branch — issue #633). For an optional rule
+                            // (`optional = true`/`"any"`) that is absent by
+                            // design, same as a tombstone — the runtime skip
+                            // semantics already governed the original run. For
+                            // a required rule it is a genuinely missing
+                            // external input (e.g. a deleted raw file) and must
+                            // invalidate: silence would serve stale results.
+                            None => rule.optional.is_optional(),
+                        });
+                if !explained_by_absent_design {
                     mismatched.insert(name.clone());
                     missing_inputs.insert(name.clone());
                 }
