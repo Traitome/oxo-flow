@@ -2171,6 +2171,55 @@ fn base_safety_blocks_exotic_recursive_flag_spellings() {
 }
 
 // ---------------------------------------------------------------------------
+// validate_shell_safety_in_workdir — subshell-closing paren boundary: the
+// standard tmpdir cleanup `( ... && rm -rf "$tmpdir") 2> log` must parse —
+// `)` is a shell reserved word that terminates the command, so it can never
+// be part of an rm operand and the segment regex must stop there instead of
+// swallowing the paren + redirect target and failing closed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workdir_safety_allows_subshell_cleanup_with_trailing_paren() {
+    // The exact shape that aborted oxo-flow-varlociraptor's
+    // get_known_variants: quoted tmpdir operand followed by the subshell's
+    // closing paren and a redirect.
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir(
+            "(mkdir -p $D && build && rm -rf \"$D\") 2> logs/x.log",
+            workdir
+        )
+        .is_ok(),
+        "subshell cleanup ( ... && rm -rf \"$tmpdir\") 2> log must be allowed"
+    );
+    // Paren boundary alone (no redirect) also parses.
+    assert!(
+        validate_shell_safety_in_workdir("(x && rm -rf /data/run/y)", workdir).is_ok(),
+        "subshell close directly after the operand must parse"
+    );
+    // The segment must now END at the paren: the redirect target that used
+    // to be swallowed no longer reaches the operand list.
+    assert!(
+        validate_shell_safety_in_workdir("(rm -rf /data/run/x) 2> /etc/never-written", workdir)
+            .is_ok(),
+        "redirect after subshell close is not an rm operand"
+    );
+}
+
+#[test]
+fn workdir_safety_still_blocks_outside_target_before_subshell_close() {
+    let workdir = Path::new("/data/run");
+    assert!(
+        validate_shell_safety_in_workdir("(x && rm -rf /etc) 2> logs/x.log", workdir).is_err(),
+        "paren boundary must not weaken the outside-workdir check"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("(rm -rf /data/run/x /etc)", workdir).is_err(),
+        "multi-operand with outside target stays blocked"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // sanitize_shell_command tests
 // ---------------------------------------------------------------------------
 
