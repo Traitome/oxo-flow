@@ -1105,6 +1105,18 @@ pub fn missing_input_patterns(
             // config-optional input is not a missing file.
             continue;
         }
+        // Mirror snapshot_input_manifest's remaining two skips (audit
+        // #649): remote objects resolve via HEAD requests and are never
+        // reported as locally missing (a workdir.join("s3://…") stat
+        // always fails and would poison the tombstone explanation with a
+        // phantom), and `ancient` inputs are exempt from invalidation
+        // entirely (issue #469).
+        if input_is_ancient(rule, &expanded, wildcard_values) {
+            continue;
+        }
+        if crate::storage::StoragePath::parse(&expanded).is_remote() {
+            continue;
+        }
         let mut entries = std::collections::BTreeMap::new();
         if collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries).is_err()
         {
@@ -2610,6 +2622,23 @@ mod tests {
         // Engine wildcards and chunk paths are skipped, like the snapshot walk.
         let wildcard_rule = list_rule("w", &["{sample}.fq", ".oxo-flow/chunks/x.bam"]);
         assert!(missing_input_patterns(&wildcard_rule, &wd, &HashMap::new()).is_empty());
+        // Remote and ancient inputs are never locally missing (audit #649):
+        // the snapshot resolves remote objects via HEAD (never local stats —
+        // a workdir.join("s3://…") always fails) and exempts ancient inputs
+        // from invalidation entirely (issue #469).
+        let remote_rule = list_rule("r2", &["s3://bucket/ref.fq", "data/missing.txt"]);
+        assert_eq!(
+            missing_input_patterns(&remote_rule, &wd, &HashMap::new()),
+            vec!["data/missing.txt".to_string()],
+            "a remote URI must not appear as a phantom local missing pattern"
+        );
+        let mut ancient_rule = list_rule("r3", &["data/missing.txt", "data/also-missing.txt"]);
+        ancient_rule.ancient = vec!["data/missing.txt".to_string()];
+        assert_eq!(
+            missing_input_patterns(&ancient_rule, &wd, &HashMap::new()),
+            vec!["data/also-missing.txt".to_string()],
+            "an ancient input is exempt from missing-input reporting"
+        );
         let _ = std::fs::remove_dir_all(&wd);
     }
 

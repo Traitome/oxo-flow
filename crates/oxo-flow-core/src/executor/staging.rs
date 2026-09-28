@@ -81,6 +81,11 @@ pub async fn stage_remote_io(
     let mut uploads: Vec<(StoragePath, std::path::PathBuf)> = Vec::new();
     let mut missing_optional_input = false;
     let mut saw_remote = false;
+    // Mode-aware optional tracking (audit #650): how many OPTIONAL remote
+    // inputs reached a staging attempt, and how many of those failed — the
+    // `any` vs `all` verdict is applied after the loop.
+    let mut remote_optional_total = 0usize;
+    let mut remote_optional_failed = 0usize;
 
     if let FilePatterns::Dir { path, .. } = &rule.input
         && StoragePath::parse(path).is_remote()
@@ -113,6 +118,10 @@ pub async fn stage_remote_io(
             );
             continue;
         };
+        let is_optional = rule.optional.is_optional();
+        if is_optional {
+            remote_optional_total += 1;
+        }
         match backend.stage(&storage_path, workdir).await {
             Ok(local) => {
                 let rel = local
@@ -123,13 +132,13 @@ pub async fn stage_remote_io(
                 tracing::debug!(input = %expanded, staged = %rel, "staged remote input");
                 input_map.insert(pattern, rel);
             }
-            Err(e) if rule.optional.is_optional() => {
+            Err(e) if is_optional => {
                 tracing::warn!(
                     input = %expanded,
                     error = %e,
                     "optional remote input unavailable; treating as missing"
                 );
-                missing_optional_input = true;
+                remote_optional_failed += 1;
             }
             Err(e) => {
                 return Err(OxoFlowError::Execution {
@@ -138,6 +147,21 @@ pub async fn stage_remote_io(
                 });
             }
         }
+    }
+
+    // Mode-aware optional verdict (audit #650): the remote path used to
+    // flag ANY optional failure, skipping the rule even under
+    // `optional = "any"` with surviving inputs — semantics the local path
+    // reserves for "ALL inputs missing". `all` skips on the first
+    // failure; `any` only when every remote input that reached staging
+    // failed (a no-backend delegation is neither success nor failure: the
+    // shell handles the raw URI itself).
+    if remote_optional_failed > 0 {
+        missing_optional_input = match rule.optional {
+            crate::rule::OptionalMode::All(true) => true,
+            crate::rule::OptionalMode::Any => remote_optional_total == remote_optional_failed,
+            crate::rule::OptionalMode::All(false) => false,
+        };
     }
 
     // ── outputs ────────────────────────────────────────────────────────────
