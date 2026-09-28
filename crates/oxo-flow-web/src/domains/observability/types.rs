@@ -22,6 +22,22 @@ pub struct ComponentHealth {
     /// carries the flag so the trade-off is visible to API consumers (issue
     /// #205), not only to whoever reads the server log.
     pub ai_key_storage: String,
+    /// The engine CLI the server spawns for runs: version it reported via
+    /// `--version` at startup and the resolved binary path (issue #579).
+    /// `None` when the probe failed or has not run — check the server log
+    /// and the run log header in that case.
+    pub engine: Option<EngineBinaryInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EngineBinaryInfo {
+    /// Version the engine binary itself reported (e.g. `"0.20.1"`).
+    pub version: String,
+    /// Resolved binary path (or bare name when found through PATH).
+    pub path: String,
+    /// Whether the engine's major.minor differs from the server's —
+    /// mismatched semantics for runs spawned by this server (issue #579).
+    pub version_mismatch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -54,6 +70,9 @@ pub struct SystemInfoResponse {
     pub arch: String,
     pub pid: u32,
     pub uptime_secs: u64,
+    /// The engine CLI resolved for run execution (issue #579); `None` when
+    /// the startup probe failed. Mirrors `/api/health`'s `components.engine`.
+    pub engine: Option<EngineBinaryInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -178,6 +197,7 @@ mod tests {
                 }),
                 ai_provider: None,
                 ai_key_storage: "encrypted".into(),
+                engine: None,
             },
             resources: ResourceInfo {
                 cpu_pct: 25.0,
@@ -206,6 +226,7 @@ mod tests {
             arch: "x86_64".into(),
             pid: 1234,
             uptime_secs: 3600,
+            engine: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: SystemInfoResponse = serde_json::from_str(&json).unwrap();

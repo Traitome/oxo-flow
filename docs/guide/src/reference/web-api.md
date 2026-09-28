@@ -59,11 +59,32 @@ GET /api/health
 ```
 Returns status, version, mode, uptime, component health (database, filesystem, scheduler, AI provider), resource usage, and license info.
 
+`components.ai_key_storage` is `"encrypted"` when `OXO_FLOW_MASTER_KEY` is set, `"plaintext"` otherwise (issue #205).
+
+`components.engine` (issue #579) reports the engine CLI the server spawns for runs, resolved once at startup by running `<binary> --version`:
+
+```json
+{
+  "status": "ok",
+  "components": {
+    "engine": {
+      "version": "0.20.1",
+      "path": "/usr/local/bin/oxo-flow",
+      "version_mismatch": false
+    }
+  }
+}
+```
+
+`version_mismatch` is `true` when the engine's major.minor differs from the server's — runs will execute under the engine's semantics, and the server log carries a drift warning with a hint to pin `OXO_FLOW_BIN`. The field is `null` when the probe failed (binary missing or unparseable `--version` output); the run log header remains the version record in that case.
+
 ### System Info
 ```
 GET /api/system
 ```
 Returns OS, architecture, PID, uptime, and version. **Team/hpc modes require authentication** (the endpoint left the anonymous whitelist in the v0.11 hardening).
+
+The response also carries `engine` — the same engine-CLI info as `/api/health`'s `components.engine` (issue #579).
 
 ### Runtime Metrics
 ```
