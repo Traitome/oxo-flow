@@ -284,14 +284,23 @@ impl Orchestrator {
                 // retry loop, like any other rejected output.
                 if matches!(response.finish_reason.as_str(), "length" | "max_tokens") {
                     let rc = response.reasoning_content.as_deref().unwrap_or("");
-                    push_retry_feedback(
-                        &mut messages,
-                        content,
-                        rc,
-                        "Your response was cut off by the output-token limit (finish_reason: length).                          The output is INCOMPLETE and cannot be used. Produce the complete output —                          same content, no re-analysis — possibly by omitting commentary to fit the budget.",
-                        rounds + 1 == self.max_rounds,
-                    );
-                    continue;
+                    // An EMPTY truncation (the token budget was consumed by
+                    // reasoning before any text) must NOT be echoed: an
+                    // empty assistant text block on the wire is rejected
+                    // with 400 by Anthropic-compatible endpoints and would
+                    // kill the whole paid generation (audit #646). Fall
+                    // through to the empty-response handling below, which
+                    // nudges without echoing.
+                    if !content.trim().is_empty() {
+                        push_retry_feedback(
+                            &mut messages,
+                            content,
+                            rc,
+                            "Your response was cut off by the output-token limit (finish_reason: length). The output is INCOMPLETE and cannot be used. Produce the complete output — same content, no re-analysis — possibly by omitting commentary to fit the budget.",
+                            rounds + 1 == self.max_rounds,
+                        );
+                        continue;
+                    }
                 }
 
                 // Extract content (agent-specific, e.g., strip code fences)

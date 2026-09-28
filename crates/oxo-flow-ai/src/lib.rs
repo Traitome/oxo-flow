@@ -47,7 +47,7 @@ use std::sync::RwLock;
 
 use config::AiConfig;
 use error::AiError;
-use provider::{AiProvider, create_provider};
+use provider::{AiProvider, ProviderKind, create_provider, create_provider_from_env};
 use session::AiSession;
 
 // ── Global registry ────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ impl AiRegistry {
         }
 
         // Create the provider
-        let provider = if config.enabled {
+        let mut provider = if config.enabled {
             create_provider(
                 config.provider,
                 config.api_key.clone(),
@@ -103,22 +103,38 @@ impl AiRegistry {
         } else {
             AiProvider::Noop
         };
+        // When the env tier (and any overrides) resolved to nothing, fall
+        // through to the documented resolution chain — the persisted config
+        // file written by `oxo-flow ai setup`, then auto-detection — the
+        // same chain `create_provider_from_env` implements. Without this,
+        // config-file-only setups resolved to Noop here after a restart
+        // (audit #648).
+        if matches!(provider, AiProvider::Noop) {
+            provider = create_provider_from_env();
+            config.enabled = !matches!(provider, AiProvider::Noop);
+            if let Ok(kind) = provider.name().parse::<ProviderKind>() {
+                config.provider = kind;
+            }
+        }
 
         let name = provider.name().to_string();
         let model = provider.model();
 
-        // Store in the global
-        if let Ok(mut p) = AI.provider.write() {
+        // Store on THIS registry — the readers below read `self`, and
+        // writing the global `AI` instead would let a non-global instance
+        // silently flip process-global state while staying unconfigured
+        // itself (audit #648).
+        if let Ok(mut p) = self.provider.write() {
             *p = Some(provider);
         }
-        if let Ok(mut c) = AI.config.write() {
+        if let Ok(mut c) = self.config.write() {
             *c = config;
         }
 
         tracing::info!(
             "AI registry initialized: provider={name}, model={}, enabled={}",
             model.as_deref().unwrap_or("default"),
-            AI.is_enabled()
+            self.is_enabled()
         );
         Ok(())
     }
@@ -126,7 +142,7 @@ impl AiRegistry {
     /// Replace the active provider directly (test support — e.g. injecting
     /// a `ScriptedBackend` for deterministic runs without network access).
     pub fn set_provider(&self, provider: AiProvider) {
-        if let Ok(mut p) = AI.provider.write() {
+        if let Ok(mut p) = self.provider.write() {
             *p = Some(provider);
         }
     }
