@@ -189,6 +189,15 @@ export default function MonitorReport() {
         // the 5s poll as the fallback instead of spinning.
         return;
       }
+      // Cleanup may have run while the ticket POST was in flight (closed
+      // was false then, true now): the just-opened stream would be orphaned
+      // forever — an EventSource nothing ever closes. HTTP/1.1 origins cap
+      // ~6 concurrent connections, so a handful of orphans stall the whole
+      // app (audit #644).
+      if (closed) {
+        es.close();
+        return;
+      }
       es.onopen = () => { attempts = 0; };
       es.onerror = () => {
         // EventSource auto-reconnects on network errors, but a 401

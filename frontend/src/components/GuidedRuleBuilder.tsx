@@ -35,23 +35,31 @@ const EMPTY_CARD: RuleCard = {
   environment: 'system',
 };
 
+// Escape a value for interpolation into a TOML basic string: a raw quote
+// or backslash in a name/path used to emit UNPARSEABLE TOML, silently
+// disabling Run/Dry-Run with no visible error (audit #652 — only `shell`
+// was escaped before).
+function tomlEscape(value: string): string {
+  return value.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: string): string {
   const rules = cards
     .filter((c) => c.name.trim() !== '')
     .map((c) => {
-      const lines: string[] = ['[[rules]]', `name = "${c.name.trim()}"`];
+      const lines: string[] = ['[[rules]]', `name = "${tomlEscape(c.name)}"`];
       if (c.inputs.length > 0) {
-        const list = c.inputs.map((i) => `"${i.trim()}"`).join(', ');
+        const list = c.inputs.map((i) => `"${tomlEscape(i)}"`).join(', ');
         lines.push(`input = [${list}]`);
       }
       if (c.outputs.length > 0) {
-        const list = c.outputs.map((o) => `"${o.trim()}"`).join(', ');
+        const list = c.outputs.map((o) => `"${tomlEscape(o)}"`).join(', ');
         lines.push(`output = [${list}]`);
       }
       if (c.threads.trim()) lines.push(`threads = ${c.threads.trim()}`);
-      if (c.memory.trim()) lines.push(`memory = "${c.memory.trim()}"`);
+      if (c.memory.trim()) lines.push(`memory = "${tomlEscape(c.memory)}"`);
       if (c.environment.trim() && c.environment !== 'system') {
-        lines.push(`environment = "${c.environment.trim()}"`);
+        lines.push(`environment = "${tomlEscape(c.environment)}"`);
       }
       // A basic `"""` string escape-processes its content, so `sed 's/\t/,/g'`
       // became a literal tab and a trailing backslash broke parsing; escape
@@ -62,7 +70,7 @@ function cardsToToml(cards: RuleCard[], workflowName: string, workflowVersion: s
     })
     .join('\n\n');
 
-  return `[workflow]\nname = "${workflowName}"\nversion = "${workflowVersion}"\n\n${rules}\n`;
+  return `[workflow]\nname = "${tomlEscape(workflowName)}"\nversion = "${tomlEscape(workflowVersion)}"\n\n${rules}\n`;
 }
 
 export default function GuidedRuleBuilder({ toml, onChange }: GuidedRuleBuilderProps) {

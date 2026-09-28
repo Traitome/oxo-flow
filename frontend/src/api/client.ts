@@ -19,6 +19,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Human-facing rendering of a failed API call: the backend's structured
+ * `{code, message, detail, suggestion}` contract carries remediation hints
+ * that were parsed but never shown anywhere (audit #653). Returns the
+ * message plus any detail/suggestion on their own lines.
+ */
+export function describeApiError(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) {
+    return err instanceof Error && err.message ? `${fallback}: ${err.message}` : fallback;
+  }
+  const parts = [err.message];
+  if (err.detail) parts.push(err.detail);
+  if (err.suggestion) parts.push(`→ ${err.suggestion}`);
+  return parts.filter((p) => p.trim() !== '').join('\n');
+}
+
 // The server injects window.__OXO_BASE__ when serving under a sub-path
 // (--base-path); every API URL must be prefixed or the request misses the
 // mount point.
@@ -64,18 +80,32 @@ async function postStream(url: string, body: unknown, signal?: AbortSignal): Pro
     body: JSON.stringify(body),
     signal,
   });
+  // Same expired-session handling as request() (#549): streaming chat kept
+  // appending a raw "Unauthorized" to the transcript instead of redirecting
+  // (audit #654).
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    localStorage.removeItem('oxo_token');
+    const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+    window.location.assign(`${base}/login?reason=expired`);
+    throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
+  }
   if (!res.ok) throw await toApiError(res);
   return res;
 }
 
 // Text endpoint helper: accepts a JSON-encoded string (what the logs
 // handler returns today) or raw text/plain, so either serialization works.
+// Only a JSON result that is actually a string is unwrapped — a log body
+// that happens to parse as a JSON number/object used to crash the logs tab
+// renderer downstream (audit #654).
 async function getText(url: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch(apiUrl(url), { headers: authHeaders(), signal });
   if (!res.ok) throw await toApiError(res);
   const text = await res.text();
   try {
-    return JSON.parse(text) as string;
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === 'string') return parsed;
+    return text;
   } catch {
     return text;
   }

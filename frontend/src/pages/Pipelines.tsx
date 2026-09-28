@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Download, GitFork, Pencil, Share2, Trash2 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { Pipeline, Template } from '../api/types';
 import { useI18n } from '../context/I18n';
 
@@ -51,16 +51,28 @@ export default function Pipelines() {
   };
 
   const handleShare = async (id: string) => {
+    // The share API call and the clipboard write are separate failure
+    // domains: the token IS created server-side even when the clipboard
+    // write fails (plain-HTTP LAN deployments have no navigator.clipboard),
+    // and reporting that as "share failed" made users retry and mint
+    // duplicate tokens (audit #654).
+    let httpsUrl: string;
     try {
       const res = await api.sharePipeline(id, 'link', 30);
       // The API returns an oxo+https:// URL; surface a clickable https://
       // link (the oxo+ scheme is the import format).
-      const httpsUrl = res.share_url.replace('oxo+', '');
-      await navigator.clipboard.writeText(httpsUrl);
-      setNotice(t('pipelines.shareCopied').replace('{{days}}', '30') + `: ${httpsUrl}`);
-    } catch {
-      setNotice(t('pipelines.shareFailed'));
+      httpsUrl = res.share_url.replace('oxo+', '');
+    } catch (err: unknown) {
+      setNotice(t('pipelines.shareFailed') + `: ${describeApiError(err, t('common.unknownError'))}`);
+      return;
     }
+    try {
+      await navigator.clipboard.writeText(httpsUrl);
+    } catch {
+      // Clipboard unavailable (plain-HTTP deployment) — the URL is shown
+      // in the notice either way.
+    }
+    setNotice(t('pipelines.shareCopied').replace('{{days}}', '30') + `: ${httpsUrl}`);
   };
 
   const handleFork = async (id: string) => {
