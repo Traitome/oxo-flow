@@ -38,11 +38,10 @@ pub async fn handle_serve(
     open_browser: bool,
 ) -> Result<()> {
     print_banner();
-    let base = if base_path.is_empty() || base_path == "/" {
-        String::new()
-    } else {
-        format!("/{}", base_path.trim_matches('/'))
-    };
+    // Reuse, never retype: the router's mount-path contract lives in the
+    // web crate (`normalize_base_path`); the previous inline copy here was
+    // a hand-typed duplicate that had already drifted from it.
+    let base = oxo_flow_web::server::normalize_base_path(&base_path);
     eprintln!(
         "{} Starting oxo-flow web server in {} mode on {}:{}{}",
         "Serve:".bold().cyan(),
