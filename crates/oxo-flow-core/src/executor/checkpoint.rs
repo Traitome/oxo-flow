@@ -894,6 +894,21 @@ pub fn compute_file_checksum(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
+    // Refuse special files before opening: `File::open` on a writer-less
+    // FIFO blocks forever (seen with STAR's leftover `tmp.fifo.read*`
+    // under .oxo-flow/tmp/ after a killed run, issue #695), and sockets /
+    // char devices have no meaningful content checksum.
+    let md = std::fs::metadata(path).map_err(|e| OxoFlowError::Execution {
+        rule: String::new(),
+        message: format!("failed to stat {} for checksum: {e}", path.display()),
+    })?;
+    if !md.is_file() {
+        return Err(OxoFlowError::Execution {
+            rule: String::new(),
+            message: format!("cannot checksum {}: not a regular file", path.display()),
+        });
+    }
+
     let file = std::fs::File::open(path).map_err(|e| OxoFlowError::Execution {
         rule: String::new(),
         message: format!("failed to open {} for checksum: {e}", path.display()),
@@ -941,11 +956,13 @@ pub fn mtime_nanos(md: &std::fs::Metadata) -> i128 {
 }
 
 /// Content hash for small files, under the shared input-manifest policy:
-/// `Some("sha256:…")` when the file is at most [`MANIFEST_HASH_MAX_BYTES`]
-/// and readable; `None` for larger files (guarded by size+mtime) and for
-/// unreadable files (best-effort degrade, never an error).
+/// `Some("sha256:…")` when the path is a regular file at most
+/// [`MANIFEST_HASH_MAX_BYTES`]; `None` for larger files (guarded by
+/// size+mtime), for unreadable files (best-effort degrade, never an
+/// error), and for special files — hashing a FIFO would block forever
+/// on open (issue #695), so those entries keep the size+mtime policy.
 pub fn content_hash_if_small(path: &Path, md: &std::fs::Metadata) -> Option<String> {
-    (md.len() <= MANIFEST_HASH_MAX_BYTES)
+    (md.is_file() && md.len() <= MANIFEST_HASH_MAX_BYTES)
         .then(|| compute_file_checksum(path).ok())
         .flatten()
 }
@@ -2732,6 +2749,40 @@ mod tests {
         assert_eq!(manifest[0].path, "data/a.txt");
         assert_eq!(manifest[0].size, 5);
         assert!(manifest[0].mtime_nanos > 0);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    /// A writer-less FIFO (STAR's leftover `tmp.fifo.read*` after a killed
+    /// run, issue #695) must not hang the manifest snapshot: opening it to
+    /// hash would block forever, so the entry is recorded with size+mtime
+    /// only (no hash) — same policy as a large file.
+    #[cfg(unix)]
+    #[test]
+    fn manifest_snapshot_completes_with_fifo_input() {
+        let wd = temp_workdir("fifo");
+        std::fs::create_dir_all(wd.join("STARtmp")).unwrap();
+        let fifo = wd.join("STARtmp/tmp.fifo.read1");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo must exist on unix");
+        assert!(status.success(), "mkfifo failed");
+        let rule = list_rule("star_align", &["STARtmp"]);
+
+        // Would hang forever before the fix (compute_file_checksum opened
+        // the FIFO and blocked in wait_for_partner). Must now complete.
+        let manifest = snapshot(&rule, &wd).expect("dir input with FIFO is trackable");
+        let entry = manifest
+            .iter()
+            .find(|e| e.path == "STARtmp/tmp.fifo.read1")
+            .expect("FIFO is recorded in the manifest");
+        assert!(entry.hash.is_none(), "FIFO must not be content-hashed");
+
+        // Direct hashing of the FIFO refuses instead of blocking.
+        assert!(
+            compute_file_checksum(&fifo).is_err(),
+            "checksum on a writer-less FIFO must error, never open it"
+        );
         let _ = std::fs::remove_dir_all(&wd);
     }
 
