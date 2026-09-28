@@ -3358,6 +3358,7 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             let run = cp.rule_runs.get(*rule);
             let exit = run.and_then(|r| r.exit_code);
             let tail = run.and_then(|r| r.stderr_tail.as_deref());
+            let stdout_tail = run.and_then(|r| r.stdout_tail.as_deref());
 
             let cascade = affected_downstream(rule, dag.as_ref());
             let cascade_text = if cascade.is_empty() {
@@ -3373,7 +3374,10 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
                         .unwrap_or_else(|| "unknown (engine-level failure)".into()),
                 ),
                 ("Affected Downstream".into(), cascade_text),
-                ("Suggested Next Step".into(), failure_suggestion(exit, tail)),
+                (
+                    "Suggested Next Step".into(),
+                    failure_suggestion(exit, tail.or(stdout_tail)),
+                ),
             ];
 
             let mut details = vec![ReportSection {
@@ -3388,6 +3392,19 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
                     id: format!("failure-{}-stderr", sanitize_id(rule)),
                     content: ReportContent::Markdown {
                         markdown: tail.to_string(),
+                    },
+                    subsections: vec![],
+                });
+            }
+            // Some tools print their root cause on stdout (issue #691): a
+            // rule whose stderr is empty but whose stdout ends in an error
+            // would otherwise get no excerpt at all.
+            if let Some(stdout) = stdout_tail {
+                details.push(ReportSection {
+                    title: "Stdout Excerpt".into(),
+                    id: format!("failure-{}-stdout", sanitize_id(rule)),
+                    content: ReportContent::Markdown {
+                        markdown: stdout.to_string(),
                     },
                     subsections: vec![],
                 });
@@ -3407,7 +3424,7 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             content: ReportContent::Text {
                 text: format!(
                     "{} rule(s) failed. For each: exit code, affected downstream rules, \
-                     a stderr excerpt when available, and a suggested next step.",
+                     stderr/stdout excerpts when available, and a suggested next step.",
                     failed.len()
                 ),
             },
@@ -4309,6 +4326,7 @@ mod tests {
                 exit_code: Some(127),
                 command: Some("gatk HaplotypeCaller -I out.bam".to_string()),
                 stderr_tail: Some("gatk: command not found".to_string()),
+                stdout_tail: None,
                 caption: None,
             },
         );
@@ -4538,6 +4556,7 @@ input = ["out.bam"]
                 exit_code: Some(137),
                 command: None,
                 stderr_tail: Some("Killed".to_string()),
+                stdout_tail: None,
                 caption: None,
             },
         );
@@ -4793,6 +4812,7 @@ report = "Per-sample QC."
                 exit_code: Some(0),
                 command: Some("fastp -i S1.fq".to_string()),
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: Some("S1: 1M reads, Q30 0.95.".to_string()),
             },
         );
@@ -4805,6 +4825,7 @@ report = "Per-sample QC."
                 exit_code: Some(0),
                 command: Some("fastp -i S2.fq".to_string()),
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: None, // falls back to the declared annotation
             },
         );
@@ -5374,6 +5395,7 @@ shell = "bwa mem"
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S1".to_string()),
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: None,
             },
         );
@@ -5386,6 +5408,7 @@ shell = "bwa mem"
                 exit_code: Some(0),
                 command: Some("summarize.sh cohort_S2".to_string()),
                 stderr_tail: None,
+                stdout_tail: None,
                 caption: None,
             },
         );
