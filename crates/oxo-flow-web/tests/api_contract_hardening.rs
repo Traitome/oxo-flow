@@ -383,3 +383,80 @@ async fn pause_and_resume_accept_empty_bodies() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Audits #651/#665 — the cursor-pagination contract: `next_cursor` is null
+// on the LAST page (not on every page), and `total` counts the whole filter
+// population on every page (it must not shrink with the cursor).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_runs_cursor_and_total_contract() {
+    ensure_db().await;
+
+    // Seed three completed runs (plus the FK parents) directly: the
+    // pagination contract is data-shape-driven, not spawn-driven. One
+    // transaction = one connection, so the FK parents are visible to the
+    // child inserts by definition.
+    let pool = oxo_flow_web::infra::db::sqlite::try_pool().expect("personal mode has SQLite");
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, password_hash, created_at) \
+         VALUES ('default', 'default', 'user', 'env', 'default', '', '2026-09-28T00:00:00Z')",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO pipelines (id, user_id, name, version, toml_content, rules_count, visibility, created_at, updated_at) \
+         VALUES ('', 'default', 'cursor-contract', '0.1.0', '', 0, 'private', '2026-09-28T00:00:00Z', '2026-09-28T00:00:00Z')",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    for i in 0..3 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, created_at) \
+             VALUES (?, 'default', '', '{}', 'cursor-contract', 'completed', ?)",
+        )
+        .bind(format!("cursor-contract-{i}"))
+        .bind(format!("2026-09-28T00:00:0{i}Z"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let app = server::build_router("personal");
+
+    // The `q` filter pins this test's dataset to its own three rows, so
+    // runs other tests insert in parallel cannot skew `total`.
+    // Page 1 (limit=2 of 3 rows): next_cursor present, total = the WHOLE
+    // matching population.
+    let (status, body) = get(&app, "/api/runs?limit=2&q=cursor-contract").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(2), "{body}");
+    assert_eq!(body["total"].as_i64(), Some(3), "{body}");
+    let cursor = body["next_cursor"]
+        .as_str()
+        .expect("page 1 of 2 must carry a next cursor")
+        .to_string();
+
+    // Page 2: the remaining row — next_cursor must be NULL (last page) and
+    // total must STILL be 3, not the 1 row left from this cursor.
+    let (status, body) = get(
+        &app,
+        &format!(
+            "/api/runs?limit=2&q=cursor-contract&cursor={}",
+            urlencoding::encode(&cursor)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(1), "{body}");
+    assert!(
+        body["next_cursor"].is_null(),
+        "the last page must not carry a next_cursor: {body}"
+    );
+    assert_eq!(body["total"].as_i64(), Some(3), "{body}");
+}

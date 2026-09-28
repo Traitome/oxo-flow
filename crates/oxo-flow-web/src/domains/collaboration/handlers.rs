@@ -188,6 +188,20 @@ pub async fn share_pipeline(
 
     let token = uuid::Uuid::new_v4().to_string();
     let now = now_iso();
+    // chrono's `DateTime + TimeDelta` PANICS on overflow, and u32::MAX days
+    // (~11.7M years) is far past chrono's year-262143 ceiling — bound the
+    // value so a bad payload gets a structured 400, not a dropped
+    // connection (audit #660). 10 years is a generous share lifetime.
+    const MAX_EXPIRES_IN_DAYS: u32 = 3650;
+    if let Some(d) = body.expires_in_days
+        && d > MAX_EXPIRES_IN_DAYS
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_EXPIRY",
+            format!("expires_in_days must be at most {MAX_EXPIRES_IN_DAYS}, got {d}"),
+        ));
+    }
     let expires_at = body
         .expires_in_days
         .map(|d| (chrono::Utc::now() + chrono::Duration::days(d as i64)).to_rfc3339());
