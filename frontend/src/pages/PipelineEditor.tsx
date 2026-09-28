@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, describeApiError } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ErrorBoundary from '../components/ErrorBoundary';
@@ -200,7 +200,9 @@ export default function PipelineEditor() {
         navigate(`/runs/${res.run_id}`);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('editor.runStartFailed');
+      // describeApiError surfaces the backend's detail/suggestion hints
+      // (the structured-error contract used to die in the UI, audit #653).
+      const msg = describeApiError(err, t('editor.runStartFailed'));
       session.setRunResult({ message: t('editor.errorPrefix').replace('{{message}}', msg), type: 'error' });
     }
     setRunning(false);
