@@ -439,14 +439,30 @@ pub async fn search_pipelines(
     let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
 
-    // Search saved pipelines from DB
-    let pipeline_rows: Vec<models::PipelineRow> = sqlx::query_as(
-        "SELECT * FROM pipelines WHERE name LIKE ? OR toml_content LIKE ? ORDER BY updated_at DESC LIMIT 50",
-    )
-    .bind(format!("%{}%", req.query))
-    .bind(format!("%{}%", req.query))
-    .fetch_all(pool)
-    .await
+    // Search saved pipelines from DB. The visibility predicate rides in the
+    // SQL (audit #664): filtering AFTER `LIMIT 50` let foreign private rows
+    // crowd the caller's own results out of the window entirely. The
+    // in-memory `can_read_pipeline` filter below stays as defense-in-depth.
+    let pattern = format!("%{}%", req.query);
+    let pipeline_rows: Vec<models::PipelineRow> = if user.is_admin() {
+        sqlx::query_as(
+            "SELECT * FROM pipelines WHERE name LIKE ? OR toml_content LIKE ? ORDER BY updated_at DESC LIMIT 50",
+        )
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as(
+            "SELECT * FROM pipelines WHERE (user_id = ? OR visibility = 'workspace') \
+             AND (name LIKE ? OR toml_content LIKE ?) ORDER BY updated_at DESC LIMIT 50",
+        )
+        .bind(&user.id)
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await
+    }
     .map_err(|e| {
         tracing::error!("DB error searching pipelines: {e}");
         err(

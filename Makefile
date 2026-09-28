@@ -4,7 +4,7 @@
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny secrets docs frontend-lint
+ci: fmt clippy build test schema-drift version-check audit deny secrets docs frontend-lint eval-tests
 
 fmt:
 	cargo fmt -- --check
@@ -42,6 +42,12 @@ docs:
 ## ci.yml; uses `npm install` rather than CI's `npm ci`).
 frontend-lint:
 	cd frontend && npm install --no-audit --no-fund && npm run lint
+
+## Eval-harness unit tests: the deterministic judge logic in eval/scripts
+## (runner.py scoring/matching) feeds AI-quality benchmark decisions, so a
+## silent rot would produce garbage numbers (audit #673).
+eval-tests:
+	python3 -m unittest discover -s eval/scripts
 
 ## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
 frontend-test:
