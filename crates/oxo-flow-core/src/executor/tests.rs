@@ -2036,6 +2036,112 @@ fn workdir_safety_blocks_tilde_user_targets() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// validate_shell_safety_in_workdir — issue #637: the `trap 'rm -rf "$dir"'
+// EXIT` cleanup idiom leaves the trap string's closing apostrophe at the end
+// of the captured segment, tripping the quote-parity reject even though the
+// rm operands themselves are balanced. The trailing-apostrophe artifact is
+// repaired; every other unbalanced shape still fails closed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workdir_safety_allows_trap_cleanup_with_relative_target() {
+    let workdir = Path::new("/data/run");
+    // The issue's exact repro: $D is relative, so the deletion is inside the
+    // workdir by construction — the stray closing apostrophe from the trap
+    // string must not block it.
+    assert!(
+        validate_shell_safety_in_workdir("trap 'rm -rf \"$D\"' EXIT", workdir).is_ok(),
+        "trap cleanup with relative target must be allowed"
+    );
+    // The bare rm inside the trap string parses to the same segment
+    // (`"$D"' EXIT`) whether or not the `trap` prefix is present.
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"$D\"' EXIT", workdir).is_ok(),
+        "the stray-apostrophe segment shape stays allowed for relative targets"
+    );
+    assert!(
+        validate_shell_safety_in_workdir(
+            "D=results/tmp; trap 'rm -rf \"$D\"' EXIT; mkdir -p $D",
+            workdir
+        )
+        .is_ok(),
+        "full trap-cleanup pipeline with relative target stays allowed"
+    );
+    // Compare: without the trap wrapper, the same deletion already parses.
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"$D\"", workdir).is_ok(),
+        "the bare quoted form stays allowed (parity with pre-#637 behavior)"
+    );
+}
+
+#[test]
+fn workdir_safety_still_blocks_trap_cleanup_outside_workdir() {
+    let workdir = Path::new("/data/run");
+    // The repair only forgives the quote artifact; the target check still
+    // runs on what remains. EXIT lands as a harmless extra relative operand,
+    // but /etc is an absolute outside-workdir deletion and must block.
+    assert!(
+        validate_shell_safety_in_workdir("trap 'rm -rf /etc' EXIT", workdir).is_err(),
+        "trap cleanup deleting outside the workdir must stay blocked"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("trap 'rm -rf \"$D\" /etc' EXIT", workdir).is_err(),
+        "mixed trap operands: the outside-workdir one must block"
+    );
+    // An absolute "signal word" is invalid shell and also reads as an
+    // absolute operand — fail closed rather than silently ignore it.
+    assert!(
+        validate_shell_safety_in_workdir("trap 'rm -rf \"$D\"' /etc", workdir).is_err(),
+        "absolute trailing token after the operand must stay blocked"
+    );
+}
+
+#[test]
+fn workdir_safety_still_fails_closed_on_non_trap_unbalanced_quotes() {
+    let workdir = Path::new("/data/run");
+    // Only the exact trailing-apostrophe shape is repaired. Everything else
+    // with odd quote parity keeps failing closed.
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"/data/run/a", workdir).is_err(),
+        "unbalanced double quote must still fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf '/data/run/a /etc", workdir).is_err(),
+        "apostrophe mid-token is not the trap artifact — fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf '/data/run/a x' y' /etc", workdir).is_err(),
+        "two trailing-apostrophe tokens is not the trap artifact — fail closed"
+    );
+    assert!(
+        validate_shell_safety_in_workdir("trap \"rm -rf '$D'\" EXIT", workdir).is_err(),
+        "trap with double-quoted string (odd double quotes) must fail closed"
+    );
+    // A stray apostrophe with an unbalanced double quote still has odd
+    // double-quote parity after the apostrophe repair — fail closed below.
+    assert!(
+        validate_shell_safety_in_workdir("rm -rf \"$D' EXIT", workdir).is_err(),
+        "unbalanced double quote + stray apostrophe must fail closed"
+    );
+}
+
+#[test]
+fn workdir_safety_trap_case_error_message_names_the_quote_artifact() {
+    // The old message ("remove quotes from rm operands") read like a verdict
+    // on the operand; the rewritten suggestion names the trap interaction so
+    // users can recognize the idiom (#637's misleading-error aspect). The
+    // shape below cannot be repaired (double quotes are also unbalanced), so
+    // it exercises the fail-closed branch that carries the new message.
+    let err = validate_shell_safety_in_workdir("rm -rf \"$D' EXIT", Path::new("/data/run"))
+        .expect_err("odd double quotes + stray apostrophe stay blocked");
+    let text = err.suggestion().unwrap_or_default();
+    assert!(
+        text.contains("stray apostrophe"),
+        "error should name the stray-apostrophe trap artifact, got: {text}"
+    );
+}
+
 #[test]
 fn workdir_safety_analyzes_each_rm_invocation_in_a_pipeline() {
     let workdir = Path::new("/data/run");

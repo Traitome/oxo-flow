@@ -294,7 +294,37 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
             });
         }
         let quote_count = segment.matches('"').count();
-        let apostrophes = segment.matches('\'').count();
+        let mut apostrophes = segment.matches('\'').count();
+        // #637: the `trap 'rm -rf "$dir"' EXIT` cleanup idiom leaves the trap
+        // string's closing apostrophe at the END of the last captured operand
+        // — the segment regex stops at whitespace, not at the outer quote
+        // boundary, so the stray quote reads as unbalanced even though the
+        // rm operands themselves are fine. When exactly one token ends with
+        // `'` and dropping that trailing apostrophe restores even parity, it
+        // is that artifact: strip it and parse the remaining operands
+        // normally. Any other unbalanced shape (apostrophe mid-token, several
+        // tokens ending in quotes, odd double quotes — including the
+        // `trap "rm -rf '$dir'"` variant) still fails closed below.
+        let mut segment = segment.to_string();
+        if apostrophes % 2 != 0 && quote_count % 2 == 0 {
+            let tokens: Vec<&str> = segment.split_whitespace().collect();
+            let stray: Vec<usize> = tokens
+                .iter()
+                .enumerate()
+                .filter(|(_, tok)| tok.ends_with('\''))
+                .map(|(idx, _)| idx)
+                .collect();
+            if let [idx] = stray[..] {
+                let repaired = tokens
+                    .iter()
+                    .enumerate()
+                    .map(|(i, tok)| if i == idx { &tok[..tok.len() - 1] } else { tok })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                segment = repaired;
+                apostrophes -= 1;
+            }
+        }
         if quote_count % 2 != 0 || apostrophes % 2 != 0 {
             return Err(OxoFlowError::Validation {
                 message: format!(
@@ -303,8 +333,10 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
                 ),
                 rule: None,
                 suggestion: Some(
-                    "Recursive deletions must be plainly spelled out; remove quotes from \
-                     rm operands, or use a script file instead"
+                    "Recursive deletions must be plainly spelled out: quote each rm operand \
+                     individually and keep quote pairs balanced — a stray apostrophe (e.g. \
+                     from a trap 'rm ...' SIGNAL string) leaves the operands unparseable; \
+                     or use a script file instead"
                         .to_string(),
                 ),
             });
@@ -316,7 +348,7 @@ fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
         // split: `rm -rf $prefix "$prefix.fa"` → [$prefix, $prefix.fa].
         // Any quote that survives wrapper-stripping (interior quotes,
         // multi-operand groups) fails closed below.
-        let unquoted = strip_surrounding_quote_pairs(segment);
+        let unquoted = strip_surrounding_quote_pairs(&segment);
         if unquoted.contains('"') || unquoted.contains('\'') {
             return Err(OxoFlowError::Validation {
                 message: format!(
