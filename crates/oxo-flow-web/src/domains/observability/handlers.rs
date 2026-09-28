@@ -452,7 +452,10 @@ pub async fn put_webhook_config(
          signature_scheme = excluded.signature_scheme, updated_at = excluded.updated_at",
     )
     .bind(&url)
-    .bind(secret)
+    // Sealed at rest like every other credential (AI keys #205, SSH keys
+    // #517) — legacy mode (no OXO_FLOW_MASTER_KEY) transparently stores
+    // plaintext (audit #664).
+    .bind(secret.as_deref().map(crate::infra::crypto::seal))
     .bind(enabled as i64)
     .bind(&events_json)
     .bind(signature_scheme)

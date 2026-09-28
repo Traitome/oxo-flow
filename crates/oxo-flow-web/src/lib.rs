@@ -866,6 +866,7 @@ pub fn start_background_tasks() {
     // (server, engine) pair and warn on drift before the first run spawns.
     executor::init_engine_version_probe();
     spawn_daily_quota_reset();
+    spawn_session_cleanup();
 }
 
 static BACKGROUND_TASKS_STARTED: std::sync::atomic::AtomicBool =
@@ -893,6 +894,44 @@ fn spawn_daily_quota_reset() {
                 .unwrap_or(std::time::Duration::from_secs(60));
             tokio::time::sleep(wait).await;
             crate::infra::quota::global_quota_tracker().reset_daily();
+        }
+    });
+}
+
+/// Prune expired `sessions` rows and stale `oauth_states` rows once per
+/// UTC day. The cleaner existed but had no production caller, so both
+/// tables grew without bound on long-lived team servers (audit #664).
+/// SQLite-backed like the auth middleware itself; a PostgreSQL deployment
+/// runs the same pruning as a follow-up through the backend trait.
+fn spawn_session_cleanup() {
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+            let Ok(pool) = crate::infra::db::sqlite::try_pool() else {
+                continue; // PostgreSQL deployment, or pool not ready yet
+            };
+            let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+            match sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
+                .bind(&cutoff)
+                .execute(pool)
+                .await
+            {
+                Ok(res) if res.rows_affected() > 0 => {
+                    tracing::info!(
+                        "session cleanup: pruned {} expired rows",
+                        res.rows_affected()
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("session cleanup failed: {e}"),
+            }
+            if let Err(e) = sqlx::query("DELETE FROM oauth_states WHERE created_at < ?")
+                .bind(&cutoff)
+                .execute(pool)
+                .await
+            {
+                tracing::warn!("oauth state cleanup failed: {e}");
+            }
         }
     });
 }

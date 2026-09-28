@@ -50,7 +50,9 @@ pub async fn load_settings() -> Option<WebhookSettings> {
     let events: Vec<String> = serde_json::from_str(&row.3).unwrap_or_default();
     Some(WebhookSettings {
         url: row.0,
-        secret: row.1,
+        // `open` transparently passes legacy plaintext through (pre-sealing
+        // rows, or deployments without OXO_FLOW_MASTER_KEY).
+        secret: row.1.map(|s| crate::infra::crypto::open(&s)),
         enabled: row.2 != 0,
         events,
         signature_scheme: row.4,
