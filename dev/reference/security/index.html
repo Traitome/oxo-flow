@@ -3984,6 +3984,15 @@ standard defensive spelling in shell loops), and the quotes are stripped
 before the in-workdir check. Command substitution (<code>$(...)</code>, backticks),
 unbalanced quotes, and quote pairs spanning multiple operands
 (<code>rm -rf "a b" c</code>) still fail closed as unparseable.</p>
+<p>One unbalanced shape is repaired rather than rejected: the shell-trap idiom
+<code>trap 'rm -rf "$D"' EXIT</code> wraps the command in single quotes, and the closing
+apostrophe rides along inside the captured operand (<code>"..." ' — five quote
+characters, odd parity). When exactly one token carries that stray trailing
+apostrophe and the double-quote parity is intact, it is stripped as the trap
+artifact and the operand is judged normally —</code>trap 'rm -rf "$WORKDIR/interim"' EXIT` inside the workdir passes, outside fails with the usual
+outside-the-workdir error. Any other unbalanced-quote shape still fails
+closed, with the error's suggestion naming the trap apostrophe so the fix is
+obvious.</p>
 <h3 id="warning-patterns-non-blocking">Warning Patterns (Non-Blocking)<a class="headerlink" href="#warning-patterns-non-blocking" title="Permanent link">#</a></h3>
 <p>These emit <strong>warnings</strong> but allow execution — the rule runs either way. The
 warning exists because such idioms can also ride in on rendered wildcard
