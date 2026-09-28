@@ -249,10 +249,16 @@ struct DeletionTarget {
 /// check". An empty `Ok` means no recursive `rm` invocation is present.
 fn recursive_deletion_targets(cmd: &str) -> Result<Vec<DeletionTarget>> {
     // Flags group + operand segment. The segment stops at shell control
-    // operators (&&, ||, ;, |, redirects, newline) so each `rm` invocation
-    // in a pipeline is analyzed on its own.
+    // operators (&&, ||, ;, |, redirects, newline) AND at `)` — a closing
+    // paren that ends an ENCLOSING subshell, not part of any operand
+    // (`( ... && rm -rf "$tmpdir") 2> log`, the standard tmpdir-cleanup
+    // idiom in oxo-flow-varlociraptor's get_known_variants; the shell
+    // tokenizes `)` as a reserved word that terminates the command, so an
+    // operand can never contain it). Without the `)` boundary the segment
+    // swallows the closing paren plus the redirect target and then fails
+    // closed, false-blocking the idiom.
     static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"rm\s+(-\S+(?:\s+-\S+)*)\s+([^;&|<>\n]+)").expect("static regex")
+        Regex::new(r"rm\s+(-\S+(?:\s+-\S+)*)\s+([^;&|<>\n)]+)").expect("static regex")
     });
     let mut targets = Vec::new();
     for caps in RE.captures_iter(cmd) {
