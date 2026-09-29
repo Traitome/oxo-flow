@@ -273,7 +273,9 @@ With more than one stage, stations are grouped into `subgraph` sections by
 **module namespace** (the `module::` prefix, one section per module — e.g.
 `fastq_qc::trimgalore` and `fastq_qc::fastqc` share a "Read QC" section) and
 falling back to the stage for rules without a `module::` prefix. Sections
-appear in workflow file order, so lines flow through them without loops;
+are ordered so upstream sections precede their consumers — Kahn over the
+section graph, ties by first appearance — so lines flow through them
+without loops (file order alone can violate dataflow in ported workflows);
 cross-section edges are placed outside the sections as nf-metro requires.
 Station labels drop the `module::` prefix.
 
