@@ -4573,7 +4573,7 @@ every run remains owned by the acting user.</p>
 every job the scheduler currently reports for your user — the natural check
 right after a submit:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%t'</span>...
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span>job<span class="o">(</span>s<span class="o">)</span>
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
