@@ -34,7 +34,7 @@ auto-discovered — see [Workflow discovery](#workflow-discovery).
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--format` | `-f` | inferred | Output format: `html`, `json`, `md`, `pdf`, or `pdf-command`. Inferred from the `-o` extension when omitted, else `html` |
-| `--output` | `-o` | stdout | Output file path (`-` writes to stdout). For auto-discovered runs, defaults to `.oxo-flow/reports/report-<UTC timestamp>.html` (the filename stays `.html` even with `-f json`) |
+| `--output` | `-o` | stdout | Output file path (`-` writes to stdout). For auto-discovered runs, defaults to `.oxo-flow/reports/report-<UTC timestamp>.<ext>` — the extension follows the requested format (`md`/`json`/`pdf`/`html`) |
 | `--checkpoint` | — | `.oxo-flow/checkpoint.json` | Path to checkpoint file for execution metrics |
 | `--run` | — | — | `DIR` — workdir of a previous run: the workflow and checkpoint are auto-discovered there. Conflicts with an explicit `WORKFLOW` |
 | `--failed` | — | — | Failure-focused report: failure diagnosis is the first section (only when failures exist) |
@@ -90,8 +90,10 @@ the workflow scan, and the report shows template-level data only, without
 the usual "no checkpoint" warning.
 
 An auto-discovered run writes the report to
-`.oxo-flow/reports/report-<UTC timestamp>.html` (path printed to stderr)
-when no `-o` is given — the same directory that `run`'s auto-snapshots
+`.oxo-flow/reports/report-<UTC timestamp>.<ext>` (path printed to stderr)
+when no `-o` is given, where `<ext>` follows the requested format
+(`-f md` → `.md`, `-f json` → `.json`, `-f pdf` → `.pdf`, else `.html`) —
+the same directory that `run`'s auto-snapshots
 fill (see [report snapshots](run.md#report-snapshots)).
 
 ---
@@ -353,7 +355,9 @@ directories and symlinks) and renders one subsection per tool × sample:
 | kraken2 | `*.kraken2.report`, `*.kraken.report` | `unclassified_rate` | Pass ≤ 20, Warn ≤ 40, else Fail (percentage scale) |
 
 Matching is case-insensitive; a file whose name is exactly the pattern
-(e.g. `fastp.json`) is parsed without a sample attribution. Files that
+(e.g. `fastp.json`) is parsed without a sample attribution. MultiQC-style
+files are also picked up: `*_mqc.json` is parsed as JSON, while `*_mqc.yml`
+is skipped with a Scan Note (no YAML parser shipped). Files that
 match a known pattern but fail to parse are counted in a **Scan Notes**
 subsection — a scanner that hid its gaps would look like full coverage.
 The section is hidden entirely when nothing parses.
@@ -428,9 +432,10 @@ commands — it is only reachable through explicit configuration.
   (stderr carries diagnostics and the `--ai` interpretation — stdout stays
   pipe-safe: `oxo-flow report wf.oxoflow -f json | jq .` works). Exception:
   auto-discovered runs (zero-arg or `--run`) write to
-  `.oxo-flow/reports/report-<UTC timestamp>.html` — and the filename stays
-  `.html` even when `-f json`/`-f md` changed the content, so the default
-  location is predictable
+  `.oxo-flow/reports/report-<UTC timestamp>.<ext>` — the extension follows
+  the requested format (`-f md` → `.md`, `-f json` → `.json`,
+  `-f pdf` → `.pdf`, else `.html`), so the default location is predictable
+  and the file never masquerades as HTML
 - HTML reports are self-contained single files: embedded CSS, dark-mode
   support, print styles, semantic landmarks, and HTML-escaped user
   content (rule names, commands, paths are safe to open and share)
