@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 
 /// Extract `[config]` key descriptions from raw workflow text.
 ///
-/// Description lines are joined with single spaces; empty `#` lines and pure
-/// decorator lines (`# ----`) are dropped.
+/// Description lines keep the author's line structure (joined with
+/// newlines); empty `#` lines and pure decorator lines (`# ----`) are dropped.
 pub fn extract_config_descriptions(text: &str) -> BTreeMap<String, String> {
     let mut descriptions: BTreeMap<String, String> = BTreeMap::new();
     let mut section: Option<String> = None;
