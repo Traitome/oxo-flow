@@ -4556,7 +4556,7 @@ auto-discovered — see <a href="#workflow-discovery">Workflow discovery</a>.</p
 <td><code>--output</code></td>
 <td><code>-o</code></td>
 <td>stdout</td>
-<td>Output file path (<code>-</code> writes to stdout). For auto-discovered runs, defaults to <code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.html</code> (the filename stays <code>.html</code> even with <code>-f json</code>)</td>
+<td>Output file path (<code>-</code> writes to stdout). For auto-discovered runs, defaults to <code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.&lt;ext&gt;</code> — the extension follows the requested format (<code>md</code>/<code>json</code>/<code>pdf</code>/<code>html</code>)</td>
 </tr>
 <tr>
 <td><code>--checkpoint</code></td>
@@ -4711,8 +4711,10 @@ PATH</code> replaces it — that file is loaded instead):</p>
 the workflow scan, and the report shows template-level data only, without
 the usual "no checkpoint" warning.</p>
 <p>An auto-discovered run writes the report to
-<code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.html</code> (path printed to stderr)
-when no <code>-o</code> is given — the same directory that <code>run</code>'s auto-snapshots
+<code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.&lt;ext&gt;</code> (path printed to stderr)
+when no <code>-o</code> is given, where <code>&lt;ext&gt;</code> follows the requested format
+(<code>-f md</code> → <code>.md</code>, <code>-f json</code> → <code>.json</code>, <code>-f pdf</code> → <code>.pdf</code>, else <code>.html</code>) —
+the same directory that <code>run</code>'s auto-snapshots
 fill (see <a href="../run/#report-snapshots">report snapshots</a>).</p>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
@@ -4967,7 +4969,9 @@ directories and symlinks) and renders one subsection per tool × sample:</p>
 </tbody>
 </table>
 <p>Matching is case-insensitive; a file whose name is exactly the pattern
-(e.g. <code>fastp.json</code>) is parsed without a sample attribution. Files that
+(e.g. <code>fastp.json</code>) is parsed without a sample attribution. MultiQC-style
+files are also picked up: <code>*_mqc.json</code> is parsed as JSON, while <code>*_mqc.yml</code>
+is skipped with a Scan Note (no YAML parser shipped). Files that
 match a known pattern but fail to parse are counted in a <strong>Scan Notes</strong>
 subsection — a scanner that hid its gaps would look like full coverage.
 The section is hidden entirely when nothing parses.</p>
@@ -5028,9 +5032,10 @@ commands — it is only reachable through explicit configuration.</p>
   (stderr carries diagnostics and the <code>--ai</code> interpretation — stdout stays
   pipe-safe: <code>oxo-flow report wf.oxoflow -f json | jq .</code> works). Exception:
   auto-discovered runs (zero-arg or <code>--run</code>) write to
-  <code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.html</code> — and the filename stays
-  <code>.html</code> even when <code>-f json</code>/<code>-f md</code> changed the content, so the default
-  location is predictable</li>
+  <code>.oxo-flow/reports/report-&lt;UTC timestamp&gt;.&lt;ext&gt;</code> — the extension follows
+  the requested format (<code>-f md</code> → <code>.md</code>, <code>-f json</code> → <code>.json</code>,
+  <code>-f pdf</code> → <code>.pdf</code>, else <code>.html</code>), so the default location is predictable
+  and the file never masquerades as HTML</li>
 <li>HTML reports are self-contained single files: embedded CSS, dark-mode
   support, print styles, semantic landmarks, and HTML-escaped user
   content (rule names, commands, paths are safe to open and share)</li>

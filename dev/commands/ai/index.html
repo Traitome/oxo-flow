@@ -4045,8 +4045,9 @@ loop. The steps:</p>
    model for correction; this loop is bounded by <code>--ai-max-retries</code>.</li>
 <li><strong>Deliver</strong> — the validated TOML is written, the three static gates
    (<code>validate</code> / <code>dry-run</code> / <code>lint</code>) can then confirm it, and the AI
-   session (token usage, tool calls) is archived to
-   <code>~/.oxo-flow/ai_sessions/</code>.</li>
+   session (token usage, tool calls) is archived to the <code>ai_sessions/</code>
+   directory of the resolved <code>.oxo-flow</code> data dir — the project-local
+   <code>.oxo-flow/</code> when one exists, else <code>~/.oxo-flow/</code>.</li>
 </ol>
 <h3 id="correction-budget-and-failure-behavior">Correction budget and failure behavior<a class="headerlink" href="#correction-budget-and-failure-behavior" title="Permanent link">#</a></h3>
 <ul>

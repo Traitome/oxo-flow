@@ -3818,9 +3818,11 @@ thereby auditable to the exact workflow version that produced it.</p>
 <p>A workflow composed from remote modules must stay reproducible even as
 upstream evolves. <code>[[include]]</code> therefore accepts <code>repo</code> + <code>ref</code> (a git
 repository URL plus a tag, branch, or commit) alongside <code>path</code>. Pinned
-includes are cloned once into <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;</code>
-and reused — the module is frozen at that ref until the workflow author
-moves it deliberately. See
+includes are cloned once into
+<code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;@&lt;hash&gt;</code> (the <code>&lt;hash&gt;</code> suffix is
+an FNV-1a of the repo+ref pair — flattened names alone are ambiguous,
+e.g. <code>https://a/b</code> and <code>https://a_b</code>) and reused — the module is frozen
+at that ref until the workflow author moves it deliberately. See
 <a href="../workflow-format/#include-modular-workflow-composition">Workflow Format</a>
 for the include syntax and interface contracts.</p>
 <h2 id="pillar-3-ecosystem-the-catalog-is-versioned">Pillar 3 — Ecosystem: the catalog is versioned<a class="headerlink" href="#pillar-3-ecosystem-the-catalog-is-versioned" title="Permanent link">#</a></h2>
