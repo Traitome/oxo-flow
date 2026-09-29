@@ -4300,8 +4300,8 @@ SLURM directives (LSF ignores <code>gpu_spec</code> entirely).</p>
 </tr>
 <tr>
 <td><strong>LSF</strong></td>
-<td><code>-gpu 2</code></td>
-<td>Basic count only</td>
+<td><code>-gpu "num=2"</code></td>
+<td>Basic count only (rendered as a quoted <code>num=</code> run-options string)</td>
 </tr>
 </tbody>
 </table>
@@ -4417,10 +4417,13 @@ below show the pin for each backend.</p>
   <code>if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi</code> —
   because the image's entrypoint shell runs first, and multi-line or
   <code>pipefail</code>-using scripts need bash, which not every image ships.</li>
-<li><strong>Paths outside the workdir are bound read-only.</strong> A <code>[config]</code> reference
-  genome or index living elsewhere on the shared filesystem is appended to
-  the mount list automatically (<code>-v /data/ref:/data/ref:ro</code>), so the rule can
-  read it from inside the container.</li>
+<li><strong>Paths outside the workdir are bound read-only (Docker backend).</strong> A
+  <code>[config]</code> reference genome or index living elsewhere on the shared
+  filesystem is appended to the Docker mount list automatically
+  (<code>-v /data/ref:/data/ref:ro</code>), so the rule can read it from inside the
+  container. The Singularity/Apptainer backend does not add these mounts —
+  bind paths yourself with <code>[cluster.container]</code> bind options if your site
+  needs them.</li>
 <li><strong><code>apptainer</code> wins when both it and <code>singularity</code> are installed</strong>, so
   clusters that renamed the binary keep working without configuration.</li>
 </ul>

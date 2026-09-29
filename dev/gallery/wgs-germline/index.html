@@ -4006,9 +4006,10 @@
 <p>Edges are shown as realized after per-sample expansion (for example,
 <code>haplotype_caller</code> → <code>combine_gvcfs</code> exists because <code>expand_inputs</code>
 resolves the three per-sample GVCFs). Note that the unexpanded template
-DAG (<code>oxo-flow graph</code>) already contains an edge from <code>combine_gvcfs</code> to
-<code>haplotype_caller</code> — <code>expand_inputs</code> patterns register template-level
-dataflow even before per-sample paths materialize. See
+DAG (<code>oxo-flow graph</code>) already contains this edge — the rule
+declaration <code>combine_gvcfs [depends: haplotype_caller]</code> shows that
+<code>expand_inputs</code> patterns register template-level dataflow even before
+per-sample paths materialize. See
 <a href="../../reference/wildcards/#fan-out-vs-fan-in">Fan-out vs Fan-in</a> for
 how the two expansion mechanisms differ.</p>
 <p><strong>Steps:</strong></p>
@@ -4697,7 +4698,8 @@ compute failing at this step for scientific reasons.</p>
 <div class="admonition note">
 <p class="admonition-title">GATK writes index files the example does not declare</p>
 <p>GATK steps emit <code>.tbi</code> (and <code>.idx</code>) sidecar files next to their VCF
-outputs — <code>variants/call.vcf.gz</code> also produces <code>variants/call.vcf.gz.tbi</code>.
+outputs — <code>variants/cohort.genotyped.vcf.gz</code> also produces
+<code>variants/cohort.genotyped.vcf.gz.tbi</code>.
 This example's <code>output</code> lists declare only the data files (the
 variant-calling tutorial declares the <code>.tbi</code> counterparts for its
 Mutect2 chain). Declaring index outputs is optional, but undeclared
@@ -4727,7 +4729,7 @@ full-cohort run restricted to a small interval list (or a mini-genome
 reference for testing) can still starve the trainer even with 30+
 samples — in that case hard filtering is again the right fallback.
 For INDELs the analogous hard-filter thresholds are
-<code>QD &lt; 2.0</code>, <code>FS &gt; 200.0</code>, <code>ReadPosRankSum &lt; 20.0</code>.</p>
+<code>QD &lt; 2.0</code>, <code>FS &gt; 200.0</code>, <code>ReadPosRankSum &lt; -20.0</code>.</p>
 </div>
 <h2 id="running-the-workflow">Running the Workflow<a class="headerlink" href="#running-the-workflow" title="Permanent link">#</a></h2>
 <h3 id="run">Run<a class="headerlink" href="#run" title="Permanent link">#</a></h3>

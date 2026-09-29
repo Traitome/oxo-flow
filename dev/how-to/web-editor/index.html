@@ -3994,17 +3994,20 @@ is preserved as a new revision first.</p>
 <h2 id="adding-a-rule-from-the-tool-palette">Adding a rule from the tool palette<a class="headerlink" href="#adding-a-rule-from-the-tool-palette" title="Permanent link">#</a></h2>
 <ol>
 <li>Open the <strong>Tools</strong> tab and search (e.g. <code>fastp</code>).</li>
-<li>Click <strong>+</strong> on a result. A new node appears with a grounded command
-   (<code>fastp {input} -o {output}</code>) and the tool's real name and version in its
-   description — never a stub.</li>
+<li>Click <strong>+</strong> on a result. A new node appears with the skeleton command
+   (<code>&lt;tool&gt; {input} -o {output}</code> — a starting point to edit, not a real
+   invocation) and the tool's real name and version in its description —
+   never a stub.</li>
 </ol>
 <h2 id="editing-a-rule">Editing a rule<a class="headerlink" href="#editing-a-rule" title="Permanent link">#</a></h2>
 <p>Double-click a node to open the inspector:</p>
 <ul>
 <li><strong>Shell command</strong> — free-form, with <code>{input}</code>/<code>{output}</code> placeholders.</li>
 <li><strong>Inputs / Outputs</strong> — file path patterns; wildcards (<code>{sample}</code>) allowed.</li>
-<li><strong>Environment</strong> — conda / mamba / docker / singularity / venv / modules /
-  system, with the spec string.</li>
+<li><strong>Environment</strong> — system / conda / mamba / docker / singularity / venv /
+  modules, with the spec string (<code>pixi</code> is not offered in the dropdown — a
+  rule that already uses it stays editable via the TOML pane, and other
+  unknown backend keys surface as <code>conda</code> with the full spec preserved).</li>
 <li><strong>Resources</strong> — threads, memory, GPU, disk, time limit.</li>
 <li><strong>Conditions, retries, tags, logs, benchmarks</strong> — the workflow format's
   execution controls.</li>
@@ -4031,13 +4034,16 @@ explicit <code>depends_on</code> edge.</p>
 <tr>
 <td>Dashed</td>
 <td>file-inferred</td>
-<td>Edit the <code>input</code>/<code>output</code> paths — the engine infers the edge from exact string matches</td>
+<td>Edit the <code>input</code>/<code>output</code> paths — the engine infers the edge when an output pattern matches an input pattern</td>
 </tr>
 </tbody>
 </table>
-<p>The distinction matters: the engine builds file edges by exact
-input/output string matching only, so wildcard patterns infer no edges —
-<code>depends_on</code> is the explicit ordering tool.</p>
+<p>The distinction matters: dashed edges are inferred from the
+<code>input</code>/<code>output</code> paths — exact literal paths always connect, and wildcard
+patterns connect too when they overlap the same files (for example
+<code>aligned/{sample}.bam</code> feeding <code>dedup/{sample}.bam</code>). Patterns that can't
+be resolved against each other leave the ordering ambiguous — use
+<code>depends_on</code> to make it explicit.</p>
 <h2 id="deleting">Deleting<a class="headerlink" href="#deleting" title="Permanent link">#</a></h2>
 <p>Select one or more nodes and press <code>Delete</code> (or <code>Backspace</code>). Removing a rule
 whose outputs other rules consume will surface validation errors on those

@@ -872,6 +872,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#execute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execute
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#dag-visualization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3868,6 +3879,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#execute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execute
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#dag-visualization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4032,8 +4054,44 @@
 </span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>
 </span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>To<span class="w"> </span>execute:<span class="w">  </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/02_file_pipeline.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
+<h3 id="execute">Execute<a class="headerlink" href="#execute" title="Permanent link">#</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/02_file_pipeline.oxoflow
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>✓<span class="w"> </span>generate_data<span class="w"> </span><span class="o">(</span><span class="m">0</span>.0s<span class="o">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>✓<span class="w"> </span>transform<span class="w"> </span><span class="o">(</span><span class="m">0</span>.0s<span class="o">)</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>✓<span class="w"> </span>summarize<span class="w"> </span><span class="o">(</span><span class="m">0</span>.0s<span class="o">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>Done:<span class="w"> </span><span class="m">3</span><span class="w"> </span>succeeded,<span class="w"> </span><span class="m">0</span><span class="w"> </span>skipped,<span class="w"> </span><span class="m">0</span><span class="w"> </span>failed
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>✓<span class="w"> </span><span class="m">3</span><span class="w"> </span>output<span class="w"> </span>files<span class="w"> </span>verified<span class="w"> </span><span class="o">(</span>2309B<span class="w"> </span>total<span class="o">)</span>
+</span></code></pre></div>
 <h3 id="dag-visualization">DAG Visualization<a class="headerlink" href="#dag-visualization" title="Permanent link">#</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>graph<span class="w"> </span>examples/gallery/02_file_pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>graph<span class="w"> </span>examples/gallery/02_file_pipeline.oxoflow
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>┌──────────────────────────────────────────────┐
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>│<span class="w">  </span>Workflow<span class="w"> </span>DAG:<span class="w"> </span><span class="m">3</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">2</span><span class="w"> </span>dependencies<span class="w">       </span>│
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>│<span class="w">  </span>Depth:<span class="w"> </span><span class="m">3</span>,<span class="w"> </span>Width:<span class="w"> </span><span class="m">1</span>,<span class="w"> </span>Critical<span class="w"> </span>path:<span class="w"> </span><span class="m">3</span><span class="w"> </span>steps<span class="w">  </span>│
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>└──────────────────────────────────────────────┘
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>Level<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">(</span>sequential<span class="o">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">     </span>generate_data
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">     </span>│
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">     </span>▼
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>Level<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">(</span>sequential<span class="o">)</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">     </span>transform<span class="w"> </span><span class="o">[</span>depends:<span class="w"> </span>generate_data<span class="o">]</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">     </span>│
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">     </span>▼
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>Level<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="o">(</span>sequential<span class="o">)</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">     </span>summarize<span class="w"> </span><span class="o">[</span>depends:<span class="w"> </span>transform<span class="o">]</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>Critical<span class="w"> </span>path:<span class="w"> </span>generate_data<span class="w"> </span>→<span class="w"> </span>transform<span class="w"> </span>→<span class="w"> </span>summarize
+</span></code></pre></div>
+<p>For embedding in docs/GitHub, the <code>mermaid</code> format renders the same DAG as
+this page shows:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>graph<span class="w"> </span>examples/gallery/02_file_pipeline.oxoflow<span class="w"> </span>--format<span class="w"> </span>mermaid
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>graph<span class="w"> </span>LR
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span>n0<span class="o">[</span><span class="s2">"generate_data"</span><span class="o">]</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span>n1<span class="o">[</span><span class="s2">"transform"</span><span class="o">]</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span>n2<span class="o">[</span><span class="s2">"summarize"</span><span class="o">]</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span>n0<span class="w"> </span>--&gt;<span class="w"> </span>n1
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span>n1<span class="w"> </span>--&gt;<span class="w"> </span>n2
 </span></code></pre></div>
 <pre class="mermaid"><code>graph LR
     A[generate_data] --&gt; B[transform]

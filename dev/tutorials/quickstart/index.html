@@ -4042,6 +4042,13 @@ when a rule's input is absent or its wildcards cannot be bound.</p>
 </span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>To execute:  oxo-flow run my-pipeline.oxoflow -j 1
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">The banner is TTY-gated</p>
+<p>The <code>oxo-flow v0.21.0 — …</code> line at the top only prints when stderr is an
+interactive terminal. In nohup/CI/log-capture runs it is suppressed (the
+run log header and <code>--version</code> still carry version provenance), so
+transcripts copied from redirected output will not show it.</p>
+</div>
 <hr />
 <h2 id="5-execute">5. Execute<a class="headerlink" href="#5-execute" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>my-pipeline.oxoflow

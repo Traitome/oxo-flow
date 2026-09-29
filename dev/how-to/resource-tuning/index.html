@@ -4290,8 +4290,10 @@
   <strong>takes precedence</strong> over the sub-table when both are present.</li>
 <li>In the sub-table, <code>threads &lt;= 1</code> means "unset" — the engine falls
   back to <code>[defaults].threads</code>. To give a rule fewer threads than the
-  default, declare <code>threads = 2</code> or higher (a single thread is not
-  expressible; there is no way to force 1).</li>
+  default, declare <code>threads = 2</code> or higher. Forcing exactly one thread
+  is only possible via the deprecated rule-level shorthand
+  <code>threads = 1</code> (lint flags it as W025); <code>resources.threads = 1</code> is
+  always read as "unset".</li>
 </ul>
 </div>
 <h2 id="memory-declaration">Memory Declaration<a class="headerlink" href="#memory-declaration" title="Permanent link">#</a></h2>

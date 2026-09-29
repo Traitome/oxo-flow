@@ -4040,8 +4040,10 @@ before exit; SIGTERM/SIGINT from outside do the same.</p>
   scatters across whatever directory the app happened to be launched from.</li>
 <li><strong>External links open in the system browser.</strong> A navigation handler
   confines the app window to the app's own loopback origin; anything else
-  (the GitHub/docs links in the UI) is handed to <code>open</code> / <code>xdg-open</code> /
-  <code>start</code>. <code>target="_blank"</code> links and <code>window.open</code> calls are routed the
+  (the GitHub/docs links in the UI) is handed to the platform opener —
+  <code>open</code> on macOS, <code>xdg-open</code> on Linux, <code>explorer</code> on Windows (not
+  <code>cmd /c start</code>, which re-parses its command line).
+  <code>target="_blank"</code> links and <code>window.open</code> calls are routed the
   same way. The window itself never navigates away from the interface.</li>
 </ul>
 <p>Rendering stays in the OS webview (not a bundled browser, not Electron):

@@ -4685,9 +4685,9 @@ reported as a petgraph <code>Cycle</code> error and surfaced as <code>OxoFlowErr
 <ul>
 <li>Critical path: <code>source → left → merge</code> (3 steps)</li>
 <li><code>right</code> is not on the critical path — it can be scheduled after <code>left</code> without affecting total time</li>
-<li>The <code>graph</code> command shows the critical path in ASCII output:</li>
+<li>The <code>graph</code> command prints the critical path length as a step count:</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Critical path: source → left → merge
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Depth: 3, Width: 2, Critical path: 3 steps
 </span></code></pre></div>
 <h4 id="interpreting-the-output">Interpreting the Output<a class="headerlink" href="#interpreting-the-output" title="Permanent link">#</a></h4>
 <ul>
@@ -4845,7 +4845,7 @@ violations fail fast in the pre-flight check, before any rule runs.</p>
 wildcards over one template (<code>variants/{smp}.vcf</code> vs
 <code>variants/{sample}.vcf</code>) and identical literal paths count too — trigger
 a warning, because the second to finish silently overwrites the first.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>W033: rules 'caller_a' and 'caller_b' both write '{sample}.vcf'
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)
 </span></code></pre></div>
 <p>Resolve by giving each rule distinct output paths (e.g., <code>caller_a/{sample}.vcf</code>, <code>caller_b/{sample}.vcf</code>). See
 <a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.</p>

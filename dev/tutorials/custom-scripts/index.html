@@ -3990,7 +3990,7 @@
 </span></code></pre></div>
 <p><code>summarize</code> depends on <code>count</code> automatically — its <code>input</code> matches <code>count</code>'s <code>output</code>, so the DAG engine infers the edge. No explicit declaration needed.</p>
 <h3 id="2-the-environment-file">2. The environment file<a class="headerlink" href="#2-the-environment-file" title="Permanent link">#</a></h3>
-<p>Both rules declare <code>environment = { conda = "envs/py.yaml" }</code>, so create that file first — the run will fail with <code>EnvironmentFileNotFound</code> otherwise:</p>
+<p>Both rules declare <code>environment = { conda = "envs/py.yaml" }</code>, so create that file first — otherwise the conda setup step fails with <code>EnvironmentFileNotFound: 'envs/py.yaml' file not found</code> (a YAML-file-not-found hint appears in the error output):</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># envs/py.yaml</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">py</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">channels</span><span class="p">:</span>

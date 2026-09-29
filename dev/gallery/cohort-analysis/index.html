@@ -3747,7 +3747,7 @@
 <ul>
 <li><code>{sample}</code> rules expand once per sample across all groups (case/control here)</li>
 <li>Cohort-level joint genotyping: <code>combine_gvcfs</code> gathers every per-sample GVCF via <code>expand_inputs</code> (<code>config.samples_list</code>), and <code>genotype_gvcfs</code> calls the whole cohort in one pass</li>
-<li>The aggregation rule has no wildcard inputs → exactly one instance; <code>depends_on</code> keeps it behind every per-sample rule (directory inputs form no DAG edges)</li>
+<li>The aggregation rule has no wildcard inputs → exactly one instance; <code>depends_on</code> keeps it behind every per-sample instance of the referenced rules (a template name expands to all its instances; directory inputs form no DAG edges on their own)</li>
 <li>Per-rule conda environments keep tool versions isolated (fastp / bwa-mem2+samtools / gatk / multiqc)</li>
 </ul>
 <h2 id="workflow-definition">Workflow Definition<a class="headerlink" href="#workflow-definition" title="Permanent link">#</a></h2>

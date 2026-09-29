@@ -3939,14 +3939,16 @@ Parameters table).</p>
 </li>
 <li><strong><code>config[].description</code></strong> — optional; present only when the key is
   commented. A contiguous block of <code>#</code> lines immediately above the key line
-  (no blank line in between) is the description, joined into one line; a
-  trailing <code>#</code> comment on the key line itself is the fallback. Empty <code>#</code>
-  lines and pure decorator lines (<code># ----</code>) are dropped. Banner lines
+  (no blank line in between) is the description, joined with newlines so the
+  author's line structure is kept; a trailing <code>#</code> comment on the key line
+  itself is the fallback. Empty <code>#</code> lines and pure decorator lines
+  (<code># ----</code>) are dropped. Banner lines
   (<code># --- section ---</code>) act as section markers: dropped when the block also
   has regular text, otherwise kept with their dashes stripped. Comments
   inside multi-line values (e.g. <code>#</code> lines within an array) never associate,
   and comments above <code>[config.&lt;name&gt;]</code> subtable headers describe the table
-  key itself.</li>
+  key itself. Include files contribute descriptions too (first definition
+  wins; include failures are silently skipped).</li>
 <li><strong><code>tools</code></strong> — conda/mamba environment YAML stems and container image names
   (registry path and tag stripped), deduped and sorted.</li>
 <li><strong><code>resources</code></strong> — max threads/memory across rules on the defaults-applied

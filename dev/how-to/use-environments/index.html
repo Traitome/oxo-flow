@@ -4365,7 +4365,9 @@ relative to the workflow root:</p>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc input.fastq.gz -o qc/"</span>
 </span></code></pre></div>
 <p>oxo-flow runs <code>pixi install --manifest-path pixi.toml</code> once, then wraps the
-command as <code>pixi run --manifest-path pixi.toml &lt;command&gt;</code>.</p>
+command as <code>pixi run --manifest-path pixi.toml bash -c '&lt;command&gt;'</code> — the
+<code>bash -c</code> wrapper keeps shell operators and multi-line scripts inside the
+pixi environment (<code>pixi run</code> is a child-process env, not a PATH mutation).</p>
 <hr />
 <h2 id="python-virtual-environments">Python Virtual Environments<a class="headerlink" href="#python-virtual-environments" title="Permanent link">#</a></h2>
 <h3 id="create-a-requirements-file">Create a requirements file<a class="headerlink" href="#create-a-requirements-file" title="Permanent link">#</a></h3>
