@@ -4313,7 +4313,8 @@ prediction is machine-readable:</p>
 <code>--skip-ref-build</code> empties the list).</p>
 <p>Status values: <code>run-never-completed</code>, <code>run-input-changed</code>,
 <code>run-config-changed</code>, <code>run-outputs-missing</code>, <code>run-cascaded</code>,
-<code>run-cascaded-upstream</code>, <code>skip</code>, <code>skip-when-condition</code>.</p>
+<code>run-cascaded-upstream</code>, <code>run-forced</code>, <code>skip</code>, <code>skip-fresh</code>,
+<code>skip-when-condition</code>.</p>
 <p><code>--json</code> also emits the <strong>execution-plan surface</strong> at the top level
 (<code>schema_version: 1</code>) — the structured mirror of the human stderr plan,
 for CI scripts and tooling that today grep the colored text:</p>

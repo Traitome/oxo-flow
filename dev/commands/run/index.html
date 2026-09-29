@@ -5404,6 +5404,12 @@ compares them against the current workflow:</p>
 </span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6" href="#__codelineno-33-6"></a><span class="go">  Running: fastp_trim</span>
 </span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7" href="#__codelineno-33-7"></a><span class="go">  …</span>
 </span></code></pre></div>
+<p>When a <code>when</code> gate closes at execution time, the rule is reported under
+<strong>Skipped (when condition false)</strong> with a <code>⊘</code> marker (or <code>⊝</code> in the
+config-change reuse view) — a gated-off rule is a skip, never a failure
+(see <a href="../status/#when-gated-off-rules">status</a> for the checkpoint-side
+display, including legacy checkpoints that carry stale <code>failed_rules</code>
+entries).</p>
 <p>Rules changed by a transformed split set (<code>transform.split.values_from</code>)
 are detected through their baked input lists, so chunked rules re-combine
 correctly when the split values change.</p>

@@ -9106,6 +9106,12 @@ records:</p>
   replay: changing a threshold referenced by such a gate (e.g.
   <code>config.min_reads</code>) re-evaluates only the instances whose verdict
   actually flipped, keeping completed unchanged instances exempt.</li>
+<li><strong>Checkpoint accounting</strong> — verdicts are stored in the checkpoint's
+  <code>when_verdicts</code> map. A gate that evaluated to <code>false</code> is a skip, not a
+  failure: the rule never enters <code>failed_rules</code> (a stale entry is pruned),
+  <code>status</code> reports it under <em>Skipped (when condition false)</em>
+  (<code>skipped_by_when</code> in <code>--json</code>), and <code>report --r-data</code> writes it to
+  <code>metrics.tsv</code> as <code>skipped_by_when</code> (issue #690).</li>
 <li><strong>Scope</strong> — only <code>when</code> strings may call these functions; <code>shell</code>,
   <code>input</code>, and <code>output</code> cannot read the filesystem at plan time.</li>
 </ul>

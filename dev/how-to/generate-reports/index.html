@@ -4262,7 +4262,9 @@ addition to the report itself):</p>
 </span></code></pre></div>
 <p><code>sample_table.tsv</code> maps every sample to its group (from <code>[[sample_groups]]</code>
 and <code>[[pairs]]</code>); <code>metrics.tsv</code> has one row per rule with wall time, peak
-memory, and status (<code>success</code> / <code>failed</code> / <code>-</code>). Without a checkpoint the
+memory, and status (<code>success</code> / <code>skipped_by_when</code> / <code>failed</code> / <code>-</code> — a
+rule whose <code>when</code> gate evaluated false is reported as <code>skipped_by_when</code>,
+never as <code>failed</code>; see <a href="../conditional-rules/">conditional rules</a>). Without a checkpoint the
 files carry headers only, with a note explaining why. Values are
 TSV-sanitized (tabs and newlines replaced) so names can never break the
 column layout.</p>
