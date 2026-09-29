@@ -52,9 +52,18 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         });
     }
     for rule in &checkpoint.failed_rules {
+        // Issue #690: a failed_rules entry whose recorded when-verdict is
+        // false was gated off, not failed — typically a stale entry from an
+        // earlier run under a different config. Surface it as Skipped so the
+        // web view agrees with the CLI's dry-run tally.
+        let when_gated_off = checkpoint.when_verdicts.get(rule) == Some(&false);
         items.push(NodeStatusItem {
             rule: rule.clone(),
-            status: NodeStatus::Failed,
+            status: if when_gated_off {
+                NodeStatus::Skipped
+            } else {
+                NodeStatus::Failed
+            },
             started_at: None,
             duration_ms: None,
             exit_code: None,
@@ -216,6 +225,33 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         assert!(load_node_statuses(&dir, false).is_empty());
+    }
+
+    #[test]
+    fn when_gated_failed_entries_show_as_skipped() {
+        // Issue #690: a stale failed_rules entry whose recorded when-verdict
+        // is false was gated off, not failed — the web view must show
+        // Skipped, matching the CLI's dry-run tally, not an alarming Failed.
+        let dir = std::env::temp_dir().join("cp-test-690");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["fastqc"],
+                "failed_rules": ["primers_map_primers", "align"],
+                "when_verdicts": {"primers_map_primers": false},
+                "benchmarks": {}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let gated = items
+            .iter()
+            .find(|i| i.rule == "primers_map_primers")
+            .unwrap();
+        assert!(matches!(gated.status, NodeStatus::Skipped));
+        let real = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(matches!(real.status, NodeStatus::Failed));
     }
 
     #[test]

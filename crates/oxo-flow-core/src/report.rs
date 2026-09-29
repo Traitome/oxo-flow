@@ -2109,7 +2109,17 @@ impl ReportSectionGenerator for UniversalGenerator {
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
         let total = ctx.config.rules.len();
         let completed = ctx.checkpoint.map(|c| c.completed_rules.len()).unwrap_or(0);
-        let failed = ctx.checkpoint.map(|c| c.failed_rules.len()).unwrap_or(0);
+        // Issue #690: failed_rules entries whose when-gate evaluated false
+        // are gated-off skips, not failures — exclude them from the count.
+        let failed = ctx
+            .checkpoint
+            .map(|c| {
+                c.failed_rules
+                    .iter()
+                    .filter(|r| c.when_verdicts.get(*r) != Some(&false))
+                    .count()
+            })
+            .unwrap_or(0);
         let total_runtime: Option<f64> = ctx.checkpoint.and_then(|c| {
             c.benchmarks
                 .values()
@@ -2203,8 +2213,20 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
         // must be byte-stable for diffing (issue #83 P1-4).
         let mut completed: Vec<&String> = cp.completed_rules.iter().collect();
         completed.sort_unstable();
-        let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
+        // Issue #690: failed_rules entries whose when-gate evaluated false
+        // were skipped by the gate, not failed — report them as skipped.
+        let mut failed: Vec<&String> = cp
+            .failed_rules
+            .iter()
+            .filter(|r| cp.when_verdicts.get(*r) != Some(&false))
+            .collect();
         failed.sort_unstable();
+        let mut when_skipped: Vec<&String> = cp
+            .failed_rules
+            .iter()
+            .filter(|r| cp.when_verdicts.get(*r) == Some(&false))
+            .collect();
+        when_skipped.sort_unstable();
 
         let mut rows: Vec<Vec<String>> = Vec::new();
         for name in &completed {
@@ -2230,6 +2252,14 @@ impl ReportSectionGenerator for ExecutionStatusGenerator {
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "-".into());
             rows.push(vec![(*name).clone(), "failed".into(), "-".into(), exit]);
+        }
+        for name in &when_skipped {
+            rows.push(vec![
+                (*name).clone(),
+                "skipped (when false)".into(),
+                "-".into(),
+                "-".into(),
+            ]);
         }
         if !rows.is_empty() {
             sections.push(ReportSection {
@@ -3279,21 +3309,26 @@ impl ReportSectionGenerator for SampleMatrixGenerator {
                     if group.samples.contains(sample) {
                         let name = format!("{}_{}_{}", rule.name, group.name, sample);
                         completed |= cp.completed_rules.contains(&name);
-                        failed |= cp.failed_rules.contains(&name);
+                        // Issue #690: a failed_rules entry with a recorded
+                        // when-false verdict was gated off, not failed.
+                        failed |= cp.failed_rules.contains(&name)
+                            && cp.when_verdicts.get(&name) != Some(&false);
                     }
                 }
                 // sample_pattern discovery uses the engine's "auto-discovered"
                 // group name (config.rs sample discovery).
                 let auto = format!("{}_auto-discovered_{}", rule.name, sample);
                 completed |= cp.completed_rules.contains(&auto);
-                failed |= cp.failed_rules.contains(&auto);
+                failed |=
+                    cp.failed_rules.contains(&auto) && cp.when_verdicts.get(&auto) != Some(&false);
                 for pair in &ctx.config.pairs {
                     if pair.experiment == *sample
                         || pair.control.as_deref() == Some(sample.as_str())
                     {
                         let name = format!("{}_{}", rule.name, pair.pair_id);
                         completed |= cp.completed_rules.contains(&name);
-                        failed |= cp.failed_rules.contains(&name);
+                        failed |= cp.failed_rules.contains(&name)
+                            && cp.when_verdicts.get(&name) != Some(&false);
                     }
                 }
                 let cell = if failed {
@@ -3339,8 +3374,14 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
         "Failed rules: exit code, cascade impact, stderr excerpt, suggested next steps"
     }
     fn applicable(&self, ctx: &ReportContext) -> bool {
+        // Issue #690: failed_rules entries with a recorded when-false verdict
+        // are gated-off skips — they don't make failure diagnosis applicable.
         ctx.checkpoint
-            .map(|c| !c.failed_rules.is_empty())
+            .map(|c| {
+                c.failed_rules
+                    .iter()
+                    .any(|r| c.when_verdicts.get(r) != Some(&false))
+            })
             .unwrap_or(false)
     }
     fn generate(&self, ctx: &ReportContext) -> Vec<ReportSection> {
@@ -3349,7 +3390,11 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
         let Some(cp) = ctx.checkpoint.as_ref() else {
             return Vec::new();
         };
-        let mut failed: Vec<&String> = cp.failed_rules.iter().collect();
+        let mut failed: Vec<&String> = cp
+            .failed_rules
+            .iter()
+            .filter(|r| cp.when_verdicts.get(*r) != Some(&false))
+            .collect();
         failed.sort_unstable();
 
         let dag = cascade_dag(ctx);

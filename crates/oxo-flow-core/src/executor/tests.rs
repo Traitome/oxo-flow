@@ -3547,6 +3547,9 @@ async fn runtime_when_gate_consumes_producer_output() {
     let ck = checkpoint.lock().await;
     assert_eq!(ck.when_verdicts.get("filter_cohort_S1"), Some(&true));
     assert_eq!(ck.when_verdicts.get("filter_cohort_S2"), Some(&false));
+    // Issue #690: a when-false verdict prunes any stale failed_rules entry —
+    // a rule the gate skipped must never linger in the failed set.
+    assert!(!ck.failed_rules.contains("filter_cohort_S2"));
 }
 #[tokio::test]
 async fn meta_when_gate_runs_se_and_skips_pe_instances() {
