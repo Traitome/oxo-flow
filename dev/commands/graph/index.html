@@ -4380,7 +4380,9 @@ resolved by three matching tiers in priority order plus a fallback:</p>
 <strong>module namespace</strong> (the <code>module::</code> prefix, one section per module — e.g.
 <code>fastq_qc::trimgalore</code> and <code>fastq_qc::fastqc</code> share a "Read QC" section) and
 falling back to the stage for rules without a <code>module::</code> prefix. Sections
-appear in workflow file order, so lines flow through them without loops;
+are ordered so upstream sections precede their consumers — Kahn over the
+section graph, ties by first appearance — so lines flow through them
+without loops (file order alone can violate dataflow in ported workflows);
 cross-section edges are placed outside the sections as nf-metro requires.
 Station labels drop the <code>module::</code> prefix.</p>
 <hr />
