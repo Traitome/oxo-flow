@@ -120,8 +120,9 @@ loop. The steps:
    model for correction; this loop is bounded by `--ai-max-retries`.
 6. **Deliver** — the validated TOML is written, the three static gates
    (`validate` / `dry-run` / `lint`) can then confirm it, and the AI
-   session (token usage, tool calls) is archived to
-   `~/.oxo-flow/ai_sessions/`.
+   session (token usage, tool calls) is archived to the `ai_sessions/`
+   directory of the resolved `.oxo-flow` data dir — the project-local
+   `.oxo-flow/` when one exists, else `~/.oxo-flow/`.
 
 ### Correction budget and failure behavior
 

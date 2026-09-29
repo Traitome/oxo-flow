@@ -35,9 +35,11 @@ thereby auditable to the exact workflow version that produced it.
 A workflow composed from remote modules must stay reproducible even as
 upstream evolves. `[[include]]` therefore accepts `repo` + `ref` (a git
 repository URL plus a tag, branch, or commit) alongside `path`. Pinned
-includes are cloned once into `~/.cache/oxo-flow/modules/<repo>@<ref>`
-and reused — the module is frozen at that ref until the workflow author
-moves it deliberately. See
+includes are cloned once into
+`~/.cache/oxo-flow/modules/<repo>@<ref>@<hash>` (the `<hash>` suffix is
+an FNV-1a of the repo+ref pair — flattened names alone are ambiguous,
+e.g. `https://a/b` and `https://a_b`) and reused — the module is frozen
+at that ref until the workflow author moves it deliberately. See
 [Workflow Format](workflow-format.md#include-modular-workflow-composition)
 for the include syntax and interface contracts.
 
