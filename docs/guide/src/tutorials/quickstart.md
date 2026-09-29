@@ -119,6 +119,12 @@ Summary: 2 rules, total 4 threads declared, max 2 threads/rule
 To execute:  oxo-flow run my-pipeline.oxoflow -j 1
 ```
 
+!!! note "The banner is TTY-gated"
+    The `oxo-flow v0.21.0 — …` line at the top only prints when stderr is an
+    interactive terminal. In nohup/CI/log-capture runs it is suppressed (the
+    run log header and `--version` still carry version provenance), so
+    transcripts copied from redirected output will not show it.
+
 ---
 
 ## 5. Execute

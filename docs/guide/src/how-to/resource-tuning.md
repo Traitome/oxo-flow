@@ -33,8 +33,10 @@ memory = "32G"  # 2× expected input size
       **takes precedence** over the sub-table when both are present.
     - In the sub-table, `threads <= 1` means "unset" — the engine falls
       back to `[defaults].threads`. To give a rule fewer threads than the
-      default, declare `threads = 2` or higher (a single thread is not
-      expressible; there is no way to force 1).
+      default, declare `threads = 2` or higher. Forcing exactly one thread
+      is only possible via the deprecated rule-level shorthand
+      `threads = 1` (lint flags it as W025); `resources.threads = 1` is
+      always read as "unset".
 
 ## Memory Declaration
 

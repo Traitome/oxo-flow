@@ -75,6 +75,11 @@ To execute:  oxo-flow run examples/gallery/01_hello_world.oxoflow -j 1
 
 ```bash
 $ oxo-flow run examples/gallery/01_hello_world.oxoflow
+Running: greet
+  ✓ greet (0.0s)
+
+Done: 1 succeeded, 0 skipped, 0 failed
+✓ 1 output files verified (21B total)
 ```
 
 ### DAG Visualization

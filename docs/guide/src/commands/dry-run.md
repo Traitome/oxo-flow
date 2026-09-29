@@ -318,8 +318,8 @@ awk -F',' 'NR>1 && $3 > 500' data/raw.csv >> data/filtered.csv
      input ✗: data/raw.csv
   3. summarize
      threads=2
-     memory=4G
      env=conda
+     memory=4G
      outputs: ["results/summary.txt"]
      command: mkdir -p results
 echo "Filtered records: $total" > results/summary.txt

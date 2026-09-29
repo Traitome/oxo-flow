@@ -104,7 +104,7 @@ memory = "16G"
 | Field | Required | Type | Description |
 |---|---|---|---|
 | `name` | Yes | String | Unique rule identifier |
-| `shell` | Yes | String | Shell command to execute (`script` or `transform` can replace it) |
+| `shell` | Conditional | String | Shell command to execute; required whenever the rule declares `output` (a `script` or `transform` may replace it) |
 | `input` | No | Array | Input file paths (may contain wildcards; recommended for file-based dependency inference) |
 | `output` | No | Array | Output file paths (may contain wildcards; recommended for checkpoint/resume) |
 | `environment` | No | Table | Environment specification |

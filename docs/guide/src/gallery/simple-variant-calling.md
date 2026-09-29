@@ -4,7 +4,7 @@ The per-sample GATK germline chain: FastQC + fastp QC, BWA-MEM2 alignment with r
 
 ## What It Demonstrates
 
-- Read-group string `-R '@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA'` renders real TAB separators
+- Read-group string built with `printf '@RG\tID:%s\tSM:%s\tPL:ILLUMINA'` renders real TAB separators
 - Each stage declares its own environment (conda for QC tools, singularity for GATK)
 - Mix of environment backends per rule is first-class
 

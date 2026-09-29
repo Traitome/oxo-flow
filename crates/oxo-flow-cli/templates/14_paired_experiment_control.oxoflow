@@ -21,17 +21,17 @@ memory = "16G"
 [report]
 # template: reserved — supply a real Tera template file path to use one
 # template = "report/clinical_template.html"
-format = [
-    "html",
-    "json",
-]
+# Section IDs are the built-in generator names (oxo-flow report --list-sections).
+# The output format is chosen on the CLI with -f (html, json, md, pdf).
 sections = [
-    "sample_info",
-    "qc",
-    "variants",
-    "clinical",
+    "universal",
+    "workflow-info",
+    "execution-status",
+    "commands",
+    "metrics",
+    "sample-matrix",
+    "software-versions",
     "provenance",
-    "disclaimer",
 ]
 
 [[rules]]

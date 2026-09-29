@@ -47,9 +47,10 @@ is preserved as a new revision first.
 ## Adding a rule from the tool palette
 
 1. Open the **Tools** tab and search (e.g. `fastp`).
-2. Click **+** on a result. A new node appears with a grounded command
-   (`fastp {input} -o {output}`) and the tool's real name and version in its
-   description — never a stub.
+2. Click **+** on a result. A new node appears with the skeleton command
+   (`<tool> {input} -o {output}` — a starting point to edit, not a real
+   invocation) and the tool's real name and version in its description —
+   never a stub.
 
 ## Editing a rule
 
@@ -57,8 +58,10 @@ Double-click a node to open the inspector:
 
 - **Shell command** — free-form, with `{input}`/`{output}` placeholders.
 - **Inputs / Outputs** — file path patterns; wildcards (`{sample}`) allowed.
-- **Environment** — conda / mamba / docker / singularity / venv / modules /
-  system, with the spec string.
+- **Environment** — system / conda / mamba / docker / singularity / venv /
+  modules, with the spec string (`pixi` is not offered in the dropdown — a
+  rule that already uses it stays editable via the TOML pane, and other
+  unknown backend keys surface as `conda` with the full spec preserved).
 - **Resources** — threads, memory, GPU, disk, time limit.
 - **Conditions, retries, tags, logs, benchmarks** — the workflow format's
   execution controls.
@@ -75,11 +78,14 @@ There are two kinds of edges, and the canvas draws them differently:
 | Style | Kind | How to change it |
 |-------|------|------------------|
 | Solid | `depends_on` (declared) | Drag handles, or edit the TOML |
-| Dashed | file-inferred | Edit the `input`/`output` paths — the engine infers the edge from exact string matches |
+| Dashed | file-inferred | Edit the `input`/`output` paths — the engine infers the edge when an output pattern matches an input pattern |
 
-The distinction matters: the engine builds file edges by exact
-input/output string matching only, so wildcard patterns infer no edges —
-`depends_on` is the explicit ordering tool.
+The distinction matters: dashed edges are inferred from the
+`input`/`output` paths — exact literal paths always connect, and wildcard
+patterns connect too when they overlap the same files (for example
+`aligned/{sample}.bam` feeding `dedup/{sample}.bam`). Patterns that can't
+be resolved against each other leave the ordering ambiguous — use
+`depends_on` to make it explicit.
 
 ## Deleting
 

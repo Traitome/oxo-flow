@@ -182,10 +182,10 @@ In a diamond DAG (`source → left, source → right → merge`):
 
 - Critical path: `source → left → merge` (3 steps)
 - `right` is not on the critical path — it can be scheduled after `left` without affecting total time
-- The `graph` command shows the critical path in ASCII output:
+- The `graph` command prints the critical path length as a step count:
 
 ```
-Critical path: source → left → merge
+Depth: 3, Width: 2, Critical path: 3 steps
 ```
 
 #### Interpreting the Output
@@ -314,7 +314,7 @@ wildcards over one template (`variants/{smp}.vcf` vs
 a warning, because the second to finish silently overwrites the first.
 
 ```
-W033: rules 'caller_a' and 'caller_b' both write '{sample}.vcf'
+W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)
 ```
 
 Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`, `caller_b/{sample}.vcf`). See

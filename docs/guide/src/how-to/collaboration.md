@@ -18,10 +18,8 @@ Create an independent copy of a pipeline in your workspace. The fork is a full
 copy — changes to the original do not affect the fork, and vice versa.
 
 ```bash
-# API
-curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/fork \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "alice"}'
+# API — ownership comes from your session, so no user id is sent
+curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/fork
 
 # Response
 {
@@ -67,18 +65,21 @@ curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
 {
   "share_url": "oxo+https://lab.example.com:8080/share/abc123",
   "access_token": "abc123",
-  "expires_at": "2024-02-12T00:00:00Z"
+  "expires_at": "2024-02-12T00:00:00+00:00"
 }
 ```
 
-**Visibility levels** (`link` / `workspace`) are stored on the share record.
+**Visibility levels** (`link` / `public` — `public` is an alias of `link`)
+are stored on the share record; other values (e.g. `workspace`) are
+rejected with `UNSUPPORTED_VISIBILITY`.
 The share URL opens a public read-only landing page (see
 [Share Landing Pages](#share-landing-pages) below); programmatic consumption
 goes through the [import API](#import) below.
 
 ## Import
 
-Import a pipeline from an `oxo+https://` share link:
+Import a pipeline from an `oxo+https://` share link (`oxo+http://` is
+accepted too — the token, not the scheme, is what the import validates):
 
 ```bash
 curl -X POST http://localhost:8080/api/pipelines/import \

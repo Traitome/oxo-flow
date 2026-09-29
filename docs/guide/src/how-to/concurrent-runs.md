@@ -41,7 +41,7 @@ checkpoint; nothing written by an earlier run leaks into the new one.
 | Logs (`.oxo-flow/logs/`) | — | Own logs per workdir |
 | Transform chunks (`.oxo-flow/chunks/`) | — | Own chunks per workdir |
 | Outputs / intermediate files | — | Written in the workdir |
-| Environment setups (`envs_dir`) | — | Resolved per run |
+| Environment setups (`.oxo-flow/env-cache`) | — | Resolved per workdir |
 
 The workdir lock lives at `.oxo-flow/lock` inside each workdir — that is
 why different workdirs never contend, and why the same workdir refuses a
