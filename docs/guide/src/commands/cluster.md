@@ -172,7 +172,7 @@ reports for your user) — the natural first question after a submit:
 
 ```bash
 $ oxo-flow cluster status
-Cluster: Executing 'squeue -u alice --noheader -o %i|%t'...
+Cluster: Executing 'squeue -u alice --noheader -o %i|%T'...
 Cluster: 2 queued job(s)
   12345: running
   12346: pending
@@ -197,8 +197,9 @@ oxo-flow cluster cancel -b slurm 12345 12346
 oxo-flow cluster logs -b slurm 12345
 ```
 
-SLURM prints the job's `sacct` record (`JobID|State|ExitCode|Elapsed|MaxRSS`);
-PBS/SGE/LSF are best-effort (`qstat -f` / `qacct` / `bacct`). Requires the
+SLURM prints the job's `sacct` record
+(`JobID,State,ExitCode,Elapsed,MaxRSS,TotalCPU`); PBS/SGE/LSF are
+best-effort (`qstat -f` / `qacct` / `bacct`). Requires the
 scheduler's client commands on `PATH`.
 
 `cluster logs` on SLURM reads `sacct` directly and does NOT fall back to
@@ -315,7 +316,8 @@ conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin
 #!/bin/bash
 #BSUB -J bwa_align
 #BSUB -n 16
-#BSUB -M 32G
+#BSUB -R 'rusage[mem=33554432] span[hosts=1]'
+#BSUB -M 33554432
 #BSUB -o logs/bwa_align.out
 #BSUB -e logs/bwa_align.err
 
@@ -324,6 +326,13 @@ set -e
 mkdir -p logs
 conda run --no-capture-output -n bwa_env bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; bwa mem -t 16 ref.fa reads.fq > aligned.sam'
 ```
+
+Memory is emitted as an explicit KB figure (`32G` → `33554432`) in both
+`-R 'rusage[mem=…]'` and `-M`: LSF's documented mem_spec unit set is
+KB/MB/GB with KB as the default, and the bare `32G` form oxo-flow stores
+internally is not a valid mem_spec. The `rusage` is what actually places
+the job on a host with room; multi-threaded rules also carry
+`span[hosts=1]` inside the same `-R` string.
 
 Environment wrapping is applied automatically: conda rules are wrapped in
 `conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; ...'`, docker rules in

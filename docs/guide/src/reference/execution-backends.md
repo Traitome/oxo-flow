@@ -61,7 +61,7 @@ and performs real submission and tracking:
   their submission sentences. All id capture shares one helper
   (`parse_job_id`), as does status-line parsing (`parse_status_line`),
   including array elements like `12345_12`.
-- `poll` — `squeue -j <ids> --noheader -o "%i|%t"` and per-backend
+- `poll` — `squeue -j <ids> --noheader -o "%i|%T"` and per-backend
   equivalents.
 - `cancel` / `logs` — `scancel` / `sacct` and equivalents.
 
