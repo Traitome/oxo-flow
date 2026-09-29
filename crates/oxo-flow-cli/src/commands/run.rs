@@ -4919,10 +4919,16 @@ fn rule_resource_rows(
         .into_iter()
         .map(|name| {
             let b = &checkpoint.benchmarks[name];
+            // Issue #690: a stale failed_rules entry with a recorded
+            // when-false verdict was gated off, not failed.
             let status = if checkpoint.completed_rules.contains(name) {
                 "completed"
             } else if checkpoint.failed_rules.contains(name) {
-                "failed"
+                if checkpoint.when_verdicts.get(name) == Some(&false) {
+                    "skipped_by_when"
+                } else {
+                    "failed"
+                }
             } else {
                 "running"
             };
@@ -6486,6 +6492,20 @@ pub async fn handle_status(
     let mut failed: Vec<&str> = state.failed_rules.iter().map(String::as_str).collect();
     failed.sort_unstable();
 
+    // Issue #690: a failed_rules entry whose recorded when-verdict is false
+    // is not a failure — the rule was gated off (typically a stale entry left
+    // by an earlier run under a different config, before verdict pruning
+    // existed). Reconcile the display here so status never shows gated-off
+    // rules as ✗ Failed. Checkpoints written by current builds no longer
+    // carry these stale entries, but older checkpoints must display sanely.
+    // (Filter preserves `failed`'s sort order.)
+    let when_gated_off: Vec<&str> = failed
+        .iter()
+        .copied()
+        .filter(|r| state.when_verdicts.get(*r) == Some(&false))
+        .collect();
+    failed.retain(|r| state.when_verdicts.get(*r) != Some(&false));
+
     // ── Per-rule staleness reasons (issue #432(c)) ────────────────────────
     // Reuse the dry-run preview's exact classification so "why will this
     // rule re-run?" has the same answer in `status` and `dry-run -v`.
@@ -6521,6 +6541,11 @@ pub async fn handle_status(
             "completed": completed,
             "failed": failed,
         });
+        // Issue #690: stale failed_rules entries whose when-gate evaluated
+        // false are reported here, not under "failed".
+        if !when_gated_off.is_empty() {
+            output["skipped_by_when"] = serde_json::json!(when_gated_off);
+        }
         if let Some(map) = staleness_json {
             output["staleness"] = serde_json::Value::Object(map);
         }
@@ -6563,6 +6588,9 @@ pub async fn handle_status(
     );
     eprintln!("  Completed: {}", completed.len());
     eprintln!("  Failed:    {}", failed.len());
+    if !when_gated_off.is_empty() {
+        eprintln!("  Skipped (when-gated off): {}", when_gated_off.len());
+    }
 
     if timing {
         let (timings, total) = rule_timings(&state);
@@ -6625,6 +6653,18 @@ pub async fn handle_status(
             eprintln!("\n{}", "Failed rules:".bold().red());
             for rule in &failed {
                 eprintln!("  {} {}", "✗".red(), rule);
+            }
+        }
+
+        if !when_gated_off.is_empty() {
+            eprintln!("\n{}", "Skipped (when condition false):".bold().yellow());
+            for rule in &when_gated_off {
+                eprintln!(
+                    "  {} {} — {}",
+                    "⊘".yellow(),
+                    rule,
+                    "condition evaluated to false".dimmed()
+                );
             }
         }
     }

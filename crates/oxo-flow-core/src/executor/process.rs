@@ -1465,10 +1465,14 @@ impl LocalExecutor {
                 if !self.config.dry_run
                     && let Some(ck) = &self.config.checkpoint
                 {
-                    ck.lock()
-                        .await
-                        .when_verdicts
-                        .insert(rule.name.clone(), false);
+                    let mut ck = ck.lock().await;
+                    ck.when_verdicts.insert(rule.name.clone(), false);
+                    // Issue #690: a when-false verdict means the rule did
+                    // not fail — prune any stale failed_rules entry (e.g.
+                    // from an earlier run whose config gate was true) so
+                    // status consumers never see a gated-off rule as ✗
+                    // Failed. Mirror of mark_completed's removal.
+                    ck.failed_rules.remove(&rule.name);
                 }
                 return Ok(record);
             }

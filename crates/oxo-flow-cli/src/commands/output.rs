@@ -1067,10 +1067,17 @@ fn write_r_data(
                 ),
                 None => ("-".to_string(), "-".to_string()),
             };
+            // Issue #690: a failed_rules entry whose when-gate evaluated
+            // false was skipped by the gate, not failed — report it as such
+            // instead of the misleading "failed".
             let status = if cp.completed_rules.contains(name) {
                 "success"
             } else if cp.failed_rules.contains(name) {
-                "failed"
+                if cp.when_verdicts.get(name) == Some(&false) {
+                    "skipped_by_when"
+                } else {
+                    "failed"
+                }
             } else {
                 "-"
             };
