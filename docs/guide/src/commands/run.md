@@ -809,6 +809,13 @@ Config change:
   …
 ```
 
+When a `when` gate closes at execution time, the rule is reported under
+**Skipped (when condition false)** with a `⊘` marker (or `⊝` in the
+config-change reuse view) — a gated-off rule is a skip, never a failure
+(see [status](status.md#when-gated-off-rules) for the checkpoint-side
+display, including legacy checkpoints that carry stale `failed_rules`
+entries).
+
 Rules changed by a transformed split set (`transform.split.values_from`)
 are detected through their baked input lists, so chunked rules re-combine
 correctly when the split values change.

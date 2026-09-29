@@ -251,7 +251,9 @@ oxo-flow report --run results/experiment1 --r-data analysis/
 
 `sample_table.tsv` maps every sample to its group (from `[[sample_groups]]`
 and `[[pairs]]`); `metrics.tsv` has one row per rule with wall time, peak
-memory, and status (`success` / `failed` / `-`). Without a checkpoint the
+memory, and status (`success` / `skipped_by_when` / `failed` / `-` — a
+rule whose `when` gate evaluated false is reported as `skipped_by_when`,
+never as `failed`; see [conditional rules](conditional-rules.md)). Without a checkpoint the
 files carry headers only, with a note explaining why. Values are
 TSV-sanitized (tabs and newlines replaced) so names can never break the
 column layout.

@@ -2258,6 +2258,12 @@ shell = "caller --input {input[0]} --output {output[0]}"
   replay: changing a threshold referenced by such a gate (e.g.
   `config.min_reads`) re-evaluates only the instances whose verdict
   actually flipped, keeping completed unchanged instances exempt.
+- **Checkpoint accounting** — verdicts are stored in the checkpoint's
+  `when_verdicts` map. A gate that evaluated to `false` is a skip, not a
+  failure: the rule never enters `failed_rules` (a stale entry is pruned),
+  `status` reports it under *Skipped (when condition false)*
+  (`skipped_by_when` in `--json`), and `report --r-data` writes it to
+  `metrics.tsv` as `skipped_by_when` (issue #690).
 - **Scope** — only `when` strings may call these functions; `shell`,
   `input`, and `output` cannot read the filesystem at plan time.
 
