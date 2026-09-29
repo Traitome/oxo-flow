@@ -54,12 +54,13 @@ oxo-flow lint pipeline.oxoflow --strict
 ```
 oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
   warning [W003]: rule has no description (rule: bwa_align)
-    hint: add a `description` field to the rule
+    hint: add description = "Brief one-line description of what bwa_align does" to this rule
   info [W004]: rule has a shell command but no log file specified (rule: bwa_align)
-    hint: add `log = "logs/bwa_align.log"` to the rule
+    hint: add log = "logs/bwa_align.log"
   info [W007]: leaf rule (no dependents) could be marked as target = true (rule: fastqc)
+    hint: add target = true to this rule
   info [W025]: rule uses deprecated rule-level threads/memory (rule: bwa_align)
-    hint: move `threads`/`memory` under `[rules.resources]`
+    hint: replace `threads = N` / `memory = "8G"` with `resources.threads = N` / `resources.memory = "8G"` under this rule
 
 Summary: 0 error(s), 1 warning(s), 3 info
 ```

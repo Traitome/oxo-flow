@@ -91,10 +91,52 @@ Summary: 3 rules, total 3 threads declared, max 1 threads/rule
 To execute:  oxo-flow run examples/gallery/02_file_pipeline.oxoflow -j 1
 ```
 
+### Execute
+
+```bash
+$ oxo-flow run examples/gallery/02_file_pipeline.oxoflow
+  ✓ generate_data (0.0s)
+  ✓ transform (0.0s)
+  ✓ summarize (0.0s)
+
+Done: 3 succeeded, 0 skipped, 0 failed
+✓ 3 output files verified (2309B total)
+```
+
 ### DAG Visualization
 
 ```bash
 $ oxo-flow graph examples/gallery/02_file_pipeline.oxoflow
+┌──────────────────────────────────────────────┐
+│  Workflow DAG: 3 rules, 2 dependencies       │
+│  Depth: 3, Width: 1, Critical path: 3 steps  │
+└──────────────────────────────────────────────┘
+
+Level 0 (sequential)
+     generate_data
+     │
+     ▼
+Level 1 (sequential)
+     transform [depends: generate_data]
+     │
+     ▼
+Level 2 (sequential)
+     summarize [depends: transform]
+
+Critical path: generate_data → transform → summarize
+```
+
+For embedding in docs/GitHub, the `mermaid` format renders the same DAG as
+this page shows:
+
+```bash
+$ oxo-flow graph examples/gallery/02_file_pipeline.oxoflow --format mermaid
+graph LR
+    n0["generate_data"]
+    n1["transform"]
+    n2["summarize"]
+    n0 --> n1
+    n1 --> n2
 ```
 
 ```mermaid

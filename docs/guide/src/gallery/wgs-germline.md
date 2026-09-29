@@ -32,9 +32,10 @@ graph TD
 Edges are shown as realized after per-sample expansion (for example,
 `haplotype_caller` → `combine_gvcfs` exists because `expand_inputs`
 resolves the three per-sample GVCFs). Note that the unexpanded template
-DAG (`oxo-flow graph`) already contains an edge from `combine_gvcfs` to
-`haplotype_caller` — `expand_inputs` patterns register template-level
-dataflow even before per-sample paths materialize. See
+DAG (`oxo-flow graph`) already contains this edge — the rule
+declaration `combine_gvcfs [depends: haplotype_caller]` shows that
+`expand_inputs` patterns register template-level dataflow even before
+per-sample paths materialize. See
 [Fan-out vs Fan-in](../reference/wildcards.md#fan-out-vs-fan-in) for
 how the two expansion mechanisms differ.
 
@@ -405,7 +406,8 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
 
 !!! note "GATK writes index files the example does not declare"
     GATK steps emit `.tbi` (and `.idx`) sidecar files next to their VCF
-    outputs — `variants/call.vcf.gz` also produces `variants/call.vcf.gz.tbi`.
+    outputs — `variants/cohort.genotyped.vcf.gz` also produces
+    `variants/cohort.genotyped.vcf.gz.tbi`.
     This example's `output` lists declare only the data files (the
     variant-calling tutorial declares the `.tbi` counterparts for its
     Mutect2 chain). Declaring index outputs is optional, but undeclared
@@ -438,7 +440,7 @@ VQSR adaptively models the variant quality profile rather than applying fixed th
     reference for testing) can still starve the trainer even with 30+
     samples — in that case hard filtering is again the right fallback.
     For INDELs the analogous hard-filter thresholds are
-    `QD < 2.0`, `FS > 200.0`, `ReadPosRankSum < 20.0`.
+    `QD < 2.0`, `FS > 200.0`, `ReadPosRankSum < -20.0`.
 
 ## Running the Workflow
 

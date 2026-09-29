@@ -84,14 +84,16 @@ oxo-flow info [OPTIONS] <WORKFLOW>
   `reference_dir`-derived paths — `config_keys` carries the bare key list.
 - **`config[].description`** — optional; present only when the key is
   commented. A contiguous block of `#` lines immediately above the key line
-  (no blank line in between) is the description, joined into one line; a
-  trailing `#` comment on the key line itself is the fallback. Empty `#`
-  lines and pure decorator lines (`# ----`) are dropped. Banner lines
+  (no blank line in between) is the description, joined with newlines so the
+  author's line structure is kept; a trailing `#` comment on the key line
+  itself is the fallback. Empty `#` lines and pure decorator lines
+  (`# ----`) are dropped. Banner lines
   (`# --- section ---`) act as section markers: dropped when the block also
   has regular text, otherwise kept with their dashes stripped. Comments
   inside multi-line values (e.g. `#` lines within an array) never associate,
   and comments above `[config.<name>]` subtable headers describe the table
-  key itself.
+  key itself. Include files contribute descriptions too (first definition
+  wins; include failures are silently skipped).
 - **`tools`** — conda/mamba environment YAML stems and container image names
   (registry path and tag stripped), deduped and sorted.
 - **`resources`** — max threads/memory across rules on the defaults-applied

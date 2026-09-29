@@ -93,7 +93,7 @@ Different schedulers handle GPU requests differently:
 | **SLURM** | `--gres=gpu:2` or `--gres=gpu:a100:2:40g` | Full support for model and memory spec |
 | **PBS** | `gpu=2` | Basic count only; model selection varies by site |
 | **SGE** | `-l gpu=2` | Basic count only; requires queue configuration |
-| **LSF** | `-gpu 2` | Basic count only |
+| **LSF** | `-gpu "num=2"` | Basic count only (rendered as a quoted `num=` run-options string) |
 
 ---
 
@@ -197,10 +197,13 @@ Three details worth knowing:
   `if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi` —
   because the image's entrypoint shell runs first, and multi-line or
   `pipefail`-using scripts need bash, which not every image ships.
-- **Paths outside the workdir are bound read-only.** A `[config]` reference
-  genome or index living elsewhere on the shared filesystem is appended to
-  the mount list automatically (`-v /data/ref:/data/ref:ro`), so the rule can
-  read it from inside the container.
+- **Paths outside the workdir are bound read-only (Docker backend).** A
+  `[config]` reference genome or index living elsewhere on the shared
+  filesystem is appended to the Docker mount list automatically
+  (`-v /data/ref:/data/ref:ro`), so the rule can read it from inside the
+  container. The Singularity/Apptainer backend does not add these mounts —
+  bind paths yourself with `[cluster.container]` bind options if your site
+  needs them.
 - **`apptainer` wins when both it and `singularity` are installed**, so
   clusters that renamed the binary keep working without configuration.
 

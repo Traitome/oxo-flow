@@ -65,8 +65,10 @@ Two quality-of-life details:
   scatters across whatever directory the app happened to be launched from.
 - **External links open in the system browser.** A navigation handler
   confines the app window to the app's own loopback origin; anything else
-  (the GitHub/docs links in the UI) is handed to `open` / `xdg-open` /
-  `start`. `target="_blank"` links and `window.open` calls are routed the
+  (the GitHub/docs links in the UI) is handed to the platform opener —
+  `open` on macOS, `xdg-open` on Linux, `explorer` on Windows (not
+  `cmd /c start`, which re-parses its command line).
+  `target="_blank"` links and `window.open` calls are routed the
   same way. The window itself never navigates away from the interface.
 
 Rendering stays in the OS webview (not a bundled browser, not Electron):

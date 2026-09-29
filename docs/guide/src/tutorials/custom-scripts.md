@@ -50,7 +50,7 @@ conda = "envs/py.yaml"
 
 ### 2. The environment file
 
-Both rules declare `environment = { conda = "envs/py.yaml" }`, so create that file first — the run will fail with `EnvironmentFileNotFound` otherwise:
+Both rules declare `environment = { conda = "envs/py.yaml" }`, so create that file first — otherwise the conda setup step fails with `EnvironmentFileNotFound: 'envs/py.yaml' file not found` (a YAML-file-not-found hint appears in the error output):
 
 ```yaml
 # envs/py.yaml

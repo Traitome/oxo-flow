@@ -93,7 +93,7 @@ oxo-flow env create [OPTIONS] <SPEC>
 
 ```
   ✓ align (conda)
-  ✗ call_variants — Docker is not available on this system
+  ✗ call_variants — environment error (docker): docker is not installed or not in PATH
 ```
 
 ---

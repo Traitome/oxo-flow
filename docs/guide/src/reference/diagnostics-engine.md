@@ -55,7 +55,7 @@ authoritative list is
 | FASTQ quality low | "per base sequence quality.*fail", "low quality", "poor quality" | ✅ Suggest fastp insertion |
 | Empty file | "empty file", "zero length", "no data" | ❌ Check upstream rule |
 | BAM truncated / index | "truncated file", "bam index", "EOF marker", exit 1 | ✅ Suggest `samtools index` |
-| BAM index missing | "failed to open index", "no index available", exit 1 | ✅ Suggest `samtools index` |
+| BAM index missing | "could not open index file", "no index available", exit 1 | ✅ Suggest `samtools index` |
 
 ### System Errors
 

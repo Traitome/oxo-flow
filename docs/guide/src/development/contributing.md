@@ -55,7 +55,8 @@ the window before adding retries.
 make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
 #       cargo build, cargo test, schema-drift, version-check, cargo audit,
-#       frontend-lint
+#       cargo-deny, aws-legacy-tripwire, secrets scan, docs build,
+#       frontend-lint, eval-tests
 ```
 
 ---
@@ -69,6 +70,7 @@ oxo-flow/
 │   ├── oxo-flow-ai/     # AI companion — provider abstraction, skill system, agent framework
 │   ├── oxo-flow-cli/    # CLI binary (oxo-flow command)
 │   ├── oxo-flow-web/    # Web REST API (axum-based)
+│   └── oxo-flow-desktop/# Desktop shell (outside the cargo workspace; see licensing)
 ├── frontend/            # Web UI (embedded SPA)
 ├── examples/            # Example workflows (.oxoflow files)
 ├── tests/               # Integration tests

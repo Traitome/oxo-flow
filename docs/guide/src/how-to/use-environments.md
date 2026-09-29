@@ -142,7 +142,9 @@ shell = "fastqc input.fastq.gz -o qc/"
 ```
 
 oxo-flow runs `pixi install --manifest-path pixi.toml` once, then wraps the
-command as `pixi run --manifest-path pixi.toml <command>`.
+command as `pixi run --manifest-path pixi.toml bash -c '<command>'` — the
+`bash -c` wrapper keeps shell operators and multi-line scripts inside the
+pixi environment (`pixi run` is a child-process env, not a PATH mutation).
 
 ---
 
