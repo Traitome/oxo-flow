@@ -227,7 +227,8 @@ Top-level fields: `"profile"` (the `--profile` name, when given) and
 
 Status values: `run-never-completed`, `run-input-changed`,
 `run-config-changed`, `run-outputs-missing`, `run-cascaded`,
-`run-cascaded-upstream`, `skip`, `skip-when-condition`.
+`run-cascaded-upstream`, `run-forced`, `skip`, `skip-fresh`,
+`skip-when-condition`.
 
 `--json` also emits the **execution-plan surface** at the top level
 (`schema_version: 1`) — the structured mirror of the human stderr plan,

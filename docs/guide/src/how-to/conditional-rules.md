@@ -94,9 +94,14 @@ not written yet, the two phases behave differently:
   evaluate to `false` (fail-closed) — a gate that cannot count what it
   was asked to count does not run the rule.
 
-Verdicts are recorded in the checkpoint; when a threshold like
-`config.min_reads` changes between runs, only instances whose recorded
-verdict actually flipped are invalidated (see "Resume & checkpoints").
+Verdicts are recorded in the checkpoint's `when_verdicts` map; when a
+threshold like `config.min_reads` changes between runs, only instances
+whose recorded verdict actually flipped are invalidated (see "Resume &
+checkpoints"). A when-false verdict also removes the rule from the
+checkpoint's `failed_rules` set — a gated-off rule is never counted as a
+failure, and `oxo-flow status` reports such rules under **Skipped (when
+condition false)** (`skipped_by_when` in `--json`), never as ✗ Failed
+(issue #690).
 
 **Scope limits.** These functions are intentionally restricted to pure
 file reads — no shell, no globbing beyond `{wildcard}` expansion, and

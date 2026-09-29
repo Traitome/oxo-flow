@@ -72,6 +72,35 @@ Failed rules:
   ✗ mark_duplicates
 ```
 
+### When-gated-off rules
+
+A rule whose `when` condition evaluated to false is a **skip**, not a
+failure. The executor never writes such a rule into `failed_rules` (the
+verdict prunes any stale entry), and the display also reconciles legacy
+checkpoints: an entry in `failed_rules` whose recorded verdict in
+`when_verdicts` is `false` is reported as gated-off instead of failed —
+under `Skipped (when condition false)` in the text view and in the
+`skipped_by_when` JSON key instead of `failed` (issue #690):
+
+```
+  Completed: 2
+  Failed:    0
+  Skipped (when-gated off): 1
+
+Completed rules:
+  ✓ trim
+  ✓ align
+
+Skipped (when condition false):
+  ⊘ qc_report — condition evaluated to false
+```
+
+```json
+"failed": [],
+"skipped_by_when": ["qc_report"],
+"when_verdicts": { "qc_report": false }
+```
+
 ### Staleness reasons
 
 When the checkpoint's workflow file is still present and parseable, `status`
@@ -127,6 +156,8 @@ With `--json`, output goes to stdout:
   "workflow": "pipeline.oxoflow",
   "completed": ["align", "sort_bam", "trim_reads"],
   "failed": [],
+  "when_verdicts": { "qc_report": false },
+  "skipped_by_when": ["qc_report"],
   "staleness": {
     "align": {
       "status": "input changed",
@@ -150,7 +181,10 @@ With `--json`, output goes to stdout:
 `--timing`; `memory` only lists rules with a sampled peak-RSS
 measurement. `staleness` appears whenever the workflow file can be
 loaded for classification **and** at least one completed rule would
-re-run (see [Staleness reasons](#staleness-reasons)).
+re-run (see [Staleness reasons](#staleness-reasons)). `skipped_by_when`
+appears only when at least one `failed_rules` entry is actually
+when-gated-off; `when_verdicts` lists the gate verdicts recorded for the
+run.
 
 ---
 
@@ -162,6 +196,7 @@ The checkpoint file is JSON with the following structure:
 {
   "completed_rules": ["trim_reads", "align", "sort_bam"],
   "failed_rules": ["mark_duplicates"],
+  "when_verdicts": { "qc_report": false },
   "benchmarks": {
     "trim_reads": {
       "rule": "trim_reads",
@@ -215,9 +250,9 @@ replay them deterministically and revoke them when the rule is invalidated
 (see [Checkpoint re-entry](../reference/workflow-format.md#checkpoint-re-entry)).
 
 Every key above is omitted from the JSON when empty — a minimal workflow
-with no `[config]` section, no temporaries, and no re-entries writes a
-much smaller checkpoint containing only `completed_rules`, `failed_rules`,
-`benchmarks`, and `workflow_path`.
+with no `[config]` section, no temporaries, no when-gates, and no
+re-entries writes a much smaller checkpoint containing only
+`completed_rules`, `failed_rules`, `benchmarks`, and `workflow_path`.
 
 ---
 
