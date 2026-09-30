@@ -5287,7 +5287,11 @@ the pid is in the summary line and (while the run is in flight) in
   summary.</li>
 <li>Bundle runs need an explicit <code>--workdir</code> (the bundle's extracted
   directory is created per-process, so it cannot be predicted from the
-  foreground invocation) and <code>--yes</code> — a detached child cannot prompt.</li>
+  foreground invocation) and <code>--yes</code> — a detached child cannot prompt.
+  <code>--workdir</code> is also what bundle discovery consults as a fallback: a
+  <code>sample_pattern</code>/<code>pairs_pattern</code> that matches nothing inside the
+  extraction is retried against the workdir
+  (<a href="https://github.com/Traitome/oxo-flow/issues/751">#751</a>).</li>
 <li><code>--background</code> is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before <code>KEY=VALUE</code> overrides) apply to the whole command line as usual.</li>
