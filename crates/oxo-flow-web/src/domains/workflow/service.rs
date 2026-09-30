@@ -36,7 +36,11 @@ pub fn parse_pipeline(
         })
         .collect();
 
-    let dag = WorkflowDag::from_rules(&config.rules).map_err(|e| format!("DAG build: {e}"))?;
+    // Config expansion matches `run` (issue #707): {config.*}-routed
+    // producer/consumer pairs only match after placeholder expansion.
+    let dag =
+        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+            .map_err(|e| format!("DAG build: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
     let core_metrics = dag
         .metrics()
@@ -429,7 +433,11 @@ pub fn diff_workflows(toml_a: &str, toml_b: &str) -> Result<DiffResponse, String
 /// Build a DAG representation suitable for frontend visualisation.
 pub fn build_dag(toml_content: &str) -> Result<DagJsonResponse, String> {
     let config = WorkflowConfig::parse(toml_content).map_err(|e| format!("Parse: {e}"))?;
-    let dag = WorkflowDag::from_rules(&config.rules).map_err(|e| format!("DAG: {e}"))?;
+    // Config expansion (issue #707) so visualised edges include
+    // {config.*}-routed producer/consumer pairs.
+    let dag =
+        WorkflowDag::from_rules_with_config(&config.rules, &config.config_placeholder_values())
+            .map_err(|e| format!("DAG: {e}"))?;
 
     let nodes: Vec<DagJsonNode> = config
         .rules
@@ -792,5 +800,36 @@ shell = "true"
         assert_eq!(node_b.environment, "system");
         assert_eq!(node_b.rule["shell"], "cat a.txt > b.txt");
         assert_eq!(node_b.rule["input"][0], "a.txt");
+    }
+
+    /// Issue #707: the web DAG must be built with config-expanded rules so
+    /// {config.*}-routed producer/consumer pairs produce edges, matching
+    /// what `run` executes. A config-less build silently drops the a→b edge.
+    #[test]
+    fn dag_edges_resolve_config_routed_paths() {
+        let toml = r#"
+[workflow]
+name = "cfg"
+
+[config]
+dir = "results"
+
+[[rules]]
+name = "a"
+output = ["{config.dir}/a.txt"]
+shell = "echo a > {config.dir}/a.txt"
+
+[[rules]]
+name = "b"
+input = ["{config.dir}/a.txt"]
+output = ["b.done"]
+shell = "cat {config.dir}/a.txt > b.done"
+"#;
+        let dag = build_dag(toml).unwrap();
+        assert!(
+            dag.edges.iter().any(|e| e.from == "a" && e.to == "b"),
+            "config-routed edge a→b must be inferred: {:?}",
+            dag.edges
+        );
     }
 }

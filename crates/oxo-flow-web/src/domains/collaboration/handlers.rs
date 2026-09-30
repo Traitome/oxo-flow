@@ -437,9 +437,17 @@ pub async fn get_share_landing(Path(token): Path<String>) -> ApiResult<serde_jso
 
     // DAG summary: rule names in execution order (no full layout — the
     // landing page shows the shape, the importer gets the TOML).
+    // Config expansion matches `run` (issue #707): {config.*}-routed
+    // producer/consumer pairs only match after placeholder expansion.
     let dag_names: Vec<String> = oxo_flow_core::WorkflowConfig::parse(&pipeline.toml_content)
         .ok()
-        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok())
+        .and_then(|wf| {
+            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &wf.rules,
+                &wf.config_placeholder_values(),
+            )
+            .ok()
+        })
         .and_then(|d| d.execution_order().ok())
         .unwrap_or_default();
 

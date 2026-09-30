@@ -746,9 +746,17 @@ pub async fn get_run_status(
 
     // Node status comes from the engine's checkpoint state (single source of
     // truth), merged with the full rule list so unrun rules show as pending.
+    // Config expansion matches `run` (issue #707): {config.*}-routed
+    // producer/consumer pairs only match after placeholder expansion.
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
-        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+        .and_then(|wf| {
+            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &wf.rules,
+                &wf.config_placeholder_values(),
+            )
+            .ok()
+        });
     let node_items = checkpoint_status::load_node_statuses(
         std::path::Path::new(run.workdir.as_deref().unwrap_or("")),
         run.status == "running",
@@ -822,10 +830,16 @@ pub async fn get_dag_status(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
 
-    // Parse the pipeline snapshot to build DAG
+    // Parse the pipeline snapshot to build DAG (config-expanded, issue #707).
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
-        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+        .and_then(|wf| {
+            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &wf.rules,
+                &wf.config_placeholder_values(),
+            )
+            .ok()
+        });
 
     // Node status comes from the engine's checkpoint state, merged with the
     // full rule list so unrun rules show as pending.
@@ -956,7 +970,13 @@ pub async fn get_run_instances(
     );
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
-        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok());
+        .and_then(|wf| {
+            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &wf.rules,
+                &wf.config_placeholder_values(),
+            )
+            .ok()
+        });
     let rules: Vec<String> = dag
         .as_ref()
         .and_then(|d| d.execution_order().ok())
@@ -1211,7 +1231,13 @@ pub async fn retry_run(
 
     let dag = oxo_flow_core::WorkflowConfig::parse(&run.pipeline_snapshot)
         .ok()
-        .and_then(|wf| oxo_flow_core::dag::WorkflowDag::from_rules(&wf.rules).ok())
+        .and_then(|wf| {
+            oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+                &wf.rules,
+                &wf.config_placeholder_values(),
+            )
+            .ok()
+        })
         .ok_or_else(|| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
