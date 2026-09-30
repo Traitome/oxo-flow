@@ -193,12 +193,13 @@ impl FastQcExtractor {
                 )
             };
             let data_file = parent.join(&data_dir_name).join("fastqc_data.txt");
-            if data_file.exists() {
+            if data_file.exists() && is_regular_file(&data_file) {
                 return Some(data_file);
             }
         }
         // Direct path
-        if path_str.ends_with("fastqc_data.txt") && file_path.exists() {
+        if path_str.ends_with("fastqc_data.txt") && file_path.exists() && is_regular_file(file_path)
+        {
             return Some(file_path.to_path_buf());
         }
         None
@@ -224,6 +225,9 @@ impl ResultExtractor for FastQcExtractor {
             None => return HashMap::new(),
         };
 
+        if !is_regular_file(&data_path) {
+            return HashMap::new();
+        }
         let content = match std::fs::read_to_string(&data_path) {
             Ok(c) => c,
             Err(_) => return HashMap::new(),
@@ -297,6 +301,9 @@ impl ResultExtractor for MultiQcExtractor {
     }
 
     fn extract(&self, file_path: &Path) -> HashMap<String, serde_json::Value> {
+        if !is_regular_file(file_path) {
+            return HashMap::new();
+        }
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(_) => return HashMap::new(),
@@ -335,6 +342,10 @@ impl ResultExtractor for GenericTextExtractor {
         // File size
         if let Ok(meta) = std::fs::metadata(file_path) {
             metrics.insert("file_size_bytes".into(), (meta.len()).into());
+        }
+
+        if !is_regular_file(file_path) {
+            return metrics;
         }
 
         // Content analysis
@@ -433,7 +444,7 @@ impl ResultExtractorRegistry {
         rule_name: &str,
     ) -> HashMap<String, serde_json::Value> {
         let path = std::path::Path::new(output_path);
-        if !path.exists() {
+        if !path.exists() || !is_regular_file(path) {
             return HashMap::new();
         }
         self.find_extractor(output_path, rule_name)
@@ -489,7 +500,7 @@ pub fn scan_run_outputs_with_config<P: AsRef<Path>>(
                 continue;
             }
             let full_path = run_dir.join(&expanded);
-            if !full_path.exists() {
+            if !full_path.exists() || !is_regular_file(&full_path) {
                 continue;
             }
 
@@ -520,9 +531,26 @@ pub fn scan_run_outputs_with_config<P: AsRef<Path>>(
     records
 }
 
+// ---------------------------------------------------------------------------
+// FIFO/special-file guard (issue #713, pattern from #695/#706)
+// ---------------------------------------------------------------------------
+
+/// `true` only for regular files: `File::open` on a writer-less FIFO blocks
+/// forever, and sockets / devices have no meaningful content. All readers
+/// below stat first instead of trusting `exists()`, which never blocks but
+/// does not exclude special files.
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+}
+
 /// Compute a SHA-256 checksum for a file, returning it as a hex string.
 fn compute_sha256_checksum(path: &Path) -> Option<String> {
     use std::io::Read;
+    if !is_regular_file(path) {
+        return None;
+    }
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 8192];
