@@ -317,7 +317,7 @@ The dry-run has expanded the `{sample}` wildcard into per-sample tasks: the thre
     output = [ "{config.results_dir}/multiqc/multiqc_report.html" ]
     ```
 
-    The rule no longer contains `{sample}`, so it becomes a single task that waits for `fastqc_raw`/`fastqc_trimmed` through file matching, and the finished report covers all samples. (The tutorial workflow above has been updated to this form; a general engine-level guard against duplicate-output task races is tracked in issue [#443](https://github.com/Traitome/oxo-flow/issues/443).)
+    The rule no longer contains `{sample}`, so it becomes a single task that waits for `fastqc_raw`/`fastqc_trimmed` through file matching, and the finished report covers all samples. (The tutorial workflow above has been updated to this form; when multiple tasks would write the same output path, the engine now flags it at plan time with a `SCI-AGG-RACE` preflight warning suggesting `expand_inputs` — see issue [#443](https://github.com/Traitome/oxo-flow/issues/443).)
 
 The suggested `-j 2` comes from dividing the machine's CPU threads by the workflow's maximum per-rule thread declaration (10 / 4 → 2, rounded down) — running more jobs than that would oversubscribe the CPU. If your rules are I/O-bound you can raise it.
 
