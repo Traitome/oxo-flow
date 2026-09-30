@@ -4182,6 +4182,15 @@ fn count_text_lines(path: &Path) -> Option<i64> {
 /// chunked FASTQ pipelines produce). Returns `None` when the file cannot
 /// be opened or read — the caller's missing-file semantics.
 fn count_lines_streamed(path: &Path, gzip: bool) -> Option<i64> {
+    // Refuse special files before opening: `File::open` on a writer-less
+    // FIFO blocks forever — and this runs inside the scheduler loop, so a
+    // leftover `tmp.fifo.read*` from a killed run (issue #695) would hang
+    // the whole run, not just one job (same stat-first gate as
+    // compute_file_checksum). Sockets/char devices have no line count.
+    let md = std::fs::metadata(path).ok()?;
+    if !md.is_file() {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     let mut lines = 0i64;
     if gzip {
@@ -4376,6 +4385,12 @@ fn resolve_runtime_path(
 fn read_text_report(path: &Path) -> Option<String> {
     const MAX_REPORT_BYTES: u64 = 16 * 1024 * 1024;
     let meta = std::fs::metadata(path).ok()?;
+    // Same FIFO/special-file gate as count_lines_streamed: the 16 MiB size
+    // cap can't save us — a FIFO reports 0 bytes, then `File::open` blocks
+    // the scheduler loop forever.
+    if !meta.is_file() {
+        return None;
+    }
     if meta.len() > MAX_REPORT_BYTES {
         return None;
     }
@@ -4632,6 +4647,35 @@ pub fn hostname() -> String {
 mod tests {
     use super::*;
     use crate::rule::{EnvironmentSpec, Resources};
+
+    /// A writer-less FIFO left behind by a killed run (issue #695's
+    /// `tmp.fifo.read*` shape) must not hang the when-atom readers — they
+    /// run inside the scheduler loop, so one blocked open would freeze the
+    /// whole run. Both readers now stat first and treat special files as
+    /// "cannot verify" (None → the missing-file semantics).
+    #[cfg(unix)]
+    #[test]
+    fn when_atom_readers_refuse_fifo_without_blocking() {
+        let wd = std::env::temp_dir().join("of-fifo-when-atoms");
+        let _ = std::fs::remove_dir_all(&wd);
+        std::fs::create_dir_all(&wd).unwrap();
+        let fifo = wd.join("tmp.fifo.read1");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo must exist on unix");
+        assert!(status.success(), "mkfifo failed");
+
+        // Would hang forever before the gate: count_lines_streamed and
+        // read_text_report both opened the FIFO and blocked in
+        // wait_for_partner. Must now return None immediately.
+        assert_eq!(count_lines_streamed(&fifo, false), None);
+        assert_eq!(count_text_lines(&fifo), None);
+        assert_eq!(count_fastq_records(&fifo), None);
+        assert_eq!(read_text_report(&fifo), None);
+
+        let _ = std::fs::remove_dir_all(&wd);
+    }
 
     #[test]
     fn capped_capture_keeps_small_streams_verbatim() {
