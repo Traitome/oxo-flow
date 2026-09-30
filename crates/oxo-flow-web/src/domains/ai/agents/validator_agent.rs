@@ -76,6 +76,11 @@ pub fn validate_pipeline_toml(toml_content: &str) -> ValidationReport {
     }
 
     // Check 3: DAG cycle detection
+    // Deliberately config-less (plain `from_rules`): this validator runs on
+    // freshly generated pipelines where {config.*} values are unresolved, so
+    // the config-less structural graph is the correct cycle-detection
+    // surface (issue #707). Execution-time surfaces must use
+    // `from_rules_with_config` instead.
     let dag_result = oxo_flow_core::dag::WorkflowDag::from_rules(&parsed.rules);
     let cycles: Vec<String> = match &dag_result {
         Ok(dag) => {

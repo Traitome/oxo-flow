@@ -17,7 +17,10 @@ pub fn create_run(
     _pipeline_id: Option<&str>,
 ) -> Result<CreateRunResponse, String> {
     let wf = WorkflowConfig::parse(pipeline_toml).map_err(|e| format!("Parse: {e}"))?;
-    let dag = WorkflowDag::from_rules(&wf.rules).map_err(|e| format!("DAG: {e}"))?;
+    // Config expansion matches `run` (issue #707): {config.*}-routed
+    // producer/consumer pairs only match after placeholder expansion.
+    let dag = WorkflowDag::from_rules_with_config(&wf.rules, &wf.config_placeholder_values())
+        .map_err(|e| format!("DAG: {e}"))?;
     let execution_order = dag.execution_order().map_err(|e| format!("Order: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
 

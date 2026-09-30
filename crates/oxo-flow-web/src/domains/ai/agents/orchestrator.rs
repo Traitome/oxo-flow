@@ -218,8 +218,13 @@ pub fn build_dag_json(toml_content: &str) -> Result<serde_json::Value, String> {
     let config = oxo_flow_core::WorkflowConfig::parse(toml_content)
         .map_err(|e| format!("Parse error: {e}"))?;
 
-    let dag = oxo_flow_core::dag::WorkflowDag::from_rules(&config.rules)
-        .map_err(|e| format!("DAG error: {e}"))?;
+    // Config expansion matches `run` (issue #707): {config.*}-routed
+    // producer/consumer pairs only match after placeholder expansion.
+    let dag = oxo_flow_core::dag::WorkflowDag::from_rules_with_config(
+        &config.rules,
+        &config.config_placeholder_values(),
+    )
+    .map_err(|e| format!("DAG error: {e}"))?;
     let dag_nodes = dag
         .topological_order()
         .map_err(|e| format!("Topological sort error: {e}"))?;
@@ -245,11 +250,7 @@ pub fn build_dag_json(toml_content: &str) -> Result<serde_json::Value, String> {
         })
         .collect();
 
-    let parallel_groups: Vec<Vec<String>> =
-        oxo_flow_core::dag::WorkflowDag::from_rules(&config.rules)
-            .ok()
-            .and_then(|d| d.parallel_groups().ok())
-            .unwrap_or_default();
+    let parallel_groups: Vec<Vec<String>> = dag.parallel_groups().unwrap_or_default();
 
     Ok(serde_json::json!({
         "nodes": nodes,
