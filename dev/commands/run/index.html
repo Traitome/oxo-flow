@@ -5306,7 +5306,8 @@ the pid is in the summary line and (while the run is in flight) in
 </ul>
 <h3 id="rule-run-records-in-the-checkpoint">Rule run records in the checkpoint<a class="headerlink" href="#rule-run-records-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>Each executed rule carries a <code>rule_runs</code> entry in <code>checkpoint.json</code> with the
-expanded command, the process exit code, a bounded stderr tail, the resolved
+expanded command, the process exit code, a bounded stdout/stderr tail, the
+resolved
 report caption, and (since the cancellation-semantics change) the terminal
 <strong><code>status</code></strong> (<code>"failed"</code>, <code>"cancelled"</code>, <code>"timed_out"</code>, …), the
 <strong><code>skip_reason</code></strong> when the rule did not run to completion, and the
@@ -5314,6 +5315,17 @@ terminating <strong><code>signal</code></strong> when the process died to one. T
 fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 <code>failed_rules</code>).</p>
+<p>The tails are truncated to the <strong>last 64 KiB per stream by default</strong> and
+prefixed with a <code>…</code> marker when cut. Set <code>OXO_FLOW_OUTPUT_TAIL_BYTES</code> to
+change the size (bytes; an invalid or zero value falls back to the default
+with a warning), e.g. <code>OXO_FLOW_OUTPUT_TAIL_BYTES=10485760</code> (10 MiB) for
+error-heavy tools whose message scrolls past the tail. The in-RAM capture
+window widens to match when the setting exceeds its 1 MiB floor — budget
+roughly 2 × (1 MiB + tail) of RAM per running job. Tails are
+bytes-bounded, so a multi-byte UTF-8 cut lands on the nearest character
+boundary (rounding down); older checkpoints that only carry the legacy
+2048-character tails remain readable (the new size applies from the next
+recorded run onward).</p>
 <h3 id="workflow-version-in-the-checkpoint">Workflow version in the checkpoint<a class="headerlink" href="#workflow-version-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>When the workflow file lives inside a git repository, oxo-flow records the
 repository's <strong>HEAD commit SHA</strong> in the checkpoint (<code>workflow_git_sha</code>) at
