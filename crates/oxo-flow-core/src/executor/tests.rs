@@ -3551,6 +3551,82 @@ async fn runtime_when_gate_consumes_producer_output() {
     // a rule the gate skipped must never linger in the failed set.
     assert!(!ck.failed_rules.contains("filter_cohort_S2"));
 }
+
+#[tokio::test]
+async fn when_false_verdict_drops_stale_failure_record() {
+    // Issue #690: a rule failed for real in an earlier run (gate true),
+    // then a config flip turned the gate false. The executor's when-false
+    // branch must drop the stale failure record — the same way
+    // mark_completed removes from failed_rules — so `status` stops
+    // rendering the rule as ✗ Failed forever.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+    std::fs::write(dir.path().join("raw/S1.fq"), "@r1\nACGT\n+\nIIII\n").unwrap();
+    let workflow_path = dir.path().join("gate.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gate"
+
+        [config]
+        min_reads = 5
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1"]
+
+        [[rules]]
+        name = "filter"
+        input = ["raw/{sample}.fq"]
+        output = ["filtered/{sample}.fq"]
+        when = "reads_count('raw/{sample}.fq') > config.min_reads"
+        shell = "cp {input[0]} {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    // Dirty legacy checkpoint: the rule failed for real earlier, and the
+    // verdict map already reflects the flipped gate.
+    let checkpoint = std::sync::Arc::new(tokio::sync::Mutex::new(CheckpointState {
+        failed_rules: ["filter_cohort_S1".to_string()].into_iter().collect(),
+        when_verdicts: [("filter_cohort_S1".to_string(), true)]
+            .into_iter()
+            .collect(),
+        ..CheckpointState::new()
+    }));
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        checkpoint: Some(checkpoint.clone()),
+        dry_run: false,
+        ..Default::default()
+    });
+
+    // Threshold 50 vs 1 record → the gate evaluates false at execution time.
+    let mut overrides = HashMap::new();
+    overrides.insert("min_reads".to_string(), toml::Value::Integer(50));
+    let instance = config
+        .rules
+        .iter()
+        .find(|r| r.name == "filter_cohort_S1")
+        .unwrap();
+    let wildcards = HashMap::from([("sample".to_string(), "S1".to_string())]);
+    let record = executor
+        .execute_rule_with_config(instance, &wildcards, &overrides)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped, "gate is false now");
+
+    let ck = checkpoint.lock().await;
+    assert!(
+        !ck.failed_rules.contains("filter_cohort_S1"),
+        "stale failure record must be dropped when the gate flips false"
+    );
+    assert_eq!(ck.when_verdicts.get("filter_cohort_S1"), Some(&false));
+}
 #[tokio::test]
 async fn meta_when_gate_runs_se_and_skips_pe_instances() {
     // methylseq-style endedness gate driven by the sample metadata table

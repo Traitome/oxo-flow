@@ -56,14 +56,14 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         // false was gated off, not failed — typically a stale entry from an
         // earlier run under a different config. Surface it as Skipped so the
         // web view agrees with the CLI's dry-run tally.
-        let when_gated_off = checkpoint.when_verdicts.get(rule) == Some(&false);
+        let status = if checkpoint.when_verdicts.get(rule) == Some(&false) {
+            NodeStatus::Skipped
+        } else {
+            NodeStatus::Failed
+        };
         items.push(NodeStatusItem {
             rule: rule.clone(),
-            status: if when_gated_off {
-                NodeStatus::Skipped
-            } else {
-                NodeStatus::Failed
-            },
+            status,
             started_at: None,
             duration_ms: None,
             exit_code: None,
@@ -270,6 +270,30 @@ mod tests {
         assert!(matches!(statuses[0], NodeStatus::Success));
         assert!(matches!(statuses[1], NodeStatus::Pending));
         assert!(matches!(statuses[2], NodeStatus::Pending));
+    }
+
+    #[test]
+    fn stale_when_false_entries_render_skipped_not_failed() {
+        // Issue #690: a checkpoint written by an older version keeps a
+        // when-gated rule in failed_rules even though the gate evaluated
+        // to false — it must surface as Skipped, never as ✗ Failed.
+        let dir = std::env::temp_dir().join("cp-test-5");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": [],
+                "failed_rules": ["align", "real_fail"],
+                "when_verdicts": {"align": false},
+                "benchmarks": {}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let align = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(matches!(align.status, NodeStatus::Skipped));
+        let real_fail = items.iter().find(|i| i.rule == "real_fail").unwrap();
+        assert!(matches!(real_fail.status, NodeStatus::Failed));
     }
 }
 

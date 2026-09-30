@@ -6441,6 +6441,32 @@ fn compute_staleness_reasons(
     reasons
 }
 
+/// Split the checkpoint's failed rules into real failures and rules whose
+/// runtime `when` gate evaluated to false (issue #690).
+///
+/// The executor records `Skipped` for a when-false verdict and (since #690)
+/// removes any stale failure record itself, but checkpoints written by older
+/// versions can still carry the stale entry — `status` then rendered the
+/// rule as `✗ Failed` forever. This display-side reconcile keeps those dirty
+/// checkpoints honest: an entry whose recorded verdict is `false` is reported
+/// as skipped-by-when, not failed. Both outputs are sorted (`failed_rules`
+/// is a BTreeSet, so iteration is already deterministic).
+fn reconcile_failed_rules<'a>(
+    failed_rules: &'a std::collections::BTreeSet<String>,
+    when_verdicts: &'a std::collections::BTreeMap<String, bool>,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let mut real_failed = Vec::new();
+    let mut skipped_when_false = Vec::new();
+    for rule in failed_rules {
+        if when_verdicts.get(rule) == Some(&false) {
+            skipped_when_false.push(rule.as_str());
+        } else {
+            real_failed.push(rule.as_str());
+        }
+    }
+    (real_failed, skipped_when_false)
+}
+
 pub async fn handle_status(
     checkpoint: Option<PathBuf>,
     workdir: Option<PathBuf>,
@@ -6489,22 +6515,12 @@ pub async fn handle_status(
     // Deterministic order (HashSet iteration order is arbitrary)
     let mut completed: Vec<&str> = state.completed_rules.iter().map(String::as_str).collect();
     completed.sort_unstable();
-    let mut failed: Vec<&str> = state.failed_rules.iter().map(String::as_str).collect();
-    failed.sort_unstable();
-
-    // Issue #690: a failed_rules entry whose recorded when-verdict is false
-    // is not a failure — the rule was gated off (typically a stale entry left
-    // by an earlier run under a different config, before verdict pruning
-    // existed). Reconcile the display here so status never shows gated-off
-    // rules as ✗ Failed. Checkpoints written by current builds no longer
-    // carry these stale entries, but older checkpoints must display sanely.
-    // (Filter preserves `failed`'s sort order.)
-    let when_gated_off: Vec<&str> = failed
-        .iter()
-        .copied()
-        .filter(|r| state.when_verdicts.get(*r) == Some(&false))
-        .collect();
-    failed.retain(|r| state.when_verdicts.get(*r) != Some(&false));
+    // Issue #690: stale entries from older checkpoints — a rule whose
+    // recorded when-verdict is false — are not failures. Reconcile so
+    // `status` matches what the executor actually did. Both vectors are
+    // sorted (failed_rules is a BTreeSet, so iteration is deterministic).
+    let (failed, when_gated_off) =
+        reconcile_failed_rules(&state.failed_rules, &state.when_verdicts);
 
     // ── Per-rule staleness reasons (issue #432(c)) ────────────────────────
     // Reuse the dry-run preview's exact classification so "why will this
@@ -6733,7 +6749,12 @@ pub async fn resume_command(
     }
 
     let completed = state.completed_rules.len();
-    let failed = state.failed_rules.len();
+    // Issue #690: don't count stale when-gated entries as failures in the
+    // resume banner either — they are skips, and the executor will re-judge
+    // their gate on this resume anyway.
+    let (failed, skipped_when_false) =
+        reconcile_failed_rules(&state.failed_rules, &state.when_verdicts);
+    let failed = failed.len();
 
     eprintln!(
         "{} Resuming workflow '{}'",
@@ -6752,6 +6773,12 @@ pub async fn resume_command(
         .map(|cfg| cfg.rules.len().saturating_sub(completed))
         .unwrap_or(failed);
     eprintln!("  State: {completed} completed, {failed} failed, {remaining} remaining");
+    if !skipped_when_false.is_empty() {
+        eprintln!(
+            "  Note: {} rule(s) were skipped by their `when` condition (recorded false); the gate is re-judged on this resume.",
+            skipped_when_false.len()
+        );
+    }
     // Issue #685: entries persisting in the running set mean the prior run
     // died mid-flight; run_command clears them (with a warning) on start.
     if !state.running_rules().is_empty() {
@@ -6826,10 +6853,39 @@ pub async fn resume_command(
 mod tests {
     use super::{
         age_ready_list, ai_attempts, cleanup_cache_dir, closest_declared_key, known_modules_hint,
-        parse_cli_overrides, parse_spawn_watchdog_threshold, substitute_source_placeholder,
-        suggest_jobs,
+        parse_cli_overrides, parse_spawn_watchdog_threshold, reconcile_failed_rules,
+        substitute_source_placeholder, suggest_jobs,
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn reconcile_failed_rules_separates_real_failures_from_when_false_skips() {
+        // Issue #690: a checkpoint written by an older version keeps a
+        // when-gated rule in failed_rules; only the recorded verdict makes
+        // it a skip.
+        let failed: std::collections::BTreeSet<String> = ["align", "qc_S2", "trim"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let verdicts: std::collections::BTreeMap<String, bool> =
+            [("qc_S2".to_string(), false)].into_iter().collect();
+        let (real_failed, skipped) = reconcile_failed_rules(&failed, &verdicts);
+        assert_eq!(real_failed, vec!["align", "trim"]);
+        assert_eq!(skipped, vec!["qc_S2"]);
+    }
+
+    #[test]
+    fn reconcile_failed_rules_keeps_failures_without_a_recorded_verdict() {
+        // No verdict recorded (or verdict true — a real failure followed by
+        // a gate flip back to true must stay a failure): everything is real.
+        let failed: std::collections::BTreeSet<String> =
+            ["a".to_string(), "b".to_string()].into_iter().collect();
+        let verdicts: std::collections::BTreeMap<String, bool> =
+            [("a".to_string(), true)].into_iter().collect();
+        let (real_failed, skipped) = reconcile_failed_rules(&failed, &verdicts);
+        assert_eq!(real_failed, vec!["a", "b"]);
+        assert!(skipped.is_empty());
+    }
 
     fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
         oxo_flow_core::config::WorkflowConfig::parse(rules_toml).unwrap()

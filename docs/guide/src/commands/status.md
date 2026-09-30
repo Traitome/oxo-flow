@@ -62,6 +62,7 @@ oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   Completed: 3
   Failed:    1
+  Skipped:   2 (when condition false)
 
 Completed rules:
   ✓ align
@@ -70,6 +71,10 @@ Completed rules:
 
 Failed rules:
   ✗ mark_duplicates
+
+Skipped by when (condition false):
+  ⊘ filter_cohort_S2
+  ⊘ filter_cohort_S1
 ```
 
 ### When-gated-off rules
@@ -80,7 +85,10 @@ verdict prunes any stale entry), and the display also reconciles legacy
 checkpoints: an entry in `failed_rules` whose recorded verdict in
 `when_verdicts` is `false` is reported as gated-off instead of failed —
 under `Skipped (when condition false)` in the text view and in the
-`skipped_by_when` JSON key instead of `failed` (issue #690):
+`skipped_by_when` JSON key instead of `failed` (issue #690). The same
+reconciliation applies to the resume banner: rules whose recorded verdict is
+`false` are counted as skips there, and the gate is re-judged on the resume
+(see [`run --resume-failed`](run.md#resuming-from-a-checkpoint)).
 
 ```
   Completed: 2
@@ -196,7 +204,10 @@ The checkpoint file is JSON with the following structure:
 {
   "completed_rules": ["trim_reads", "align", "sort_bam"],
   "failed_rules": ["mark_duplicates"],
-  "when_verdicts": { "qc_report": false },
+  "when_verdicts": {
+    "filter_cohort_S1": true,
+    "filter_cohort_S2": false
+  },
   "benchmarks": {
     "trim_reads": {
       "rule": "trim_reads",
@@ -239,7 +250,10 @@ The checkpoint file is JSON with the following structure:
 `config_snapshot` records the effective config values (sensitive keys stored
 as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
-`input_manifests` records, per completed rule, every resolved input file
+`when_verdicts` records, per rule instance, the runtime verdict of its
+`when` gate (`true`/`false`) — used for config-change replay and to
+distinguish when-gated skips from real failures in `status` output (issue
+#690). `input_manifests` records, per completed rule, every resolved input file
 (path, size, mtime in nanoseconds, and a content hash for files up to
 64 MiB) so later runs detect changed inputs (issue #72). `tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)
