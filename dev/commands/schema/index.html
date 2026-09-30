@@ -3766,7 +3766,7 @@
 <h1 id="oxo-flow-schema">oxo-flow schema<a class="headerlink" href="#oxo-flow-schema" title="Permanent link">#</a></h1>
 <p>Output the JSON Schema for the <code>.oxoflow</code> format.</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow schema [OPTIONS]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow schema
 </span></code></pre></div>
 <h2 id="description">Description<a class="headerlink" href="#description" title="Permanent link">#</a></h2>
 <p>Prints a JSON Schema (Draft-07) document describing the structure and
@@ -3780,8 +3780,10 @@ larger toolchains.</p>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Save to a file</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>oxoflow-schema.json
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Validate a workflow against the schema (using a JSON Schema validator)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>schema.json
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Validate a workflow against the saved schema (using a JSON Schema</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># validator, e.g. check-jsonschema)</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>oxo-flow<span class="w"> </span>schema<span class="w"> </span>&gt;<span class="w"> </span>schema.json
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>check-jsonschema<span class="w"> </span>--schemafile<span class="w"> </span>schema.json<span class="w"> </span>workflow.oxoflow
 </span></code></pre></div>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>

@@ -3921,7 +3921,17 @@ and total runtime.</p>
 <tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
-<td>Enable debug-level logging</td>
+<td>Enable debug-level logging (global)</td>
+</tr>
+<tr>
+<td><code>--quiet</code></td>
+<td>—</td>
+<td>Suppress informational output, including the version banner (global)</td>
+</tr>
+<tr>
+<td><code>--no-color</code></td>
+<td>—</td>
+<td>Disable colored output, also respects the <code>NO_COLOR</code> environment variable (global)</td>
 </tr>
 </tbody>
 </table>
@@ -3985,8 +3995,7 @@ reconciliation applies to the resume banner: rules whose recorded verdict is
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  ⊘ qc_report — condition evaluated to false
 </span></code></pre></div>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc_report"</span><span class="p">],</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">"when_verdicts"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"qc_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc_report"</span><span class="p">]</span>
 </span></code></pre></div>
 <h3 id="staleness-reasons">Staleness reasons<a class="headerlink" href="#staleness-reasons" title="Permanent link">#</a></h3>
 <p>When the checkpoint's workflow file is still present and parseable, <code>status</code>
@@ -4027,28 +4036,27 @@ first):</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"status"</span><span class="p">,</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">"checkpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">".oxo-flow/checkpoint.json"</span><span class="p">,</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline.oxoflow"</span><span class="p">,</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/abs/path/pipeline.oxoflow"</span><span class="p">,</span>
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">"completed"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"align"</span><span class="p">,</span><span class="w"> </span><span class="s2">"sort_bam"</span><span class="p">,</span><span class="w"> </span><span class="s2">"trim_reads"</span><span class="p">],</span>
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">"when_verdicts"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"qc_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc_report"</span><span class="p">],</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">"staleness"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"input changed"</span><span class="p">,</span>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">      </span><span class="nt">"detail"</span><span class="p">:</span><span class="w"> </span><span class="s2">"recorded input manifest (paths/size/mtime) no longer matches disk"</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">  </span><span class="nt">"timings"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="mf">30.1</span><span class="p">,</span>
-</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">    </span><span class="nt">"sort_bam"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.3</span><span class="p">,</span>
-</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">    </span><span class="nt">"trim_reads"</span><span class="p">:</span><span class="w"> </span><span class="mf">2.8</span>
-</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="w">  </span><span class="nt">"total_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">45.2</span><span class="p">,</span>
-</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="w">  </span><span class="nt">"memory"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"max_memory_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">29000</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory_limit_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">32000</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="w">    </span><span class="nt">"sort_bam"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"max_memory_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">8100</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory_limit_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">32000</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="p">}</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">"skipped_by_when"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc_report"</span><span class="p">],</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">"staleness"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"input changed"</span><span class="p">,</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="nt">"detail"</span><span class="p">:</span><span class="w"> </span><span class="s2">"recorded input manifest (paths/size/mtime) no longer matches disk"</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span><span class="nt">"timings"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="mf">30.1</span><span class="p">,</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">    </span><span class="nt">"sort_bam"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.3</span><span class="p">,</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">    </span><span class="nt">"trim_reads"</span><span class="p">:</span><span class="w"> </span><span class="mf">2.8</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="w">  </span><span class="nt">"total_time_secs"</span><span class="p">:</span><span class="w"> </span><span class="mf">45.2</span><span class="p">,</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="w">  </span><span class="nt">"memory"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="w">    </span><span class="nt">"align"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"max_memory_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">29000</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory_limit_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">32000</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="w">    </span><span class="nt">"sort_bam"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"max_memory_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">8100</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory_limit_mb"</span><span class="p">:</span><span class="w"> </span><span class="mi">32000</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>timings</code>, <code>total_time_secs</code>, and <code>memory</code> are only present with
 <code>--timing</code>; <code>memory</code> only lists rules with a sampled peak-RSS
@@ -4056,8 +4064,8 @@ measurement. <code>staleness</code> appears whenever the workflow file can be
 loaded for classification <strong>and</strong> at least one completed rule would
 re-run (see <a href="#staleness-reasons">Staleness reasons</a>). <code>skipped_by_when</code>
 appears only when at least one <code>failed_rules</code> entry is actually
-when-gated-off; <code>when_verdicts</code> lists the gate verdicts recorded for the
-run.</p>
+when-gated-off; the verdicts themselves live in the checkpoint file's
+<code>when_verdicts</code> map and are not duplicated into the JSON.</p>
 <hr />
 <h2 id="checkpoint-file-format">Checkpoint File Format<a class="headerlink" href="#checkpoint-file-format" title="Permanent link">#</a></h2>
 <p>The checkpoint file is JSON with the following structure:</p>
@@ -4124,7 +4132,9 @@ replay them deterministically and revoke them when the rule is invalidated
 <p>Every key above is omitted from the JSON when empty — a minimal workflow
 with no <code>[config]</code> section, no temporaries, no when-gates, and no
 re-entries writes a much smaller checkpoint containing only
-<code>completed_rules</code>, <code>failed_rules</code>, <code>benchmarks</code>, and <code>workflow_path</code>.</p>
+<code>completed_rules</code>, <code>failed_rules</code>, <code>benchmarks</code>, <code>workflow_path</code>,
+<code>workdir</code>, <code>rule_fingerprints</code>, <code>rule_fingerprints_no_input</code>, and
+<code>rule_runs</code>.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>

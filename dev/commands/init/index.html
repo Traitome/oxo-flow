@@ -3915,7 +3915,7 @@
 <tbody>
 <tr>
 <td><code>&lt;NAME&gt;</code></td>
-<td>Project name (also used as the default directory name)</td>
+<td>Project name (no path separators; also used as the default directory name)</td>
 </tr>
 </tbody>
 </table>
@@ -3981,6 +3981,8 @@
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    cd my-pipeline
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    oxo-flow run my-pipeline.oxoflow
 </span></code></pre></div>
+<p>All output (including the version banner) goes to stderr; the banner appears
+only on an interactive terminal and is suppressed by <code>--quiet</code>.</p>
 <h3 id="generated-files">Generated files<a class="headerlink" href="#generated-files" title="Permanent link">#</a></h3>
 <p><strong><code>&lt;name&gt;.oxoflow</code></strong> — Starter workflow file:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[workflow]</span>

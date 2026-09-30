@@ -4815,6 +4815,9 @@
 </span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Any git URL or local repository directory</span>
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>https://example.com/team/pipeline.git
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># A local checkout via file:// (must be an existing directory)</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>file:///path/to/pipeline
 </span></code></pre></div>
 <p>A bare <code>owner/pipeline</code> argument is interpreted as a GitHub repository
 unless it names something real on the filesystem: a path that exists, one
@@ -4822,11 +4825,13 @@ starting with <code>.</code>, or one ending in <code>.oxoflow</code> is always t
 local workflow path. Only a single-slash <code>owner/name</code> — optionally with
 <code>@ref</code> and a trailing <code>.git</code> — maps to <code>https://github.com/owner/name.git</code>.
 (So a missing <code>data/pipeline.oxoflow</code> keeps its normal "workflow file not
-found" error instead of attempting a clone.)</p>
-<p>The repository is checked out into <code>.oxo-flow/repos/&lt;owner&gt;-&lt;name&gt;</code> under
-the current directory (reused on later runs — delete the directory to
-force a fresh clone; the owner prefix keeps same-named repos of different
-owners from sharing a checkout), and the workflow file is auto-discovered
+found" error instead of attempting a clone.) An <code>https://…/*.git</code> URL runs
+that repository directly; <code>file://&lt;dir&gt;</code> runs an existing local checkout.</p>
+<p>The repository is checked out into <code>.oxo-flow/repos/&lt;host&gt;-&lt;owner&gt;-&lt;name&gt;</code>
+under the current directory (e.g. <code>.oxo-flow/repos/github.com-owner-pipeline</code>;
+reused on later runs — delete the directory to force a fresh clone; the host
+and owner prefixes keep same-named repos of different owners or hosts from
+sharing a checkout), and the workflow file is auto-discovered
 (<code>main.oxoflow</code> first). Because the clone is a read-only cache, the working directory
 defaults to the <strong>current directory</strong> for repository runs — outputs, the
 checkpoint, and the workdir lock all land next to your data, not inside the

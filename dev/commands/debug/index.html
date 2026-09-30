@@ -3869,7 +3869,7 @@ outputs, and dependencies. Useful for verifying that template variables are
 substituted correctly.</p>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow debug &lt;WORKFLOW&gt; [OPTIONS]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow debug [OPTIONS] &lt;WORKFLOW&gt;
 </span></code></pre></div>
 <hr />
 <h2 id="arguments">Arguments<a class="headerlink" href="#arguments" title="Permanent link">#</a></h2>
@@ -3899,9 +3899,9 @@ substituted correctly.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>--rule &lt;NAME&gt;</code></td>
+<td><code>--rule &lt;RULE_NAME&gt;</code></td>
 <td><code>-r</code></td>
-<td>Show only a specific rule (by name)</td>
+<td>Show the expanded command for this rule only</td>
 </tr>
 <tr>
 <td><code>--ai</code></td>
@@ -3911,7 +3911,17 @@ substituted correctly.</p>
 <tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
-<td>Enable debug-level logging</td>
+<td>Enable debug-level logging (global)</td>
+</tr>
+<tr>
+<td><code>--quiet</code></td>
+<td>—</td>
+<td>Suppress informational output, including the version banner (global)</td>
+</tr>
+<tr>
+<td><code>--no-color</code></td>
+<td>—</td>
+<td>Disable colored output, also respects the <code>NO_COLOR</code> environment variable (global)</td>
 </tr>
 </tbody>
 </table>
@@ -3941,6 +3951,8 @@ substituted correctly.</p>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  Dependencies: ["generate_data"]
 </span></code></pre></div>
+<p>All output (including the version banner) goes to stderr; the banner appears
+only on an interactive terminal and is suppressed by <code>--quiet</code>.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
@@ -3948,7 +3960,8 @@ substituted correctly.</p>
 <li>Template variables like <code>{input}</code>, <code>{output}</code>, and <code>{threads}</code> are
   substituted in the expanded view</li>
 <li>Wildcard rules are expanded per sample before display: rule names get a
-  <code>_&lt;sample&gt;</code> suffix (e.g. <code>bwa_mem2_align_cohort_NA12878</code>) and wildcard
+  <code>_&lt;group&gt;_&lt;sample&gt;</code> suffix (or <code>_&lt;pair_id&gt;</code> for pair/scatter rules; e.g.
+  <code>bwa_mem2_align_cohort_NA12878</code>) and wildcard
   placeholders are replaced with concrete values</li>
 <li>With <code>--rule</code>, use the full expanded rule name as shown in the output
   (for wildcard workflows, the template name like <code>bwa_mem2_align</code> will not match)</li>

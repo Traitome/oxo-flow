@@ -3889,7 +3889,7 @@
 <p>Mark workflow outputs as up-to-date without re-executing rules.</p>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow touch [OPTIONS] &lt;WORKFLOW&gt; [KEY=VALUE]...
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow touch [OPTIONS] &lt;WORKFLOW&gt; [OVERRIDES]...
 </span></code></pre></div>
 <hr />
 <h2 id="arguments">Arguments<a class="headerlink" href="#arguments" title="Permanent link">#</a></h2>
@@ -3906,7 +3906,7 @@
 <td>Path to the <code>.oxoflow</code> workflow file</td>
 </tr>
 <tr>
-<td><code>[KEY=VALUE]...</code></td>
+<td><code>[OVERRIDES]...</code></td>
 <td>Direct config overrides as trailing positionals — the forms <code>KEY=VALUE</code> and <code>--KEY=VALUE</code> work for any key; the bare space form <code>--KEY VALUE</code> is accepted only for keys declared with the declarative inline-table syntax (<code>key = { default = … }</code>) and is rejected as an unknown argument for plain <code>key = "value"</code> keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on <code>{config.*}</code> (issue #432). Command flags must come <strong>before</strong> the overrides.</td>
 </tr>
 </tbody>
@@ -3931,6 +3931,26 @@
 <td><code>--workdir &lt;DIR&gt;</code></td>
 <td><code>-d</code></td>
 <td>Working directory the outputs live in (default: the workflow file's directory)</td>
+</tr>
+<tr>
+<td><code>--arg &lt;KEY=VALUE&gt;</code></td>
+<td></td>
+<td>Config override (<code>KEY=VALUE</code> or <code>--KEY VALUE</code>); touch validates output paths against the overridden values — the same machinery as the <code>[OVERRIDES]...</code> positionals</td>
+</tr>
+<tr>
+<td><code>--verbose</code></td>
+<td><code>-v</code></td>
+<td>Enable debug-level logging (global)</td>
+</tr>
+<tr>
+<td><code>--quiet</code></td>
+<td>—</td>
+<td>Suppress informational output, including the version banner (global)</td>
+</tr>
+<tr>
+<td><code>--no-color</code></td>
+<td>—</td>
+<td>Disable colored output, also respects the <code>NO_COLOR</code> environment variable (global)</td>
 </tr>
 </tbody>
 </table>

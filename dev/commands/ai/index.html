@@ -3887,7 +3887,7 @@
 
 <h1 id="oxo-flow-ai"><code>oxo-flow ai</code><a class="headerlink" href="#oxo-flow-ai" title="Permanent link">#</a></h1>
 <p>AI status, self-test, setup, and three-layer workflow explanation.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow<span class="w"> </span>ai<span class="w">                 </span><span class="c1"># quick status: provider, model, quota</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow<span class="w"> </span>ai<span class="w">                 </span><span class="c1"># quick status: provider, model, endpoint, sessions</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>oxo-flow<span class="w"> </span>ai<span class="w"> </span><span class="nb">test</span><span class="w">            </span><span class="c1"># full self-test (provider round-trip)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>oxo-flow<span class="w"> </span>ai<span class="w"> </span>setup<span class="w">           </span><span class="c1"># interactive provider configuration wizard</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>oxo-flow<span class="w"> </span>ai<span class="w"> </span>explain<span class="w"> </span>wf.oxoflow
@@ -4015,8 +4015,8 @@ itself:</p>
 </tr>
 </tbody>
 </table>
-<p>All AI features go through the configured provider (see <code>oxo-flow ai
-status</code>); deterministic behavior never depends on the model — AI output is
+<p>All AI features go through the configured provider (see <code>oxo-flow ai</code>);
+deterministic behavior never depends on the model — AI output is
 always additive prose or proposals, never silent engine decisions.</p>
 <h2 id="how-template-ai-generates-a-workflow">How <code>template --ai</code> generates a workflow<a class="headerlink" href="#how-template-ai-generates-a-workflow" title="Permanent link">#</a></h2>
 <p><code>template --ai</code> runs the same generation agent as the web translate and

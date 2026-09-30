@@ -4382,7 +4382,7 @@ or cancel/collect jobs after an interrupted run.</p>
 </blockquote>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow cluster &lt;ACTION&gt; [OPTIONS]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow cluster &lt;COMMAND&gt;
 </span></code></pre></div>
 <hr />
 <h2 id="actions">Actions<a class="headerlink" href="#actions" title="Permanent link">#</a></h2>
@@ -4749,18 +4749,21 @@ command under <code>bash</code> when the image ships it — see
 </span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a>
 </span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting fastqc...'</span>
 </span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a>JOB_IDS<span class="o">[</span>fastqc<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>cluster_scripts/fastqc.sh<span class="k">)</span>
-</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a>
-</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting trim_reads...'</span>
-</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
-</span><span id="__span-22-27"><a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a>
-</span><span id="__span-22-28"><a id="__codelineno-22-28" name="__codelineno-22-28" href="#__codelineno-22-28"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting bwa_align...'</span>
-</span><span id="__span-22-29"><a id="__codelineno-22-29" name="__codelineno-22-29" href="#__codelineno-22-29"></a>JOB_IDS<span class="o">[</span>bwa_align<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/bwa_align.sh<span class="k">)</span>
-</span><span id="__span-22-30"><a id="__codelineno-22-30" name="__codelineno-22-30" href="#__codelineno-22-30"></a>
-</span><span id="__span-22-31"><a id="__codelineno-22-31" name="__codelineno-22-31" href="#__codelineno-22-31"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'All jobs submitted successfully!'</span>
-</span><span id="__span-22-32"><a id="__codelineno-22-32" name="__codelineno-22-32" href="#__codelineno-22-32"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Job ID mapping:'</span>
-</span><span id="__span-22-33"><a id="__codelineno-22-33" name="__codelineno-22-33" href="#__codelineno-22-33"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="p">!JOB_IDS[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-</span><span id="__span-22-34"><a id="__codelineno-22-34" name="__codelineno-22-34" href="#__codelineno-22-34"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"  </span><span class="nv">$name</span><span class="s2">: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[</span><span class="nv">$name</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
-</span><span id="__span-22-35"><a id="__codelineno-22-35" name="__codelineno-22-35" href="#__codelineno-22-35"></a><span class="k">done</span>
+</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted fastqc as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a>
+</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting trim_reads...'</span>
+</span><span id="__span-22-27"><a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a>JOB_IDS<span class="o">[</span>trim_reads<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[fastqc]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/trim_reads.sh<span class="k">)</span>
+</span><span id="__span-22-28"><a id="__codelineno-22-28" name="__codelineno-22-28" href="#__codelineno-22-28"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted trim_reads as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-22-29"><a id="__codelineno-22-29" name="__codelineno-22-29" href="#__codelineno-22-29"></a>
+</span><span id="__span-22-30"><a id="__codelineno-22-30" name="__codelineno-22-30" href="#__codelineno-22-30"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Submitting bwa_align...'</span>
+</span><span id="__span-22-31"><a id="__codelineno-22-31" name="__codelineno-22-31" href="#__codelineno-22-31"></a>JOB_IDS<span class="o">[</span>bwa_align<span class="o">]=</span><span class="k">$(</span>oxo_submit<span class="w"> </span>--dependency<span class="o">=</span>afterok:<span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[trim_reads]</span><span class="si">}</span><span class="w"> </span>cluster_scripts/bwa_align.sh<span class="k">)</span>
+</span><span id="__span-22-32"><a id="__codelineno-22-32" name="__codelineno-22-32" href="#__codelineno-22-32"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"  Submitted bwa_align as job ID: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[bwa_align]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-22-33"><a id="__codelineno-22-33" name="__codelineno-22-33" href="#__codelineno-22-33"></a>
+</span><span id="__span-22-34"><a id="__codelineno-22-34" name="__codelineno-22-34" href="#__codelineno-22-34"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'All jobs submitted successfully!'</span>
+</span><span id="__span-22-35"><a id="__codelineno-22-35" name="__codelineno-22-35" href="#__codelineno-22-35"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">'Job ID mapping:'</span>
+</span><span id="__span-22-36"><a id="__codelineno-22-36" name="__codelineno-22-36" href="#__codelineno-22-36"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="p">!JOB_IDS[@]</span><span class="si">}</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-22-37"><a id="__codelineno-22-37" name="__codelineno-22-37" href="#__codelineno-22-37"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"  </span><span class="nv">$name</span><span class="s2">: </span><span class="si">${</span><span class="nv">JOB_IDS</span><span class="p">[</span><span class="nv">$name</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-22-38"><a id="__codelineno-22-38" name="__codelineno-22-38" href="#__codelineno-22-38"></a><span class="k">done</span>
 </span></code></pre></div>
 <p>Different backends use different dependency syntax:</p>
 <table>
@@ -4785,7 +4788,7 @@ command under <code>bash</code> when the image ships it — see
 </tr>
 <tr>
 <td>LSF</td>
-<td><code>-w 'ended(jobid)'</code></td>
+<td><code>-w "ended(jobid)"</code></td>
 </tr>
 </tbody>
 </table>

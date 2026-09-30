@@ -3992,7 +3992,17 @@
 <tr>
 <td><code>--verbose</code></td>
 <td><code>-v</code></td>
-<td>Enable debug-level logging</td>
+<td>Enable debug-level logging (global)</td>
+</tr>
+<tr>
+<td><code>--quiet</code></td>
+<td>—</td>
+<td>Suppress informational output, including the version banner (global)</td>
+</tr>
+<tr>
+<td><code>--no-color</code></td>
+<td>—</td>
+<td>Disable colored output, also respects the <code>NO_COLOR</code> environment variable (global)</td>
 </tr>
 </tbody>
 </table>
@@ -4026,7 +4036,7 @@
 <h3 id="circular-dependency">Circular dependency<a class="headerlink" href="#circular-dependency" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>  error [E006]: DAG error: cycle detected in workflow DAG: align → sort_bam → align
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    hint: check for circular dependencies between rules
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>✗ pipeline.oxoflow — 1 validation error(s)
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: align → sort_bam → align
 </span></code></pre></div>
 <h3 id="wildcard-input-without-a-sample-domain">Wildcard input without a sample domain<a class="headerlink" href="#wildcard-input-without-a-sample-domain" title="Permanent link">#</a></h3>
 <p>An input containing a sample placeholder (<code>{sample}</code>, <code>{group}</code>, <code>{pair_id}</code>, …)
