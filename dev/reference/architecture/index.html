@@ -4439,7 +4439,7 @@ compiled, licensed, and audited in isolation.</p>
 <td><code>oxo-flow-web</code></td>
 <td>library</td>
 <td>core, ai</td>
-<td>REST/WebSocket server: 9 domains, storage backends, SSE broadcast, OpenAPI</td>
+<td>REST/SSE server: 9 domains, storage backends, SSE broadcast, OpenAPI</td>
 </tr>
 <tr>
 <td><code>oxo-flow-cli</code></td>
@@ -4818,14 +4818,17 @@ rules.</p>
 <hr />
 <h2 id="scheduling-resources">Scheduling &amp; Resources<a class="headerlink" href="#scheduling-resources" title="Permanent link">#</a></h2>
 <p>The scheduler never over-subscribes. When a job's requirements cannot be
-met, it waits; when they are impossible on this machine, it fails fast
-and names the conflict.</p>
+met, it waits; when a resource-group requirement exceeds its declared
+capacity, it fails fast and names the conflict. (Threads/memory beyond the
+machine's total capacity are clamped to a whole-pool reservation instead —
+the declared value is treated as the tool's upper bound, so the rule simply
+runs alone.)</p>
 <pre class="mermaid"><code>flowchart LR
     ready["Ready set&lt;br/&gt;(priority ↓, name ↑)"] --&gt; check{"ResourcePool:&lt;br/&gt;threads + memory&lt;br/&gt;available?"}
     check -- yes --&gt; reserve["Reserve"]
-    check -- "no, but satisfiable later" --&gt; wait["Queue &amp; wait&lt;br/&gt;(holder diagnostics,&lt;br/&gt;priority aging)"]
+    check -- "no, but satisfiable later" --&gt; wait["Queue &amp; wait&lt;br/&gt;(holder diagnostics,&lt;br/&gt;FIFO-gated queue)"]
     wait --&gt; check
-    check -- "impossible request&lt;br/&gt;(&gt; total threads/memory)" --&gt; fastfail["Fail fast:&lt;br/&gt;ResourceGroupExhausted&lt;br/&gt;names the rule"]
+    check -- "impossible request&lt;br/&gt;(group above declared capacity)" --&gt; fastfail["Fail fast:&lt;br/&gt;ResourceGroupExhausted&lt;br/&gt;names the rule"]
     reserve --&gt; run["Execute job"]
     run --&gt; release["Release resources&lt;br/&gt;(success · failure · timeout)"]
     release --&gt; ready</code></pre>
@@ -4870,7 +4873,6 @@ cache.</p>
         &lt;&lt;trait&gt;&gt;
         +wrap_command(cmd, spec) String
         +setup_command(spec) String
-        +setup_command_with_opts(spec, prefix) String
     }
     class Conda
     class Mamba
@@ -5091,8 +5093,8 @@ declared one — runtime <code>output_pattern</code> fan-out, which inserts inst
 forward under completion-ordering guarantees. <code>dry-run</code> shares the same
 planning code and previews the checkpoint state a real run would produce.</p>
 <h3 id="resources-as-constraints-not-hints">Resources as constraints, not hints<a class="headerlink" href="#resources-as-constraints-not-hints" title="Permanent link">#</a></h3>
-<p>Check → reserve → execute → release, with fast failure on impossible
-requests and queueing (with aging) on contention. The same declaration
+<p>Check → reserve → execute → release, with fast failure on unsatisfiable
+group requests and FIFO-gated queueing on contention. The same declaration
 drives local concurrency, cluster submissions, and the web runner.</p>
 <h3 id="environment-isolation">Environment isolation<a class="headerlink" href="#environment-isolation" title="Permanent link">#</a></h3>
 <p>Resolve → setup (locked, content-hashed, cached) → wrap → execute. Per

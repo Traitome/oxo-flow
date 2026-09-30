@@ -7130,14 +7130,14 @@ disk space matters.</p>
 <tr>
 <td><code>input</code></td>
 <td>Array of strings</td>
-<td><strong>Yes</strong></td>
-<td>Input file paths</td>
+<td>No</td>
+<td>Input file paths. Optional (defaults to empty) — a rule with no <code>input</code> is legal (e.g. a pure producer or a setup step; pair it with <code>depends_on</code> when ordering matters)</td>
 </tr>
 <tr>
 <td><code>output</code></td>
 <td>Array of strings</td>
-<td><strong>Yes</strong></td>
-<td>Output file paths</td>
+<td>No</td>
+<td>Output file paths. Optional (defaults to empty) — a shell-only rule with no declared outputs validates and runs; pair with <code>depends_on</code> for ordering</td>
 </tr>
 <tr>
 <td><code>output_pattern</code></td>
@@ -9581,7 +9581,9 @@ domain per sample instance, and consumers instantiate over the union.</p>
   instantiation, under the same plan-time semantics as a static fan-out —
   <code>wildcard_constraints</code> filtered and per-instance <code>when</code> gates evaluated,
   so gated-off combos never become instances (issue #296 follow-up). A
-  consumer declared <strong>before</strong> its producer is legal but warned.
+  consumer declared <strong>before</strong> its producer is legal but warned
+  (<code>output_pattern consumer declared BEFORE its producer; the fan-out still
+  resolves, but declare the producer first for stable run attribution</code>).
   Referencing two producers' fresh wildcards in one rule is a v1 error; a
   chain — a rule that is both consumer and producer of fresh wildcards —
   is supported.</li>

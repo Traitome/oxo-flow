@@ -3825,30 +3825,8 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#benchmark-terms" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Benchmark terms
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
   
 </li>
       
@@ -4687,30 +4665,8 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#benchmark-terms" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Benchmark terms
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        See Also
-      
-    </span>
-  </a>
   
 </li>
       
@@ -5161,16 +5117,18 @@ below cover the codes referenced across this documentation.</p>
 </tr>
 </tbody>
 </table>
-<p>Schema-check codes (<code>S001</code>–<code>S006</code>) come from the raw-file schema pass
-<code>oxo-flow validate</code> runs before parsing: <code>S001</code> invalid TOML syntax,
-<code>S002</code> missing <code>[workflow]</code>, <code>S003</code> missing workflow name, <code>S004</code>
-malformed <code>[[rules]]</code>, <code>S005</code> a rule entry that is not a table, and
-<code>S006</code> an unknown top-level section (checked against the parser's own
-E017 whitelist — the documented sections are never flagged). <code>S007</code>
-warns when <code>[workflow].format_version</code> is present but unrecognized, and
-<code>S008</code> is the secret-scanning warning: a token-shaped pattern in the raw
-file (<a href="../security/">security</a>); it comes from the lint pass, not the
-schema pass.</p>
+<p>Schema-check codes (<code>S001</code>–<code>S007</code>) come from the raw-file schema pass,
+reachable through <code>oxo-flow lint</code> (not <code>validate</code>, which reports only
+parse-level errors): <code>S001</code> invalid TOML syntax, <code>S002</code> missing
+<code>[workflow]</code>, <code>S003</code> missing workflow name, <code>S004</code> malformed <code>[[rules]]</code>,
+<code>S005</code> a rule entry that is not a table, and <code>S006</code> an unknown top-level
+section (checked against the parser's own E017 whitelist — the documented
+sections are never flagged; since the parsed config cannot retain unknown
+keys, <code>S006</code> is the one schema code users can actually trigger, per issue</p>
+<h1 id="470-s007-warns-when-workflowformat_version-is-present-but">470). <code>S007</code> warns when <code>[workflow].format_version</code> is present but<a class="headerlink" href="#470-s007-warns-when-workflowformat_version-is-present-but" title="Permanent link">#</a></h1>
+<p>unrecognized, and <code>S008</code> is the secret-scanning warning: a token-shaped
+pattern in the raw file (<a href="../security/">security</a>); like the whole S-series,
+it reaches users only through the lint pass.</p>
 <p>The full, current list with suggestions is best read from the commands:
 <code>oxo-flow lint --json</code> prints every code with its message and suggestion
 (see <a href="../../commands/lint/">lint</a>). AI-generated drafts that fail a gate

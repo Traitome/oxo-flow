@@ -4022,9 +4022,10 @@ community corpus, not against single examples:</p>
    the seven pipelines that have one (atacseq, chipseq, mag, methylseq,
    rnaseq, scrnaseq, viralrecon); the target is the same order of
    magnitude at the module tier.</li>
-<li><strong>Visual QA</strong> — rendered maps are inspected per persona (the gallery
-   QA page compares ours side-by-side with the upstream reference where
-   one exists).</li>
+<li><strong>Visual QA</strong> — rendered maps are inspected per persona; the committed
+   transit maps live on each pipeline's page in the community site, and a
+   structural QA gate (<code>scripts/qa-metro.py</code> in the site repo) re-checks
+   coverage, SVG validity, and aspect ratio after every regeneration.</li>
 </ol>
 <p>The render recipes (line-spread modes, spacing directives, and the
 curve-invariant fallback for process-tier maps whose density exceeds what

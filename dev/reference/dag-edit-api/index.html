@@ -4344,7 +4344,7 @@ code <code>NO_REDO</code>.</p>
 <tr>
 <td><code>validation_errors</code></td>
 <td>Array of String</td>
-<td>Validation error messages (lint-level findings such as a missing description may appear even when <code>success</code> is <code>true</code>)</td>
+<td>Validation <strong>error</strong>-severity messages (lint warnings such as a missing description are collected separately and are not part of this response)</td>
 </tr>
 </tbody>
 </table>
@@ -4354,7 +4354,15 @@ code <code>NO_REDO</code>.</p>
 <h2 id="important-notes">Important Notes<a class="headerlink" href="#important-notes" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>File-based edges are immutable via the edit API.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules, which the edit API cannot currently modify.</li>
-<li><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are returned in <code>validation_errors</code> with <code>success: false</code>, while the edit is still applied. Edits that break parsing — invalid TOML syntax, unknown fields, or duplicate rule names — are rejected with HTTP <code>400</code> instead. Cycle detection is not part of the edit validation path: a cycle introduced via <code>depends_on</code> edits is accepted here and only surfaces later when the DAG is built (see <a href="../dag-engine/">DAG Engine</a>).</li>
+<li><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are
+returned in <code>validation_errors</code> with <code>success: false</code>, while the edit is still
+applied. Edits that break parsing — invalid TOML syntax, unknown fields, or
+duplicate rule names — are rejected with HTTP <code>400</code> instead. Cycle detection
+<strong>is</strong> part of the edit validation path: since issue #466, <code>validate_format</code>
+builds the DAG with parsed config values on every edit, so a cycle introduced
+via <code>depends_on</code> edits surfaces immediately as <code>success: false</code> with the
+<code>DAG error:</code> (E006) message in <code>validation_errors</code> (the edit itself is still
+applied). See <a href="../dag-engine/">DAG Engine</a>.</li>
 <li><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</li>
 <li><strong>Undo/redo is in-memory.</strong> Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.</li>
 </ul>

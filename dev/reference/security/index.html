@@ -4135,7 +4135,7 @@ survive — review the flagged lines yourself:</p>
 </tr>
 </tbody>
 </table>
-<p>Additionally, workflow config values declared with <code>sensitive = true</code> in a <code>[config]</code> definition are masked as <code>***</code> in logs, <code>--help</code>, and error output.</p>
+<p>Additionally, workflow config values declared with <code>sensitive = true</code> in a <code>[config]</code> definition are masked in all non-execution output — <code>****</code> in config logs, <code>***</code> in recorded commands, stderr, and plan previews (the value is env-routed instead of staying on the command line), and a <code>sha256:</code> digest in the checkpoint's config snapshot.</p>
 <hr />
 <h2 id="dependency-auditing">Dependency Auditing<a class="headerlink" href="#dependency-auditing" title="Permanent link">#</a></h2>
 <p>CI runs <code>cargo audit</code> (via <code>make ci</code>) against <code>Cargo.lock</code> files. When interpreting
@@ -4191,7 +4191,11 @@ audit results, note how the tools differ:</p>
 </tr>
 </tbody>
 </table>
-<p>Rate limiting is active in all deployment modes (personal, team, hpc).</p>
+<p>Rate limiting is active in all deployment modes (personal, team, hpc). Two
+additional behaviors worth knowing: run-submission endpoints have a separate
+limiter whose 429 body uses the code <code>RUN_RATE_LIMITED</code>, and
+<code>OXO_FLOW_DISABLE_RATE_LIMIT=1</code> disables the middleware entirely (test/dev
+escape hatch, e.g. for Playwright e2e runs — do not use in production).</p>
 <hr />
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">#</a></h2>
 <ol>

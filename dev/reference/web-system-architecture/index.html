@@ -4129,7 +4129,7 @@
 <li>Unified structured responses</li>
 <li>Long-running operations streamed via SSE</li>
 <li>Self-discoverable via <code>GET /api/openapi.json</code></li>
-<li>Errors include <code>code</code> + <code>message</code> + <code>detail</code> + <code>suggestion</code> fields</li>
+<li>Errors carry <code>code</code> + <code>message</code>, plus optional <code>detail</code> and <code>suggestion</code> fields</li>
 </ul>
 <h3 id="2-intent-first-pipeline-authoring">2. Intent-First Pipeline Authoring<a class="headerlink" href="#2-intent-first-pipeline-authoring" title="Permanent link">#</a></h3>
 <p>Users describe <em>what</em> they want ("run standard RNA-seq differential expression on this cohort"), and the system generates a validated pipeline. The TOML format becomes the compilation target, not the authoring surface.</p>
@@ -4396,13 +4396,14 @@
 (See <a href="../web-api/">Web API</a> for the complete API reference — the OpenAPI 3.1 spec is CODE-GENERATED via utoipa and served live at <code>GET /api/openapi.json</code> on any running server.)</p>
 <hr />
 <h2 id="structured-error-response">Structured Error Response<a class="headerlink" href="#structured-error-response" title="Permanent link">#</a></h2>
-<p>All errors follow this format:</p>
+<p>All errors follow this format — <code>detail</code> and <code>suggestion</code> are optional and
+only present when a handler supplies them (e.g. <code>429</code> bodies carry
+<code>detail: "retry in &lt;N&gt;s"</code>):</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AUTH_REQUIRED"</span><span class="p">,</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Authentication is required for this endpoint"</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"detail"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The request did not include a valid session token or Bearer token"</span><span class="p">,</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">"suggestion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Please login at POST /api/auth/login to obtain a session token"</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Authentication required in team/hpc mode"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"suggestion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Login at POST /api/auth/login to obtain a session token"</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="error-codes">Error Codes<a class="headerlink" href="#error-codes" title="Permanent link">#</a></h3>
 <table>
