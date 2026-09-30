@@ -80,11 +80,12 @@ are skipped and reported by `validate`/`dry-run` instead.
 
 A rule whose `when` gate is statically false under the current `[config]`
 never executes, so deep checks **skip it entirely** — no D001–D004
-findings for paths only a skipped rule would touch (the gate verdict comes
-from the engine's own condition evaluator, the same call the readiness
-check makes). Gates that reference `{sample}` wildcards or `{meta.*}`
-columns are decided per instance during expansion and cannot be judged on
-the raw workflow file, so those rules keep their findings.
+findings for paths only a skipped rule would touch, and its shell tokens
+do not trigger the `reference_dir`-derived tool-index probes (the gate
+verdict comes from the engine's own condition evaluator, the same call
+the readiness check makes). Gates that reference `{sample}` wildcards or
+`{meta.*}` columns are decided per instance during expansion and cannot
+be judged on the raw workflow file, so those rules keep their findings.
 
 ### Exit codes
 

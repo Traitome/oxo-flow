@@ -380,13 +380,13 @@ page.
 ```
 GET /api/runs/{id}/status
 ```
-Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`.
+Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule skipped by its `when` gate (`when_verdicts == false`, no completed/failed entry) is surfaced as `skipped`, never as a forever-`pending` node (issue #739).
 
 ### DAG Status
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped.
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics.pending_nodes` and the ETA count only rules that can still run — when-gated-off rules are `skipped`, not pending (issue #739).
 
 ### Diagnostics
 ```

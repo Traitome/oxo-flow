@@ -713,6 +713,25 @@ pub fn detect_config_changes_with_replay(
         graph.interpolating_rules_referencing(all_diff_keys.iter().map(String::as_str));
     directly_affected.extend(fingerprint_mismatches.iter().cloned());
 
+    // A rule gated off in BOTH the stored and the current verdict is
+    // skipped this run no matter what changed — listing it as
+    // invalidated/directly-affected only put gate-off names in the banner's
+    // lists and counts (issue #739). Verdicts stay recorded below, so a
+    // gate that later flips true still invalidates through the when-channel
+    // (a true→false flip keeps its seed here: its cached output must stop
+    // being served). Closure through a dropped seed is correct: a skipped
+    // producer leaves its output files untouched, so its consumers' inputs
+    // did not change either.
+    directly_affected.retain(|name| {
+        !matches!(
+            (
+                checkpoint.when_verdicts.get(name),
+                current_verdicts.get(name)
+            ),
+            (Some(false), Some(false)) | (None, Some(false))
+        )
+    });
+
     // `when`-gated references (issue #198): a gate that keeps its truth
     // value between runs leaves completed outputs valid — skip them instead
     // of invalidating whole chains whenever a flag toggles. A flipped gate
@@ -746,9 +765,14 @@ pub fn detect_config_changes_with_replay(
                 // No recorded verdict (checkpoint predates issue #198 or the
                 // rule entered a run for the first time): adopt the same
                 // one-time conservative window as fingerprints — invalidate,
-                // record, and never again churn on unchanged gates.
-                when_flip_invalidated.push(rule_name.clone());
-                directly_affected.insert(rule_name);
+                // record, and never again churn on unchanged gates. A rule
+                // gated off NOW is not adopted as invalidated: it will be
+                // skipped anyway, and its verdict is recorded silently so
+                // the next config change sees `Some(false)` here (#739).
+                if current_verdicts.get(&rule_name) == Some(&true) {
+                    when_flip_invalidated.push(rule_name.clone());
+                    directly_affected.insert(rule_name);
+                }
             }
         }
     }
