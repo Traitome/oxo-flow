@@ -2630,6 +2630,11 @@ impl RuleCaptionsGenerator {
             Some(wd) => wd.join(file),
             None => std::path::PathBuf::from(file),
         };
+        // Stat first: opening a FIFO would block until a writer appears
+        // (#714); a non-regular file keeps the None fallback.
+        if !crate::result::is_regular_file(&path) {
+            return None;
+        }
         std::fs::read_to_string(&path).ok()
     }
 }

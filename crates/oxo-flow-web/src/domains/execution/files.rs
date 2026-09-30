@@ -200,9 +200,11 @@ async fn read_capped(path: &FsPath, limit: u64) -> std::io::Result<Vec<u8>> {
 
 /// Serve one file: preview JSON, or bytes with Range/ETag/disposition.
 async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Response {
+    // Only regular files are servable: the stat also keeps a FIFO in the
+    // run dir from blocking the async worker on open (issue #714).
     let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => {
+        Ok(m) if m.is_file() => m,
+        _ => {
             return err(StatusCode::NOT_FOUND, "NOT_FOUND", "File not found".into())
                 .into_response();
         }
@@ -398,6 +400,11 @@ fn collect_zip_entries(dir: &FsPath) -> Result<Vec<ZipEntry>, String> {
             }
             if meta.is_dir() {
                 stack.push(path);
+                continue;
+            }
+            // FIFOs / sockets / devices are not zip content, and opening one
+            // (crc32, body streaming) would block (#714).
+            if !meta.is_file() {
                 continue;
             }
             if is_blocked_name(path.file_name().and_then(|n| n.to_str()).unwrap_or("")) {

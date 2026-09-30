@@ -159,6 +159,23 @@ impl Tool for ReadFileTool {
             None => std::path::PathBuf::from(path),
         };
 
+        // Stat first: a FIFO in scope would block the open until a writer
+        // appears (#714) — fail as a tool error instead. (Same check as
+        // oxo-flow-core's result::is_regular_file; this crate deliberately
+        // does not depend on core.)
+        let is_regular_file = std::fs::metadata(&resolved)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
+        if !is_regular_file {
+            return Err(AiError::ToolError {
+                tool: "read_file".into(),
+                message: format!(
+                    "cannot read '{path}': not a regular file — directories, FIFOs and other \
+                     special files have no readable content"
+                ),
+            });
+        }
+
         let content = std::fs::read_to_string(&resolved).map_err(|e| AiError::ToolError {
             tool: "read_file".into(),
             message: format!(

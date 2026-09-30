@@ -931,6 +931,17 @@ impl ExperimentControlPair {
             message: format!("failed to read metadata for pairs file: {}", e),
         })?;
 
+        // A 0-byte FIFO passes any size gate, and opening it for read would
+        // block until a writer appears (#714) — refuse non-regular files.
+        if !metadata.is_file() {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "pairs file is not a regular file (directory, FIFO, or other special \
+                          file)"
+                    .to_string(),
+            });
+        }
+
         // 50MB limit to prevent OOM on accidental binary file input
         if metadata.len() > 50 * 1024 * 1024 {
             return Err(OxoFlowError::Parse {

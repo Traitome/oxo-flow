@@ -189,6 +189,13 @@ pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
+    // Stat first: opening a FIFO would block until a writer appears and
+    // then stream indefinitely (#714).
+    anyhow::ensure!(
+        oxo_flow_core::result::is_regular_file(path),
+        "not a regular file: {}",
+        path.display()
+    );
     let file = std::fs::File::open(path)
         .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
     let mut reader = std::io::BufReader::with_capacity(65536, file);

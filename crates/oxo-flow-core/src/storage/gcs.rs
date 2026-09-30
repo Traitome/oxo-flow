@@ -331,6 +331,19 @@ fn compute_md5(data: &[u8]) -> String {
 /// full-object buffer) before streaming it.
 async fn streaming_md5(path: &Path) -> std::io::Result<String> {
     use tokio::io::AsyncReadExt;
+    // Stat first: File::open on a writer-less FIFO would block the async
+    // worker (#714); the upload open below is only reached after this
+    // succeeded on the same regular file.
+    if !tokio::fs::metadata(path)
+        .await
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not a regular file",
+        ));
+    }
     let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = md5::Md5::new();
     let mut buf = vec![0u8; 64 * 1024];

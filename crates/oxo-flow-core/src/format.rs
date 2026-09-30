@@ -1611,6 +1611,7 @@ pub fn lint_format(
             };
             let mut scanned = script_path.to_string();
             if let Some(base) = script_base
+                && crate::result::is_regular_file(&base.join(script_path))
                 && let Ok(content) = std::fs::read_to_string(base.join(script_path))
             {
                 scanned.push('\n');

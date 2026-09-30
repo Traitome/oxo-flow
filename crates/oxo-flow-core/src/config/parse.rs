@@ -69,6 +69,18 @@ impl WorkflowConfig {
     /// Parse a workflow configuration from a `.oxoflow` file.
     #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
+        // A non-regular path (FIFO, directory, device) must fail now rather
+        // than block in read_to_string (#714); a missing file falls through
+        // so read_to_string still maps to WorkflowNotFound.
+        if std::fs::metadata(path)
+            .map(|m| !m.is_file())
+            .unwrap_or(false)
+        {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "not a regular file (FIFO, directory, or other special file)".to_string(),
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 OxoFlowError::WorkflowNotFound(path.to_path_buf())
@@ -404,6 +416,21 @@ impl WorkflowConfig {
                     }
                 })?;
                 let inc_path = cache_dir.join(&inc.path);
+                // Non-regular include (FIFO/device) must fail, not block the
+                // open (#714); a missing file falls through to the read's
+                // own error mapping.
+                if std::fs::metadata(&inc_path)
+                    .map(|m| !m.is_file())
+                    .unwrap_or(false)
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "failed to read include '{}' from repo '{repo}': not a regular file",
+                            inc.path
+                        ),
+                    });
+                }
                 let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
                     path: inc_path.clone(),
                     message: format!(
@@ -431,6 +458,21 @@ impl WorkflowConfig {
                 (text, base_dir.to_path_buf()) // Remote includes don't change base_dir for now
             } else {
                 let inc_path = base_dir.join(&inc.path);
+                // Non-regular include (FIFO/device) must fail, not block the
+                // open (#714); a missing file falls through to the read's
+                // own error mapping.
+                if std::fs::metadata(&inc_path)
+                    .map(|m| !m.is_file())
+                    .unwrap_or(false)
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "failed to read include '{}': not a regular file",
+                            inc.path
+                        ),
+                    });
+                }
                 let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
                     path: inc_path.clone(),
                     message: format!("failed to read include '{}': {}", inc.path, e),
