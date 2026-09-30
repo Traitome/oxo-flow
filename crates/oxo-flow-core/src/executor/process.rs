@@ -1487,9 +1487,15 @@ impl LocalExecutor {
                     // earlier real failure, the same way mark_completed
                     // mirrors its insert, so status consumers never see a
                     // gated-off rule as ✗ Failed.
+                    // Issue #747: also drop the spawn-time running mark
+                    // (run.rs persists it for every submitted rule before
+                    // this gate runs) — a terminal skip must not leave the
+                    // rule in `running`, or the web status poll renders a
+                    // phantom Running node for a rule that never executed.
                     let mut ck = ck.lock().await;
                     ck.when_verdicts.insert(rule.name.clone(), false);
                     ck.failed_rules.remove(&rule.name);
+                    ck.clear_running(&rule.name);
                 }
                 return Ok(record);
             }

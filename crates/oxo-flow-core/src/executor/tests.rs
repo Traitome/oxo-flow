@@ -3693,6 +3693,78 @@ async fn when_false_verdict_drops_stale_failure_record() {
     );
     assert_eq!(ck.when_verdicts.get("filter_cohort_S1"), Some(&false));
 }
+
+#[tokio::test]
+async fn when_false_verdict_clears_spawn_time_running_mark() {
+    // Issue #747: run.rs persists a `running` mark for every submitted
+    // rule before the executor evaluates the when-gate (issue #685 ask 3).
+    // A when-false skip is terminal — the mark must not outlive it, or the
+    // web status poll (which trusts the persisted running set, issue #734)
+    // renders a phantom Running node for a rule that never executed.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+    std::fs::write(dir.path().join("raw/S1.fq"), "@r1\nACGT\n+\nIIII\n").unwrap();
+    let workflow_path = dir.path().join("gate.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "gate"
+
+        [config]
+        min_reads = 5
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1"]
+
+        [[rules]]
+        name = "filter"
+        input = ["raw/{sample}.fq"]
+        output = ["filtered/{sample}.fq"]
+        when = "reads_count('raw/{sample}.fq') > config.min_reads"
+        shell = "cp {input[0]} {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = crate::config::WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    // Mirror the spawn-time state: run.rs already persisted the running
+    // mark before the executor ever sees the rule.
+    let checkpoint = std::sync::Arc::new(tokio::sync::Mutex::new(CheckpointState {
+        running: ["filter_cohort_S1".to_string()].into_iter().collect(),
+        ..CheckpointState::new()
+    }));
+    let executor = LocalExecutor::new(ExecutorConfig {
+        workdir: dir.path().to_path_buf(),
+        checkpoint: Some(checkpoint.clone()),
+        dry_run: false,
+        ..Default::default()
+    });
+
+    let mut overrides = HashMap::new();
+    overrides.insert("min_reads".to_string(), toml::Value::Integer(50));
+    let instance = config
+        .rules
+        .iter()
+        .find(|r| r.name == "filter_cohort_S1")
+        .unwrap();
+    let wildcards = HashMap::from([("sample".to_string(), "S1".to_string())]);
+    let record = executor
+        .execute_rule_with_config(instance, &wildcards, &overrides)
+        .await
+        .unwrap();
+    assert_eq!(record.status, JobStatus::Skipped, "gate is false");
+
+    let ck = checkpoint.lock().await;
+    assert!(
+        !ck.running.contains("filter_cohort_S1"),
+        "terminal when-false skip must clear the spawn-time running mark"
+    );
+    assert_eq!(ck.when_verdicts.get("filter_cohort_S1"), Some(&false));
+}
 #[tokio::test]
 async fn meta_when_gate_runs_se_and_skips_pe_instances() {
     // methylseq-style endedness gate driven by the sample metadata table
