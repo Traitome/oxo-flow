@@ -1465,10 +1465,13 @@ impl LocalExecutor {
                 if !self.config.dry_run
                     && let Some(ck) = &self.config.checkpoint
                 {
-                    ck.lock()
-                        .await
-                        .when_verdicts
-                        .insert(rule.name.clone(), false);
+                    // Issue #690: a gate flipping to false must also drop any
+                    // stale failure record from an earlier real failure, the
+                    // same way mark_completed mirrors its insert — otherwise
+                    // `status` keeps rendering the rule as ✗ Failed.
+                    let mut ck = ck.lock().await;
+                    ck.when_verdicts.insert(rule.name.clone(), false);
+                    ck.failed_rules.remove(&rule.name);
                 }
                 return Ok(record);
             }

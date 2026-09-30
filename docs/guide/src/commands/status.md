@@ -62,6 +62,7 @@ oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   Completed: 3
   Failed:    1
+  Skipped:   2 (when condition false)
 
 Completed rules:
   ✓ align
@@ -70,7 +71,22 @@ Completed rules:
 
 Failed rules:
   ✗ mark_duplicates
+
+Skipped by when (condition false):
+  ⊘ filter_cohort_S2
+  ⊘ filter_cohort_S1
 ```
+
+### Rules skipped by their `when` condition
+
+A rule whose runtime `when` gate evaluated to `false` was skipped, not
+failed (issue #690). Checkpoints written by older versions can still carry
+such a rule in `failed_rules` — `status` cross-checks the recorded
+`when_verdicts` and reports those entries under **Skipped by when** instead
+of counting them as `✗ Failed`, so the failed count matches what the
+executor actually did. On the next run the executor re-judges the gate and
+clears the stale entry itself; `--resume-failed` also clears it (see
+[`run --resume-failed`](run.md#resuming-from-a-checkpoint)).
 
 ### Staleness reasons
 
@@ -127,6 +143,7 @@ With `--json`, output goes to stdout:
   "workflow": "pipeline.oxoflow",
   "completed": ["align", "sort_bam", "trim_reads"],
   "failed": [],
+  "skipped_when_false": [],
   "staleness": {
     "align": {
       "status": "input changed",
@@ -148,7 +165,9 @@ With `--json`, output goes to stdout:
 
 `timings`, `total_time_secs`, and `memory` are only present with
 `--timing`; `memory` only lists rules with a sampled peak-RSS
-measurement. `staleness` appears whenever the workflow file can be
+measurement. `skipped_when_false` is always emitted (an empty list when
+none) so consumers can distinguish "no such rules" from "older client that
+never reports them". `staleness` appears whenever the workflow file can be
 loaded for classification **and** at least one completed rule would
 re-run (see [Staleness reasons](#staleness-reasons)).
 
@@ -162,6 +181,10 @@ The checkpoint file is JSON with the following structure:
 {
   "completed_rules": ["trim_reads", "align", "sort_bam"],
   "failed_rules": ["mark_duplicates"],
+  "when_verdicts": {
+    "filter_cohort_S1": true,
+    "filter_cohort_S2": false
+  },
   "benchmarks": {
     "trim_reads": {
       "rule": "trim_reads",
@@ -204,7 +227,10 @@ The checkpoint file is JSON with the following structure:
 `config_snapshot` records the effective config values (sensitive keys stored
 as SHA-256 digests) and `rule_fingerprints` the structural fingerprints that
 drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
-`input_manifests` records, per completed rule, every resolved input file
+`when_verdicts` records, per rule instance, the runtime verdict of its
+`when` gate (`true`/`false`) — used for config-change replay and to
+distinguish when-gated skips from real failures in `status` output (issue
+#690). `input_manifests` records, per completed rule, every resolved input file
 (path, size, mtime in nanoseconds, and a content hash for files up to
 64 MiB) so later runs detect changed inputs (issue #72). `tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)

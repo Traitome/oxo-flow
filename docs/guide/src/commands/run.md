@@ -39,7 +39,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
-| `--resume-failed` | — | — | Resume only failed rules from a previous run |
+| `--resume-failed` | — | — | Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose `when` gate recorded `false` (they are skips, not failures — issue #690); `status` reports them as skipped, not failed |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
 | `--provenance` | — | — | Track output file checksums for later verification |
