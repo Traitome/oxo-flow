@@ -274,22 +274,16 @@ fn lsf_span_clause(rule: &Rule) -> String {
     }
 }
 
-/// Parse a memory figure into KB for LSF's `-M`/`rusage[mem=]`, whose
-/// documented unit set is KB/MB/GB (default KB). Accepts `K`/`M`/`G`/`T`
-/// with or without the trailing `B`, case-insensitive; a bare number is
-/// already KB. `None` when the text is not a recognisable figure.
+/// Parse a memory figure into KB for LSF's `-M`/`rusage[mem=]` by sharing
+/// the engine-wide parser `scheduler::parse_memory_mb`: a bare number is
+/// megabytes (the convention users see in `dry-run`/`run` resource
+/// output), `K`/`M`/`G`/`T` suffixes are single-letter, and the MB result
+/// converts ×1024 to KB. The two parsers used to disagree on bare values,
+/// so the same `memory = "4096"` scheduled 4 GB locally but 4 MB on LSF
+/// (#716). `None` now means exactly "local scheduling cannot parse this
+/// figure either" — the call site renders the raw string verbatim.
 fn lsf_mem_kb(mem: &str) -> Option<u64> {
-    let mem = mem.trim();
-    let split = mem.find(|c: char| !c.is_ascii_digit()).unwrap_or(mem.len());
-    let (digits, unit) = mem.split_at(split);
-    let multiplier = match unit.trim().to_ascii_lowercase().as_str() {
-        "" | "k" | "kb" => 1,
-        "m" | "mb" => 1024,
-        "g" | "gb" => 1024 * 1024,
-        "t" | "tb" => 1024 * 1024 * 1024,
-        _ => return None,
-    };
-    digits.trim().parse::<u64>().ok()?.checked_mul(multiplier)
+    crate::scheduler::parse_memory_mb(mem).and_then(|mb| mb.checked_mul(1024))
 }
 
 /// Convert duration string ("24h", "30m", "2d") to scheduler format ("DD-HH:MM:SS" or "HH:MM:SS")
@@ -644,15 +638,32 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
         .or(config.walltime.as_ref());
     if let Some(wt) = walltime {
         // LSF uses [HH:]MM format
-        let total_secs = crate::rule::parse_duration_secs(wt).unwrap_or(3600);
-        let total_mins = total_secs.div_ceil(60); // Round up to nearest minute
-        let hours = total_mins / 60;
-        let mins = total_mins % 60;
+        match crate::rule::parse_duration_secs(wt) {
+            Some(total_secs) => {
+                let total_mins = total_secs.div_ceil(60); // Round up to nearest minute
+                let hours = total_mins / 60;
+                let mins = total_mins % 60;
 
-        if hours > 0 {
-            lines.push(format!("#BSUB -W {:02}:{:02}", hours, mins));
-        } else {
-            lines.push(format!("#BSUB -W {}", mins));
+                if hours > 0 {
+                    lines.push(format!("#BSUB -W {:02}:{:02}", hours, mins));
+                } else {
+                    lines.push(format!("#BSUB -W {}", mins));
+                }
+            }
+            None => {
+                // A present-but-unparseable walltime used to silently become
+                // a 1-hour limit, killing long jobs with no hint that the
+                // rule's walltime was never honored (#715). Render it
+                // verbatim like the memory fallback above: bsub then rejects
+                // the script loudly instead of running with the wrong limit.
+                tracing::warn!(
+                    rule = %rule.name,
+                    walltime = %wt,
+                    "unparseable LSF walltime; rendering it verbatim in #BSUB -W \
+                     (accepted formats: 90s, 30m, 24h, 2d)"
+                );
+                lines.push(format!("#BSUB -W {wt}"));
+            }
         }
     }
 
@@ -977,18 +988,81 @@ mod tests {
     }
 
     #[test]
+    fn lsf_walltime_renders_parsed_limit() {
+        // 90m = 5400 s → rounds up to [HH:]MM as 01:30.
+        let mut rule = make_rule("variant_call", 8, Some("16G"));
+        rule.resources.time_limit = Some("90m".to_string());
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config);
+        assert!(script.contains("#BSUB -W 01:30"), "{script}");
+    }
+
+    #[test]
+    fn lsf_walltime_unparseable_renders_verbatim_not_silent_default() {
+        // A present-but-unparseable walltime must not silently become a
+        // 1-hour limit (#715): it travels verbatim so bsub rejects the
+        // script loudly instead of killing a long job at 1 h.
+        let mut rule = make_rule("assembly", 16, Some("64G"));
+        rule.resources.time_limit = Some("24 hours".to_string());
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "spades.py --isolate", &config);
+        assert!(script.contains("#BSUB -W 24 hours"), "{script}");
+        assert!(!script.contains("#BSUB -W 01:00"), "{script}");
+        assert!(!script.contains("#BSUB -W 1:00"), "{script}");
+    }
+
+    #[test]
     fn lsf_mem_kb_parses_every_documented_unit_form() {
-        // KB is the default unit, so a bare figure is already KB.
-        assert_eq!(super::lsf_mem_kb("4096"), Some(4096));
+        // lsf_mem_kb shares scheduler::parse_memory_mb (MB convention): a
+        // bare figure is MB, every accepted form converts ×1024 to KB
+        // (#716).
+        assert_eq!(super::lsf_mem_kb("4096"), Some(4096 * 1024));
         assert_eq!(super::lsf_mem_kb("4G"), Some(4 * 1024 * 1024));
         assert_eq!(super::lsf_mem_kb("4g"), Some(4 * 1024 * 1024));
-        assert_eq!(super::lsf_mem_kb("2GB"), Some(2 * 1024 * 1024));
         assert_eq!(super::lsf_mem_kb("1500M"), Some(1500 * 1024));
-        assert_eq!(super::lsf_mem_kb("512kb"), Some(512));
         assert_eq!(super::lsf_mem_kb("1T"), Some(1024 * 1024 * 1024));
-        // Not a figure.
+        // Unparsable figures — including multi-char suffixes and sub-MB K
+        // values, which local scheduling also rejects — return None so the
+        // script renders them verbatim instead of guessing a unit.
         assert_eq!(super::lsf_mem_kb("lots"), None);
         assert_eq!(super::lsf_mem_kb(""), None);
+        assert_eq!(super::lsf_mem_kb("512kb"), None);
+    }
+
+    #[test]
+    fn lsf_mem_kb_agrees_with_engine_memory_convention() {
+        // Whatever parse_memory_mb reports in MB, LSF must receive in KB —
+        // the same config must not schedule 4 GB locally and 4 MB on the
+        // cluster (#716).
+        for mem in ["4096", "8192", "4096M", "4G", "4g", "1T", "1t"] {
+            let mb = crate::scheduler::parse_memory_mb(mem)
+                .unwrap_or_else(|| panic!("parse_memory_mb({mem}) returned None"));
+            assert_eq!(
+                super::lsf_mem_kb(mem),
+                Some(mb * 1024),
+                "lsf_mem_kb({mem}) diverges from parse_memory_mb × 1024"
+            );
+        }
+        // Grammar parity: a figure the engine cannot parse locally is
+        // unparsable on LSF too.
+        for mem in ["lots", "", "4096mb", "2GB", "512k"] {
+            assert_eq!(crate::scheduler::parse_memory_mb(mem), None, "{mem}");
+            assert_eq!(super::lsf_mem_kb(mem), None, "{mem}");
+        }
     }
 
     #[test]

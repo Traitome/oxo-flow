@@ -65,6 +65,27 @@ time_limit = "24h"
 | `disk` | String | `"100G"` | Local disk space — **local warning only**, never emitted as a scheduler directive |
 | `time_limit` | String | `"24h"` | Wall-time limit |
 
+### Memory and walltime conventions
+
+One engine-wide parser reads both `memory` and `disk`, so what you see in
+`dry-run`/`run` resource output is what the scheduler gets:
+
+- **Bare numbers are megabytes** (`memory = "4096"` = 4 GB) — on every
+  backend. LSF's own default unit is KB, so oxo-flow converts the parsed
+  figure ×1024 and submits an explicit KB number to `-M` /
+  `rusage[mem=…]`; the same config cannot schedule 4 GB locally and 4 MB
+  on the cluster.
+- Accepted forms: a bare number, or a single-letter `K`/`M`/`G`/`T`
+  suffix (`"512k"`, `"1500M"`, `"4G"`, `"1T"`). Multi-letter suffixes
+  (`"4096MB"`, `"2GB"`) are **not** parsed — a rule declaring one gets a
+  validation warning locally, and cluster backends render the string
+  verbatim instead of guessing a unit.
+- `time_limit` accepts `90s`, `30m`, `24h`, `2d`. A **present but
+  unparseable** value is never silently replaced by a default: LSF
+  renders it verbatim in `#BSUB -W` (with a warning in the log), so
+  `bsub` rejects the script loudly instead of killing a long job at a
+  hidden 1-hour limit.
+
 ### GPU Specification
 
 For basic GPU requests, use the `gpu` field:
@@ -171,6 +192,33 @@ set -e
 mkdir -p logs
 apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
 ```
+
+---
+
+## LSF Example
+
+```bash
+#!/bin/bash
+#BSUB -J align_batch_S1
+#BSUB -n 16
+#BSUB -R 'rusage[mem=33554432] span[hosts=1]'
+#BSUB -M 33554432
+#BSUB -W 24:00
+#BSUB -o logs/align_batch_S1.out
+#BSUB -e logs/align_batch_S1.err
+
+set -e
+
+mkdir -p logs
+apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocontainers/bwa:0.7.17 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -c "$1"; else exec sh -c "$1"; fi' sh 'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'
+```
+
+The memory figure is explicit KB (`"32G"` = 32768 MB × 1024) because LSF's
+own default unit is KB; `span[hosts=1]` rides in the `-R` string so a
+multi-thread rule stays on one host. `-W 24:00` is the parsed form of the
+rule's `time_limit = "24h"` — LSF takes `[HH:]MM`. The workdir pin other
+backends need is implicit here: an LSF job starts in the directory the
+script was submitted from.
 
 ---
 
