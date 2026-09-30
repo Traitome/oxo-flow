@@ -677,6 +677,10 @@ Notes:
 - Bundle runs need an explicit `--workdir` (the bundle's extracted
   directory is created per-process, so it cannot be predicted from the
   foreground invocation) and `--yes` — a detached child cannot prompt.
+  `--workdir` is also what bundle discovery consults as a fallback: a
+  `sample_pattern`/`pairs_pattern` that matches nothing inside the
+  extraction is retried against the workdir
+  ([#751](https://github.com/Traitome/oxo-flow/issues/751)).
 - `--background` is a launcher flag, not a workflow setting: the child
   re-parses the remaining argv, so flag ordering rules (command flags
   before `KEY=VALUE` overrides) apply to the whole command line as usual.
