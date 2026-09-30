@@ -404,7 +404,7 @@ The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase,
 ```
 GET /api/runs/{id}/preview
 ```
-The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one.
+The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one — or when the workdir path is not a regular file (issue #735: a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
 
 ### AI Status
 ```

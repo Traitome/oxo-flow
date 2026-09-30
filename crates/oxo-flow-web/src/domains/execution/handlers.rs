@@ -1727,16 +1727,46 @@ pub async fn get_run_preview(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
     let workdir = run.workdir.as_deref().unwrap_or("");
-    let content =
-        tokio::fs::read_to_string(std::path::Path::new(workdir).join("dry-run-preview.json"))
-            .await
-            .map_err(|_| {
-                err(
-                    StatusCode::NOT_FOUND,
-                    "NO_PREVIEW",
-                    "No dry-run preview for this run".into(),
-                )
-            })?;
+    // The workdir is rule-writable: gate the preview read on a regular
+    // file (a planted FIFO would hang the open) and cap it (the preview is
+    // server-written and KB-scale — anything larger was not written by
+    // finalize_run) (issue #735).
+    let preview_path = std::path::Path::new(workdir).join("dry-run-preview.json");
+    let meta = tokio::fs::metadata(&preview_path).await.map_err(|_| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_PREVIEW",
+            "No dry-run preview for this run".into(),
+        )
+    })?;
+    if !meta.is_file() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_PREVIEW",
+            "No dry-run preview for this run".into(),
+        ));
+    }
+    const MAX_PREVIEW_BYTES: u64 = 16 * 1024 * 1024;
+    if meta.len() > MAX_PREVIEW_BYTES {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PREVIEW_TOO_LARGE",
+            format!(
+                "Preview file is {} bytes — larger than the {} byte server-written maximum",
+                meta.len(),
+                MAX_PREVIEW_BYTES
+            ),
+        ));
+    }
+    let content = tokio::fs::read_to_string(&preview_path)
+        .await
+        .map_err(|_| {
+            err(
+                StatusCode::NOT_FOUND,
+                "NO_PREVIEW",
+                "No dry-run preview for this run".into(),
+            )
+        })?;
     let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,

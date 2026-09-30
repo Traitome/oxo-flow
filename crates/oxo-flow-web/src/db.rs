@@ -307,12 +307,17 @@ pub async fn recover_orphaned_runs() -> Result<()> {
                     }
                 } else {
                     // The CLI died while the server was down: attribute from
-                    // the exit record instead of guessing.
+                    // the exit record instead of guessing. Stat first — a
+                    // planted FIFO at .exit-code would hang startup recovery
+                    // (issue #735).
                     let workdir = workdir.unwrap_or_default();
-                    let exit_code =
-                        std::fs::read_to_string(std::path::Path::new(&workdir).join(".exit-code"))
-                            .ok()
-                            .and_then(|c| c.trim().parse::<i32>().ok());
+                    let exit_path = std::path::Path::new(&workdir).join(".exit-code");
+                    let exit_code = std::fs::metadata(&exit_path)
+                        .map(|m| m.is_file())
+                        .unwrap_or(false)
+                        .then(|| std::fs::read_to_string(&exit_path).ok())
+                        .flatten()
+                        .and_then(|c| c.trim().parse::<i32>().ok());
                     tracing::info!(
                         "Run {id}: CLI already dead after restart (exit record: {exit_code:?}) — attributing"
                     );
