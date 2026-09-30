@@ -145,9 +145,15 @@ worth being explicit about the limits:
   with the available CPUs.
 - **Sample DATA is not bundled.** The engine-owned data files the workflow
   declares (`metadata_file`, `pairs_file`, `sample_groups_file`) travel in the
-  bundle; raw analysis inputs (FASTQs, BAMs, …) do not. Consumers supply those
-  at their own paths — via the same relative layout, `--workdir`, or config
-  overrides.
+  bundle; raw analysis inputs (FASTQs, BAMs, …) do not. For `--bundle` runs the
+  workflow is executed from a temp extraction dir, so wildcard discovery
+  (`sample_pattern`, engine-owned file patterns) only sees data **inside the
+  bundle** — `--workdir` moves execution/checkpoint/outputs, not discovery.
+  To supply raw inputs at their own paths, use a plain workflow file
+  (`oxo-flow run workflow.oxo.wgf`) whose discovery anchors to the workflow's
+  directory, optionally with `--workdir` or config overrides
+  ([#751](https://github.com/Traitome/oxo-flow/issues/751) tracks redirecting
+  discovery for bundle runs).
 
 None of these are specific to oxo-flow — they apply to Snakemake and Nextflow
 bundles equally. The goal is honest reproducibility, not a guarantee we cannot
