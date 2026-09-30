@@ -2908,11 +2908,26 @@ impl WorkflowConfig {
         }
 
         if let Some(ref n_str) = split.n {
-            // Resolve n from config (config.<key> or bare <key>) or parse as number
+            // Resolve n from config (config.<key> or bare <key>) or parse as number.
+            // A value that parses to nothing must not silently become one
+            // chunk — that collapses the whole scatter and wrong-shapes
+            // every downstream per-chunk output (issue #740).
             let n = self
                 .resolve_config_list(n_str)
-                .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()))
-                .unwrap_or_else(|| n_str.parse::<usize>().unwrap_or(1));
+                .and_then(|v| v.first().and_then(|s| s.parse::<usize>().ok()));
+            let n = match n {
+                Some(n) => n,
+                None => match n_str.parse::<usize>() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        tracing::warn!(
+                            "split.n '{}' is not a number — falling back to a single chunk",
+                            n_str
+                        );
+                        1
+                    }
+                },
+            };
             // Generate chunk indices: 0, 1, 2, ..., n-1
             return Ok((0..n).map(|i| i.to_string()).collect());
         }

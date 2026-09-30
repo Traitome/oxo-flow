@@ -442,6 +442,20 @@ fn pbs_gpu_directive(spec: &crate::rule::GpuSpec) -> Vec<String> {
     directives
 }
 
+/// Normalize a rule's memory figure for a PBS/SGE directive (issue #740,
+/// the unfixed half of #716): `parse_memory_mb` is the shared grammar, but
+/// PBS `mem=` and SGE `h_vmem=` carry their own default units (words /
+/// bytes), so the figure travels with an explicit unit instead of
+/// verbatim. `unit` is the suffix the backend documents (`mb` for PBS,
+/// `M` for SGE). Falls back to the raw string when unparsable — validate
+/// rejects those earlier anyway.
+fn scheduler_mem_spec(mem: &str, unit: &str) -> String {
+    match crate::scheduler::parse_memory_mb(mem) {
+        Some(mb) => format!("{mb}{unit}"),
+        None => mem.to_string(),
+    }
+}
+
 fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) -> String {
     let mut lines = vec!["#!/bin/bash".to_string()];
     lines.push(format!("#PBS -N {}", rule.name));
@@ -449,7 +463,7 @@ fn generate_pbs_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
     let threads = rule.effective_threads();
     let mut resource_parts = vec![format!("nodes=1:ppn={threads}")];
     if let Some(mem) = rule.effective_memory() {
-        resource_parts.push(format!("mem={mem}"));
+        resource_parts.push(format!("mem={}", scheduler_mem_spec(mem, "mb")));
     }
 
     // GPU for PBS (site-specific format)
@@ -522,7 +536,7 @@ fn generate_sge_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
 
     let mut resource_parts = vec![];
     if let Some(mem) = rule.effective_memory() {
-        resource_parts.push(format!("h_vmem={mem}"));
+        resource_parts.push(format!("h_vmem={}", scheduler_mem_spec(mem, "M")));
     }
 
     // GPU handling for SGE (site-specific)
@@ -893,7 +907,9 @@ mod tests {
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#PBS -N fastqc"));
         assert!(script.contains("nodes=1:ppn=4"));
-        assert!(script.contains("mem=8G"));
+        // Explicit unit: PBS's mem= default unit is words, so the figure
+        // travels as MB instead of the raw config string (#740).
+        assert!(script.contains("mem=8192mb"));
         assert!(script.contains("walltime=02:00:00"));
         assert!(script.contains("#PBS -q batch"));
         assert!(script.contains("#PBS -A lab01"));
@@ -918,7 +934,9 @@ mod tests {
         assert!(script.starts_with("#!/bin/bash"));
         assert!(script.contains("#$ -N variant_call"));
         assert!(script.contains("#$ -pe smp 8"));
-        assert!(script.contains("#$ -l h_vmem=16G"));
+        // Explicit unit: SGE's h_vmem default is bytes, so the figure
+        // travels as megabytes instead of the raw config string (#740).
+        assert!(script.contains("#$ -l h_vmem=16384M"));
         assert!(script.contains("#$ -l h_rt=12:00:00"));
         assert!(script.contains("#$ -q all.q"));
         assert!(script.contains("#$ -o logs/variant_call.out"));

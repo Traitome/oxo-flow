@@ -1352,8 +1352,11 @@ fn parse_hms_to_secs(value: &str) -> Option<f64> {
 /// Parse an sacct MaxRSS value to MB.
 ///
 /// Accepted forms: `"2048K"`, `"512M"`, `"1.5G"`, `"12345c"` (bytes), or a
-/// bare number (bytes); `T` (tebibytes) is also accepted as a harmless
-/// extension beyond sacct's documented K/M/G output. Suffixes are
+/// bare number (kilobytes — sacct stores bare `MaxRSS` figures in KB, the
+/// same convention the backend TerminalRecord parser applies, so the two
+/// tables agree; they used to disagree 1024×, reporting 2 MB vs 0 MB for
+/// the same job, issue #740); `T` (tebibytes) is also accepted as a
+/// harmless extension beyond sacct's documented K/M/G output. Suffixes are
 /// case-insensitive and base-1024; the result rounds UP so the table never
 /// under-reports a peak.
 fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
@@ -1374,7 +1377,7 @@ fn parse_maxrss_to_mb(value: &str) -> Option<u64> {
             };
             (num, mult)
         }
-        _ => (value, 1u64),
+        _ => (value, 1024u64),
     };
     let bytes = num.trim().parse::<f64>().ok()? * mult as f64;
     Some((bytes / (1024.0 * 1024.0)).ceil() as u64)
@@ -1971,6 +1974,10 @@ mod tests {
         assert_eq!(parse_maxrss_to_mb("1G"), Some(1024));
         assert_eq!(parse_maxrss_to_mb("1.5G"), Some(1536));
         assert_eq!(parse_maxrss_to_mb("2k"), Some(1)); // 2 KiB rounds up to 1 MB
+        // Bare = KB: sacct's convention and the backend TerminalRecord
+        // parser agree, so both tables report the same job the same way
+        // (issue #740 — they used to disagree 1024×).
+        assert_eq!(parse_maxrss_to_mb("2048"), Some(2));
         assert_eq!(parse_maxrss_to_mb("123456789c"), Some(118)); // 117.7… rounds up
         assert_eq!(parse_maxrss_to_mb("0"), Some(0));
         assert_eq!(parse_maxrss_to_mb("  8G  "), Some(8192));
