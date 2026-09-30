@@ -77,6 +77,10 @@ oxo-flow resume .oxo-flow/checkpoint.json -j 4
   The standalone `resume` command is useful for explicitly re-running after
   inspecting the checkpoint state.
 - Use `oxo-flow status` to inspect the checkpoint before resuming.
+- Rules whose `when` gate recorded `false` are reported as **skipped**, not
+  failed, in the resume banner (issue #690) — their stale failure entries
+  from older checkpoints don't count toward the failed total, and the gate
+  is re-judged on this resume anyway.
 - `--background` detaches the resumed run (see
   [run's Background runs section](run.md#background-runs-background)).
 
