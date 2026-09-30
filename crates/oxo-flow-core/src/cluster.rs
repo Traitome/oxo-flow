@@ -289,28 +289,24 @@ fn lsf_mem_kb(mem: &str) -> Option<u64> {
 /// Convert duration string ("24h", "30m", "2d") to scheduler format ("DD-HH:MM:SS" or "HH:MM:SS")
 fn format_walltime_for_scheduler(time_str: &str) -> String {
     let time_str = time_str.trim();
-    // If already in scheduler format (HH:MM:SS or D-HH:MM:SS), validate and return
-    if time_str.contains(':') {
-        // Basic validation: count colons and check characters
-        let colon_count = time_str.chars().filter(|&c| c == ':').count();
-        let valid_chars = time_str
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == ':' || c == '-');
-        if (colon_count == 2 || colon_count == 3) && valid_chars {
-            return time_str.to_string();
-        }
-        // Invalid format - fall through to parse as duration
-    }
-
-    // Parse duration like "24h", "30m", "2d"
-    let total_secs = match crate::rule::parse_duration_secs(time_str) {
+    // One shared parser for every backend: suffix forms plus the colon
+    // forms the config docs promise (#737).
+    let total_secs = match crate::rule::parse_walltime_secs(time_str) {
         Some(secs) => secs,
         None => {
+            // Unparseable walltimes travel verbatim (the #715 LSF
+            // precedent): sbatch/qsub/qsub then reject the script loudly
+            // instead of silently running with a 1-hour limit. The
+            // default-to-1h behavior also broke `MM:SS`/`H:MM` inputs that
+            // the old colon pre-check let fall through to a parser that
+            // rejects all colons.
             tracing::warn!(
-                "Invalid walltime '{}', defaulting to 1h. Use format like '24h', '2d', or '01:00:00'.",
+                "Invalid walltime '{}', passing it through verbatim — the scheduler will \
+                 reject the script loudly instead of running with a hidden 1-hour limit \
+                 (accepted: 90s, 30m, 24h, 2d, 01:00:00, 1-06:00:00)",
                 time_str
             );
-            3600
+            return time_str.to_string();
         }
     };
     let days = total_secs / 86400;
@@ -638,7 +634,7 @@ fn generate_lsf_script(rule: &Rule, shell_cmd: &str, config: &ClusterJobConfig) 
         .or(config.walltime.as_ref());
     if let Some(wt) = walltime {
         // LSF uses [HH:]MM format
-        match crate::rule::parse_duration_secs(wt) {
+        match crate::rule::parse_walltime_secs(wt) {
             Some(total_secs) => {
                 let total_mins = total_secs.div_ceil(60); // Round up to nearest minute
                 let hours = total_mins / 60;
@@ -871,7 +867,9 @@ mod tests {
         assert!(script.contains("#SBATCH --job-name=bwa_align"));
         assert!(script.contains("#SBATCH --cpus-per-task=16"));
         assert!(script.contains("#SBATCH --mem=32G"));
-        assert!(script.contains("#SBATCH --time=24:00:00"));
+        // "24:00:00" parses to 24 h, rendered in SLURM's canonical
+        // D-HH:MM:SS form (same limit, canonical shape — #737).
+        assert!(script.contains("#SBATCH --time=1-00:00:00"));
         assert!(script.contains("#SBATCH --partition=compute"));
         assert!(script.contains("#SBATCH --account=proj123"));
         assert!(script.contains("#SBATCH --output=logs/bwa_align.out"));
@@ -1023,6 +1021,44 @@ mod tests {
         assert!(script.contains("#BSUB -W 24 hours"), "{script}");
         assert!(!script.contains("#BSUB -W 01:00"), "{script}");
         assert!(!script.contains("#BSUB -W 1:00"), "{script}");
+    }
+
+    #[test]
+    fn slurm_walltime_unparseable_renders_verbatim_not_silent_default() {
+        // #737: #715 fixed LSF only — SLURM/PBS/SGE still substituted a
+        // silent 1-hour limit. Verbatim passthrough makes sbatch reject
+        // the script loudly instead.
+        let mut rule = make_rule("assembly", 16, Some("64G"));
+        rule.resources.time_limit = Some("24 hours".to_string());
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Slurm,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script = generate_submit_script(&ClusterBackend::Slurm, &rule, "spades.py", &config);
+        assert!(script.contains("#SBATCH --time=24 hours"), "{script}");
+        assert!(!script.contains("#SBATCH --time=01:00:00"), "{script}");
+    }
+
+    #[test]
+    fn lsf_walltime_colon_form_parses_like_other_backends() {
+        // The documented HH:MM:SS form used to reach LSF verbatim, where
+        // `-W 24:00:00` is invalid — a portability break vs the other
+        // backends (#737). The shared parser renders it as [HH:]MM.
+        let mut rule = make_rule("variant_call", 8, Some("16G"));
+        rule.resources.time_limit = Some("24:00:00".to_string());
+        let config = ClusterJobConfig {
+            backend: ClusterBackend::Lsf,
+            queue: None,
+            account: None,
+            walltime: None,
+            extra_args: vec![],
+        };
+        let script =
+            generate_submit_script(&ClusterBackend::Lsf, &rule, "gatk HaplotypeCaller", &config);
+        assert!(script.contains("#BSUB -W 24:00"), "{script}");
     }
 
     #[test]
@@ -1482,8 +1518,12 @@ mod tests {
         assert_eq!(format_walltime_for_scheduler("30m"), "00:30:00");
         assert_eq!(format_walltime_for_scheduler("2d"), "2-00:00:00");
         assert_eq!(format_walltime_for_scheduler("48h"), "2-00:00:00");
-        assert_eq!(format_walltime_for_scheduler("1:30:00"), "1:30:00"); // Already formatted
+        // Colon forms parse through the shared walltime parser and render
+        // canonically zero-padded (#737).
+        assert_eq!(format_walltime_for_scheduler("1:30:00"), "01:30:00");
         assert_eq!(format_walltime_for_scheduler("12h"), "12:00:00"); // Less than 24h
+        // Unparseable → verbatim, never a silent 1-hour default (#715/#737).
+        assert_eq!(format_walltime_for_scheduler("24 hours"), "24 hours");
     }
 
     // -- Module loading tests ------------------------------------------------

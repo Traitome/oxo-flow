@@ -80,11 +80,17 @@ One engine-wide parser reads both `memory` and `disk`, so what you see in
   (`"4096MB"`, `"2GB"`) are **not** parsed — a rule declaring one gets a
   validation warning locally, and cluster backends render the string
   verbatim instead of guessing a unit.
-- `time_limit` accepts `90s`, `30m`, `24h`, `2d`. A **present but
-  unparseable** value is never silently replaced by a default: LSF
-  renders it verbatim in `#BSUB -W` (with a warning in the log), so
-  `bsub` rejects the script loudly instead of killing a long job at a
-  hidden 1-hour limit.
+- `time_limit` accepts the suffix forms `90s`, `30m`, `24h`, `2d` and the
+  scheduler-style colon forms `01:00:00`, `24:00:00`, `1-06:00:00` — one
+  shared parser for the local executor and every backend, so the same
+  value means the same limit everywhere. Bare numbers (`"1500"`) are
+  **rejected at validate time**: ambiguous between seconds and LSF
+  minutes — write `"1500s"` or `"25m"`.
+- A **present but unparseable** walltime is never silently replaced by a
+  default: every backend renders it verbatim (with a warning in the log),
+  so the scheduler rejects the script loudly instead of killing a long
+  job at a hidden 1-hour limit. The local executor logs a warning and
+  falls back to the global timeout.
 
 ### GPU Specification
 
