@@ -103,7 +103,7 @@ compiled, licensed, and audited in isolation.
 |---|---|---|---|
 | `oxo-flow-core` | library | — | The engine: workflow model, expansion, DAG, execution, checkpointing, environments, storage, reporting |
 | `oxo-flow-ai` | library | — | AI companion: provider abstraction, agent orchestrator, embedded knowledge bases, tool/skill system |
-| `oxo-flow-web` | library | core, ai | REST/WebSocket server: 9 domains, storage backends, SSE broadcast, OpenAPI |
+| `oxo-flow-web` | library | core, ai | REST/SSE server: 9 domains, storage backends, SSE broadcast, OpenAPI |
 | `oxo-flow-cli` | binary | core, ai, web | User-facing `oxo-flow` binary: 30 subcommands, run loop, human rendering |
 | `oxo-flow-desktop` | binary (excluded from the workspace) | web | Native desktop shell (wry + tao) around the embedded server; built by a separate cargo invocation, version kept in lockstep by `scripts/bump-version.sh` |
 
@@ -365,16 +365,19 @@ rules.
 ## Scheduling & Resources
 
 The scheduler never over-subscribes. When a job's requirements cannot be
-met, it waits; when they are impossible on this machine, it fails fast
-and names the conflict.
+met, it waits; when a resource-group requirement exceeds its declared
+capacity, it fails fast and names the conflict. (Threads/memory beyond the
+machine's total capacity are clamped to a whole-pool reservation instead —
+the declared value is treated as the tool's upper bound, so the rule simply
+runs alone.)
 
 ```mermaid
 flowchart LR
     ready["Ready set<br/>(priority ↓, name ↑)"] --> check{"ResourcePool:<br/>threads + memory<br/>available?"}
     check -- yes --> reserve["Reserve"]
-    check -- "no, but satisfiable later" --> wait["Queue & wait<br/>(holder diagnostics,<br/>priority aging)"]
+    check -- "no, but satisfiable later" --> wait["Queue & wait<br/>(holder diagnostics,<br/>FIFO-gated queue)"]
     wait --> check
-    check -- "impossible request<br/>(> total threads/memory)" --> fastfail["Fail fast:<br/>ResourceGroupExhausted<br/>names the rule"]
+    check -- "impossible request<br/>(group above declared capacity)" --> fastfail["Fail fast:<br/>ResourceGroupExhausted<br/>names the rule"]
     reserve --> run["Execute job"]
     run --> release["Release resources<br/>(success · failure · timeout)"]
     release --> ready
@@ -432,7 +435,6 @@ classDiagram
         <<trait>>
         +wrap_command(cmd, spec) String
         +setup_command(spec) String
-        +setup_command_with_opts(spec, prefix) String
     }
     class Conda
     class Mamba
@@ -644,8 +646,8 @@ planning code and previews the checkpoint state a real run would produce.
 
 ### Resources as constraints, not hints
 
-Check → reserve → execute → release, with fast failure on impossible
-requests and queueing (with aging) on contention. The same declaration
+Check → reserve → execute → release, with fast failure on unsatisfiable
+group requests and FIFO-gated queueing on contention. The same declaration
 drives local concurrency, cluster submissions, and the web runner.
 
 ### Environment isolation

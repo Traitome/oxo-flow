@@ -602,8 +602,8 @@ memory = "32G"
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | **Yes** | Unique rule identifier |
-| `input` | Array of strings | **Yes** | Input file paths |
-| `output` | Array of strings | **Yes** | Output file paths |
+| `input` | Array of strings | No | Input file paths. Optional (defaults to empty) — a rule with no `input` is legal (e.g. a pure producer or a setup step; pair it with `depends_on` when ordering matters) |
+| `output` | Array of strings | No | Output file paths. Optional (defaults to empty) — a shell-only rule with no declared outputs validates and runs; pair with `depends_on` for ordering |
 | `output_pattern` | String | No | Runtime-discovered output pattern: outputs enumerated by a filesystem scan after the rule completes; downstream consumers of its wildcard instantiate per discovered value. A `[[values]]` wildcard in the pattern is a plan-time fan-out trigger instead (issue #296). Mutually exclusive with `output`/`transform`/`input_groups` — see [Runtime-Discovered Outputs](#runtime-discovered-outputs-output_pattern) |
 | `shell` | String | No | Shell command to execute |
 | `script` | String | No | Script file path (auto-detects interpreter) |
@@ -2749,7 +2749,9 @@ Semantics:
   instantiation, under the same plan-time semantics as a static fan-out —
   `wildcard_constraints` filtered and per-instance `when` gates evaluated,
   so gated-off combos never become instances (issue #296 follow-up). A
-  consumer declared **before** its producer is legal but warned.
+  consumer declared **before** its producer is legal but warned
+  (`output_pattern consumer declared BEFORE its producer; the fan-out still
+  resolves, but declare the producer first for stable run attribution`).
   Referencing two producers' fresh wildcards in one rule is a v1 error; a
   chain — a rule that is both consumer and producer of fresh wildcards —
   is supported.
