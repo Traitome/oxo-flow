@@ -4,7 +4,9 @@ use colored::Colorize;
 use oxo_flow_core::config::WorkflowConfig;
 use oxo_flow_core::config_impact::{ConfigChangeReport, config_value_string};
 use oxo_flow_core::dag::WorkflowDag;
-use oxo_flow_core::executor::{CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock};
+use oxo_flow_core::executor::{
+    CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock, output_tail_bytes_from_env,
+};
 use oxo_flow_core::rule::{Rule, parse_duration_secs};
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
@@ -378,7 +380,7 @@ async fn terminate_on_signal(
             cpu_seconds: None,
             caption: None,
         };
-        ck.record_run(&record);
+        ck.record_run(&record, output_tail_bytes_from_env());
         ck.mark_failed(rule);
     }
     if let Err(e) = ck.save_to_file(checkpoint_path) {
@@ -2119,6 +2121,10 @@ pub async fn run_command(
         // Shared with the manifest snapshot resolver so staging and
         // invalidation always see the same backends (issue #80 item 2).
         storage_resolver: crate::commands::run_preview::storage_resolver(),
+        // Checkpoint excerpt size, honoring OXO_FLOW_OUTPUT_TAIL_BYTES (also
+        // read by the signal handler and cluster paths, which have no
+        // ExecutorConfig here).
+        output_tail_bytes: output_tail_bytes_from_env(),
         // The freshness gate reads recorded provenance checksums from the
         // live checkpoint (issue #194 B2).
         checkpoint: Some(checkpoint.clone()),
@@ -3271,7 +3277,7 @@ pub async fn run_command(
                             }
 
                             let mut ck = checkpoint.lock().await;
-                            ck.record_run(&record);
+                            ck.record_run(&record, output_tail_bytes_from_env());
                             ck.mark_completed(&rule_name, benchmark);
                             if let Some(ref manifest) = input_manifest {
                                 ck.record_input_manifest(&rule_name, manifest.clone());
@@ -3383,7 +3389,7 @@ pub async fn run_command(
                                 frs.insert(rule_name.clone());
                             }
                             let mut ck = checkpoint.lock().await;
-                            ck.record_run(&record);
+                            ck.record_run(&record, output_tail_bytes_from_env());
                             ck.mark_failed(&rule_name);
                             if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                                 tracing::warn!("Failed to save checkpoint: {e}");
@@ -3493,7 +3499,7 @@ pub async fn run_command(
                             duration_ms: 0,
                         });
                         let mut ck = checkpoint.lock().await;
-                        ck.record_run(&record);
+                        ck.record_run(&record, output_tail_bytes_from_env());
                         ck.mark_failed(&rule_name);
                         if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
                             tracing::warn!("Failed to save checkpoint: {e}");
@@ -3697,7 +3703,7 @@ pub async fn run_command(
                     }),
                 };
                 let mut ck = checkpoint.lock().await;
-                ck.record_run(&record);
+                ck.record_run(&record, output_tail_bytes_from_env());
                 ck.mark_failed(&rule_name);
                 if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
@@ -3767,7 +3773,7 @@ pub async fn run_command(
             }
             {
                 let mut ck = checkpoint.lock().await;
-                ck.record_run(&record);
+                ck.record_run(&record, output_tail_bytes_from_env());
                 ck.mark_failed(&completed_rule);
                 if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
@@ -3842,7 +3848,7 @@ pub async fn run_command(
             }
             {
                 let mut ck = checkpoint.lock().await;
-                ck.record_run(&record);
+                ck.record_run(&record, output_tail_bytes_from_env());
                 ck.mark_failed(&completed_rule);
                 if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
                     tracing::warn!("Failed to save checkpoint: {save_err}");
@@ -4074,7 +4080,7 @@ pub async fn run_command(
                             cpu_seconds: None,
                             caption: None,
                         };
-                        ck.record_run(&record);
+                        ck.record_run(&record, output_tail_bytes_from_env());
                         if !is_tty {
                             diagnostic_narrate(
                                 format_args!(

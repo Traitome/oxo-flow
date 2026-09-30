@@ -699,7 +699,8 @@ By default, checkpoints are saved in a hidden `.oxo-flow/` directory located in 
 ### Rule run records in the checkpoint
 
 Each executed rule carries a `rule_runs` entry in `checkpoint.json` with the
-expanded command, the process exit code, a bounded stderr tail, the resolved
+expanded command, the process exit code, a bounded stdout/stderr tail, the
+resolved
 report caption, and (since the cancellation-semantics change) the terminal
 **`status`** (`"failed"`, `"cancelled"`, `"timed_out"`, …), the
 **`skip_reason`** when the rule did not run to completion, and the
@@ -707,6 +708,18 @@ terminating **`signal`** when the process died to one. The three newer
 fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 `failed_rules`).
+
+The tails are truncated to the **last 64 KiB per stream by default** and
+prefixed with a `…` marker when cut. Set `OXO_FLOW_OUTPUT_TAIL_BYTES` to
+change the size (bytes; an invalid or zero value falls back to the default
+with a warning), e.g. `OXO_FLOW_OUTPUT_TAIL_BYTES=10485760` (10 MiB) for
+error-heavy tools whose message scrolls past the tail. The in-RAM capture
+window widens to match when the setting exceeds its 1 MiB floor — budget
+roughly 2 × (1 MiB + tail) of RAM per running job. Tails are
+bytes-bounded, so a multi-byte UTF-8 cut lands on the nearest character
+boundary (rounding down); older checkpoints that only carry the legacy
+2048-character tails remain readable (the new size applies from the next
+recorded run onward).
 
 ### Workflow version in the checkpoint
 

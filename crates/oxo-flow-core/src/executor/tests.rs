@@ -593,7 +593,7 @@ fn checkpoint_record_run_persists_diagnostics() {
         cpu_seconds: None,
         caption: Some("GATK germline variant calling (issue #281 caption).".to_string()),
     };
-    state.record_run(&record);
+    state.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
     state.mark_failed("call");
 
     // Round-trips through JSON so legacy/forward compatibility is covered.
@@ -620,7 +620,8 @@ fn checkpoint_record_run_persists_diagnostics() {
 #[test]
 fn checkpoint_stderr_tail_is_bounded() {
     let mut state = CheckpointState::new();
-    let long = "x".repeat(10_000);
+    // Above DEFAULT_OUTPUT_TAIL_BYTES so truncation actually engages.
+    let long = "x".repeat(DEFAULT_OUTPUT_TAIL_BYTES + 1_000);
     let record = JobRecord {
         signal: None,
         rule: "noisy".to_string(),
@@ -637,11 +638,14 @@ fn checkpoint_stderr_tail_is_bounded() {
         cpu_seconds: None,
         caption: None,
     };
-    state.record_run(&record);
+    state.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
     let tail = state.rule_runs["noisy"].stderr_tail.as_deref().unwrap();
     assert!(tail.starts_with('…'));
-    // 2048 chars of content + the "…\n" truncation marker.
-    assert!(tail.chars().count() <= 2048 + 2, "tail must stay bounded");
+    // DEFAULT_OUTPUT_TAIL_BYTES of content plus the 4-byte "…\n" marker.
+    assert!(
+        tail.len() <= DEFAULT_OUTPUT_TAIL_BYTES + 4,
+        "tail must stay bounded"
+    );
 }
 
 #[test]
@@ -649,7 +653,8 @@ fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
     // Issue #691: stdout persists with the same bounded-tail contract as
     // stderr; a rule with stdout-only diagnostics leaves a trail.
     let mut state = CheckpointState::new();
-    let long = "y".repeat(10_000);
+    // Above DEFAULT_OUTPUT_TAIL_BYTES so truncation actually engages.
+    let long = "y".repeat(DEFAULT_OUTPUT_TAIL_BYTES + 1_000);
     let record = JobRecord {
         signal: None,
         rule: "verbose".to_string(),
@@ -666,10 +671,13 @@ fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
         cpu_seconds: None,
         caption: None,
     };
-    state.record_run(&record);
+    state.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
     let tail = state.rule_runs["verbose"].stdout_tail.as_deref().unwrap();
     assert!(tail.starts_with('…'));
-    assert!(tail.chars().count() <= 2048 + 2, "tail must stay bounded");
+    assert!(
+        tail.len() <= DEFAULT_OUTPUT_TAIL_BYTES + 4,
+        "tail must stay bounded"
+    );
     // And an empty-stdout rule persists no field.
     let mut quiet = CheckpointState::new();
     let quiet_record = JobRecord {
@@ -688,8 +696,66 @@ fn checkpoint_stdout_tail_is_bounded_and_masking_ready() {
         caption: None,
         signal: None,
     };
-    quiet.record_run(&quiet_record);
+    quiet.record_run(&quiet_record, DEFAULT_OUTPUT_TAIL_BYTES);
     assert!(quiet.rule_runs["quiet"].stdout_tail.is_none());
+}
+
+#[test]
+fn checkpoint_tail_configurable_small_and_multi_byte() {
+    // The tail bound is a configuration input, not a hardcoded constant:
+    // a small bound still truncates with the ellipsis marker, and the byte
+    // cut never splits a multi-byte character.
+    let mut state = CheckpointState::new();
+    let record = JobRecord {
+        signal: None,
+        rule: "unicode".to_string(),
+        status: JobStatus::Failed,
+        started_at: None,
+        finished_at: None,
+        exit_code: Some(1),
+        // 3-byte chars: cutting at a raw byte offset would panic mid-char.
+        stdout: Some("变".repeat(200)),
+        stderr: Some("héllo wörld".to_string()),
+        command: None,
+        retries: 0,
+        skip_reason: None,
+        max_rss_mb: None,
+        cpu_seconds: None,
+        caption: None,
+    };
+    // Small tail: shorter than the stream, truncation marker present,
+    // byte budget respected (the "…\n" marker is additive metadata, 4
+    // UTF-8 bytes), result valid UTF-8 (no panic).
+    state.record_run(&record, 10);
+    let out = state.rule_runs["unicode"].stdout_tail.as_deref().unwrap();
+    assert!(out.starts_with("…\n"));
+    assert!(out.len() <= 10 + 4, "byte budget must hold");
+    // 10 bytes from the end cuts mid-character; the boundary walk-back
+    // rounds down to the last 9 bytes = 3 whole characters.
+    assert_eq!(
+        out.strip_prefix("…\n"),
+        Some("变变变"),
+        "content is the last whole chars"
+    );
+    // The same 10-byte bound applies to stderr: "héllo wörld" is 13 bytes
+    // (é/ö are 2 bytes each), so it truncates too — and the cut lands on a
+    // char boundary (byte 3, after 'é').
+    let err = state.rule_runs["unicode"].stderr_tail.as_deref().unwrap();
+    assert_eq!(err, "…\nllo wörld");
+
+    // Larger tail than the whole stream: no truncation, no marker.
+    let mut state = CheckpointState::new();
+    state.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
+    let out = state.rule_runs["unicode"].stdout_tail.as_deref().unwrap();
+    assert_eq!(out, "变".repeat(200));
+
+    // Zero tail keeps only the marker.
+    let mut state = CheckpointState::new();
+    state.record_run(&record, 0);
+    assert_eq!(
+        state.rule_runs["unicode"].stdout_tail.as_deref(),
+        Some("…\n")
+    );
 }
 
 #[test]

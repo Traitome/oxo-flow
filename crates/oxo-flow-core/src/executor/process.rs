@@ -323,6 +323,12 @@ pub struct ExecutorConfig {
     /// workflow dir) keeps the historical raw-spec behavior — the two
     /// roots coincide, so relative paths already resolve.
     pub workflow_root: Option<PathBuf>,
+    /// Size of the stdout/stderr tail persisted per rule in the checkpoint
+    /// (see [`super::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES`], issue #719).
+    /// Override with `OXO_FLOW_OUTPUT_TAIL_BYTES` outside the
+    /// CLI run path; values above the 1 MiB capture tail window widen that
+    /// window so the requested tail is actually captured.
+    pub output_tail_bytes: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -349,6 +355,7 @@ impl Default for ExecutorConfig {
             wildcard_constraints: HashMap::new(),
             base_dir: None,
             workflow_root: None,
+            output_tail_bytes: super::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
         }
     }
 }
@@ -2072,8 +2079,8 @@ impl LocalExecutor {
                 // and `child.wait()` run concurrently.
                 let stdout_pipe = child.stdout.take();
                 let stderr_pipe = child.stderr.take();
-                let mut stdout_cap = CappedCapture::new();
-                let mut stderr_cap = CappedCapture::new();
+                let mut stdout_cap = CappedCapture::with_tail_bytes(self.config.output_tail_bytes);
+                let mut stderr_cap = CappedCapture::with_tail_bytes(self.config.output_tail_bytes);
                 let wait_and_drain = async {
                     let (status, _, _) = tokio::join!(
                         child.wait(),
@@ -2761,25 +2768,47 @@ const CAPTURE_HEAD_BYTES: usize = 1 << 20;
 const CAPTURE_TAIL_BYTES: usize = 1 << 20;
 
 /// Bounded capture of one stream: the first [`CAPTURE_HEAD_BYTES`] and the
-/// last [`CAPTURE_TAIL_BYTES`], with the dropped middle replaced by a
-/// marker line when rendering.
+/// last `tail_window` bytes, with the dropped middle replaced by a marker
+/// line when rendering. The tail window defaults to [`CAPTURE_TAIL_BYTES`]
+/// and widens via [`ExecutorConfig::output_tail_bytes`] (issue #719)
+/// so a larger checkpoint tail can actually be captured.
 ///
 /// The engine used to buffer a rule's whole output (`wait_with_output`)
 /// and then copy it again — a rule streaming GBs OOMed the engine before
 /// any diagnostic reached the user. The cap is applied at the capture
 /// boundary, so masking, the checkpoint's `stderr_tail`, the report and
 /// the web UI all see the same bounded text.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CappedCapture {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     /// Total bytes seen, kept or dropped.
     total: u64,
+    /// Window kept from the stream tail; at least [`CAPTURE_TAIL_BYTES`].
+    tail_window: usize,
+}
+
+impl Default for CappedCapture {
+    fn default() -> Self {
+        Self {
+            head: Vec::new(),
+            tail: std::collections::VecDeque::new(),
+            total: 0,
+            tail_window: CAPTURE_TAIL_BYTES,
+        }
+    }
 }
 
 impl CappedCapture {
-    fn new() -> Self {
-        Self::default()
+    /// Capture with the tail window widened to `tail_bytes` when it exceeds
+    /// the default — the checkpoint tail must not ask for bytes the capture
+    /// already dropped. Values at or below the default keep the 2 MiB
+    /// steady-state RAM bound per stream.
+    fn with_tail_bytes(tail_bytes: usize) -> Self {
+        Self {
+            tail_window: tail_bytes.max(CAPTURE_TAIL_BYTES),
+            ..Self::default()
+        }
     }
 
     fn push(&mut self, bytes: &[u8]) {
@@ -2792,7 +2821,7 @@ impl CappedCapture {
             return;
         }
         self.tail.extend(rest.iter().copied());
-        let overflow = self.tail.len().saturating_sub(CAPTURE_TAIL_BYTES);
+        let overflow = self.tail.len().saturating_sub(self.tail_window);
         self.tail.drain(..overflow);
     }
 
@@ -2809,7 +2838,7 @@ impl CappedCapture {
         out.push_str(&format!(
             "\n[oxo-flow] output truncated: {dropped} bytes dropped \
              (capture capped at {} MiB)\n",
-            (CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES) / (1 << 20)
+            (CAPTURE_HEAD_BYTES + self.tail_window) / (1 << 20)
         ));
         let tail: Vec<u8> = self.tail.into_iter().collect();
         out.push_str(&String::from_utf8_lossy(&tail));
@@ -4679,7 +4708,7 @@ mod tests {
 
     #[test]
     fn capped_capture_keeps_small_streams_verbatim() {
-        let mut cap = CappedCapture::new();
+        let mut cap = CappedCapture::default();
         cap.push(b"hello ");
         cap.push(b"world");
         assert_eq!(cap.into_string(), "hello world");
@@ -4689,7 +4718,7 @@ mod tests {
     fn capped_capture_keeps_head_and_tail_with_truncation_marker() {
         // A rule streaming GBs must not be buffered whole: the capture keeps
         // the first MiB and the last MiB and names what it dropped.
-        let mut cap = CappedCapture::new();
+        let mut cap = CappedCapture::default();
         let chunk = vec![b'a'; 64 * 1024];
         let chunks = (CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES) / chunk.len() + 8;
         for _ in 0..chunks {
@@ -4711,7 +4740,7 @@ mod tests {
 
     #[test]
     fn capped_capture_drops_only_the_middle_after_the_head_fills() {
-        let mut cap = CappedCapture::new();
+        let mut cap = CappedCapture::default();
         cap.push(b"HEAD");
         cap.push(&vec![b'x'; CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES]);
         cap.push(b"TAIL");
@@ -4719,6 +4748,44 @@ mod tests {
         assert!(out.starts_with("HEADxxx"));
         assert!(out.ends_with("TAIL"));
         assert_eq!(out.matches("output truncated:").count(), 1);
+    }
+
+    #[test]
+    fn capped_capture_widens_tail_window_when_configured() {
+        // Issue #691: a tail request above the default 1 MiB window must
+        // widen the capture, or the checkpoint tail silently drops bytes
+        // the configuration asked to keep. Sub-default requests keep the
+        // 1 MiB floor instead of shrinking the steady-state buffer.
+        let small = CappedCapture::with_tail_bytes(64 * 1024);
+        assert_eq!(small.tail_window, CAPTURE_TAIL_BYTES);
+
+        let requested = 2 * 1024 * 1024 + 512;
+        let mut cap = CappedCapture::with_tail_bytes(requested);
+        cap.push(b"HEAD");
+        cap.push(&vec![b'x'; CAPTURE_HEAD_BYTES + requested]);
+        cap.push(b"TAIL");
+        let out = cap.into_string();
+        assert!(out.starts_with("HEADxxx"));
+        assert!(out.ends_with("TAIL"));
+        // The marker names the widened head+window total, not the default.
+        let marker_mib = (CAPTURE_HEAD_BYTES + requested) / (1 << 20);
+        assert!(out.contains(&format!("{marker_mib} MiB")), "{out:?}");
+        // Head fills to exactly CAPTURE_HEAD_BYTES; the tail window holds
+        // `requested` bytes ((requested-4) x's + "TAIL"), so the whole
+        // rendered string is head + marker + requested.
+        let dropped = 4 + CAPTURE_HEAD_BYTES + requested + 4 - (CAPTURE_HEAD_BYTES + requested);
+        let marker = format!(
+            "\n[oxo-flow] output truncated: {dropped} bytes dropped (capture capped at {marker_mib} MiB)\n"
+        );
+        assert_eq!(
+            out,
+            format!(
+                "HEAD{}{marker}{}TAIL",
+                "x".repeat(CAPTURE_HEAD_BYTES - 4),
+                "x".repeat(requested - 4),
+            ),
+            "window raise must keep exactly the requested tail"
+        );
     }
 
     #[test]

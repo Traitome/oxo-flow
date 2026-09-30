@@ -178,12 +178,12 @@ pub struct RuleRunRecord {
     /// resolved). Absent in legacy checkpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Tail of the rule's stderr (see the `STDERR_TAIL_CHARS` constant) for
+    /// Tail of the rule's stderr (see [`DEFAULT_OUTPUT_TAIL_BYTES`]) for
     /// failure diagnosis. Absent when the rule produced no stderr.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
-    /// Tail of the rule's stdout (see the `STDOUT_TAIL_CHARS` constant,
-    /// issue #691): some tools print their root cause or key diagnostics on
+    /// Tail of the rule's stdout (see [`DEFAULT_OUTPUT_TAIL_BYTES`], issue
+    /// #691): some tools print their root cause or key diagnostics on
     /// stdout, which used to be visible only live in the terminal. Absent
     /// when the rule produced no stdout or the record predates the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -401,31 +401,54 @@ fn deserialize_output_pattern_domains<'de, D: serde::Deserializer<'de>>(
         .collect())
 }
 
-/// Bound on the stderr excerpt persisted per rule (issue #83 WS2). Full
-/// output stays in the terminal; the checkpoint keeps enough for failure
-/// diagnosis without growing unbounded on noisy tools.
-const STDERR_TAIL_CHARS: usize = 2048;
+/// Default bound on the stdout/stderr excerpt persisted per rule. The
+/// excerpt is the tail of the captured output: enough for failure
+/// diagnosis without growing unbounded on noisy tools. Override with
+/// `OXO_FLOW_OUTPUT_TAIL_BYTES` (see
+/// [`crate::executor::ExecutorConfig::output_tail_bytes`]).
+pub const DEFAULT_OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 
-/// Bound on the stdout excerpt persisted per rule (issue #691): some tools
-/// print their root cause or key diagnostics on stdout, so the checkpoint
-/// keeps a bounded excerpt with the same contract as `stderr_tail`.
-const STDOUT_TAIL_CHARS: usize = 2048;
-
-/// Last [`STDERR_TAIL_CHARS`] characters of a rule's stderr, prefixed with
-/// an ellipsis marker when truncated.
-fn stderr_tail(stderr: Option<&str>) -> Option<String> {
-    tail_chars(stderr, STDERR_TAIL_CHARS)
+/// Resolve the configured output-tail size from `OXO_FLOW_OUTPUT_TAIL_BYTES`.
+///
+/// Callers without access to an
+/// [`crate::executor::ExecutorConfig`]-derived value (the signal
+/// handler, cluster submission paths) use this to honor the same override.
+/// A missing variable yields the default; an unparsable or zero value falls
+/// back to the default with a warning — an explicit-but-broken setting must
+/// not silently disable the tail.
+pub fn output_tail_bytes_from_env() -> usize {
+    const ENV_VAR: &str = "OXO_FLOW_OUTPUT_TAIL_BYTES";
+    match std::env::var(ENV_VAR) {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(0) | Err(_) => {
+                tracing::warn!(value = %raw, "invalid {ENV_VAR}, using the default output tail size");
+                DEFAULT_OUTPUT_TAIL_BYTES
+            }
+            Ok(bytes) => bytes,
+        },
+        Err(_) => DEFAULT_OUTPUT_TAIL_BYTES,
+    }
 }
 
-/// Last `chars` characters of a stream capture, prefixed with an ellipsis
-/// marker when truncated.
-fn tail_chars(stream: Option<&str>, chars: usize) -> Option<String> {
+/// Last `bytes` bytes of a stream capture, prefixed with an ellipsis marker
+/// when truncated. The cut point is walked back to a UTF-8 character
+/// boundary so the persisted tail is always valid `String` content. The
+/// `"…\n"` marker (4 UTF-8 bytes) is additive metadata — the content
+/// portion never exceeds `bytes`, so the persisted total is at most
+/// `bytes + 4`.
+fn stream_tail(stream: Option<&str>, bytes: usize) -> Option<String> {
     let stream = stream?;
-    // nth_back is 0-indexed from the end, so N-1 lands exactly N chars back.
-    match stream.char_indices().nth_back(chars - 1) {
-        Some((start, _)) => Some(format!("…\n{}", &stream[start..])),
-        None => Some(stream.to_string()),
+    if bytes == 0 {
+        return Some(String::from("…\n"));
     }
+    if stream.len() <= bytes {
+        return Some(stream.to_string());
+    }
+    let mut start = stream.len() - bytes;
+    while !stream.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(format!("…\n{}", &stream[start..]))
 }
 
 impl CheckpointState {
@@ -628,17 +651,18 @@ impl CheckpointState {
     }
 
     /// Persist execution detail for reporting (issue #83 WS2): the exit
-    /// code and expanded command that actually ran, plus a bounded stderr
-    /// excerpt. Call at completion/failure time, before the corresponding
-    /// `mark_completed`/`mark_failed`.
-    pub fn record_run(&mut self, record: &JobRecord) {
+    /// code and expanded command that actually ran, plus a bounded excerpt
+    /// of each output stream. Call at completion/failure time, before the
+    /// corresponding `mark_completed`/`mark_failed`. `tail_bytes` bounds
+    /// each excerpt (see [`DEFAULT_OUTPUT_TAIL_BYTES`]).
+    pub fn record_run(&mut self, record: &JobRecord, tail_bytes: usize) {
         self.rule_runs.insert(
             record.rule.clone(),
             RuleRunRecord {
                 exit_code: record.exit_code,
                 command: record.command.clone(),
-                stderr_tail: stderr_tail(record.stderr.as_deref()),
-                stdout_tail: tail_chars(record.stdout.as_deref(), STDOUT_TAIL_CHARS),
+                stderr_tail: stream_tail(record.stderr.as_deref(), tail_bytes),
+                stdout_tail: stream_tail(record.stdout.as_deref(), tail_bytes),
                 caption: record.caption.clone(),
                 status: Some(record.status.to_string()),
                 skip_reason: record.skip_reason.clone(),
@@ -1752,7 +1776,7 @@ mod tests {
             caption: None,
             signal: Some(15),
         };
-        ck.record_run(&record);
+        ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
         let r = &ck.rule_runs["slow_scan"];
         assert_eq!(r.status.as_deref(), Some("cancelled"));
         assert_eq!(r.skip_reason.as_deref(), Some("run aborted"));
@@ -1768,7 +1792,7 @@ mod tests {
         let mk = |record: JobRecord| {
             let mut ck = CheckpointState::default();
             ck.mark_failed(&record.rule);
-            ck.record_run(&record);
+            ck.record_run(&record, DEFAULT_OUTPUT_TAIL_BYTES);
             ck
         };
         let base = |status: crate::executor::JobStatus,
