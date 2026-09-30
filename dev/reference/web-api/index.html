@@ -4215,7 +4215,7 @@ The full run row: <code>{ id, user_id, pipeline_id, pipeline_snapshot, status, p
 <h3 id="run-preview">Run Preview<a class="headerlink" href="#run-preview" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/runs/{id}/preview
 </span></code></pre></div>
-The instance-level dry-run plan (<code>checkpoint_preview</code> + execution order), persisted by the executor as <code>dry-run-preview.json</code> when a dry-run completes. Returns <code>404 NO_PREVIEW</code> for runs that never produced one.</p>
+The instance-level dry-run plan (<code>checkpoint_preview</code> + execution order), persisted by the executor as <code>dry-run-preview.json</code> when a dry-run completes. Returns <code>404 NO_PREVIEW</code> for runs that never produced one — or when the workdir path is not a regular file (issue #735: a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return <code>413 PREVIEW_TOO_LARGE</code>.</p>
 <h3 id="ai-status">AI Status<a class="headerlink" href="#ai-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>GET /api/runs/{id}/ai-status
 </span></code></pre></div>
