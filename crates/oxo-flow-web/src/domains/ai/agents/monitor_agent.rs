@@ -6,6 +6,7 @@
 //! Decision engine: info -> warn -> alert -> critical with escalation
 
 use super::types::*;
+use crate::domains::execution::diagnostics::DiagnosticsEngine;
 use chrono::Utc;
 
 /// Execution status of a single rule/node.
@@ -255,34 +256,34 @@ pub fn suggest_fix(rule: &str, exit_code: Option<i32>, _log_excerpt: &str) -> Ve
     }
 }
 
-/// Check if an error pattern is known and auto-fixable.
+/// Check if a failed rule matches a known error pattern.
+///
+/// Delegates to the shared [`DiagnosticsEngine`] pattern table so the AI
+/// monitor and the web diagnostics service agree on what counts as a known
+/// error (issue #708) — the previous hand-rolled substring checks matched
+/// near-miss words (`contains("oom")` matched "zoom"). Returns
+/// `(auto_fixable, pattern_id)`.
+///
+/// Exit-code-only signatures still fire when no stderr text survived:
+/// 137/9 is the OOM killer's SIGKILL, 139 is SIGSEGV.
 pub fn is_known_error_pattern(exit_code: Option<i32>, log_excerpt: &str) -> (bool, String) {
-    let log_lower = log_excerpt.to_lowercase();
-
-    if exit_code == Some(137)
-        || log_lower.contains("oom")
-        || log_lower.contains("out of memory")
-        || log_lower.contains("killed")
-    {
-        return (true, "oom_killed".into());
-    }
-    if exit_code == Some(139)
-        || log_lower.contains("segfault")
-        || log_lower.contains("segmentation fault")
-    {
-        return (true, "segfault".into());
-    }
-    if log_lower.contains("no such file") || log_lower.contains("cannot find") {
-        return (true, "missing_file".into());
-    }
-    if log_lower.contains("permission denied") || log_lower.contains("access denied") {
-        return (false, "permission_error".into());
-    }
-    if log_lower.contains("disk full") || log_lower.contains("no space left") {
-        return (true, "disk_full".into());
+    match exit_code {
+        Some(137) | Some(9) => return (true, "oom_killed".into()),
+        Some(139) => return (true, "segfault".into()),
+        _ => {}
     }
 
-    (false, "unknown".into())
+    match DiagnosticsEngine::global()
+        .analyze("monitor", log_excerpt, exit_code)
+        .into_iter()
+        .find(|r| r.error_pattern.as_deref() != Some("unknown_error"))
+    {
+        Some(result) => (
+            result.auto_fixable,
+            result.error_pattern.unwrap_or_else(|| "unknown".into()),
+        ),
+        None => (false, "unknown".into()),
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +349,24 @@ mod tests {
         let (known, pattern) = is_known_error_pattern(None, "Out of memory: killed process");
         assert!(known);
         assert_eq!(pattern, "oom_killed");
+    }
+
+    #[test]
+    fn test_zoom_does_not_match_oom() {
+        // Regression for issue #709: contains("oom") matched "zoom".
+        let (known, pattern) = is_known_error_pattern(None, "Zooming the canvas to level 5");
+        assert!(!known);
+        assert_eq!(pattern, "unknown");
+    }
+
+    #[test]
+    fn test_shared_engine_reports_diagnostics_pattern_id() {
+        // The monitor and the diagnostics engine now share one table, so
+        // pattern ids and auto-fixability cannot drift apart (#708).
+        let (known, pattern) =
+            is_known_error_pattern(Some(127), "sh: 1: fastqc: command not found");
+        assert!(known);
+        assert_eq!(pattern, "command_not_found");
     }
 
     #[test]

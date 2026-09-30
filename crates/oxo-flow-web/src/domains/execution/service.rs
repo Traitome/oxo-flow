@@ -152,7 +152,8 @@ pub fn diagnose_run(
         oxo_flow_core::executor::checkpoint::BenchmarkRecord,
     >,
 ) -> DiagnosticsResponse {
-    let engine = DiagnosticsEngine::new();
+    // Shared engine: the static pattern table's regexes compile once (#708).
+    let engine = DiagnosticsEngine::global();
 
     // Sampled peak RSS at ≥80% of the declared memory limit = sustained
     // memory pressure worth surfacing.
