@@ -787,4 +787,22 @@ mod tests {
             assert!(upload_stage_path(workdir, &StoragePath::parse(raw)).is_err());
         }
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn md5_of_fifo_errors_instead_of_blocking() {
+        // #714: the stat-first gate must refuse a FIFO before the open —
+        // this test hangs (until the harness kills it) if md5_of_file ever
+        // opens the pipe.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("pipe");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo available on unix");
+        assert!(status.success());
+
+        let err = md5_of_file(&fifo).await.expect_err("FIFO must error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }

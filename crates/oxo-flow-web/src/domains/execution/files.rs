@@ -411,6 +411,12 @@ fn collect_zip_entries(dir: &FsPath) -> Result<Vec<ZipEntry>, String> {
                 stack.push(path);
                 continue;
             }
+            // FIFOs / sockets / devices are not zip content, and opening one
+            // (crc32, body streaming) would block (#714 addendum: the #724
+            // sweep gated the file-serving paths but not this walker).
+            if !meta.is_file() {
+                continue;
+            }
             if is_blocked_name(path.file_name().and_then(|n| n.to_str()).unwrap_or("")) {
                 continue;
             }
