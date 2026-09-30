@@ -4314,10 +4314,15 @@ when you need at least one GPU (<code>gpu = 1</code> or higher).</p>
   <code>rusage[mem=…]</code>; the same config cannot schedule 4 GB locally and 4 MB
   on the cluster.</li>
 <li>Accepted forms: a bare number, or a single-letter <code>K</code>/<code>M</code>/<code>G</code>/<code>T</code>
-  suffix (<code>"512k"</code>, <code>"1500M"</code>, <code>"4G"</code>, <code>"1T"</code>). Multi-letter suffixes
-  (<code>"4096MB"</code>, <code>"2GB"</code>) are <strong>not</strong> parsed — a rule declaring one gets a
-  validation warning locally, and cluster backends render the string
-  verbatim instead of guessing a unit.</li>
+  suffix (<code>"4096"</code>, <code>"8G"</code>, <code>"16384M"</code>, <code>"1T"</code>). Fractional (<code>"16.5G"</code>)
+  and multi-letter-suffix (<code>"4096MB"</code>, <code>"2GB"</code>) figures parse to nothing
+  engine-wide and are <strong>rejected at validate time</strong> — the same predicate
+  <code>check</code>'s E004 diagnostic applies, so a config that loads is a config
+  the pool, the quota, and every scheduler render agree on. Because
+  PBS <code>mem=</code> and SGE <code>h_vmem=</code> default to their own units (words/bytes),
+  those two backends receive the figure with an <strong>explicit unit</strong>
+  (<code>mem=8192mb</code>, <code>h_vmem=16384M</code>); SLURM's <code>--mem</code> and LSF's converted
+  KB figure need no help (their defaults match or are converted).</li>
 <li><code>time_limit</code> accepts the suffix forms <code>90s</code>, <code>30m</code>, <code>24h</code>, <code>2d</code> and the
   scheduler-style colon forms <code>01:00:00</code>, <code>24:00:00</code>, <code>1-06:00:00</code> — one
   shared parser for the local executor and every backend, so the same
@@ -4411,7 +4416,7 @@ below show the pin for each backend.</p>
 <h2 id="pbs-example">PBS Example<a class="headerlink" href="#pbs-example" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="ch">#!/bin/bash</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1">#PBS -N align_batch_S1</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1">#PBS -l nodes=1:ppn=16,mem=32G,walltime=1-00:00:00</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1">#PBS -l nodes=1:ppn=16,mem=32768mb,walltime=1-00:00:00</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1">#PBS -o logs/align_batch_S1.out</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">#PBS -e logs/align_batch_S1.err</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nb">cd</span><span class="w"> </span>/abs/path/to/workdir<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
@@ -4427,7 +4432,7 @@ below show the pin for each backend.</p>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">#$ -wd /abs/path/to/workdir</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1">#$ -N align_batch_S1</span>
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1">#$ -pe smp 16</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">#$ -l h_vmem=32G</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">#$ -l h_vmem=32768M</span>
 </span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1">#$ -l h_rt=1-00:00:00</span>
 </span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">#$ -o logs/align_batch_S1.out</span>
 </span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1">#$ -e logs/align_batch_S1.err</span>
