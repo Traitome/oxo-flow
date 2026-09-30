@@ -931,6 +931,16 @@ impl ExperimentControlPair {
             message: format!("failed to read metadata for pairs file: {}", e),
         })?;
 
+        // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+        // a FIFO's metadata length is 0, so the size gate alone would pass and
+        // the open below would block forever.
+        if !metadata.is_file() {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "pairs file is not a regular file".to_string(),
+            });
+        }
+
         // 50MB limit to prevent OOM on accidental binary file input
         if metadata.len() > 50 * 1024 * 1024 {
             return Err(OxoFlowError::Parse {

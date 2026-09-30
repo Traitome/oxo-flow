@@ -189,6 +189,14 @@ pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
+    // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+    // File::open on a writer-less FIFO blocks forever.
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat for checksum: {}", path.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("cannot checksum {}: not a regular file", path.display());
+    }
+
     let file = std::fs::File::open(path)
         .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
     let mut reader = std::io::BufReader::with_capacity(65536, file);

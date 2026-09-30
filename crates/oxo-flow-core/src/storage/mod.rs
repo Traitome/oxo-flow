@@ -224,6 +224,14 @@ async fn md5_base64_of_file(path: &Path) -> std::io::Result<String> {
 async fn md5_of_file(path: &Path) -> std::io::Result<[u8; 16]> {
     use md5::Digest as _;
     use tokio::io::AsyncReadExt as _;
+    // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+    // open on a writer-less FIFO blocks the async worker forever.
+    if !tokio::fs::metadata(path).await?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("cannot checksum {}: not a regular file", path.display()),
+        ));
+    }
     let mut hasher = md5::Md5::new();
     let mut file = tokio::fs::File::open(path).await?;
     let mut buf = vec![0u8; 64 * 1024];

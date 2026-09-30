@@ -2630,7 +2630,13 @@ impl RuleCaptionsGenerator {
             Some(wd) => wd.join(file),
             None => std::path::PathBuf::from(file),
         };
-        std::fs::read_to_string(&path).ok()
+        // Stat-first regular-file gate (issue #714): read_to_string on a
+        // writer-less FIFO blocks forever; a non-file degrades to no caption,
+        // same as a missing one.
+        match std::fs::metadata(&path) {
+            Ok(m) if m.is_file() => std::fs::read_to_string(&path).ok(),
+            _ => None,
+        }
     }
 }
 

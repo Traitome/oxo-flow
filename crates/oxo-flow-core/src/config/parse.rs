@@ -69,6 +69,16 @@ impl WorkflowConfig {
     /// Parse a workflow configuration from a `.oxoflow` file.
     #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
+        // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+        // read_to_string on a writer-less FIFO blocks the caller forever.
+        if let Ok(meta) = std::fs::metadata(path)
+            && !meta.is_file()
+        {
+            return Err(OxoFlowError::Parse {
+                path: path.to_path_buf(),
+                message: "not a regular file".to_string(),
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 OxoFlowError::WorkflowNotFound(path.to_path_buf())
@@ -404,6 +414,19 @@ impl WorkflowConfig {
                     }
                 })?;
                 let inc_path = cache_dir.join(&inc.path);
+                // Stat-first regular-file gate (issue #714, pattern from
+                // #695/#706): open on a writer-less FIFO blocks the thread.
+                if let Ok(meta) = std::fs::metadata(&inc_path)
+                    && !meta.is_file()
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!(
+                            "include '{}' from repo '{repo}' is not a regular file",
+                            inc.path
+                        ),
+                    });
+                }
                 let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
                     path: inc_path.clone(),
                     message: format!(
@@ -431,6 +454,16 @@ impl WorkflowConfig {
                 (text, base_dir.to_path_buf()) // Remote includes don't change base_dir for now
             } else {
                 let inc_path = base_dir.join(&inc.path);
+                // Stat-first regular-file gate (issue #714, pattern from
+                // #695/#706): open on a writer-less FIFO blocks the thread.
+                if let Ok(meta) = std::fs::metadata(&inc_path)
+                    && !meta.is_file()
+                {
+                    return Err(OxoFlowError::Parse {
+                        path: inc_path.clone(),
+                        message: format!("include '{}' is not a regular file", inc.path),
+                    });
+                }
                 let text = std::fs::read_to_string(&inc_path).map_err(|e| OxoFlowError::Parse {
                     path: inc_path.clone(),
                     message: format!("failed to read include '{}': {}", inc.path, e),
