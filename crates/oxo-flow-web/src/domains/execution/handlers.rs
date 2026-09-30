@@ -1178,13 +1178,32 @@ pub async fn get_run_logs(
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
 
+    // Bounded tail (issue #734): the endpoint's contract is the log text,
+    // but buffering a multi-GB log per request is a memory-amplification
+    // surface — the newest 8 MiB covers any reasonable viewer, with an
+    // explicit truncation marker so nothing is silently missing.
+    const MAX_LOG_ENDPOINT_BYTES: u64 = 8 * 1024 * 1024;
     let log_content = match run.workdir.as_ref() {
-        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
-            .await
-            .ok(),
-        None => None,
-    }
-    .unwrap_or_else(|| "No execution log available.".to_string());
+        Some(wd) => {
+            let log_path = format!("{wd}/execution.log");
+            let path = std::path::Path::new(&log_path);
+            match std::fs::metadata(path)
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+            {
+                Some(len) if len > MAX_LOG_ENDPOINT_BYTES => {
+                    let tail = checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES);
+                    format!(
+                        "[log truncated — showing the newest {MAX_LOG_ENDPOINT_BYTES} of {len} bytes; read the full file from the run workdir]\n{tail}"
+                    )
+                }
+                Some(_) => checkpoint_status::read_tail_bounded(path, MAX_LOG_ENDPOINT_BYTES),
+                None => "No execution log available.".to_string(),
+            }
+        }
+        None => "No execution log available.".to_string(),
+    };
 
     Ok(Json(log_content))
 }
