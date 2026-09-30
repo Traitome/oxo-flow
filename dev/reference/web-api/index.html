@@ -4271,7 +4271,7 @@ it instead). A terminal run in either endpoint returns <code>409 RUN_NOT_ACTIVE<
 <h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>GET /api/runs/{id}/logs
 </span></code></pre></div>
-Returns full execution log.</p>
+Returns the execution log text — bounded to the newest 8 MiB with an explicit <code>[log truncated …]</code> marker line when the log is larger (issue #734; buffering a multi-GB log per request was a memory-amplification surface). Read the full file from the run workdir when the marker appears.</p>
 <h3 id="results">Results<a class="headerlink" href="#results" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>GET /api/runs/{id}/results
 </span></code></pre></div>
