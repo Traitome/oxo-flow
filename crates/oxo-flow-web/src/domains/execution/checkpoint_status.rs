@@ -228,6 +228,50 @@ mod tests {
     }
 
     #[test]
+    fn read_tail_bounded_returns_whole_small_file() {
+        let dir = std::env::temp_dir().join("cp-tail-small");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("execution.log"), "line one\nline two\n").unwrap();
+        assert_eq!(
+            read_tail_bounded(&dir.join("execution.log"), 256 * 1024),
+            "line one\nline two\n"
+        );
+    }
+
+    #[test]
+    fn read_tail_bounded_reads_only_the_tail_window() {
+        let dir = std::env::temp_dir().join("cp-tail-window");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let big = "x".repeat(4096);
+        let mut log = String::new();
+        for i in 0..100 {
+            log.push_str(&format!("{big} line {i}\n"));
+        }
+        fs::write(dir.join("execution.log"), &log).unwrap();
+        let tail = read_tail_bounded(&dir.join("execution.log"), 8192);
+        // Bounded well under the file size…
+        assert!(tail.len() <= 8192, "tail is {} bytes", tail.len());
+        // …starts on a whole line (no torn prefix)…
+        assert!(tail.starts_with("xxxx"));
+        // …and carries the newest content.
+        assert!(tail.contains("line 99"));
+        assert!(!tail.contains("line 0\n"));
+    }
+
+    #[test]
+    fn read_tail_bounded_missing_file_is_empty() {
+        let dir = std::env::temp_dir().join("cp-tail-missing");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            read_tail_bounded(&dir.join("execution.log"), 256 * 1024),
+            ""
+        );
+    }
+
+    #[test]
     fn when_gated_failed_entries_show_as_skipped() {
         // Issue #690: a stale failed_rules entry whose recorded when-verdict
         // is false was gated off, not failed — the web view must show
@@ -392,14 +436,32 @@ pub fn load_benchmarks(
 /// leading partial line is skipped and only whole lines within the window
 /// are returned (chronological order preserved).
 pub fn load_metrics_bounded(run_dir: &Path, max_bytes: u64) -> Vec<serde_json::Value> {
-    let Ok(mut file) = std::fs::File::open(run_dir.join("metrics.jsonl")) else {
-        return Vec::new();
+    read_tail_bounded(&run_dir.join("metrics.jsonl"), max_bytes)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect()
+}
+
+/// Read at most the newest `max_bytes` of a file, seeking to the tail
+/// first so a multi-gigabyte log is never buffered whole (issue #710).
+/// When the window starts mid-line the torn first line is dropped, so
+/// consumers only ever see whole lines. A missing, unreadable, or
+/// non-regular file (FIFO/socket/device — `File::open` would block on a
+/// writer-less FIFO, #695 family) yields an empty string.
+pub fn read_tail_bounded(path: &Path, max_bytes: u64) -> String {
+    // Stat first: `exists()` never blocks but does not exclude special
+    // files, and opening those can hang the request.
+    if !oxo_flow_core::result::is_regular_file(path) {
+        return String::new();
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
     };
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let skip = file_len.saturating_sub(max_bytes);
     // Seek near the end first so we never read the whole file into memory.
     if skip > 0 && std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(skip)).is_err() {
-        return Vec::new();
+        return String::new();
     }
     let mut content = String::new();
     {
@@ -409,7 +471,7 @@ pub fn load_metrics_bounded(run_dir: &Path, max_bytes: u64) -> Vec<serde_json::V
             .read_to_string(&mut content)
             .is_err()
         {
-            return Vec::new();
+            return String::new();
         }
     }
     // Drop the first line when we skipped into the middle of one.
@@ -418,8 +480,5 @@ pub fn load_metrics_bounded(run_dir: &Path, max_bytes: u64) -> Vec<serde_json::V
     } else {
         0
     };
-    content[start..]
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .collect()
+    content[start..].to_owned()
 }

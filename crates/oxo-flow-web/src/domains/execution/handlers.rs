@@ -1051,11 +1051,15 @@ pub async fn get_diagnostics(
         run.status == "running",
     );
 
-    // Try to read log output from workdir
+    // Try to read log output from workdir — the newest 256 KiB only:
+    // execution.log is the run's full unbounded log, and diagnosis keys
+    // off trailing error context, so buffering the whole file per request
+    // is pure memory amplification (issue #710).
     let log_output = match run.workdir.as_ref() {
-        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
-            .await
-            .unwrap_or_default(),
+        Some(wd) => checkpoint_status::read_tail_bounded(
+            std::path::Path::new(&format!("{wd}/execution.log")),
+            256 * 1024,
+        ),
         None => String::new(),
     };
 
@@ -1844,10 +1848,13 @@ async fn build_report_for_run(
         None => Vec::new(),
     };
 
+    // Bounded tail (issue #710): the report agent summarizes trailing
+    // error context, not the whole run log.
     let log_summary = match run.workdir.as_ref() {
-        Some(wd) => tokio::fs::read_to_string(format!("{wd}/execution.log"))
-            .await
-            .unwrap_or_default(),
+        Some(wd) => checkpoint_status::read_tail_bounded(
+            std::path::Path::new(&format!("{wd}/execution.log")),
+            256 * 1024,
+        ),
         None => String::new(),
     };
 
