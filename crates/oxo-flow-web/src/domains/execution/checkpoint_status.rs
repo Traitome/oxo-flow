@@ -70,6 +70,37 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             progress_pct: None,
         });
     }
+    // When-skipped rules have no completed/failed entry at all — the
+    // executor records only `when_verdicts[name] = false` (issue #739).
+    // Without this loop they fell through to `Pending` forever in the web
+    // status/DAG views (inflating pending_nodes and the ETA); same
+    // reconciliation the CLI's resume banner got in #690.
+    {
+        let accounted: HashSet<&String> = checkpoint
+            .completed_rules
+            .iter()
+            .chain(checkpoint.failed_rules.iter())
+            .collect();
+        let mut skipped: Vec<&String> = checkpoint
+            .when_verdicts
+            .iter()
+            .filter(|(name, verdict)| {
+                !**verdict && !accounted.contains(name) && !running.iter().any(|r| r == *name)
+            })
+            .map(|(name, _)| name)
+            .collect();
+        skipped.sort();
+        for rule in skipped {
+            items.push(NodeStatusItem {
+                rule: rule.clone(),
+                status: NodeStatus::Skipped,
+                started_at: None,
+                duration_ms: None,
+                exit_code: None,
+                progress_pct: None,
+            });
+        }
+    }
     for rule in &running {
         items.push(NodeStatusItem {
             rule: rule.clone(),
@@ -269,6 +300,32 @@ mod tests {
             read_tail_bounded(&dir.join("execution.log"), 256 * 1024),
             ""
         );
+    }
+
+    #[test]
+    fn when_skipped_rules_surface_as_skipped_not_pending() {
+        // #739: the executor records only `when_verdicts[name] = false` for
+        // a gated-off rule — no completed/failed entry. The web status and
+        // DAG views must show Skipped, not a forever-Pending node that
+        // inflates pending_nodes and the ETA.
+        let dir = std::env::temp_dir().join("cp-when-skip");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["align"],
+                "failed_rules": [],
+                "benchmarks": {},
+                "when_verdicts": {"qc": false}
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let qc = items
+            .iter()
+            .find(|i| i.rule == "qc")
+            .expect("when-skipped rule must appear");
+        assert!(matches!(qc.status, NodeStatus::Skipped), "{:?}", qc.status);
     }
 
     #[test]

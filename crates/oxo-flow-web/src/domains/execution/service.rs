@@ -24,6 +24,42 @@ pub fn create_run(
     let execution_order = dag.execution_order().map_err(|e| format!("Order: {e}"))?;
     let parallel_groups = dag.parallel_groups().unwrap_or_default();
 
+    // When-awareness (issue #739): a rule whose gate is statically false
+    // under the current [config] never runs — the spawned CLI prints
+    // `[skip: when condition false]` for it — so the plan must not count
+    // it. Wildcard/`{meta.*}` gates bake per instance during expansion and
+    // stay in the plan, the same conservative stance the CLI dry-run
+    // takes. Same evaluator call readiness and deep_check make.
+    let gated_off: std::collections::HashSet<&str> = wf
+        .rules
+        .iter()
+        .filter_map(|r| {
+            let when = r.when.as_deref()?;
+            (!when.contains('{')
+                && !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                    when,
+                    &wf.config,
+                    &std::collections::HashMap::new(),
+                    wf.base_dir(),
+                ))
+            .then_some(r.name.as_str())
+        })
+        .collect();
+    let execution_order: Vec<String> = execution_order
+        .into_iter()
+        .filter(|name| !gated_off.contains(name.as_str()))
+        .collect();
+    let parallel_groups: Vec<Vec<String>> = parallel_groups
+        .into_iter()
+        .map(|group| {
+            group
+                .into_iter()
+                .filter(|name| !gated_off.contains(name.as_str()))
+                .collect()
+        })
+        .filter(|group: &Vec<String>| !group.is_empty())
+        .collect();
+
     // Estimate memory from rules. The engine's canonical parser
     // (`scheduler::parse_memory_mb`) is the single source of truth for
     // units: a heuristic guess (">1000 means already MB") silently
@@ -232,7 +268,13 @@ pub fn diagnose_run(
         .map(|n| DiagnosticWarning {
             rule: n.rule.clone(),
             pattern: "skipped".into(),
-            suggestion: "This rule was skipped due to upstream failure.".into(),
+            // Every Skipped item this path produces is a when-gate skip
+            // (checkpoint_status keys both sources on
+            // `when_verdicts == false`) — the old "upstream failure"
+            // reason was never true here (issue #739).
+            suggestion: "This rule's when-condition evaluated false — it did not run \
+                         in this configuration."
+                .into(),
         })
         .collect();
 
@@ -267,6 +309,52 @@ output = ["hi.txt"]
         let resp = create_run(toml, &config, None).unwrap();
         assert_eq!(resp.execution_plan.total_rules, 1);
         assert_eq!(resp.estimated_resources.max_threads, 2);
+    }
+
+    #[test]
+    fn create_run_plan_excludes_when_gated_off_rules() {
+        // #739: a rule whose gate is statically false never runs — the
+        // spawned CLI prints `[skip: when condition false]` for it — so the
+        // plan's order and rule count must not include it.
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+
+[config]
+run_qc = false
+
+[[rules]]
+name = "hello"
+shell = "echo hi"
+output = ["hi.txt"]
+
+[[rules]]
+name = "qc"
+when = "config.run_qc"
+shell = "echo qc"
+output = ["qc.txt"]
+"#;
+        let config = RunConfig {
+            max_jobs: Some(2),
+            dry_run: None,
+            keep_going: None,
+            resource_budget: None,
+        };
+        let resp = create_run(toml, &config, None).unwrap();
+        assert_eq!(
+            resp.execution_plan.total_rules, 1,
+            "gated-off rule must not count"
+        );
+        assert!(
+            !resp
+                .execution_plan
+                .execution_order
+                .iter()
+                .any(|name| name == "qc"),
+            "gated-off rule must not appear in the plan: {:?}",
+            resp.execution_plan.execution_order
+        );
     }
 
     #[test]

@@ -155,6 +155,9 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    // Shell tokens of gate-passing rules — pass (b)'s derived-index probe
+    // consumes these instead of re-collecting over every rule (#739).
+    let mut gated_shell_tokens: HashSet<&str> = HashSet::new();
 
     for rule in &config.rules {
         // A rule whose `when` gate is statically false under the current
@@ -175,6 +178,9 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
             )
         {
             continue;
+        }
+        if let Some(shell) = rule.shell.as_deref() {
+            gated_shell_tokens.extend(shell.split_whitespace());
         }
         let env = config.resolve_environment(rule);
         let env_kind = env
@@ -291,23 +297,20 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
     }
 
     // (b) `reference_dir`-derived tool indexes for tools mentioned in shells.
+    // Tokens come only from rules that passed the when-gate above (#739):
+    // a gated-off rule mentioning gatk must not flag its index as missing
+    // when no gate-passing rule will ever use it.
     let derived = config.derive_reference_paths();
     if !derived.is_empty() {
-        let all_tokens: HashSet<&str> = config
-            .rules
-            .iter()
-            .filter_map(|r| r.shell.as_deref())
-            .flat_map(str::split_whitespace)
-            .collect();
         for (tool, key) in TOOL_INDEX_KEYS {
-            if all_tokens.contains(tool)
+            if gated_shell_tokens.contains(tool)
                 && let Some(path) = derived.get(*key)
             {
                 check_reference_path(&mut report, &mut seen, base_dir, path, None);
             }
         }
-        if all_tokens.contains("samtools")
-            && all_tokens.contains("faidx")
+        if gated_shell_tokens.contains("samtools")
+            && gated_shell_tokens.contains("faidx")
             && let Some(path) = derived.get("samtools_faidx")
         {
             check_reference_path(&mut report, &mut seen, base_dir, path, None);
@@ -645,6 +648,26 @@ mod tests {
              script = \"scripts/missing_qc.py --out results/qc.txt\"\n");
         let report = deep_for(&toml, dir.path());
         assert_eq!(findings_of(&report, "D001").len(), 1);
+    }
+
+    #[test]
+    fn gated_off_rule_tokens_do_not_trigger_derived_reference_checks() {
+        // #739 pass (b): a when-gated-off rule mentioning gatk must not
+        // make the derived-index probe flag the gatk dict as missing — no
+        // gate-passing rule will ever use it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("ref")).unwrap();
+        let toml = wf("[config]\nreference_dir = \"ref\"\nrun_vc = false\n\n\
+             [[rules]]\nname = \"vc\"\nwhen = \"config.run_vc\"\n\
+             output = [\"results/v.vcf\"]\ndescription = \"gated off\"\n\
+             shell = \"gatk HaplotypeCaller -R {config.reference_dir}/genome.fa\"\n");
+        let report = deep_for(&toml, dir.path());
+        let d004 = findings_of(&report, "D004");
+        assert!(
+            d004.is_empty(),
+            "gated-off rule must not emit derived D004 findings: {d004:?}"
+        );
+        assert_eq!(report.references_checked, 0);
     }
 
     #[test]

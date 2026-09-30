@@ -1306,7 +1306,22 @@ pub fn lint_format(
         // are included — `transform.map` executes even though the rule
         // declares no outputs of its own.
         let executes = rule.shell.is_some() || rule.script.is_some() || rule.transform.is_some();
-        let can_never_run = matches!(rule.when.as_deref().map(str::trim), Some("false"));
+        // "Can never run" is a gate verdict, not a literal-string match
+        // (#739): a gate that evaluates false under the current [config]
+        // means the rule never executes and W019/W024's run-time
+        // consequences are moot — the same call the input-existence gate
+        // above makes (#493). Conditions referencing wildcards or
+        // `{meta.*}` columns bake per instance and stay conservatively
+        // checkable here, matching deep_check's raw-config guard.
+        let can_never_run = rule.when.as_deref().is_some_and(|when| {
+            !when.contains('{')
+                && !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                    when,
+                    &config.config,
+                    &std::collections::HashMap::new(),
+                    config.base_dir(),
+                )
+        });
         let has_dependents = dag
             .as_ref()
             .and_then(|d| d.dependents(&rule.name).ok())
@@ -5396,6 +5411,31 @@ shell = "samtools faidx {{config.reference}}"
         assert!(
             !diagnostics.iter().any(|d| d.code == "W019"),
             "a rule with when = \"false\" can never execute — missing outputs are moot: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_no_w019_when_gate_evaluates_false() {
+        // #739: the gate verdict comes from the evaluator, not just the
+        // literal "false" string — a config-false gate keeps W019 silent
+        // for the same reason.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            run_qc = false
+
+            [[rules]]
+            name = "never_runs"
+            when = "config.run_qc"
+            shell = "echo data > sra/x.fastq"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert!(
+            !diagnostics.iter().any(|d| d.code == "W019"),
+            "a rule whose gate evaluates false can never execute: {diagnostics:?}"
         );
     }
 
