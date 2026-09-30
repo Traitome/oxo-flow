@@ -76,10 +76,15 @@ One engine-wide parser reads both `memory` and `disk`, so what you see in
   `rusage[mem=…]`; the same config cannot schedule 4 GB locally and 4 MB
   on the cluster.
 - Accepted forms: a bare number, or a single-letter `K`/`M`/`G`/`T`
-  suffix (`"512k"`, `"1500M"`, `"4G"`, `"1T"`). Multi-letter suffixes
-  (`"4096MB"`, `"2GB"`) are **not** parsed — a rule declaring one gets a
-  validation warning locally, and cluster backends render the string
-  verbatim instead of guessing a unit.
+  suffix (`"4096"`, `"8G"`, `"16384M"`, `"1T"`). Fractional (`"16.5G"`)
+  and multi-letter-suffix (`"4096MB"`, `"2GB"`) figures parse to nothing
+  engine-wide and are **rejected at validate time** — the same predicate
+  `check`'s E004 diagnostic applies, so a config that loads is a config
+  the pool, the quota, and every scheduler render agree on. Because
+  PBS `mem=` and SGE `h_vmem=` default to their own units (words/bytes),
+  those two backends receive the figure with an **explicit unit**
+  (`mem=8192mb`, `h_vmem=16384M`); SLURM's `--mem` and LSF's converted
+  KB figure need no help (their defaults match or are converted).
 - `time_limit` accepts the suffix forms `90s`, `30m`, `24h`, `2d` and the
   scheduler-style colon forms `01:00:00`, `24:00:00`, `1-06:00:00` — one
   shared parser for the local executor and every backend, so the same
@@ -168,7 +173,7 @@ below show the pin for each backend.
 ```bash
 #!/bin/bash
 #PBS -N align_batch_S1
-#PBS -l nodes=1:ppn=16,mem=32G,walltime=1-00:00:00
+#PBS -l nodes=1:ppn=16,mem=32768mb,walltime=1-00:00:00
 #PBS -o logs/align_batch_S1.out
 #PBS -e logs/align_batch_S1.err
 cd /abs/path/to/workdir || exit 1
@@ -188,7 +193,7 @@ apptainer exec --bind /abs/path/to/workdir:/abs/path/to/workdir docker://biocont
 #$ -wd /abs/path/to/workdir
 #$ -N align_batch_S1
 #$ -pe smp 16
-#$ -l h_vmem=32G
+#$ -l h_vmem=32768M
 #$ -l h_rt=1-00:00:00
 #$ -o logs/align_batch_S1.out
 #$ -e logs/align_batch_S1.err

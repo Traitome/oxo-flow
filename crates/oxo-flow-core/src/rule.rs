@@ -1593,16 +1593,19 @@ impl Rule {
         if let Some(mem) = self.effective_memory() {
             let mem_trimmed = mem.trim();
             if !mem_trimmed.is_empty() {
-                // Must end with a valid unit suffix and have a numeric prefix
-                let valid = mem_trimmed
-                    .strip_suffix(['G', 'g', 'M', 'm', 'K', 'k', 'T', 't'])
-                    .and_then(|num_part| num_part.parse::<f64>().ok())
-                    .map(|v| v.is_finite() && v > 0.0)
-                    .unwrap_or(false);
+                // The engine parser IS the grammar (issue #740): a value it
+                // cannot parse reserves 0 MB locally and reaches scheduler
+                // directives unchecked, so accepting it here let configs
+                // load and then mis-schedule. Bare numbers are megabytes
+                // (`parse_memory_mb`'s convention — the old check rejected
+                // them while `check`'s E004 and the pool accepted them);
+                // fractional figures ("16.5G") and sub-MB values ("512k")
+                // parse to nothing and are rejected with E004 today.
+                let valid = crate::scheduler::parse_memory_mb(mem_trimmed).is_some();
                 if !valid {
                     return Err(crate::error::OxoFlowError::Validation {
                         message: format!(
-                            "rule '{}' has invalid memory format '{}' (expected e.g. \"8G\", \"16384M\", \"1T\")",
+                            "rule '{}' has invalid memory format '{}' (expected e.g. \"4096\", \"8G\", \"16384M\", \"1T\" — bare numbers are MB)",
                             self.name, mem
                         ),
                         rule: Some(self.name.clone()),
@@ -2671,6 +2674,40 @@ mod tests {
         assert!(rule.validate().is_err(), "16GB must be rejected");
         rule.resources.memory = Some("16G".to_string());
         assert!(rule.validate().is_ok(), "16G must be accepted");
+    }
+
+    #[test]
+    fn validate_memory_agrees_with_engine_parser() {
+        // #740: validate's grammar IS parse_memory_mb — one predicate, so
+        // a config that loads is a config the pool, the quota, and every
+        // backend render agree on.
+        for mem in ["4096", "8192", "8G", "16384M", "1T", "4g"] {
+            let mut rule = Rule {
+                name: "test".to_string(),
+                ..Default::default()
+            };
+            rule.resources.memory = Some(mem.to_string());
+            assert!(
+                rule.validate().is_ok(),
+                "{mem} parses engine-wide and must pass validate"
+            );
+        }
+        for mem in ["16.5G", "512k", "16GB", "abc"] {
+            let mut rule = Rule {
+                name: "test".to_string(),
+                ..Default::default()
+            };
+            rule.resources.memory = Some(mem.to_string());
+            assert_eq!(
+                crate::scheduler::parse_memory_mb(mem),
+                None,
+                "{mem} must not parse engine-wide"
+            );
+            assert!(
+                rule.validate().is_err(),
+                "{mem} must fail validate in step with the parser"
+            );
+        }
     }
 
     #[test]
