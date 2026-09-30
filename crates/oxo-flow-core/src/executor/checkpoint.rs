@@ -3,7 +3,59 @@ use crate::executor::JobRecord;
 use crate::rule::{FilePatterns, Rule};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic counter making every staged checkpoint filename unique within
+/// this process (combined with the PID, unique on the machine).
+static STAGED_SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// `checkpoint.json` → `checkpoint.json.<seq>.<pid>.tmp`: a sibling staged
+/// name no other concurrent save can collide with.
+fn unique_staged_path(path: &Path) -> PathBuf {
+    let seq = STAGED_SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "checkpoint.json".into());
+    name.push(format!(".{seq}.{}.tmp", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// Shared save body for [`CheckpointState::save_to_file`] and
+/// [`save_to_file_async`](CheckpointState::save_to_file_async): create the
+/// parent dir, write + fsync the staged file, rename it over the target,
+/// fsync the parent dir. The staged path is caller-chosen and unique per
+/// call, so concurrent saves never rename or delete each other's file.
+fn write_checkpoint_staged(json: &str, path: &Path, tmp_path: &Path) -> Result<()> {
+    let parent = crate::parent_dir(path);
+    if parent != std::path::Path::new(".") {
+        std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
+            message: format!("failed to create checkpoint directory: {e}"),
+        })?;
+    }
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(tmp_path)?;
+        use std::io::Write;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(tmp_path, path)?;
+        // fsync the parent directory so the rename is durable (POSIX).
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    write_result.map_err(|e| {
+        // Never leave a partial tmp file behind for the next attempt to
+        // trip over; the real checkpoint (old or new) is what matters.
+        let _ = std::fs::remove_file(tmp_path);
+        OxoFlowError::Config {
+            message: format!("failed to save checkpoint to {}: {e}", path.display()),
+        }
+    })
+}
 
 /// One file in an input manifest: part of the file set a rule's inputs
 /// resolved to when the rule completed.
@@ -751,72 +803,28 @@ impl CheckpointState {
     /// two fsyncs belong on the blocking pool, not a runtime worker. Call
     /// it while holding the checkpoint mutex; `&self` stays borrowed, the
     /// serialized bytes move to the pool.
+    ///
+    /// The staged file carries a per-call unique suffix instead of a fixed
+    /// `.tmp` name: a concurrent writer (e.g. a rule task orphaned by
+    /// `abort_all()` whose `save_to_file_async` future was dropped mid-`await`
+    /// — the spawned blocking task still runs to completion) would otherwise
+    /// rename/delete a sibling save's staged file out from under it, surfacing
+    /// as an intermittent `No such file or directory` on the abort path.
     pub async fn save_to_file_async(&self, path: &Path) -> Result<()> {
         let json = self.to_json()?;
         let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            let parent = crate::parent_dir(&path);
-            if parent != std::path::Path::new(".") {
-                std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
-                    message: format!("failed to create checkpoint directory: {e}"),
-                })?;
-            }
-            let tmp_path = path.with_extension("json.tmp");
-            let write_result = (|| -> std::io::Result<()> {
-                let mut f = std::fs::File::create(&tmp_path)?;
-                use std::io::Write;
-                f.write_all(json.as_bytes())?;
-                f.sync_all()?;
-                drop(f);
-                std::fs::rename(&tmp_path, &path)?;
-                if let Ok(dir) = std::fs::File::open(parent) {
-                    let _ = dir.sync_all();
-                }
-                Ok(())
-            })();
-            write_result.map_err(|e| {
-                let _ = std::fs::remove_file(&tmp_path);
-                OxoFlowError::Config {
-                    message: format!("failed to save checkpoint to {}: {e}", path.display()),
-                }
-            })
-        })
-        .await
-        .map_err(|e| OxoFlowError::Config {
-            message: format!("checkpoint save task failed: {e}"),
-        })?
+        let tmp_path = unique_staged_path(&path);
+        tokio::task::spawn_blocking(move || write_checkpoint_staged(&json, &path, &tmp_path))
+            .await
+            .map_err(|e| OxoFlowError::Config {
+                message: format!("checkpoint save task failed: {e}"),
+            })?
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let parent = crate::parent_dir(path);
-        if parent != std::path::Path::new(".") {
-            std::fs::create_dir_all(parent).map_err(|e| OxoFlowError::Config {
-                message: format!("failed to create checkpoint directory: {e}"),
-            })?;
-        }
         let json = self.to_json()?;
-        let tmp_path = path.with_extension("json.tmp");
-        let write_result = (|| -> std::io::Result<()> {
-            let mut f = std::fs::File::create(&tmp_path)?;
-            use std::io::Write;
-            f.write_all(json.as_bytes())?;
-            f.sync_all()?;
-            drop(f);
-            std::fs::rename(&tmp_path, path)?;
-            // fsync the parent directory so the rename is durable (POSIX).
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
-            Ok(())
-        })();
-        write_result.map_err(|e| {
-            // Never leave a partial tmp file behind for the next attempt to
-            // trip over; the real checkpoint (old or new) is what matters.
-            let _ = std::fs::remove_file(&tmp_path);
-            OxoFlowError::Config {
-                message: format!("failed to save checkpoint to {}: {e}", path.display()),
-            }
-        })
+        let tmp_path = unique_staged_path(path);
+        write_checkpoint_staged(&json, path, &tmp_path)
     }
 
     /// Load checkpoint state from a file.
@@ -2039,7 +2047,7 @@ mod tests {
         ck.completed_rules.insert("rule_a".to_string());
         ck.save_to_file(&path).unwrap();
         assert!(path.exists());
-        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+        assert!(!dir_has_staged_tmp(dir.path()));
         let loaded = CheckpointState::load_from_file(&path).unwrap();
         assert!(loaded.completed_rules.contains("rule_a"));
         // A second save overwrites cleanly.
@@ -2047,7 +2055,19 @@ mod tests {
         ck.save_to_file(&path).unwrap();
         let loaded = CheckpointState::load_from_file(&path).unwrap();
         assert!(loaded.completed_rules.contains("rule_b"));
-        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+        assert!(!dir_has_staged_tmp(dir.path()));
+    }
+
+    /// Any leftover `*.tmp` sibling (staged names are unique per call now,
+    /// so the no-litter assertion must scan the directory, not one name).
+    fn dir_has_staged_tmp(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            })
+            .unwrap_or(false)
     }
 
     #[test]
@@ -2059,7 +2079,22 @@ mod tests {
         std::fs::create_dir(&target_dir).unwrap();
         let ck = CheckpointState::default();
         assert!(ck.save_to_file(&target_dir).is_err());
-        assert!(!dir.path().join("checkpoint.json.tmp").exists());
+        assert!(!dir_has_staged_tmp(dir.path()));
+    }
+
+    #[test]
+    fn checkpoint_staged_names_are_unique_per_call() {
+        // Concurrent saves (rule completion racing an abort-path save) must
+        // never share a staged file: each call gets a fresh name, so one
+        // save's rename cannot yank another's staged file (live ENOENT seen
+        // on the abort path with the old fixed `.tmp` name).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+        let a = unique_staged_path(&path);
+        let b = unique_staged_path(&path);
+        assert_ne!(a, b, "staged names must be unique within a process");
+        assert!(a.starts_with(dir.path()));
+        assert!(a.to_string_lossy().ends_with(".tmp"));
     }
 
     #[test]
