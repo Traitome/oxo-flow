@@ -50,8 +50,32 @@ struct Pattern {
     fix_config_path: Option<&'static str>,
 }
 
+impl Pattern {
+    /// True when this pattern can fire from log content alone, without a
+    /// corroborating exit code (issue #708: patterns with empty `exit_codes`
+    /// previously matched *every* exit status — including success — off a
+    /// single loose substring like "version"). Test-only now: the exit-code
+    /// gate judges log-only patterns by their regexes, not by this flag.
+    #[cfg(test)]
+    fn log_only(&self) -> bool {
+        self.exit_codes.is_empty()
+    }
+}
+
+/// Substring patterns are matched as whole-word/anchored regexes against the
+/// lowercased log (issue #708: `contains("version")` fired on success
+/// banners, `contains("so.")` on "also."). Patterns are compiled once at
+/// engine construction; an entry that fails to compile is skipped — the table
+/// is static, and the table-driven test below proves every entry compiles.
+fn compile_patterns(pats: &[&str]) -> Vec<regex::Regex> {
+    pats.iter()
+        .filter_map(|p| regex::Regex::new(&p.to_lowercase()).ok())
+        .collect()
+}
+
 pub struct DiagnosticsEngine {
     patterns: Vec<Pattern>,
+    compiled: Vec<(usize, Vec<regex::Regex>)>,
 }
 
 impl DiagnosticsEngine {
@@ -62,7 +86,7 @@ impl DiagnosticsEngine {
                 id: "command_not_found",
                 category: ErrorCategory::Tool,
                 exit_codes: vec![127],
-                stderr_patterns: vec!["command not found", "No such file"],
+                stderr_patterns: vec!["command not found", "no such file or directory"],
                 likely_cause: "Required tool not installed or not in PATH.",
                 auto_fixable: true,
                 fix_desc: Some("Install missing tool via conda or package manager."),
@@ -102,7 +126,15 @@ impl DiagnosticsEngine {
                 id: "tool_version_mismatch",
                 category: ErrorCategory::Tool,
                 exit_codes: vec![],
-                stderr_patterns: vec!["version", "incompatible", "unsupported"],
+                // Anchored complaint phrasings only (issue #708): a bare
+                // "version" matched every tool banner printing its version.
+                stderr_patterns: vec![
+                    "incompatible .*version",
+                    "unsupported .*version",
+                    "version .*incompatible",
+                    "requires .*version",
+                    "version mismatch",
+                ],
                 likely_cause: "Tool version incompatible with inputs or parameters.",
                 auto_fixable: false,
                 fix_desc: Some("Use a compatible tool version."),
@@ -139,7 +171,11 @@ impl DiagnosticsEngine {
                 id: "disk_full",
                 category: ErrorCategory::Resource,
                 exit_codes: vec![],
-                stderr_patterns: vec!["no space left on device", "disk quota exceeded", "ENOSPC"],
+                stderr_patterns: vec![
+                    "no space left on device",
+                    "disk quota exceeded",
+                    "\\benospc\\b",
+                ],
                 likely_cause: "Disk full. Free up space or redirect output.",
                 auto_fixable: false,
                 fix_desc: Some("Clean temp files or increase disk allocation."),
@@ -153,7 +189,7 @@ impl DiagnosticsEngine {
                     "cpu time",
                     "cpu limit",
                     "resource temporarily unavailable",
-                    "EAGAIN",
+                    "\\beagain\\b",
                 ],
                 likely_cause: "CPU time limit exceeded or resource temporarily unavailable.",
                 auto_fixable: true,
@@ -164,7 +200,12 @@ impl DiagnosticsEngine {
                 id: "ulimit",
                 category: ErrorCategory::Resource,
                 exit_codes: vec![],
-                stderr_patterns: vec!["too many open files", "ulimit", "EMFILE", "ENFILE"],
+                stderr_patterns: vec![
+                    "too many open files",
+                    "\\bulimit\\b",
+                    "\\bemfile\\b",
+                    "\\benfile\\b",
+                ],
                 likely_cause: "Too many open files. Increase ulimit.",
                 auto_fixable: true,
                 fix_desc: Some("Run 'ulimit -n 65536' before starting."),
@@ -175,11 +216,14 @@ impl DiagnosticsEngine {
                 id: "file_not_found",
                 category: ErrorCategory::Data,
                 exit_codes: vec![1],
+                // bare "not found" matched command-not-found, version
+                // strings, and tool names (issue #708)
                 stderr_patterns: vec![
                     "no such file or directory",
                     "cannot open",
-                    "not found",
-                    "ENOENT",
+                    "\\bnot found\\b.*\\b(file|input|path)\\b",
+                    "\\bfile\\b.*\\bnot found\\b",
+                    "enoent",
                 ],
                 likely_cause: "Input file not found. Check paths and wildcard expansion.",
                 auto_fixable: false,
@@ -190,12 +234,14 @@ impl DiagnosticsEngine {
                 id: "truncated_file",
                 category: ErrorCategory::Data,
                 exit_codes: vec![1],
+                // "premature"/"incomplete"/"corrupt" as bare words matched
+                // unrelated prose (issue #708)
                 stderr_patterns: vec![
-                    "truncated",
+                    "\\btruncated\\b",
                     "unexpected end",
-                    "premature",
-                    "corrupt",
-                    "incomplete",
+                    "premature end",
+                    "\\bcorrupt\\b",
+                    "incomplete (file|input|read|bam)",
                 ],
                 likely_cause: "Input file truncated or corrupted.",
                 auto_fixable: false,
@@ -206,7 +252,7 @@ impl DiagnosticsEngine {
                 id: "empty_file",
                 category: ErrorCategory::Data,
                 exit_codes: vec![],
-                stderr_patterns: vec!["empty file", "zero length", "no data"],
+                stderr_patterns: vec!["\\bempty file\\b", "zero length", "file is empty"],
                 likely_cause: "Input file is empty.",
                 auto_fixable: false,
                 fix_desc: Some("Check upstream steps produced valid output."),
@@ -218,8 +264,8 @@ impl DiagnosticsEngine {
                 exit_codes: vec![],
                 stderr_patterns: vec![
                     "per base sequence quality.*fail",
-                    "low quality",
-                    "poor quality",
+                    "\\blow quality\\b",
+                    "\\bpoor quality\\b",
                 ],
                 likely_cause: "FASTQ files have low quality scores.",
                 auto_fixable: true,
@@ -230,7 +276,13 @@ impl DiagnosticsEngine {
                 id: "gzip_corrupt",
                 category: ErrorCategory::Data,
                 exit_codes: vec![1],
-                stderr_patterns: vec!["not in gzip format", "gzip", "corrupt input"],
+                // bare "gzip" matched any tool mentioning gzip (issue #708)
+                stderr_patterns: vec![
+                    "not in gzip format",
+                    "\\bgzip\\b.*(invalid|corrupt|failed)",
+                    "corrupt input",
+                    "unexpected end of (file|gzip)",
+                ],
                 likely_cause: "Gzipped file is corrupt or not actually gzipped.",
                 auto_fixable: false,
                 fix_desc: Some("Verify file is valid gzip: 'gzip -t file.gz'"),
@@ -271,7 +323,17 @@ impl DiagnosticsEngine {
                 id: "network_error",
                 category: ErrorCategory::System,
                 exit_codes: vec![],
-                stderr_patterns: vec!["connection refused", "network", "cannot resolve", "timeout"],
+                // "network"/"timeout" alone matched benign mentions
+                // (issue #708); anchor on connection-failure phrasing.
+                stderr_patterns: vec![
+                    "connection refused",
+                    "could not resolve",
+                    "cannot resolve",
+                    "name or service not known",
+                    "network is unreachable",
+                    "connection reset by peer",
+                    "curl: \\(7\\)",
+                ],
                 likely_cause: "Network resource unavailable.",
                 auto_fixable: false,
                 fix_desc: Some("Check network connectivity and remote resource availability."),
@@ -301,11 +363,12 @@ impl DiagnosticsEngine {
                 id: "shared_library",
                 category: ErrorCategory::System,
                 exit_codes: vec![127, 1],
+                // Loader-line phrasings only (issue #708): "so." matched
+                // "also." and "lib" matched any path with "lib" in it.
                 stderr_patterns: vec![
                     "error while loading shared libraries",
-                    "lib",
-                    "so.",
                     "cannot open shared object",
+                    "\\blib\\S+\\.so[\\.0-9]*: cannot open",
                 ],
                 likely_cause: "Missing shared library dependency.",
                 auto_fixable: true,
@@ -333,8 +396,16 @@ impl DiagnosticsEngine {
             Pattern {
                 id: "missing_required_param",
                 category: ErrorCategory::Config,
+                // "missing"/"required" alone matched half of all failure
+                // text (issue #708); anchor on argument-error phrasing.
                 exit_codes: vec![1],
-                stderr_patterns: vec!["required", "must specify", "missing", "argument expected"],
+                stderr_patterns: vec![
+                    "the following (arguments|options) are required",
+                    "must specify",
+                    "required argument.*missing",
+                    "missing required (argument|parameter|option)",
+                    "argument expected",
+                ],
                 likely_cause: "Required parameter is missing.",
                 auto_fixable: false,
                 fix_desc: Some("Add the missing parameter to the rule command."),
@@ -344,7 +415,15 @@ impl DiagnosticsEngine {
                 id: "wildcard_empty",
                 category: ErrorCategory::Config,
                 exit_codes: vec![],
-                stderr_patterns: vec!["no matches", "no files", "wildcard", "empty", "no input"],
+                // "empty"/"no files" alone matched unrelated failures
+                // (issue #708); anchor on wildcard/no-match phrasing.
+                stderr_patterns: vec![
+                    "no matches found",
+                    "no files (were )?(found|match)",
+                    "wildcard.*no (match|files)",
+                    "no input files",
+                    "glob matched no( files|thing)",
+                ],
                 likely_cause: "Wildcard pattern matched no files.",
                 auto_fixable: false,
                 fix_desc: Some("Check file naming matches the wildcard pattern."),
@@ -354,7 +433,16 @@ impl DiagnosticsEngine {
                 id: "conda_env_fail",
                 category: ErrorCategory::Config,
                 exit_codes: vec![1],
-                stderr_patterns: vec!["conda", "environment", "environment.yml", "create failed"],
+                // "environment" alone matched every tool that prints its
+                // active env name (issue #708); anchor on failure phrasing.
+                stderr_patterns: vec![
+                    "conda.*error",
+                    "environment creation",
+                    "environmentnotfound",
+                    "condaenvnotfounderror",
+                    "failed to activate conda",
+                    "create failed",
+                ],
                 likely_cause: "Conda environment creation or activation failed.",
                 auto_fixable: false,
                 fix_desc: Some("Verify conda is installed and environment name is correct."),
@@ -364,11 +452,13 @@ impl DiagnosticsEngine {
                 id: "docker_fail",
                 category: ErrorCategory::Config,
                 exit_codes: vec![125, 126],
+                // "docker"/"daemon" matched any successful docker banner
+                // (issue #708); anchor on failure phrasings.
                 stderr_patterns: vec![
-                    "docker",
-                    "cannot connect",
-                    "daemon",
+                    "cannot connect to the docker daemon",
+                    "docker daemon.*not running",
                     "permission denied.*docker",
+                    "is the docker daemon running",
                 ],
                 likely_cause: "Docker daemon not running or no permission.",
                 auto_fixable: false,
@@ -413,7 +503,12 @@ impl DiagnosticsEngine {
                 fix_config_path: None,
             },
         ];
-        Self { patterns }
+        let compiled = patterns
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, compile_patterns(&p.stderr_patterns)))
+            .collect();
+        Self { patterns, compiled }
     }
 
     /// Analyze log output and optional exit code for a given rule.
@@ -427,21 +522,29 @@ impl DiagnosticsEngine {
         let log_lower = log_output.to_lowercase();
         let mut results = Vec::new();
 
-        for p in &self.patterns {
-            let exit_match =
-                exit_code.is_none_or(|ec| p.exit_codes.is_empty() || p.exit_codes.contains(&ec));
-            let stderr_match = p
-                .stderr_patterns
-                .iter()
-                .any(|pat| log_lower.contains(&pat.to_lowercase()));
+        for (i, p) in self.patterns.iter().enumerate() {
+            // Exit-code gate (issue #708): patterns with declared exit codes
+            // only fire with a matching code; log-only patterns (empty table)
+            // must anchor on precise regexes instead, and never fire on a
+            // *successful* rule (exit 0).
+            let exit_match = match exit_code {
+                Some(0) => false,
+                Some(ec) => p.exit_codes.is_empty() || p.exit_codes.contains(&ec),
+                // No exit code recorded: judge by log content alone (previous
+                // `is_none_or` semantics). The #708 fix is the Some(0) /
+                // Some(ec) arms plus the tightened regexes below.
+                None => true,
+            };
+            let stderr_match = self.compiled[i].1.iter().any(|re| re.is_match(&log_lower));
 
             if exit_match && stderr_match {
                 let relevant: Vec<String> = log_output
                     .lines()
                     .filter(|line| {
-                        p.stderr_patterns
+                        self.compiled[i]
+                            .1
                             .iter()
-                            .any(|pat| line.to_lowercase().contains(&pat.to_lowercase()))
+                            .any(|re| re.is_match(&line.to_lowercase()))
                     })
                     .take(10)
                     .map(|s| s.to_string())
@@ -577,5 +680,166 @@ mod tests {
         let log = "something went wrong";
         let results = engine.analyze("mystery", log, Some(99));
         assert_eq!(results[0].error_pattern.as_deref(), Some("unknown_error"));
+    }
+
+    // ---- Table-driven gate (issue #708): every pattern must fire on its
+    // canonical trigger and stay silent on benign lines. ----
+
+    /// Canonical trigger log line per pattern id. Every entry here must
+    /// actually match — a pattern whose trigger can't fire is dead weight.
+    const CANONICAL_TRIGGERS: &[(&str, &str)] = &[
+        ("command_not_found", "/bin/bash: bwa: command not found"),
+        ("segfault", "segmentation fault (core dumped)"),
+        ("illegal_instruction", "illegal instruction (core dumped)"),
+        ("bus_error", "bus error"),
+        (
+            "tool_version_mismatch",
+            "Error: incompatible version: requires >=2.0",
+        ),
+        ("oom_killed", "Fatal error: out of memory"),
+        ("timeout", "Error: process timed out after 3600 seconds"),
+        ("disk_full", "OSError: [Errno 28] No space left on device"),
+        ("cpu_limit", "EAGAIN: resource temporarily unavailable"),
+        ("ulimit", "too many open files"),
+        (
+            "file_not_found",
+            "open: no such file or directory: sample.fastq",
+        ),
+        ("truncated_file", "gzip: stdin: unexpected end of file"),
+        ("empty_file", "Error: empty file: sample.fastq"),
+        (
+            "low_quality_fastq",
+            "fastqc: per base sequence quality fail",
+        ),
+        ("gzip_corrupt", "gzip: stdin: not in gzip format"),
+        (
+            "bam_truncated",
+            "samtools: EOF marker is absent; truncated file",
+        ),
+        ("permission_denied", "error: permission denied: results.txt"),
+        ("broken_pipe", "head: error: broken pipe"),
+        (
+            "network_error",
+            "curl: (7) Failed to connect: connection refused",
+        ),
+        ("signal_kill", "process terminated by SIGTERM"),
+        ("signal_interrupt", "process cancelled by SIGINT"),
+        (
+            "shared_library",
+            "error while loading shared libraries: libhts.so.2: cannot open shared object file",
+        ),
+        (
+            "invalid_param",
+            "error: unrecognized option '--nonexistent'",
+        ),
+        (
+            "missing_required_param",
+            "error: the following arguments are required: --input",
+        ),
+        ("wildcard_empty", "No matches found for *.bam in data/"),
+        ("conda_env_fail", "CondaError: environment creation failed"),
+        (
+            "docker_fail",
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        ),
+        ("singularity_fail", "FATAL: image not found: tool.sif"),
+        (
+            "shell_syntax",
+            "/bin/sh: -c: line 1: syntax error: unexpected token",
+        ),
+        (
+            "bam_index_missing",
+            "samtools view: could not open index file: sample.bam.bai",
+        ),
+    ];
+
+    /// Benign log lines that must NOT trip any pattern (the #708
+    /// false-positive class: success banners, prose, version strings).
+    const BENIGN_LINES: &[&str] = &[
+        "bwa version 0.7.17-r1188",
+        "samtools 1.19.2 (built with htslib 1.19.1)",
+        "Loaded reference genome. Also checking index.",
+        "Starting rule fastqc with 8 threads, version 0.11.9",
+        "Zoom into region chr1:1000-2000 completed",
+        "Reading 5000 sequences from the room dataset",
+        "Docker image digest verified, pulling layers",
+        "Environment variables loaded from environment.yml",
+        "The process was not killed; it exited normally",
+        "Downloaded 100% of file (45.2 MB/s)",
+        "gatk BestPractices version 4.4.0.0 started",
+    ];
+
+    #[test]
+    fn every_pattern_fires_on_its_canonical_trigger() {
+        let engine = DiagnosticsEngine::new();
+        for (id, trigger) in CANONICAL_TRIGGERS {
+            let results = engine.analyze("test_rule", trigger, None);
+            let hit = results
+                .iter()
+                .any(|r| r.error_pattern.as_deref() == Some(*id));
+            assert!(hit, "pattern '{id}' never fires on its trigger: {trigger}");
+        }
+    }
+
+    #[test]
+    fn benign_lines_never_match() {
+        let engine = DiagnosticsEngine::new();
+        for line in BENIGN_LINES {
+            let results = engine.analyze("test_rule", line, Some(1));
+            let matched: Vec<&str> = results
+                .iter()
+                .filter_map(|r| r.error_pattern.as_deref())
+                .filter(|p| *p != "unknown_error")
+                .collect();
+            assert!(
+                matched.is_empty(),
+                "benign line '{line}' falsely matched {matched:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn patterns_compile_and_log_only_patterns_are_precise() {
+        let engine = DiagnosticsEngine::new();
+        for (i, p) in engine.patterns.iter().enumerate() {
+            assert!(
+                !engine.compiled[i].1.is_empty(),
+                "pattern '{}' has zero compilable regexes",
+                p.id
+            );
+            // Log-only patterns (issue #708 point 1) must have at least one
+            // anchored/precise pattern: reject short bare-word patterns.
+            if p.log_only() {
+                for pat in &p.stderr_patterns {
+                    let precise = pat.contains('\\')
+                        || pat.contains(".*")
+                        || pat.contains('|')
+                        || pat.split_whitespace().count() > 1;
+                    assert!(
+                        precise,
+                        "log-only pattern '{}' uses over-broad substring '{pat}'",
+                        p.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exit_code_gate_scopes_pattern_to_declared_codes() {
+        // A declared-exit-code pattern must NOT fire on a different code
+        // (issue #708: empty exit_codes matched every status).
+        let engine = DiagnosticsEngine::new();
+        // "oom_killed" declares 137/9 — must not fire on exit 1 even with
+        // matching log text.
+        let results = engine.analyze("r", "out of memory", Some(1));
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.error_pattern.as_deref() == Some("oom_killed"))
+        );
+        // ...and must never fire on success.
+        let results = engine.analyze("r", "out of memory", Some(0));
+        assert!(results.is_empty());
     }
 }

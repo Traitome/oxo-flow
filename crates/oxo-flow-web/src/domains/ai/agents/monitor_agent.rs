@@ -256,23 +256,29 @@ pub fn suggest_fix(rule: &str, exit_code: Option<i32>, _log_excerpt: &str) -> Ve
 }
 
 /// Check if an error pattern is known and auto-fixable.
+///
+/// Log matching is word-token based (issue #709): a bare `contains("oom")`
+/// matched "zoom"/"room", and `contains("killed")` matched "not killed".
+/// "killed" is only trusted as an OOM signal when it sits next to OOM
+/// context ("out of memory", "oom") or a kill exit code (137/9/SIGKILL).
 pub fn is_known_error_pattern(exit_code: Option<i32>, log_excerpt: &str) -> (bool, String) {
     let log_lower = log_excerpt.to_lowercase();
 
-    if exit_code == Some(137)
-        || log_lower.contains("oom")
-        || log_lower.contains("out of memory")
-        || log_lower.contains("killed")
-    {
+    let words: Vec<&str> = log_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let has_word = |needle: &str| words.contains(&needle);
+    let oom_in_log = has_word("oom") || log_lower.contains("out of memory");
+
+    let kill_exit = matches!(exit_code, Some(137) | Some(9));
+    if kill_exit || (oom_in_log && log_lower.contains("kill")) {
         return (true, "oom_killed".into());
     }
-    if exit_code == Some(139)
-        || log_lower.contains("segfault")
-        || log_lower.contains("segmentation fault")
-    {
+    if exit_code == Some(139) || has_word("segfault") || log_lower.contains("segmentation fault") {
         return (true, "segfault".into());
     }
-    if log_lower.contains("no such file") || log_lower.contains("cannot find") {
+    if log_lower.contains("no such file") || has_word("enoent") {
         return (true, "missing_file".into());
     }
     if log_lower.contains("permission denied") || log_lower.contains("access denied") {
@@ -348,6 +354,37 @@ mod tests {
         let (known, pattern) = is_known_error_pattern(None, "Out of memory: killed process");
         assert!(known);
         assert_eq!(pattern, "oom_killed");
+    }
+
+    #[test]
+    fn test_no_false_positives_from_loose_substrings() {
+        // issue #709: "oom" inside other words, "killed" negated, and node's
+        // "cannot find module" are not evidence of the named failure.
+        for (log, why) in [
+            ("Zoom into region chr1:1000-2000 completed", "zoom"),
+            ("Reading 5000 sequences from the room dataset", "room"),
+            (
+                "The process was not killed; it exited normally",
+                "not killed",
+            ),
+            ("Error: Cannot find module 'lodash'", "node module"),
+            ("bwa version 0.7.17-r1188", "success banner"),
+        ] {
+            let (known, pattern) = is_known_error_pattern(Some(1), log);
+            assert!(!known, "false positive ({why}): {log} -> {pattern}");
+        }
+    }
+
+    #[test]
+    fn test_killed_requires_oom_context_or_kill_exit_code() {
+        // "Killed" alone with a non-kill exit code is ambiguous — e.g. an
+        // HPC scheduler message — so it must not claim oom_killed.
+        let (known, pattern) = is_known_error_pattern(Some(1), "Job killed");
+        assert!(!known, "{pattern}");
+        // But with SIGKILL-class exit codes it is OOM (test_is_known_oom_pattern
+        // covers the exit-only case).
+        let (known, _) = is_known_error_pattern(Some(137), "Job killed");
+        assert!(known);
     }
 
     #[test]
