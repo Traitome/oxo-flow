@@ -13,7 +13,7 @@ All endpoints are designed to be consumable by both AI agents and browsers:
 - Unified structured responses
 - Long-running operations streamed via SSE
 - Self-discoverable via `GET /api/openapi.json`
-- Errors include `code` + `message` + `detail` + `suggestion` fields
+- Errors carry `code` + `message`, plus optional `detail` and `suggestion` fields
 
 ### 2. Intent-First Pipeline Authoring
 
@@ -243,14 +243,15 @@ Rate limiting and SSE:
 
 ## Structured Error Response
 
-All errors follow this format:
+All errors follow this format — `detail` and `suggestion` are optional and
+only present when a handler supplies them (e.g. `429` bodies carry
+`detail: "retry in <N>s"`):
 
 ```json
 {
   "code": "AUTH_REQUIRED",
-  "message": "Authentication is required for this endpoint",
-  "detail": "The request did not include a valid session token or Bearer token",
-  "suggestion": "Please login at POST /api/auth/login to obtain a session token"
+  "message": "Authentication required in team/hpc mode",
+  "suggestion": "Login at POST /api/auth/login to obtain a session token"
 }
 ```
 

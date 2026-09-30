@@ -38,7 +38,7 @@ pub struct Report {
     pub workflow_name: String,
     pub workflow_version: String,
     pub sections: Vec<ReportSection>,
-    pub metadata: HashMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
     // Provenance fields (absent for template-only reports / non-git workflows):
     pub checkpoint_path: Option<String>,
     pub workflow_path: Option<String>,

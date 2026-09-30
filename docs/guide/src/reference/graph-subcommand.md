@@ -115,9 +115,10 @@ community corpus, not against single examples:
    the seven pipelines that have one (atacseq, chipseq, mag, methylseq,
    rnaseq, scrnaseq, viralrecon); the target is the same order of
    magnitude at the module tier.
-3. **Visual QA** — rendered maps are inspected per persona (the gallery
-   QA page compares ours side-by-side with the upstream reference where
-   one exists).
+3. **Visual QA** — rendered maps are inspected per persona; the committed
+   transit maps live on each pipeline's page in the community site, and a
+   structural QA gate (`scripts/qa-metro.py` in the site repo) re-checks
+   coverage, SVG validity, and aspect ratio after every regeneration.
 
 The render recipes (line-spread modes, spacing directives, and the
 curve-invariant fallback for process-tier maps whose density exceeds what

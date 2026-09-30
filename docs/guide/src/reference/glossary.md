@@ -367,16 +367,18 @@ below cover the codes referenced across this documentation.
 | `W032` | A config key looks like a secret but is not declared `sensitive` |
 | `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
 
-Schema-check codes (`S001`–`S006`) come from the raw-file schema pass
-`oxo-flow validate` runs before parsing: `S001` invalid TOML syntax,
-`S002` missing `[workflow]`, `S003` missing workflow name, `S004`
-malformed `[[rules]]`, `S005` a rule entry that is not a table, and
-`S006` an unknown top-level section (checked against the parser's own
-E017 whitelist — the documented sections are never flagged). `S007`
-warns when `[workflow].format_version` is present but unrecognized, and
-`S008` is the secret-scanning warning: a token-shaped pattern in the raw
-file ([security](security.md)); it comes from the lint pass, not the
-schema pass.
+Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
+reachable through `oxo-flow lint` (not `validate`, which reports only
+parse-level errors): `S001` invalid TOML syntax, `S002` missing
+`[workflow]`, `S003` missing workflow name, `S004` malformed `[[rules]]`,
+`S005` a rule entry that is not a table, and `S006` an unknown top-level
+section (checked against the parser's own E017 whitelist — the documented
+sections are never flagged; since the parsed config cannot retain unknown
+keys, `S006` is the one schema code users can actually trigger, per issue
+#470). `S007` warns when `[workflow].format_version` is present but
+unrecognized, and `S008` is the secret-scanning warning: a token-shaped
+pattern in the raw file ([security](security.md)); like the whole S-series,
+it reaches users only through the lint pass.
 
 The full, current list with suggestions is best read from the commands:
 `oxo-flow lint --json` prints every code with its message and suggestion

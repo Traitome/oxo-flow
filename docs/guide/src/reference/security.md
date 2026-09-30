@@ -114,7 +114,7 @@ survive — review the flagged lines yourself:
 | `access_token` | substring | Possible access token in configuration |
 | `private_key` | substring | Possible private key in configuration |
 
-Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked as `***` in logs, `--help`, and error output.
+Additionally, workflow config values declared with `sensitive = true` in a `[config]` definition are masked in all non-execution output — `****` in config logs, `***` in recorded commands, stderr, and plan previews (the value is env-routed instead of staying on the command line), and a `sha256:` digest in the checkpoint's config snapshot.
 
 ---
 
@@ -160,7 +160,11 @@ The web server applies per-IP rate limiting across all API endpoints:
 | Window duration | 60 seconds |
 | Response | HTTP 429 with structured error body (`code: "RATE_LIMITED"`) and `Retry-After` header |
 
-Rate limiting is active in all deployment modes (personal, team, hpc).
+Rate limiting is active in all deployment modes (personal, team, hpc). Two
+additional behaviors worth knowing: run-submission endpoints have a separate
+limiter whose 429 body uses the code `RUN_RATE_LIMITED`, and
+`OXO_FLOW_DISABLE_RATE_LIMIT=1` disables the middleware entirely (test/dev
+escape hatch, e.g. for Playwright e2e runs — do not use in production).
 
 ---
 
