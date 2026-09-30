@@ -4318,11 +4318,17 @@ when you need at least one GPU (<code>gpu = 1</code> or higher).</p>
   (<code>"4096MB"</code>, <code>"2GB"</code>) are <strong>not</strong> parsed — a rule declaring one gets a
   validation warning locally, and cluster backends render the string
   verbatim instead of guessing a unit.</li>
-<li><code>time_limit</code> accepts <code>90s</code>, <code>30m</code>, <code>24h</code>, <code>2d</code>. A <strong>present but
-  unparseable</strong> value is never silently replaced by a default: LSF
-  renders it verbatim in <code>#BSUB -W</code> (with a warning in the log), so
-  <code>bsub</code> rejects the script loudly instead of killing a long job at a
-  hidden 1-hour limit.</li>
+<li><code>time_limit</code> accepts the suffix forms <code>90s</code>, <code>30m</code>, <code>24h</code>, <code>2d</code> and the
+  scheduler-style colon forms <code>01:00:00</code>, <code>24:00:00</code>, <code>1-06:00:00</code> — one
+  shared parser for the local executor and every backend, so the same
+  value means the same limit everywhere. Bare numbers (<code>"1500"</code>) are
+  <strong>rejected at validate time</strong>: ambiguous between seconds and LSF
+  minutes — write <code>"1500s"</code> or <code>"25m"</code>.</li>
+<li>A <strong>present but unparseable</strong> walltime is never silently replaced by a
+  default: every backend renders it verbatim (with a warning in the log),
+  so the scheduler rejects the script loudly instead of killing a long
+  job at a hidden 1-hour limit. The local executor logs a warning and
+  falls back to the global timeout.</li>
 </ul>
 <h3 id="gpu-specification">GPU Specification<a class="headerlink" href="#gpu-specification" title="Permanent link">#</a></h3>
 <p>For basic GPU requests, use the <code>gpu</code> field:</p>

@@ -4199,11 +4199,11 @@ page.</p>
 <h3 id="run-status">Run Status<a class="headerlink" href="#run-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/runs/{id}/status
 </span></code></pre></div>
-Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }</code>.</p>
+Real-time status: <code>{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }</code>. A rule skipped by its <code>when</code> gate (<code>when_verdicts == false</code>, no completed/failed entry) is surfaced as <code>skipped</code>, never as a forever-<code>pending</code> node (issue #739).</p>
 <h3 id="dag-status">DAG Status<a class="headerlink" href="#dag-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/runs/{id}/dag-status
 </span></code></pre></div>
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped.</p>
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. <code>metrics.pending_nodes</code> and the ETA count only rules that can still run — when-gated-off rules are <code>skipped</code>, not pending (issue #739).</p>
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>

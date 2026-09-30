@@ -4187,11 +4187,12 @@ are skipped and reported by <code>validate</code>/<code>dry-run</code> instead.<
 <h3 id="when-gated-rules">When-gated rules<a class="headerlink" href="#when-gated-rules" title="Permanent link">#</a></h3>
 <p>A rule whose <code>when</code> gate is statically false under the current <code>[config]</code>
 never executes, so deep checks <strong>skip it entirely</strong> — no D001–D004
-findings for paths only a skipped rule would touch (the gate verdict comes
-from the engine's own condition evaluator, the same call the readiness
-check makes). Gates that reference <code>{sample}</code> wildcards or <code>{meta.*}</code>
-columns are decided per instance during expansion and cannot be judged on
-the raw workflow file, so those rules keep their findings.</p>
+findings for paths only a skipped rule would touch, and its shell tokens
+do not trigger the <code>reference_dir</code>-derived tool-index probes (the gate
+verdict comes from the engine's own condition evaluator, the same call
+the readiness check makes). Gates that reference <code>{sample}</code> wildcards or
+<code>{meta.*}</code> columns are decided per instance during expansion and cannot
+be judged on the raw workflow file, so those rules keep their findings.</p>
 <h3 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">#</a></h3>
 <ul>
 <li><code>0</code> — no error-severity findings (warnings do not fail)</li>
