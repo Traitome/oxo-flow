@@ -4155,8 +4155,11 @@ output directly:</p>
   <code>oxo-flow run pipeline.oxoflow --samples first:2</code> — the engine runs the
   full pipeline on two samples, reports a projected full-run time, and skips
   them automatically when you scale up. The two-rule demo above has no
-  samples, so <code>--samples</code> there would exit with
-  <code>--samples matched no samples in this workflow</code>. See
+  samples, so a sample <em>filter</em> there — e.g. <code>--samples first:2</code> or
+  <code>--samples ready</code> — would exit with
+  <code>--samples matched no samples in this workflow</code> (a bare sample <em>name</em>
+  like <code>--samples S9</code> instead declares it for later use and exits
+  successfully). See
   <a href="../../commands/run/#pilot-runs-and-scale-up">Pilot runs</a> and
   <a href="../../gallery/parallel-samples/">Parallel Samples</a> for a sample-driven
   workflow to try it on.</li>
