@@ -3911,6 +3911,10 @@ recorded instance set exactly.</p>
   The standalone <code>resume</code> command is useful for explicitly re-running after
   inspecting the checkpoint state.</li>
 <li>Use <code>oxo-flow status</code> to inspect the checkpoint before resuming.</li>
+<li>Rules whose <code>when</code> gate recorded <code>false</code> are reported as <strong>skipped</strong>, not
+  failed, in the resume banner (issue #690) — their stale failure entries
+  from older checkpoints don't count toward the failed total, and the gate
+  is re-judged on this resume anyway.</li>
 <li><code>--background</code> detaches the resumed run (see
   <a href="../run/#background-runs-background">run's Background runs section</a>).</li>
 </ul>

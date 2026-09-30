@@ -4705,7 +4705,7 @@
 <td><code>--resume-failed</code></td>
 <td>—</td>
 <td>—</td>
-<td>Resume only failed rules from a previous run</td>
+<td>Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose <code>when</code> gate recorded <code>false</code> (they are skips, not failures — issue #690); <code>status</code> reports them as skipped, not failed</td>
 </tr>
 <tr>
 <td><code>--profile</code></td>
