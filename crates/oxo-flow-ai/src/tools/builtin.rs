@@ -159,6 +159,19 @@ impl Tool for ReadFileTool {
             None => std::path::PathBuf::from(path),
         };
 
+        // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+        // read_to_string on a writer-less FIFO blocks the AI worker forever.
+        // Missing files fall through to the read error below, which steers
+        // to embedded knowledge.
+        if let Ok(meta) = std::fs::metadata(&resolved)
+            && !meta.is_file()
+        {
+            return Err(AiError::ToolError {
+                tool: "read_file".into(),
+                message: format!("cannot read '{path}': not a regular file"),
+            });
+        }
+
         let content = std::fs::read_to_string(&resolved).map_err(|e| AiError::ToolError {
             tool: "read_file".into(),
             message: format!(

@@ -207,6 +207,17 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
                 .into_response();
         }
     };
+    // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+    // File::open on a writer-less FIFO blocks the async worker forever, and
+    // sockets / devices have no servable content.
+    if !meta.is_file() {
+        return err(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "NOT_REGULAR_FILE",
+            "Not a regular file — cannot serve".into(),
+        )
+        .into_response();
+    }
     let size = meta.len();
     let mime = mime_for(path);
     let name = path

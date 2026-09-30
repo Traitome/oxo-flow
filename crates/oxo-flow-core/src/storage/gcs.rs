@@ -331,6 +331,14 @@ fn compute_md5(data: &[u8]) -> String {
 /// full-object buffer) before streaming it.
 async fn streaming_md5(path: &Path) -> std::io::Result<String> {
     use tokio::io::AsyncReadExt;
+    // Stat-first regular-file gate (issue #714, pattern from #695/#706):
+    // open on a writer-less FIFO blocks the async worker forever.
+    if !tokio::fs::metadata(path).await?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("cannot hash {}: not a regular file", path.display()),
+        ));
+    }
     let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = md5::Md5::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -438,6 +446,8 @@ impl StorageBackend for GcsStorage {
         // Hash the file (streaming) for the signed Content-MD5, then stream
         // it as the request body — `tokio::fs::read` held the whole object
         // in RAM, unlike the S3 backend's `ByteStream::from_path`.
+        // streaming_md5's stat-first regular-file gate (issue #714) covers
+        // the open below: a FIFO never reaches this open.
         let md5 = streaming_md5(local)
             .await
             .map_err(|e| gcs_io_error("upload read", bucket, &remote.key, &e.to_string()))?;

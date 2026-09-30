@@ -110,8 +110,14 @@ fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
         return Ok((name.clone(), name));
     }
 
-    // Try reading the YAML file to extract `name:` field
-    let file_content = std::fs::read(spec).ok();
+    // Try reading the YAML file to extract `name:` field. Stat-first
+    // regular-file gate (issue #714, pattern from #695/#706): read() on a
+    // writer-less FIFO blocks forever; a non-file spec falls through to the
+    // same fallback as an unreadable one.
+    let file_content = match std::fs::metadata(spec) {
+        Ok(m) if m.is_file() => std::fs::read(spec).ok(),
+        _ => None,
+    };
     let from_yaml = file_content
         .as_deref()
         .and_then(|bytes| std::str::from_utf8(bytes).ok())
@@ -485,6 +491,14 @@ impl CondaBackend {
 /// conda path is the precedent: its content hash lives in the derived
 /// env name, so its cache-hit verify catches edits.
 fn spec_content_tag(spec: &str) -> String {
+    // Stat-first regular-file gate (issue #714): read() on a writer-less
+    // FIFO blocks forever; non-regular specs keep the empty tag.
+    let Ok(meta) = std::fs::metadata(spec) else {
+        return String::new();
+    };
+    if !meta.is_file() {
+        return String::new();
+    }
     let Ok(bytes) = std::fs::read(spec) else {
         return String::new();
     };

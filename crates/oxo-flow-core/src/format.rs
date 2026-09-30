@@ -1610,11 +1610,19 @@ pub fn lint_format(
                         .is_some_and(|deps| deps.iter().any(|d| d == producer))
             };
             let mut scanned = script_path.to_string();
-            if let Some(base) = script_base
-                && let Ok(content) = std::fs::read_to_string(base.join(script_path))
-            {
-                scanned.push('\n');
-                scanned.push_str(&content);
+            if let Some(base) = script_base {
+                // Stat-first regular-file gate (issue #714, pattern from
+                // #695/#706): read on a writer-less FIFO blocks the format
+                // run.
+                let script_file = base.join(script_path);
+                if std::fs::metadata(&script_file)
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+                    && let Ok(content) = std::fs::read_to_string(&script_file)
+                {
+                    scanned.push('\n');
+                    scanned.push_str(&content);
+                }
             }
             for producer in &config.rules {
                 if producer.name == rule.name || has_edge(&producer.name) {
