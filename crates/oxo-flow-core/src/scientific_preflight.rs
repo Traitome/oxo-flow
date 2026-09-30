@@ -352,7 +352,8 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
                 rule: rule.name.clone(),
                 message: format!(
                     "VariantRecalibrator trains on the cohort, but only {sample_count} sample(s) \
-                     are in this run — GATK recommends a minimum of ~{MIN_VQSR_SAMPLES}. \
+                     are in this run — GATK recommends a minimum of ~{MIN_VQSR_SAMPLES} \
+                     (and considerably more, on the order of 100, for targeted/exome data). \
                      The pilot will fail at this step for scientific reasons, not technical ones."
                 ),
                 suggestion: "stop the pilot before VQSR (-t <rule>) or use hard filtering \
@@ -378,9 +379,12 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
             warnings.push(ScientificWarning {
                 code: "SCI-MUTECT2-TUMOR-ONLY".into(),
                 rule: rule.name.clone(),
-                message: "Mutect2 runs without a matched normal. GATK: tumor-only mode is \
-                          supported but 'far inferior' to tumor-normal calling — a matched \
-                          normal filters germline variants in a way population resources cannot."
+                message: "Mutect2 runs without a matched normal. Tumor-only mode is supported, \
+                          but GATK's documentation stresses that a matched normal helps not \
+                          only with germline filtering — it also exposes technical artifacts \
+                          (e.g. mapping errors at rare SNPs) that even a large panel of \
+                          normals can miss. Without a matched normal, germline filtering \
+                          leans entirely on population allele-frequency priors."
                     .into(),
                 suggestion: "pair each tumor with a matched normal; in tumor-only mode also \
                              supply --germline-resource and --panel-of-normals"
