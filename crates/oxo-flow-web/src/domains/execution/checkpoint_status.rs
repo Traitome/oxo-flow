@@ -23,10 +23,31 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         .unwrap_or_else(|_| CheckpointState::new());
 
     let mut running: Vec<String> = Vec::new();
-    if is_running && let Ok(log) = std::fs::read_to_string(run_dir.join("execution.log")) {
-        for line in log.lines() {
-            if let Some(rest) = line.strip_prefix("Running: ") {
-                running.push(rest.trim().to_string());
+    if is_running {
+        if !checkpoint.running.is_empty() {
+            // The checkpoint's persisted in-flight set (issue #685) is
+            // authoritative — written at spawn, removed at every terminal
+            // transition — so the hot polled path reads O(in-flight) state
+            // and never touches the log (issue #734).
+            running.extend(checkpoint.running.iter().cloned());
+        } else {
+            // Legacy checkpoint (or genuinely nothing in flight): fall
+            // back to the run log, bounded — the old code buffered the
+            // whole file on every status poll, and a rule-writable
+            // execution.log must not hang the poll on a planted FIFO
+            // (#695/#734). Rules already completed or failed are skipped,
+            // so their stale `Running:` lines cannot resurrect as phantom
+            // Running nodes.
+            let log = read_tail_bounded(&run_dir.join("execution.log"), 1024 * 1024);
+            for line in log.lines() {
+                if let Some(rest) = line.strip_prefix("Running: ") {
+                    let name = rest.trim();
+                    if !checkpoint.completed_rules.contains(name)
+                        && !checkpoint.failed_rules.contains(name)
+                    {
+                        running.push(name.to_string());
+                    }
+                }
             }
         }
     }
@@ -329,6 +350,57 @@ mod tests {
     }
 
     #[test]
+    fn running_rules_prefer_checkpoint_set_over_log_scan() {
+        // #734: the persisted in-flight set (#685) is authoritative — the
+        // polled path must not buffer the log at all when it is present.
+        // The stale `Running: align` line in the log must also lose to the
+        // completed entry instead of resurrecting a phantom Running node.
+        let dir = std::env::temp_dir().join("cp-running-prefer");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["align"],
+                "failed_rules": [],
+                "benchmarks": {},
+                "running": ["samtools_sort"]
+            }"#,
+        );
+        fs::write(
+            dir.join("execution.log"),
+            "Running: align\n✓ align\nRunning: samtools_sort\n",
+        )
+        .unwrap();
+        let items = load_node_statuses(&dir, true);
+        let align = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(
+            matches!(align.status, NodeStatus::Success),
+            "stale log line must not resurrect a completed rule: {:?}",
+            align.status
+        );
+        let sort = items.iter().find(|i| i.rule == "samtools_sort").unwrap();
+        assert!(matches!(sort.status, NodeStatus::Running));
+    }
+
+    #[test]
+    fn read_head_bounded_returns_whole_lines_from_the_head() {
+        let dir = std::env::temp_dir().join("cp-head-bounded");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let log = "first line\nsecond line\nthird line\n";
+        fs::write(dir.join("execution.log"), log).unwrap();
+        // A window far larger than the file yields the whole content.
+        assert_eq!(read_head_bounded(&dir.join("execution.log"), 4096), log);
+        // A tiny window ends on a whole line, never a torn record.
+        let head = read_head_bounded(&dir.join("execution.log"), 20);
+        assert!(head.ends_with('\n'), "no torn line: {head:?}");
+        assert!(head.starts_with("first line"));
+        // Missing file → empty.
+        assert_eq!(read_head_bounded(&dir.join("absent.log"), 4096), "");
+    }
+
+    #[test]
     fn when_gated_failed_entries_show_as_skipped() {
         // Issue #690: a stale failed_rules entry whose recorded when-verdict
         // is false was gated off, not failed — the web view must show
@@ -497,6 +569,36 @@ pub fn load_metrics_bounded(run_dir: &Path, max_bytes: u64) -> Vec<serde_json::V
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .collect()
+}
+
+/// Read at most the first `max_bytes` of a file (issue #734): the head
+/// window is where run-start artifacts live — the dry-run preview JSON and
+/// the invalidation summary print before any rule executes, so a tail
+/// window would miss them in a long log. The window ends on a whole line.
+/// A missing, unreadable, or non-regular file yields an empty string.
+pub fn read_head_bounded(path: &Path, max_bytes: u64) -> String {
+    if !oxo_flow_core::result::is_regular_file(path) {
+        return String::new();
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let mut content = String::new();
+    {
+        use std::io::Read;
+        if std::io::BufReader::new(file)
+            .take(max_bytes)
+            .read_to_string(&mut content)
+            .is_err()
+        {
+            return String::new();
+        }
+    }
+    // End on a whole line so consumers never see a torn final record.
+    match content.rfind('\n') {
+        Some(i) => content[..=i].to_owned(),
+        None => content,
+    }
 }
 
 /// Read at most the newest `max_bytes` of a file, seeking to the tail

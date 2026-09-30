@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
+use crate::domains::execution::checkpoint_status;
 use crate::workspace::get_run_directory;
 use crate::{broadcast_event_for, db};
 
@@ -709,9 +710,13 @@ pub(crate) async fn finalize_run(run_id: &str, exit_code: Option<i32>, log_path:
     {
         error!("Failed to update final status for run {run_id}: {e}");
     }
-    // Read the log once (async): it feeds both the dry-run preview
-    // extraction and the invalidation summary below.
-    let log = tokio::fs::read_to_string(log_path).await.ok();
+    // Read the log once, bounded to the head window: both consumers below
+    // (dry-run preview JSON, invalidation summary) print at run start,
+    // before any rule executes — a tail window would miss them, and the
+    // old whole-file read buffered a multi-GB log at every run's terminal
+    // path (issue #734).
+    let log_content = checkpoint_status::read_head_bounded(log_path, 16 * 1024 * 1024);
+    let log = (!log_content.is_empty()).then_some(log_content);
     // Persist the dry-run preview (instance-level plan) next to the log so
     // /api/runs/{id}/preview can serve it without re-parsing the log.
     if let Some(log) = log.as_deref()
@@ -846,8 +851,18 @@ fn spawn_log_tailer(run_id: String, workdir: PathBuf) {
             if file.seek(std::io::SeekFrom::Start(offset)).await.is_err() {
                 continue;
             }
+            // Bound the per-tick delta: a rule that emitted hundreds of MB
+            // between ticks must not buffer all of it for SSE parsing
+            // (issue #734). Anything past the cap is skipped — the next
+            // tick resumes from the new offset.
+            const MAX_TAILER_TICK_BYTES: u64 = 4 * 1024 * 1024;
             let mut buf = String::new();
-            if file.read_to_string(&mut buf).await.is_err() {
+            if file
+                .take(MAX_TAILER_TICK_BYTES)
+                .read_to_string(&mut buf)
+                .await
+                .is_err()
+            {
                 continue;
             }
             offset = len;

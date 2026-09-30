@@ -234,7 +234,10 @@ pub async fn explain(
                 std::path::Path::new(wd),
                 running,
             );
-            let log = std::fs::read_to_string(format!("{wd}/execution.log")).unwrap_or_default();
+            let log = crate::domains::execution::checkpoint_status::read_tail_bounded(
+                std::path::Path::new(&format!("{wd}/execution.log")),
+                1024 * 1024,
+            );
             let benchmarks = crate::domains::execution::checkpoint_status::load_benchmarks(
                 std::path::Path::new(wd),
             );

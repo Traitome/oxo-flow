@@ -129,7 +129,15 @@ impl Tool for RunLogsTool {
         let log = run
             .workdir
             .as_deref()
-            .and_then(|wd| std::fs::read_to_string(format!("{wd}/execution.log")).ok())
+            .map(|wd| {
+                // Bounded tail (issue #734): the consumer wants the last
+                // 200 lines; the old whole-file read buffered a multi-GB
+                // log on the runtime thread per chat query.
+                crate::domains::execution::checkpoint_status::read_tail_bounded(
+                    std::path::Path::new(&format!("{wd}/execution.log")),
+                    1024 * 1024,
+                )
+            })
             .unwrap_or_default();
         // Bound the result: the last 200 lines carry the failure context.
         let tail: Vec<&str> = log.lines().rev().take(200).collect();

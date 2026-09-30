@@ -477,7 +477,7 @@ it instead). A terminal run in either endpoint returns `409 RUN_NOT_ACTIVE`.
 ```
 GET /api/runs/{id}/logs
 ```
-Returns full execution log.
+Returns the execution log text — bounded to the newest 8 MiB with an explicit `[log truncated …]` marker line when the log is larger (issue #734; buffering a multi-GB log per request was a memory-amplification surface). Read the full file from the run workdir when the marker appears.
 
 ### Results
 ```
