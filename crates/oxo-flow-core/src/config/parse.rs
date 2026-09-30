@@ -245,10 +245,24 @@ impl WorkflowConfig {
             let discovered =
                 crate::wildcard::discover_wildcards_from_pattern(&search_dir, &file_pattern)?;
             if discovered.is_empty() {
+                // Bundle runs extract the workflow into a per-process temp
+                // dir, which is where this scan anchors — data living next to
+                // the bundle file (or under --workdir) is invisible to it, and
+                // the failure only surfaces later as unbound wildcards.
+                // Tell the user where the scan actually looked and how to
+                // fix the layout (issue #751 on bundle data paths).
+                let bundle_hint = if search_dir.starts_with(std::env::temp_dir()) {
+                    "\n  note: the workflow is running from a bundle's temp extraction; \
+                     data files must sit inside the bundle, or use a plain workflow \
+                     path with --workdir"
+                } else {
+                    ""
+                };
                 tracing::warn!(
-                    "sample_pattern '{}' matched no files in {}",
+                    "sample_pattern '{}' matched no files in {}{}",
                     sample_pattern,
-                    search_dir.display()
+                    search_dir.display(),
+                    bundle_hint
                 );
             } else {
                 // Extract sample values from discovered combinations
