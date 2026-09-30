@@ -64,7 +64,7 @@ oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
   Completed: 3
   Failed:    1
-  Skipped:   2 (when condition false)
+  Skipped (when-gated off): 2
 
 Completed rules:
   ✓ align
@@ -74,7 +74,7 @@ Completed rules:
 Failed rules:
   ✗ mark_duplicates
 
-Skipped by when (condition false):
+Skipped (when condition false):
   ⊘ filter_cohort_S2
   ⊘ filter_cohort_S1
 ```
@@ -90,7 +90,7 @@ under `Skipped (when condition false)` in the text view and in the
 `skipped_by_when` JSON key instead of `failed` (issue #690). The same
 reconciliation applies to the resume banner: rules whose recorded verdict is
 `false` are counted as skips there, and the gate is re-judged on the resume
-(see [`run --resume-failed`](run.md#resuming-from-a-checkpoint)).
+(see [Checkpointing and Resuming](run.md#checkpointing-and-resuming)).
 
 ```
   Completed: 2
