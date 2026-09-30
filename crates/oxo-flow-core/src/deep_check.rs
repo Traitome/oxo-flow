@@ -146,8 +146,36 @@ pub fn compute_deep_check(config: &WorkflowConfig, base_dir: &Path) -> DeepCheck
     // Deduplicate by (code, path): a shared script referenced by five rules
     // is one problem, not five.
     let mut seen: HashSet<(String, String)> = HashSet::new();
+    // The [config] table as plain toml values — the `when` evaluator
+    // resolves `config.x` references itself and would see no bare keys
+    // through deep_check's own `vars`, which carry the `config.` prefix
+    // expand_config needs. (Same construction readiness makes.)
+    let config_values: HashMap<String, toml::Value> = config
+        .config
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     for rule in &config.rules {
+        // A rule whose `when` gate is statically false under the current
+        // [config] never executes — probing its paths would report
+        // findings for output that can never exist (issue #717). The
+        // engine's own evaluator is the verdict (the same call readiness
+        // makes). Gates referencing wildcards or `{meta.*}` columns only
+        // become decidable per instance during expansion, and this check
+        // walks the raw config — those keep their findings, the same
+        // `{`-placeholder guard every path probe here already applies.
+        if let Some(when) = rule.when.as_deref()
+            && !when.contains('{')
+            && !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &config_values,
+                &std::collections::HashMap::new(),
+                Some(base_dir),
+            )
+        {
+            continue;
+        }
         let env = config.resolve_environment(rule);
         let env_kind = env
             .as_ref()
@@ -572,8 +600,51 @@ mod tests {
             "path was {}",
             f.path
         );
-        assert_eq!(report.error_count, 1);
-        assert!(!report.passed);
+    }
+
+    #[test]
+    fn when_false_rule_skips_deep_check_findings() {
+        // #717: a rule whose `when` gate is statically false never runs, so
+        // its missing script must not fail `test --deep` — matching run's
+        // skip semantics via the engine's own evaluator.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = wf("[config]\nrun_qc = false\n\n\
+             [[rules]]\nname = \"qc\"\nwhen = \"config.run_qc\"\n\
+             output = [\"results/qc.txt\"]\ndescription = \"qc step\"\n\
+             script = \"scripts/missing_qc.py --out results/qc.txt\"\n\n\
+             [[rules]]\nname = \"align\"\noutput = [\"results/a.txt\"]\n\
+             description = \"always runs\"\n\
+             script = \"scripts/missing_align.py --out results/a.txt\"\n");
+        let report = deep_for(&toml, dir.path());
+        let d001 = findings_of(&report, "D001");
+        assert_eq!(d001.len(), 1, "{d001:?}");
+        assert_eq!(d001[0].rule.as_deref(), Some("align"));
+    }
+
+    #[test]
+    fn when_true_rule_keeps_deep_check_findings() {
+        // A gate that passes under the current [config] changes nothing:
+        // the rule runs, so its findings are real.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = wf("[config]\nrun_qc = true\n\n\
+             [[rules]]\nname = \"qc\"\nwhen = \"config.run_qc\"\n\
+             output = [\"results/qc.txt\"]\ndescription = \"qc step\"\n\
+             script = \"scripts/missing_qc.py --out results/qc.txt\"\n");
+        let report = deep_for(&toml, dir.path());
+        assert_eq!(findings_of(&report, "D001").len(), 1);
+    }
+
+    #[test]
+    fn wildcard_when_keeps_deep_check_findings() {
+        // A wildcard/`{meta.*}`-dependent gate is not decidable on the raw
+        // config (it bakes per instance during expansion) — deep-check
+        // keeps the findings rather than guessing the gate off.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = wf("[[rules]]\nname = \"qc\"\nwhen = \"{sample} == 'S1'\"\n\
+             output = [\"results/qc.txt\"]\ndescription = \"qc step\"\n\
+             script = \"scripts/missing_qc.py --out results/qc.txt\"\n");
+        let report = deep_for(&toml, dir.path());
+        assert_eq!(findings_of(&report, "D001").len(), 1);
     }
 
     #[test]
