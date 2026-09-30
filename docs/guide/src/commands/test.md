@@ -76,6 +76,16 @@ All relative paths resolve against the workflow file's directory (or
 placeholders are expanded; paths that still contain `{sample}` wildcards
 are skipped and reported by `validate`/`dry-run` instead.
 
+### When-gated rules
+
+A rule whose `when` gate is statically false under the current `[config]`
+never executes, so deep checks **skip it entirely** — no D001–D004
+findings for paths only a skipped rule would touch (the gate verdict comes
+from the engine's own condition evaluator, the same call the readiness
+check makes). Gates that reference `{sample}` wildcards or `{meta.*}`
+columns are decided per instance during expansion and cannot be judged on
+the raw workflow file, so those rules keep their findings.
+
 ### Exit codes
 
 - `0` — no error-severity findings (warnings do not fail)
