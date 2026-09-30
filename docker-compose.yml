@@ -45,6 +45,7 @@ services:
       - GITHUB_CLIENT_ID
       - GITHUB_CLIENT_SECRET
       - OXO_FLOW_LICENSE
+      - OXO_FLOW_OUTPUT_TAIL_BYTES
       # PostgreSQL (optional): the published image builds WITHOUT the
       # `postgres` compile feature, so uncommenting this line crash-loops
       # the container at startup (it refuses a postgres:// URL and

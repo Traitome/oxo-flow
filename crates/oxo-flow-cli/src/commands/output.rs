@@ -1671,7 +1671,8 @@ pub fn handle_export(workflow: PathBuf, format: String, output: Option<PathBuf>)
 // ── AI result interpretation ───────────────────────────────────────────────
 
 /// Cap on the stderr excerpt carried per rule into the interpretation
-/// prompt. The checkpoint already bounds `stderr_tail` (`STDERR_TAIL_CHARS`);
+/// prompt. The checkpoint already bounds `stderr_tail`
+/// (`DEFAULT_OUTPUT_TAIL_BYTES`, tunable via `OXO_FLOW_OUTPUT_TAIL_BYTES`);
 /// this second bound keeps one pathological rule from dominating the prompt.
 const INTERPRET_STDERR_CHARS: usize = 400;
 

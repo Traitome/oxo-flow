@@ -211,6 +211,9 @@ async fn record_outcome(
         .and_then(|f| record.started_at.map(|s| f.signed_duration_since(s)))
         .map(|d| d.num_milliseconds() as f64 / 1000.0)
         .unwrap_or(0.0);
+    // No ExecutorConfig on the cluster path — the tail size comes from the
+    // same env override the signal handler reads (issue #691).
+    let output_tail_bytes = oxo_flow_core::executor::output_tail_bytes_from_env();
     let mut ck = args.checkpoint.lock().await;
     match record.status {
         JobStatus::Success => {
@@ -233,7 +236,7 @@ async fn record_outcome(
                 retries: record.retries,
                 recorded_as: None,
             };
-            ck.record_run(record);
+            ck.record_run(record, output_tail_bytes);
             ck.mark_completed(&record.rule, benchmark);
             if let Some(rule) = rule
                 && let Ok(Some(manifest)) =
@@ -260,7 +263,7 @@ async fn record_outcome(
             } else {
                 summary.non_required_failed += 1;
             }
-            ck.record_run(record);
+            ck.record_run(record, output_tail_bytes);
             ck.mark_failed(&record.rule);
         }
         _ => {
@@ -422,24 +425,28 @@ pub(crate) async fn run_on_cluster(
     > {
         let ck = submit_ck.clone();
         let path = submit_path.clone();
+        let output_tail_bytes = oxo_flow_core::executor::output_tail_bytes_from_env();
         Box::pin(async move {
             let mut ck = ck.lock().await;
-            ck.record_run(&oxo_flow_core::executor::JobRecord {
-                signal: None,
-                rule: rule.clone(),
-                status: oxo_flow_core::executor::JobStatus::Running,
-                started_at: Some(chrono::Utc::now()),
-                finished_at: None,
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                command: None,
-                retries: 0,
-                skip_reason: None,
-                max_rss_mb: None,
-                cpu_seconds: None,
-                caption: None,
-            });
+            ck.record_run(
+                &oxo_flow_core::executor::JobRecord {
+                    signal: None,
+                    rule: rule.clone(),
+                    status: oxo_flow_core::executor::JobStatus::Running,
+                    started_at: Some(chrono::Utc::now()),
+                    finished_at: None,
+                    exit_code: None,
+                    stdout: None,
+                    stderr: None,
+                    command: None,
+                    retries: 0,
+                    skip_reason: None,
+                    max_rss_mb: None,
+                    cpu_seconds: None,
+                    caption: None,
+                },
+                output_tail_bytes,
+            );
             ck.save_to_file(&path)
         })
     };
