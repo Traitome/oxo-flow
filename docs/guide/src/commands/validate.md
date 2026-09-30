@@ -27,7 +27,9 @@ oxo-flow validate [OPTIONS] <WORKFLOW>
 | `--as-include` | — | Validate as a sub-workflow fragment (skips input-existence checks and DAG construction; **cycle detection still applies**) |
 | `--json` | — | Output machine-readable JSON to stdout |
 | `--ai` | — | Enable AI-powered semantic validation |
-| `--verbose` | `-v` | Enable debug-level logging |
+| `--verbose` | `-v` | Enable debug-level logging (global) |
+| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---
 
@@ -77,7 +79,7 @@ oxo-flow validate pipeline.oxoflow
 ```
   error [E006]: DAG error: cycle detected in workflow DAG: align → sort_bam → align
     hint: check for circular dependencies between rules
-✗ pipeline.oxoflow — 1 validation error(s)
+✗ pipeline.oxoflow — DAG error: cycle detected in workflow DAG: align → sort_bam → align
 ```
 
 ### Wildcard input without a sample domain

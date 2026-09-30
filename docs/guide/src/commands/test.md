@@ -83,9 +83,12 @@ are skipped and reported by `validate`/`dry-run` instead.
 
 ### Machine-readable output
 
-With `--json`, one combined JSON document is emitted on stdout: a `steps`
-array (validate / lint / dry-run / deep-check statuses) plus per-step
-reports under `reports`, so CI can gate on either surface:
+With `--json`, one combined JSON document is emitted on stdout — a `steps`
+array covering **all** steps (validate / lint / dry-run, `deep-check` when
+`--deep`, `run` when `--run`, `output` when `--output` is checked), plus
+per-step sub-documents under `reports` (currently `deep-check`), so CI can
+gate on either surface. The document also carries the `workflow` path and
+the aggregate `status`:
 
 ```bash
 oxo-flow test pipeline.oxoflow --deep --json | jq '.reports."deep-check"'
@@ -134,7 +137,8 @@ oxo-flow test pipeline.oxoflow --deep --json   # CI preflight gate
 ## Exit Codes
 
 - `0` — all checks passed
-- `1` — validation, lint, or deep checks found issues
+- `1` — validation, lint, or a `D001` deep-check finding (see above); a
+  failed `--run` step or a missing `--output` file also exits `1`
 
 ## See Also
 

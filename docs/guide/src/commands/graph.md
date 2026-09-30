@@ -129,7 +129,7 @@ For example, a workflow with a `cohort` sample group of three samples shows the 
 
 ```
 ┌────────────────────────────────────────────────┐
-│  Workflow DAG: 22 rules, 28 dependencies       │
+│  Workflow DAG: 22 rules, 23 dependencies       │
 │  Depth: 12, Width: 3, Critical path: 12 steps  │
 └────────────────────────────────────────────────┘
 

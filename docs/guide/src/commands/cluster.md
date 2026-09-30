@@ -13,7 +13,7 @@ Manage cluster job submission and monitoring.
 ## Usage
 
 ```
-oxo-flow cluster <ACTION> [OPTIONS]
+oxo-flow cluster <COMMAND>
 ```
 
 ---
@@ -370,12 +370,15 @@ oxo_submit() {
 
 echo 'Submitting fastqc...'
 JOB_IDS[fastqc]=$(oxo_submit cluster_scripts/fastqc.sh)
+echo "  Submitted fastqc as job ID: ${JOB_IDS[fastqc]}"
 
 echo 'Submitting trim_reads...'
 JOB_IDS[trim_reads]=$(oxo_submit --dependency=afterok:${JOB_IDS[fastqc]} cluster_scripts/trim_reads.sh)
+echo "  Submitted trim_reads as job ID: ${JOB_IDS[trim_reads]}"
 
 echo 'Submitting bwa_align...'
 JOB_IDS[bwa_align]=$(oxo_submit --dependency=afterok:${JOB_IDS[trim_reads]} cluster_scripts/bwa_align.sh)
+echo "  Submitted bwa_align as job ID: ${JOB_IDS[bwa_align]}"
 
 echo 'All jobs submitted successfully!'
 echo 'Job ID mapping:'
@@ -391,7 +394,7 @@ Different backends use different dependency syntax:
 | SLURM | `--dependency=afterok:jobid` |
 | PBS | `-W depend=afterok:jobid` |
 | SGE | `-hold_jid jobid` |
-| LSF | `-w 'ended(jobid)'` |
+| LSF | `-w "ended(jobid)"` |
 
 ### Element-wise array chaining (SLURM)
 

@@ -7,7 +7,7 @@ Inspect and manage workflow configuration.
 ## Usage
 
 ```
-oxo-flow config <ACTION> [OPTIONS]
+oxo-flow config <COMMAND>
 ```
 
 ---

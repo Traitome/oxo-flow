@@ -3,7 +3,7 @@
 AI status, self-test, setup, and three-layer workflow explanation.
 
 ```bash
-oxo-flow ai                 # quick status: provider, model, quota
+oxo-flow ai                 # quick status: provider, model, endpoint, sessions
 oxo-flow ai test            # full self-test (provider round-trip)
 oxo-flow ai setup           # interactive provider configuration wizard
 oxo-flow ai explain wf.oxoflow
@@ -88,8 +88,8 @@ itself:
 | `template --ai` | Generate a workflow from a natural-language description (optionally grounded in `--from-url`/`--from-file` reference material) |
 | `env create --ai` | Generate a conda/pixi environment spec from a natural-language description |
 
-All AI features go through the configured provider (see `oxo-flow ai
-status`); deterministic behavior never depends on the model — AI output is
+All AI features go through the configured provider (see `oxo-flow ai`);
+deterministic behavior never depends on the model — AI output is
 always additive prose or proposals, never silent engine decisions.
 
 ## How `template --ai` generates a workflow

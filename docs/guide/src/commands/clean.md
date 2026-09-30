@@ -91,7 +91,7 @@ y
   ✓ results/trimmed/sample1_R1.fastq.gz
   ✓ results/trimmed/sample1_R2.fastq.gz
 
-Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped, 0 rejected
+Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped, 0 rejected, 0 protected
 ```
 
 ---

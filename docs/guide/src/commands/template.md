@@ -29,7 +29,7 @@ immediately complete and runnable.
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output <OUTPUT>` | Output file or directory (a trailing slash forces a directory, created if missing). Defaults to current directory with template name |
+| `-o, --output <OUTPUT>` | Output file or directory (a trailing slash forces a directory, created if missing). Defaults to the current directory with the template's name minus its numeric prefix (e.g. `01_hello_world` → `hello_world.oxoflow`) |
 | `--ai` | Generate the workflow with AI from a natural language description |
 | `--from-url <URL>` | URL(s) to use as reference material for AI generation (repeatable) |
 | `--from-file <PATH>` | File(s) to use as reference material for AI generation (repeatable) |

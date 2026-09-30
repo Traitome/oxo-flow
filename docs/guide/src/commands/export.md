@@ -28,6 +28,11 @@ oxo-flow export [OPTIONS] <WORKFLOW>
 | `--format` | `-f` | `docker` | Export format (`docker`, `singularity`, `compose`, `toml`) |
 | `--output` | `-o` | stdout | Output file path |
 
+In addition, all global flags apply: `--verbose` / `-v` (debug-level
+logging), `--quiet` (suppress informational output), and `--no-color`
+(disable colored output; also respects the `NO_COLOR` environment
+variable).
+
 ---
 
 ## Examples

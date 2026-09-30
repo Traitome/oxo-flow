@@ -5,7 +5,7 @@ Output the JSON Schema for the `.oxoflow` format.
 ## Usage
 
 ```
-oxo-flow schema [OPTIONS]
+oxo-flow schema
 ```
 
 ## Description
@@ -24,8 +24,10 @@ oxo-flow schema
 # Save to a file
 oxo-flow schema > oxoflow-schema.json
 
-# Validate a workflow against the schema (using a JSON Schema validator)
+# Validate a workflow against the saved schema (using a JSON Schema
+# validator, e.g. check-jsonschema)
 oxo-flow schema > schema.json
+check-jsonschema --schemafile schema.json workflow.oxoflow
 ```
 
 ## See Also
