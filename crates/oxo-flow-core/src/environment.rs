@@ -4161,4 +4161,29 @@ mod tests {
         // Unknown limits never clamp.
         assert_eq!(effective_cpu_limit_with(8, None, u32::MAX), 8);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_spec_does_not_block_content_tag_or_name_probe() {
+        // #714: both file-backed spec readers stat before opening — a
+        // writer-less FIFO would otherwise hang the caller. The test hangs
+        // (until the harness kills it) if either reader opens the pipe.
+        let dir = std::env::temp_dir().join("oxo-env-fifo");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("env.yaml");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo available on unix");
+        assert!(status.success());
+
+        assert_eq!(spec_content_tag(&fifo.to_string_lossy()), "");
+        // The name probe falls back to the file stem — plain name, no
+        // content-hash suffix, and crucially no hang.
+        let name = conda_env_name_from_spec("conda", &fifo.to_string_lossy()).unwrap();
+        assert_eq!(name, "env");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
