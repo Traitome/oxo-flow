@@ -775,7 +775,14 @@ pub fn resume_monitoring(run_id: String, pid: i32, workdir: PathBuf) {
         let log_path = workdir.join("execution.log");
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            if let Ok(content) = tokio::fs::read_to_string(&exit_file).await {
+            // Stat first: the workdir is rule-writable, and opening a
+            // writer-less FIFO planted at .exit-code would block this task
+            // forever — the run could never leave "running" (issue #735).
+            let exit_readable = tokio::fs::metadata(&exit_file)
+                .await
+                .map(|m| m.is_file())
+                .unwrap_or(false);
+            if exit_readable && let Ok(content) = tokio::fs::read_to_string(&exit_file).await {
                 let code = content.trim().parse::<i32>().ok();
                 finalize_run(&run_id, code, &log_path).await;
                 break;
@@ -894,6 +901,20 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
             .await
             .map(|content| content.lines().count())
             .unwrap_or(0);
+        // The workdir is rule-writable: a pre-planted FIFO at metrics.jsonl
+        // must not hang the sampler's opens below (issue #735) — the file
+        // is only ever written by this sampler, so bail if it exists as a
+        // non-regular file.
+        if tokio::fs::metadata(workdir.join("metrics.jsonl"))
+            .await
+            .map(|m| !m.is_file())
+            .unwrap_or(false)
+        {
+            warn!(
+                "metrics.jsonl in run workdir {workdir:?} is not a regular file — resource sampling disabled for run {run_id}"
+            );
+            return;
+        }
         loop {
             ticker.tick().await;
             let active: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
@@ -929,6 +950,16 @@ fn spawn_resource_sampler(run_id: String, cli_pid: u32, workdir: PathBuf) {
 async fn append_metrics(workdir: &std::path::Path, line: &str, existing_lines: usize) -> usize {
     const MAX_METRICS_LINES: usize = 2000;
     let path = workdir.join("metrics.jsonl");
+
+    // Gate every tick, not just sampler startup: a rule could swap a
+    // non-regular file in between the stat and the open (issue #735).
+    if tokio::fs::metadata(&path)
+        .await
+        .map(|m| !m.is_file())
+        .unwrap_or(false)
+    {
+        return existing_lines;
+    }
 
     if existing_lines < MAX_METRICS_LINES {
         use tokio::io::AsyncWriteExt;
@@ -1193,6 +1224,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(content, "l1\nl2\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn append_metrics_skips_non_regular_file() {
+        // #735: a FIFO planted at metrics.jsonl (the workdir is
+        // rule-writable) must not be opened for append — write-open blocks
+        // until a reader appears. The test hangs if the gate regresses.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("metrics.jsonl");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo available on unix");
+        assert!(status.success());
+
+        let lines = append_metrics(dir.path(), "l1", 7).await;
+        assert_eq!(lines, 7, "FIFO target must be skipped, count unchanged");
     }
 
     #[tokio::test]

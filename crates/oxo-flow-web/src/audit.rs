@@ -5,8 +5,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Audit log entry format.
@@ -79,57 +79,6 @@ pub fn write_audit_log(
     Ok(())
 }
 
-/// Get recent audit log entries.
-///
-/// Reads logs from the last `days` days and returns them as JSON lines.
-/// Entries are sorted by timestamp (newest first).
-///
-/// # Arguments
-///
-/// * `days` - Number of days to look back (1-30)
-///
-/// # Returns
-///
-/// A vector of JSON strings, each representing an AuditEntry.
-pub fn get_recent_audit_logs(days: u8) -> std::io::Result<Vec<String>> {
-    let days = days.clamp(1, 30) as i64;
-    let dir = audit_log_dir();
-    let mut entries = Vec::new();
-
-    if !dir.exists() {
-        return Ok(entries);
-    }
-
-    for day_offset in 0..days {
-        let date = Utc::now() - chrono::Duration::days(day_offset);
-        let path = audit_log_path(date);
-
-        if path.exists() {
-            let file = File::open(&path)?;
-            let reader = BufReader::new(file);
-
-            for line in reader.lines().map_while(Result::ok) {
-                if !line.trim().is_empty() {
-                    entries.push(line);
-                }
-            }
-        }
-    }
-
-    // Sort by timestamp (newest first) - parse each entry and sort
-    entries.sort_by(|a, b| {
-        let ts_a = serde_json::from_str::<AuditEntry>(a)
-            .map(|e| e.timestamp)
-            .unwrap_or_default();
-        let ts_b = serde_json::from_str::<AuditEntry>(b)
-            .map(|e| e.timestamp)
-            .unwrap_or_default();
-        ts_b.cmp(&ts_a)
-    });
-
-    Ok(entries)
-}
-
 /// Middleware: record every state-changing request (non-GET/HEAD/OPTIONS) in
 /// the `audit_logs` table — the single audit write point covering all
 /// mutation handlers (issue #79 P1-05: the table had schema but zero write
@@ -197,7 +146,6 @@ pub async fn audit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_audit_entry_serialization() {
@@ -218,26 +166,5 @@ mod tests {
         assert_eq!(parsed.user, entry.user);
         assert_eq!(parsed.action, entry.action);
         assert_eq!(parsed.resource, entry.resource);
-    }
-
-    #[test]
-    fn test_write_and_read_audit_logs() {
-        let temp_dir = tempdir().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Write some entries
-        write_audit_log("user1", "login", "system", "success").unwrap();
-        write_audit_log("user2", "workflow.run", "test-workflow", "success").unwrap();
-
-        // Read them back
-        let logs = get_recent_audit_logs(1).unwrap();
-        assert_eq!(logs.len(), 2);
-
-        // Verify newest first
-        let first: AuditEntry = serde_json::from_str(&logs[0]).unwrap();
-        assert_eq!(first.action, "workflow.run");
-
-        std::env::set_current_dir(original_dir).unwrap();
     }
 }
