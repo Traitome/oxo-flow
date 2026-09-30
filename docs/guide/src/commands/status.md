@@ -30,7 +30,9 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 | `--timing` | | Show per-rule wall-clock times, sampled peak RSS, and total runtime, slowest first |
 | `--limit <LIMIT>` | `-n` | Maximum number of rules in the `--timing` view (default: 10; requires `--timing`) |
 | `--json` | | Output machine-readable JSON to stdout |
-| `--verbose` | `-v` | Enable debug-level logging |
+| `--verbose` | `-v` | Enable debug-level logging (global) |
+| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---
 
@@ -97,8 +99,7 @@ Skipped (when condition false):
 
 ```json
 "failed": [],
-"skipped_by_when": ["qc_report"],
-"when_verdicts": { "qc_report": false }
+"skipped_by_when": ["qc_report"]
 ```
 
 ### Staleness reasons
@@ -153,10 +154,9 @@ With `--json`, output goes to stdout:
 {
   "command": "status",
   "checkpoint": ".oxo-flow/checkpoint.json",
-  "workflow": "pipeline.oxoflow",
+  "workflow": "/abs/path/pipeline.oxoflow",
   "completed": ["align", "sort_bam", "trim_reads"],
   "failed": [],
-  "when_verdicts": { "qc_report": false },
   "skipped_by_when": ["qc_report"],
   "staleness": {
     "align": {
@@ -183,8 +183,8 @@ measurement. `staleness` appears whenever the workflow file can be
 loaded for classification **and** at least one completed rule would
 re-run (see [Staleness reasons](#staleness-reasons)). `skipped_by_when`
 appears only when at least one `failed_rules` entry is actually
-when-gated-off; `when_verdicts` lists the gate verdicts recorded for the
-run.
+when-gated-off; the verdicts themselves live in the checkpoint file's
+`when_verdicts` map and are not duplicated into the JSON.
 
 ---
 
@@ -252,7 +252,9 @@ replay them deterministically and revoke them when the rule is invalidated
 Every key above is omitted from the JSON when empty — a minimal workflow
 with no `[config]` section, no temporaries, no when-gates, and no
 re-entries writes a much smaller checkpoint containing only
-`completed_rules`, `failed_rules`, `benchmarks`, and `workflow_path`.
+`completed_rules`, `failed_rules`, `benchmarks`, `workflow_path`,
+`workdir`, `rule_fingerprints`, `rule_fingerprints_no_input`, and
+`rule_runs`.
 
 ---
 

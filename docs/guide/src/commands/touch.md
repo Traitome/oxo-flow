@@ -7,7 +7,7 @@ Mark workflow outputs as up-to-date without re-executing rules.
 ## Usage
 
 ```
-oxo-flow touch [OPTIONS] <WORKFLOW> [KEY=VALUE]...
+oxo-flow touch [OPTIONS] <WORKFLOW> [OVERRIDES]...
 ```
 
 ---
@@ -17,7 +17,7 @@ oxo-flow touch [OPTIONS] <WORKFLOW> [KEY=VALUE]...
 | Argument | Description |
 |---|---|
 | `<WORKFLOW>` | Path to the `.oxoflow` workflow file |
-| `[KEY=VALUE]...` | Direct config overrides as trailing positionals — the forms `KEY=VALUE` and `--KEY=VALUE` work for any key; the bare space form `--KEY VALUE` is accepted only for keys declared with the declarative inline-table syntax (`key = { default = … }`) and is rejected as an unknown argument for plain `key = "value"` keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on `{config.*}` (issue #432). Command flags must come **before** the overrides. |
+| `[OVERRIDES]...` | Direct config overrides as trailing positionals — the forms `KEY=VALUE` and `--KEY=VALUE` work for any key; the bare space form `--KEY VALUE` is accepted only for keys declared with the declarative inline-table syntax (`key = { default = … }`) and is rejected as an unknown argument for plain `key = "value"` keys (touch's override gate sees only the declarative keys, so a space-form plain-key override is indistinguishable from a mistyped option). Needed when outputs or wildcard expansion branch on `{config.*}` (issue #432). Command flags must come **before** the overrides. |
 
 ---
 
@@ -27,6 +27,10 @@ oxo-flow touch [OPTIONS] <WORKFLOW> [KEY=VALUE]...
 |---|---|---|
 | `--rule` | `-r` | Specific rule(s) whose outputs to touch |
 | `--workdir <DIR>` | `-d` | Working directory the outputs live in (default: the workflow file's directory) |
+| `--arg <KEY=VALUE>` | | Config override (`KEY=VALUE` or `--KEY VALUE`); touch validates output paths against the overridden values — the same machinery as the `[OVERRIDES]...` positionals |
+| `--verbose` | `-v` | Enable debug-level logging (global) |
+| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---
 

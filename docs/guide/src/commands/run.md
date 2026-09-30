@@ -96,6 +96,9 @@ oxo-flow run gh:owner/pipeline@v0.21.0
 
 # Any git URL or local repository directory
 oxo-flow run https://example.com/team/pipeline.git
+
+# A local checkout via file:// (must be an existing directory)
+oxo-flow run file:///path/to/pipeline
 ```
 
 A bare `owner/pipeline` argument is interpreted as a GitHub repository
@@ -104,12 +107,14 @@ starting with `.`, or one ending in `.oxoflow` is always treated as a
 local workflow path. Only a single-slash `owner/name` — optionally with
 `@ref` and a trailing `.git` — maps to `https://github.com/owner/name.git`.
 (So a missing `data/pipeline.oxoflow` keeps its normal "workflow file not
-found" error instead of attempting a clone.)
+found" error instead of attempting a clone.) An `https://…/*.git` URL runs
+that repository directly; `file://<dir>` runs an existing local checkout.
 
-The repository is checked out into `.oxo-flow/repos/<owner>-<name>` under
-the current directory (reused on later runs — delete the directory to
-force a fresh clone; the owner prefix keeps same-named repos of different
-owners from sharing a checkout), and the workflow file is auto-discovered
+The repository is checked out into `.oxo-flow/repos/<host>-<owner>-<name>`
+under the current directory (e.g. `.oxo-flow/repos/github.com-owner-pipeline`;
+reused on later runs — delete the directory to force a fresh clone; the host
+and owner prefixes keep same-named repos of different owners or hosts from
+sharing a checkout), and the workflow file is auto-discovered
 (`main.oxoflow` first). Because the clone is a read-only cache, the working directory
 defaults to the **current directory** for repository runs — outputs, the
 checkpoint, and the workdir lock all land next to your data, not inside the

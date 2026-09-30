@@ -9,7 +9,7 @@ substituted correctly.
 ## Usage
 
 ```
-oxo-flow debug <WORKFLOW> [OPTIONS]
+oxo-flow debug [OPTIONS] <WORKFLOW>
 ```
 
 ---
@@ -26,9 +26,11 @@ oxo-flow debug <WORKFLOW> [OPTIONS]
 
 | Option | Short | Description |
 |---|---|---|
-| `--rule <NAME>` | `-r` | Show only a specific rule (by name) |
+| `--rule <RULE_NAME>` | `-r` | Show the expanded command for this rule only |
 | `--ai` | — | Enable AI-powered command explanation |
-| `--verbose` | `-v` | Enable debug-level logging |
+| `--verbose` | `-v` | Enable debug-level logging (global) |
+| `--quiet` | — | Suppress informational output, including the version banner (global) |
+| `--no-color` | — | Disable colored output, also respects the `NO_COLOR` environment variable (global) |
 
 ---
 
@@ -68,6 +70,9 @@ awk -F',' 'NR>1 && $3 > 500' data/raw.csv >> data/filtered.csv
   Dependencies: ["generate_data"]
 ```
 
+All output (including the version banner) goes to stderr; the banner appears
+only on an interactive terminal and is suppressed by `--quiet`.
+
 ---
 
 ## Notes
@@ -76,7 +81,8 @@ awk -F',' 'NR>1 && $3 > 500' data/raw.csv >> data/filtered.csv
 - Template variables like `{input}`, `{output}`, and `{threads}` are
   substituted in the expanded view
 - Wildcard rules are expanded per sample before display: rule names get a
-  `_<sample>` suffix (e.g. `bwa_mem2_align_cohort_NA12878`) and wildcard
+  `_<group>_<sample>` suffix (or `_<pair_id>` for pair/scatter rules; e.g.
+  `bwa_mem2_align_cohort_NA12878`) and wildcard
   placeholders are replaced with concrete values
 - With `--rule`, use the full expanded rule name as shown in the output
   (for wildcard workflows, the template name like `bwa_mem2_align` will not match)

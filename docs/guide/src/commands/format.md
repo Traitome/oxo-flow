@@ -60,15 +60,15 @@ oxo-flow format pipeline.oxoflow --check
 ## Output
 
 ```
-[workflow]
-name = "my-pipeline"
-version = "0.1.0"
-
 [[rules]]
 name = "step1"
 input = ["input.txt"]
 output = ["output.txt"]
 shell = "cat input.txt > output.txt"
+
+[workflow]
+name = "my-pipeline"
+version = "0.1.0"
 ```
 
 ---

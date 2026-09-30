@@ -16,7 +16,7 @@ oxo-flow init [OPTIONS] <NAME>
 
 | Argument | Description |
 |---|---|
-| `<NAME>` | Project name (also used as the default directory name) |
+| `<NAME>` | Project name (no path separators; also used as the default directory name) |
 
 ---
 
@@ -64,6 +64,9 @@ oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
     cd my-pipeline
     oxo-flow run my-pipeline.oxoflow
 ```
+
+All output (including the version banner) goes to stderr; the banner appears
+only on an interactive terminal and is suppressed by `--quiet`.
 
 ### Generated files
 

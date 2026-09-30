@@ -23,7 +23,7 @@ oxo-flow serve [OPTIONS]
 | `--open` | — | — | Open the interface in the default browser on startup (env: `OXO_FLOW_OPEN_BROWSER`) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 | `--quiet` | — | — | Suppress non-essential output (errors only) |
-| `--no-color` | — | — | Disable colored output |
+| `--no-color` | — | — | Disable colored output (also respects the `NO_COLOR` environment variable) |
 
 ---
 
@@ -177,7 +177,9 @@ curl http://127.0.0.1:8080/api/health
     "database": { "status": "ok", "latency_ms": null },
     "filesystem": { "status": "ok", "latency_ms": null },
     "scheduler": null,
-    "ai_provider": null
+    "ai_provider": null,
+    "ai_key_storage": "plaintext",
+    "engine": null
   },
   "resources": { "cpu_pct": 0.0, "memory_used_pct": 0.0, "disk_used_pct": 0.0 },
   "license": {
@@ -201,7 +203,11 @@ curl -X POST http://127.0.0.1:8080/api/pipelines/validate \
 ```json
 {
   "valid": true,
-  "errors": []
+  "errors": [],
+  "rules": 1,
+  "dependencies": 0,
+  "missing_inputs": [],
+  "warnings": []
 }
 ```
 
