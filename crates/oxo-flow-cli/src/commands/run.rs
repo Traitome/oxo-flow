@@ -1296,8 +1296,22 @@ pub async fn run_command(
             None => anyhow::anyhow!("{e}"),
         })?;
 
-    let mut config = WorkflowConfig::from_file(&workflow)
-        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+    // Issue #751: bundle runs extract the workflow into a temp dir, so
+    // relative sample_pattern/pairs_pattern scans anchor inside the
+    // extraction and never see data kept under --workdir. When the workflow
+    // file lives in the extraction AND the effective workdir differs from
+    // it, hand the workdir to the parser as a discovery fallback. (Without
+    // an explicit --workdir, main.rs passes the extraction dir itself, so
+    // the two are equal and the fallback is a no-op.)
+    let discovery_fallback =
+        if workflow.starts_with(std::env::temp_dir()) && workdir_effective != workflow_dir {
+            Some(workdir_effective.as_path())
+        } else {
+            None
+        };
+    let mut config =
+        WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
+            .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // ── Parse and merge CLI config overrides (shared with dry-run) ─────
     // The workflow's own [config] keys gate the `--KEY VALUE` space form:
@@ -5094,8 +5108,18 @@ pub async fn dry_run_command(
     // directory — the same base the executor uses for run (issue #68).
     let base_dir = workdir.as_deref().unwrap_or(&workflow_dir);
 
-    let mut config = WorkflowConfig::from_file(&workflow)
-        .with_context(|| format!("failed to parse {}", workflow.display()))?;
+    // Issue #751: same discovery fallback as run — bundle extractions live
+    // under the temp dir, and --workdir may hold the data. The fallback is
+    // a no-op unless the two roots differ.
+    let discovery_fallback =
+        if workflow.starts_with(std::env::temp_dir()) && base_dir != workflow_dir {
+            Some(base_dir)
+        } else {
+            None
+        };
+    let mut config =
+        WorkflowConfig::from_file_with_discovery_fallback(&workflow, discovery_fallback)
+            .with_context(|| format!("failed to parse {}", workflow.display()))?;
 
     // ── CLI config overrides (shared with run, issue #77) ─────
     // Applied in run's exact order: overrides first, then

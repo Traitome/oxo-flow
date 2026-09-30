@@ -69,6 +69,22 @@ impl WorkflowConfig {
     /// Parse a workflow configuration from a `.oxoflow` file.
     #[must_use = "parsing a config file returns a Result that must be used"]
     pub fn from_file(path: &Path) -> Result<Self> {
+        Self::from_file_with_discovery_fallback(path, None)
+    }
+
+    /// [`Self::from_file`] with a fallback root for filesystem discovery
+    /// (issue #751).
+    ///
+    /// Bundle runs extract the workflow into a per-process temp dir, so the
+    /// relative `sample_pattern` / `pairs_pattern` scans anchor inside the
+    /// extraction and never see data the user keeps under the run workdir.
+    /// When a scan against the workflow's own directory comes up empty, it
+    /// is retried against `discovery_fallback` (the effective `--workdir`)
+    /// before the miss is reported.
+    pub fn from_file_with_discovery_fallback(
+        path: &Path,
+        discovery_fallback: Option<&Path>,
+    ) -> Result<Self> {
         // Stat-first regular-file gate (issue #714, pattern from #695/#706):
         // read_to_string on a writer-less FIFO blocks the caller forever.
         if let Ok(meta) = std::fs::metadata(path)
@@ -140,8 +156,24 @@ impl WorkflowConfig {
 
         // Discover pairs from pattern if specified
         if let Some(ref pairs_pattern) = config.workflow.pairs_pattern {
-            let discovered_pairs =
+            let mut discovered_pairs =
                 ExperimentControlPair::discover_from_pattern(pairs_pattern, parent)?;
+            if discovered_pairs.is_empty()
+                && let Some(fallback) = discovery_fallback
+            {
+                discovered_pairs =
+                    ExperimentControlPair::discover_from_pattern(pairs_pattern, fallback)?;
+                if !discovered_pairs.is_empty() {
+                    tracing::info!(
+                        "pairs_pattern '{}' matched no files under {} — discovered {} under the \
+                         run workdir {} instead (issue #751)",
+                        pairs_pattern,
+                        parent.display(),
+                        discovered_pairs.len(),
+                        fallback.display()
+                    );
+                }
+            }
             let count = discovered_pairs.len();
             // Merge with inline/file pairs
             config.pairs.extend(discovered_pairs);
@@ -233,17 +265,53 @@ impl WorkflowConfig {
                     let dir = sp.parent().unwrap_or(std::path::Path::new("/"));
                     (dir.to_path_buf(), file_name.to_string_lossy().to_string())
                 } else {
-                    (parent.to_path_buf(), expanded_pattern)
+                    (parent.to_path_buf(), expanded_pattern.clone())
                 }
             } else if let Some(file_name) = sp.file_name() {
                 let dir = sp.parent().unwrap_or(std::path::Path::new(""));
                 (parent.join(dir), file_name.to_string_lossy().to_string())
             } else {
-                (parent.to_path_buf(), expanded_pattern)
+                (parent.to_path_buf(), expanded_pattern.clone())
             };
 
             let discovered =
                 crate::wildcard::discover_wildcards_from_pattern(&search_dir, &file_pattern)?;
+            // Issue #751: bundle runs anchor the scan inside the temp
+            // extraction, which does not hold the user's data. Retry against
+            // the run workdir before reporting the miss.
+            let (discovered, search_dir) = if discovered.is_empty()
+                && let Some(fallback) = discovery_fallback
+            {
+                let fb = std::path::Path::new(&expanded_pattern);
+                // Absolute patterns were not anchored to `parent` in the
+                // first scan, so the fallback has nothing to add.
+                let fallback_dir = if fb.is_absolute() {
+                    search_dir.clone()
+                } else {
+                    let dir = fb
+                        .parent()
+                        .unwrap_or(std::path::Path::new(""))
+                        .to_string_lossy();
+                    fallback.join(dir.as_ref())
+                };
+                let fallback_discovered =
+                    crate::wildcard::discover_wildcards_from_pattern(&fallback_dir, &file_pattern)?;
+                if !fallback_discovered.is_empty() {
+                    tracing::info!(
+                        "sample_pattern '{}' matched no files under {} — discovered {} file(s) \
+                         under the run workdir {} instead (issue #751)",
+                        sample_pattern,
+                        search_dir.display(),
+                        fallback_discovered.len(),
+                        fallback_dir.display()
+                    );
+                    (fallback_discovered, fallback_dir)
+                } else {
+                    (discovered, search_dir)
+                }
+            } else {
+                (discovered, search_dir)
+            };
             if discovered.is_empty() {
                 // Bundle runs extract the workflow into a per-process temp
                 // dir, which is where this scan anchors — data living next to
@@ -251,10 +319,12 @@ impl WorkflowConfig {
                 // the failure only surfaces later as unbound wildcards.
                 // Tell the user where the scan actually looked and how to
                 // fix the layout (issue #751 on bundle data paths).
-                let bundle_hint = if search_dir.starts_with(std::env::temp_dir()) {
+                let bundle_hint = if discovery_fallback.is_none()
+                    && search_dir.starts_with(std::env::temp_dir())
+                {
                     "\n  note: the workflow is running from a bundle's temp extraction; \
-                     data files must sit inside the bundle, or use a plain workflow \
-                     path with --workdir"
+                     data files must sit inside the bundle, or pass --workdir so discovery \
+                     can also consult the run workdir"
                 } else {
                     ""
                 };

@@ -1356,6 +1356,89 @@ fn sample_pattern_expands_config_vars() {
     assert_eq!(group.samples, vec!["S1".to_string()]);
 }
 
+// Issue #751: a bundle run extracts the workflow into a temp dir, so the
+// sample_pattern scan anchors inside the extraction and misses data the user
+// keeps under --workdir. With a discovery fallback, the empty scan is retried
+// against the fallback root and the samples are found there.
+#[test]
+fn sample_pattern_discovery_falls_back_to_workdir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join("bundle-extract");
+    let raw = wf_dir.join("raw_data");
+    std::fs::create_dir_all(&raw).unwrap();
+    let wf_path = wf_dir.join("wf.oxoflow");
+    std::fs::write(
+        &wf_path,
+        r#"
+        [workflow]
+        name = "wf"
+        version = "1.0.0"
+        sample_pattern = "raw_data/{sample}_R1.fastq.gz"
+        "#,
+    )
+    .unwrap();
+
+    // No fallback, no data: discovery misses (the pre-fix bundle symptom).
+    let config = WorkflowConfig::from_file_with_discovery_fallback(&wf_path, None).unwrap();
+    assert!(
+        config
+            .sample_groups
+            .iter()
+            .all(|g| g.name != "auto-discovered")
+    );
+
+    // Data lives under the workdir, not the extraction — the fallback finds it.
+    let workdir = dir.path().join("workdir");
+    let wd_raw = workdir.join("raw_data");
+    std::fs::create_dir_all(&wd_raw).unwrap();
+    std::fs::write(wd_raw.join("S1_R1.fastq.gz"), b"x").unwrap();
+    std::fs::write(wd_raw.join("S2_R1.fastq.gz"), b"x").unwrap();
+
+    let config =
+        WorkflowConfig::from_file_with_discovery_fallback(&wf_path, Some(&workdir)).unwrap();
+    let group = config
+        .sample_groups
+        .iter()
+        .find(|g| g.name == "auto-discovered")
+        .expect("fallback discovery should find samples");
+    assert_eq!(group.samples, vec!["S1".to_string(), "S2".to_string()]);
+}
+
+// Issue #751 companion: the fallback must not double-discover when the data
+// already sits inside the extraction (the primary scan wins; no duplicate
+// group is pushed).
+#[test]
+fn sample_pattern_discovery_fallback_is_noop_when_primary_hits() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = dir.path().join("raw_data");
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::write(raw.join("S1_R1.fastq.gz"), b"x").unwrap();
+
+    let wf_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &wf_path,
+        r#"
+        [workflow]
+        name = "wf"
+        version = "1.0.0"
+        sample_pattern = "raw_data/{sample}_R1.fastq.gz"
+        "#,
+    )
+    .unwrap();
+
+    let workdir = dir.path().join("workdir");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let config =
+        WorkflowConfig::from_file_with_discovery_fallback(&wf_path, Some(&workdir)).unwrap();
+    let groups: Vec<_> = config
+        .sample_groups
+        .iter()
+        .filter(|g| g.name == "auto-discovered")
+        .collect();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].samples, vec!["S1".to_string()]);
+}
+
 #[test]
 fn filter_samples_first_n_and_explicit() {
     let toml = r#"

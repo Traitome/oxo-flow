@@ -147,13 +147,11 @@ worth being explicit about the limits:
   declares (`metadata_file`, `pairs_file`, `sample_groups_file`) travel in the
   bundle; raw analysis inputs (FASTQs, BAMs, …) do not. For `--bundle` runs the
   workflow is executed from a temp extraction dir, so wildcard discovery
-  (`sample_pattern`, engine-owned file patterns) only sees data **inside the
-  bundle** — `--workdir` moves execution/checkpoint/outputs, not discovery.
-  To supply raw inputs at their own paths, use a plain workflow file
-  (`oxo-flow run workflow.oxo.wgf`) whose discovery anchors to the workflow's
-  directory, optionally with `--workdir` or config overrides
-  ([#751](https://github.com/Traitome/oxo-flow/issues/751) tracks redirecting
-  discovery for bundle runs).
+  (`sample_pattern`, `pairs_pattern`) scans the extraction first — but when a
+  pattern matches nothing there, discovery retries against the run workdir
+  (`--workdir`), so raw inputs can live beside the bundle and be pointed at
+  with `--workdir`. Data placed **inside** the bundle still wins: the
+  extraction scan is the primary anchor and the workdir is only a fallback.
 
 None of these are specific to oxo-flow — they apply to Snakemake and Nextflow
 bundles equally. The goal is honest reproducibility, not a guarantee we cannot
