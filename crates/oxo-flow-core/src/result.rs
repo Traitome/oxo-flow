@@ -539,7 +539,7 @@ pub fn scan_run_outputs_with_config<P: AsRef<Path>>(
 /// forever, and sockets / devices have no meaningful content. All readers
 /// below stat first instead of trusting `exists()`, which never blocks but
 /// does not exclude special files.
-fn is_regular_file(path: &Path) -> bool {
+pub fn is_regular_file(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|m| m.is_file())
         .unwrap_or(false)

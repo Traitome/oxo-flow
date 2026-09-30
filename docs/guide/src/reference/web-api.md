@@ -392,7 +392,7 @@ DAG JSON with per-node live status. Color-coded: green=completed, blue=running, 
 ```
 GET /api/runs/{id}/diagnostics
 ```
-Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint.
+Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }`. Uses 30+ deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of `execution.log` (seek-based tail, torn first line dropped), never the whole file (issue #710).
 
 ### Run Detail
 ```
@@ -416,7 +416,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 ```
 GET /api/runs/{id}/report
 ```
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`.
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`.
 
 ### Report Q&A
 ```
