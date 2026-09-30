@@ -3315,6 +3315,20 @@ pub async fn run_command(
                             (rule_name, oxo_flow_core::executor::JobStatus::Success, record)
                         } else if record.status == oxo_flow_core::executor::JobStatus::Skipped {
                             skipped_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            // Issue #747: a Skipped record is terminal. Drop
+                            // the spawn-time running mark regardless of which
+                            // skip path produced it (when-gate false skips it
+                            // in the executor; the other terminal skip
+                            // reasons clear it here). Otherwise the persisted
+                            // running set outlives the run and the web status
+                            // poll renders phantom Running nodes.
+                            if record.skip_reason.as_deref() != Some("outputs up-to-date") {
+                                let mut ck = checkpoint.lock().await;
+                                ck.clear_running(&rule_name);
+                                if let Err(e) = ck.save_to_file_async(&checkpoint_path).await {
+                                    tracing::warn!("Failed to save checkpoint (skip): {e}");
+                                }
+                            }
                             if record.skip_reason.as_deref() == Some("optional inputs missing") {
                                 // No outputs will exist — block non-optional
                                 // dependents instead of letting them run into
