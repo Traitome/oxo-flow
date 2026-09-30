@@ -4207,7 +4207,7 @@ DAG JSON with per-node live status. Color-coded: green=completed, blue=running, 
 <h3 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>GET /api/runs/{id}/diagnostics
 </span></code></pre></div>
-Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }</code>. Uses 30+ deterministic error patterns — zero AI in this endpoint.</p>
+Deterministic error analysis: <code>{ failed_nodes: [{ rule, error_pattern, likely_cause, suggestions, auto_fixable, fix_action, relevant_log_lines }], warnings, resource_bottlenecks }</code>. Uses 30+ deterministic error patterns — zero AI in this endpoint. Diagnosis reads only the newest 256 KiB of <code>execution.log</code> (seek-based tail, torn first line dropped), never the whole file (issue #710).</p>
 <h3 id="run-detail">Run Detail<a class="headerlink" href="#run-detail" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>GET /api/runs/{id}
 </span></code></pre></div>
@@ -4223,7 +4223,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 <h3 id="run-report">Run Report<a class="headerlink" href="#run-report" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>GET /api/runs/{id}/report
 </span></code></pre></div>
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers <code>report/ask</code> and feeds <code>report/visualize</code>.</p>
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers <code>report/ask</code> and feeds <code>report/visualize</code>. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of <code>execution.log</code> (issue #710); the full log stays on <code>GET /api/runs/{id}/logs</code>.</p>
 <h3 id="report-qa">Report Q&amp;A<a class="headerlink" href="#report-qa" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>POST /api/runs/{id}/report/ask
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>Content-Type: application/json
