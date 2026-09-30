@@ -76,7 +76,11 @@ pub(crate) fn require_run_mutator(
 
 /// Pre-flight quota usage (threads, memory MB) for a pipeline TOML — the
 /// single computation shared by create_run, retry, and resume-checkpoint
-/// so every spawn path budgets identically (#519).
+/// so every spawn path budgets identically (#519). Memory goes through
+/// `effective_memory()` so both the deprecated `memory` field and the
+/// modern `[rules.resources] memory` count — collecting only the
+/// deprecated field let the preferred syntax bypass the quota entirely
+/// (issue #738).
 fn quota_usage_for(toml: &str) -> (u32, u64) {
     oxo_flow_core::config::WorkflowConfig::parse(toml)
         .map(|wf| {
@@ -85,14 +89,92 @@ fn quota_usage_for(toml: &str) -> (u32, u64) {
                 .rules
                 .iter()
                 .filter_map(|r| {
-                    r.memory
-                        .as_deref()
+                    r.effective_memory()
                         .and_then(oxo_flow_core::scheduler::parse_memory_mb)
                 })
                 .sum();
             (threads.max(1), memory_mb)
         })
         .unwrap_or((1, 0))
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+
+    #[test]
+    fn quota_counts_resources_memory_not_just_deprecated_field() {
+        // #738: the modern [rules.resources] memory declaration must count
+        // toward the quota — collecting only the deprecated `memory` field
+        // let the preferred syntax bypass the cap entirely.
+        let toml = "\
+[workflow]
+name = \"quota\"
+version = \"1.0.0\"
+description = \"quota fixture\"
+author = \"tests\"
+
+[[rules]]
+name = \"modern\"
+output = [\"out.txt\"]
+shell = \"echo hi\"
+
+[rules.resources]
+memory = \"64G\"
+
+[[rules]]
+name = \"legacy\"
+output = [\"out2.txt\"]
+shell = \"echo hi\"
+memory = \"1G\"
+";
+        let (threads, memory_mb) = quota_usage_for(toml);
+        assert_eq!(memory_mb, 64 * 1024 + 1024, "resources.memory must count");
+        assert_eq!(threads, 2);
+    }
+
+    #[test]
+    fn quota_memory_field_precedence_matches_effective_memory() {
+        // When both fields are set, the deprecated `memory` wins — the same
+        // precedence `effective_memory()` (and the run estimator) applies,
+        // so the collectors cannot disagree on field selection.
+        let toml = "\
+[workflow]
+name = \"quota\"
+version = \"1.0.0\"
+description = \"quota fixture\"
+author = \"tests\"
+
+[[rules]]
+name = \"both\"
+output = [\"a.txt\"]
+shell = \"echo a\"
+memory = \"1G\"
+
+[rules.resources]
+memory = \"64G\"
+";
+        let (_threads, memory_mb) = quota_usage_for(toml);
+        assert_eq!(memory_mb, 1024, "deprecated field takes precedence");
+
+        let toml_resources_only = "\
+[workflow]
+name = \"quota\"
+version = \"1.0.0\"
+description = \"quota fixture\"
+author = \"tests\"
+
+[[rules]]
+name = \"modern\"
+output = [\"a.txt\"]
+shell = \"echo a\"
+
+[rules.resources]
+memory = \"64G\"
+";
+        let (_threads, memory_mb) = quota_usage_for(toml_resources_only);
+        assert_eq!(memory_mb, 64 * 1024, "resources-only rules must count");
+    }
 }
 
 /// Apply the #213 run-creation limiter and the #82 quota pre-flight to a
