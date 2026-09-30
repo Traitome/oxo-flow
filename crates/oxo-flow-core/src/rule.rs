@@ -222,6 +222,42 @@ pub fn parse_duration_secs(s: &str) -> Option<u64> {
     None
 }
 
+/// Parse a walltime string into seconds: everything
+/// [`parse_duration_secs`] accepts plus the scheduler-style colon forms
+/// the config docs and every cluster example use — `HH:MM:SS` and
+/// `[D-]HH:MM:SS`. One shared parser so a `time_limit`/`walltime` value
+/// means the same thing on the local executor and on every cluster
+/// backend (issues #715/#737). Bare numbers stay rejected: ambiguous
+/// between seconds and LSF's minutes. Returns `None` for anything else —
+/// callers warn and fail loudly rather than guess.
+#[must_use]
+pub fn parse_walltime_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if !s.contains(':') {
+        return parse_duration_secs(s);
+    }
+    let (days, hms) = match s.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, s),
+    };
+    let parts: Vec<&str> = hms.split(':').collect();
+    if parts.len() != 3 {
+        // `HH:MM` / `MM:SS` are ambiguous (LSF reads `[HH:]MM`, sacct
+        // reads `MM:SS`) — require the explicit suffix form instead.
+        return None;
+    }
+    let hours: u64 = parts[0].parse().ok()?;
+    let minutes: u64 = parts[1].parse().ok()?;
+    let secs: u64 = parts[2].parse().ok()?;
+    if minutes > 59 || secs > 59 {
+        return None;
+    }
+    days.checked_mul(86400)?
+        .checked_add(hours.checked_mul(3600)?)?
+        .checked_add(minutes.checked_mul(60)?)?
+        .checked_add(secs)
+}
+
 /// GPU resource specification with detailed hardware requirements.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GpuSpec {
@@ -1588,6 +1624,26 @@ impl Rule {
                 suggestion: None,
             });
         }
+        // Validate the walltime format: an unparseable `time_limit` used to
+        // run with no local timeout and a silent 1-hour cluster limit
+        // (issues #715/#737) — reject it at check time instead.
+        if let Some(wt) = self.resources.time_limit.as_deref()
+            && parse_walltime_secs(wt).is_none()
+        {
+            return Err(crate::error::OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' has invalid time_limit '{}' (expected e.g. \"90s\", \"30m\", \
+                     \"24h\", \"2d\", \"01:00:00\", \"1-06:00:00\")",
+                    self.name, wt
+                ),
+                rule: Some(self.name.clone()),
+                suggestion: Some(
+                    "bare numbers are ambiguous (seconds vs LSF minutes) — write \"1500s\" \
+                     or \"25m\" instead"
+                        .to_string(),
+                ),
+            });
+        }
         Ok(())
     }
 
@@ -2625,6 +2681,50 @@ mod tests {
             ..Default::default()
         };
         assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn parse_walltime_secs_accepts_documented_forms() {
+        // #737: one shared walltime grammar — suffix forms plus the colon
+        // forms the config docs and every backend example use.
+        assert_eq!(parse_walltime_secs("90s"), Some(90));
+        assert_eq!(parse_walltime_secs("30m"), Some(1800));
+        assert_eq!(parse_walltime_secs("24h"), Some(86_400));
+        assert_eq!(parse_walltime_secs("2d"), Some(172_800));
+        assert_eq!(parse_walltime_secs("01:00:00"), Some(3_600));
+        assert_eq!(parse_walltime_secs("24:00:00"), Some(86_400));
+        assert_eq!(parse_walltime_secs("1-06:00:00"), Some(108_000));
+        // Ambiguous or invalid forms stay rejected.
+        assert_eq!(parse_walltime_secs("24:00"), None, "MM:SS/HH:MM ambiguous");
+        assert_eq!(parse_walltime_secs("1500"), None, "bare number ambiguous");
+        assert_eq!(parse_walltime_secs("24 hours"), None);
+        assert_eq!(
+            parse_walltime_secs("01:99:00"),
+            None,
+            "minutes out of range"
+        );
+        assert_eq!(parse_walltime_secs(""), None);
+    }
+
+    #[test]
+    fn validate_rejects_unparseable_time_limit() {
+        // An unparseable time_limit used to run with no local timeout and
+        // a silent 1-hour cluster limit (#715/#737) — reject at check time.
+        let mut rule = Rule {
+            name: "test".to_string(),
+            ..Default::default()
+        };
+        rule.resources.time_limit = Some("24 hours".to_string());
+        assert!(rule.validate().is_err(), "prose walltime must be rejected");
+
+        rule.resources.time_limit = Some("1500".to_string());
+        assert!(rule.validate().is_err(), "bare seconds are ambiguous");
+
+        rule.resources.time_limit = Some("24:00:00".to_string());
+        assert!(rule.validate().is_ok(), "documented colon form must pass");
+
+        rule.resources.time_limit = Some("48h".to_string());
+        assert!(rule.validate().is_ok());
     }
 
     #[test]

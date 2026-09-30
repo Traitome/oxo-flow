@@ -1199,10 +1199,20 @@ impl LocalExecutor {
     }
 
     fn get_timeout(&self, rule: &Rule) -> Option<std::time::Duration> {
-        if let Some(ref time_limit) = rule.resources.time_limit
-            && let Some(secs) = crate::rule::parse_duration_secs(time_limit)
-        {
-            return Some(std::time::Duration::from_secs(secs));
+        if let Some(ref time_limit) = rule.resources.time_limit {
+            // The shared walltime parser (#737): the same string means the
+            // same thing here as on every cluster backend. An unparseable
+            // value used to fall through to the global timeout with no
+            // hint the rule's own limit was discarded.
+            match crate::rule::parse_walltime_secs(time_limit) {
+                Some(secs) => return Some(std::time::Duration::from_secs(secs)),
+                None => tracing::warn!(
+                    rule = %rule.name,
+                    time_limit = %time_limit,
+                    "unparseable rule time_limit — using the global timeout instead \
+                     (accepted: 90s, 30m, 24h, 2d, 01:00:00, 1-06:00:00)"
+                ),
+            }
         }
         self.config.timeout
     }
