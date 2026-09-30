@@ -1410,6 +1410,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#memory-and-walltime-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory and walltime conventions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#gpu-specification" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1452,6 +1463,17 @@
     <span class="md-ellipsis">
       
         SGE Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lsf-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSF Example
       
     </span>
   </a>
@@ -3923,6 +3945,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#memory-and-walltime-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory and walltime conventions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#gpu-specification" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3965,6 +3998,17 @@
     <span class="md-ellipsis">
       
         SGE Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lsf-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSF Example
       
     </span>
   </a>
@@ -4260,6 +4304,26 @@ when you need at least one GPU (<code>gpu = 1</code> or higher).</p>
 </tr>
 </tbody>
 </table>
+<h3 id="memory-and-walltime-conventions">Memory and walltime conventions<a class="headerlink" href="#memory-and-walltime-conventions" title="Permanent link">#</a></h3>
+<p>One engine-wide parser reads both <code>memory</code> and <code>disk</code>, so what you see in
+<code>dry-run</code>/<code>run</code> resource output is what the scheduler gets:</p>
+<ul>
+<li><strong>Bare numbers are megabytes</strong> (<code>memory = "4096"</code> = 4 GB) — on every
+  backend. LSF's own default unit is KB, so oxo-flow converts the parsed
+  figure ×1024 and submits an explicit KB number to <code>-M</code> /
+  <code>rusage[mem=…]</code>; the same config cannot schedule 4 GB locally and 4 MB
+  on the cluster.</li>
+<li>Accepted forms: a bare number, or a single-letter <code>K</code>/<code>M</code>/<code>G</code>/<code>T</code>
+  suffix (<code>"512k"</code>, <code>"1500M"</code>, <code>"4G"</code>, <code>"1T"</code>). Multi-letter suffixes
+  (<code>"4096MB"</code>, <code>"2GB"</code>) are <strong>not</strong> parsed — a rule declaring one gets a
+  validation warning locally, and cluster backends render the string
+  verbatim instead of guessing a unit.</li>
+<li><code>time_limit</code> accepts <code>90s</code>, <code>30m</code>, <code>24h</code>, <code>2d</code>. A <strong>present but
+  unparseable</strong> value is never silently replaced by a default: LSF
+  renders it verbatim in <code>#BSUB -W</code> (with a warning in the log), so
+  <code>bsub</code> rejects the script loudly instead of killing a long job at a
+  hidden 1-hour limit.</li>
+</ul>
 <h3 id="gpu-specification">GPU Specification<a class="headerlink" href="#gpu-specification" title="Permanent link">#</a></h3>
 <p>For basic GPU requests, use the <code>gpu</code> field:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[rules.resources]</span>
@@ -4368,6 +4432,28 @@ below show the pin for each backend.</p>
 </span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
 </span></code></pre></div>
 <hr />
+<h2 id="lsf-example">LSF Example<a class="headerlink" href="#lsf-example" title="Permanent link">#</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="ch">#!/bin/bash</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#BSUB -J align_batch_S1</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#BSUB -n 16</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#BSUB -R 'rusage[mem=33554432] span[hosts=1]'</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1">#BSUB -M 33554432</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">#BSUB -W 24:00</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">#BSUB -o logs/align_batch_S1.out</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1">#BSUB -e logs/align_batch_S1.err</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--bind<span class="w"> </span>/abs/path/to/workdir:/abs/path/to/workdir<span class="w"> </span>docker://biocontainers/bwa:0.7.17<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'if command -v bash &gt;/dev/null 2&gt;&amp;1; then exec bash -c "$1"; else exec sh -c "$1"; fi'</span><span class="w"> </span>sh<span class="w"> </span><span class="s1">'bwa mem -t 16 ref.fa S1_R1.fastq.gz | samtools sort -o aligned/S1.bam'</span>
+</span></code></pre></div>
+<p>The memory figure is explicit KB (<code>"32G"</code> = 32768 MB × 1024) because LSF's
+own default unit is KB; <code>span[hosts=1]</code> rides in the <code>-R</code> string so a
+multi-thread rule stays on one host. <code>-W 24:00</code> is the parsed form of the
+rule's <code>time_limit = "24h"</code> — LSF takes <code>[HH:]MM</code>. The workdir pin other
+backends need is implicit here: an LSF job starts in the directory the
+script was submitted from.</p>
+<hr />
 <h2 id="environment-wrapping">Environment Wrapping<a class="headerlink" href="#environment-wrapping" title="Permanent link">#</a></h2>
 <p>When generating cluster scripts, oxo-flow automatically wraps commands through the environment resolver:</p>
 <table>
@@ -4429,59 +4515,59 @@ below show the pin for each backend.</p>
 </ul>
 <h3 id="environment-examples">Environment Examples<a class="headerlink" href="#environment-examples" title="Permanent link">#</a></h3>
 <p><strong>Conda with GPU for deep learning:</strong></p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"train_model"</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"data/train.h5"</span><span class="p">]</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"models/trained.pt"</span><span class="p">]</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/pytorch.yaml"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python train.py --input {input} --output {output}"</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"64G"</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">gpu</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"train_model"</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"data/train.h5"</span><span class="p">]</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"models/trained.pt"</span><span class="p">]</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">conda</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/pytorch.yaml"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"python train.py --input {input} --output {output}"</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"64G"</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="n">gpu</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="n">time_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span>
 </span></code></pre></div>
 <p>The <code>gpu</code> field controls the <strong>scheduler allocation only</strong> (e.g.
 <code>#SBATCH --gres=gpu:2</code>) — there is no <code>{resources.gpu}</code> shell placeholder.</p>
 <p><strong>Singularity (common on HPC):</strong></p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_call"</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"docker://broadinstitute/gatk:4.4.0.0"</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -I {input} -O {output}"</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"variant_call"</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">singularity</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"docker://broadinstitute/gatk:4.4.0.0"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"gatk HaplotypeCaller -I {input} -O {output}"</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"32G"</span>
 </span></code></pre></div>
 <p>Only <strong>one</strong> backend applies per rule, so combining e.g. <code>singularity</code> with
 <code>modules</code> in the same rule is rejected outright (the module loads would be
 silently dropped) — use the module-based example below for module-only
 setups.</p>
 <p><strong>Pixi for reproducible environments:</strong></p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc_check"</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{sample}.fastq.gz"</span><span class="p">]</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/{sample}_fastqc.html"</span><span class="p">]</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/pixi.toml"</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1"># the manifest FILE, not an env name</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc -t {threads} -o qc/ {input}"</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
-</span></code></pre></div>
-<p><strong>Pure Module-based (traditional HPC):</strong></p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{sample}.fq"</span><span class="p">]</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">modules</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bwa/0.7.17"</span><span class="p">,</span><span class="w"> </span><span class="s2">"samtools/1.17"</span><span class="p">,</span><span class="w"> </span><span class="s2">"gcc/11"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"qc_check"</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"{sample}.fastq.gz"</span><span class="p">]</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"qc/{sample}_fastqc.html"</span><span class="p">]</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">pixi</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">"envs/pixi.toml"</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1"># the manifest FILE, not an env name</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"fastqc -t {threads} -o qc/ {input}"</span>
 </span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>
 </span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="k">[rules.resources]</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"64G"</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</span></code></pre></div>
+<p><strong>Pure Module-based (traditional HPC):</strong></p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reads/{sample}.fq"</span><span class="p">]</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">environment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">modules</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"bwa/0.7.17"</span><span class="p">,</span><span class="w"> </span><span class="s2">"samtools/1.17"</span><span class="p">,</span><span class="w"> </span><span class="s2">"gcc/11"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"bwa mem -t {threads} ref.fa {input} | samtools sort -o {output}"</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="k">[rules.resources]</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"64G"</span>
 </span></code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Pre-build environments on cluster nodes</p>
@@ -4496,8 +4582,8 @@ setups.</p>
 <li><strong>Reserve</strong>: Reserve resources before starting the job</li>
 <li><strong>Release</strong>: Release resources after completion (or on failure/timeout)</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Limit to 16 threads and 32GB memory for local execution</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--max-threads<span class="w"> </span><span class="m">16</span><span class="w"> </span>--max-memory<span class="w"> </span><span class="m">32768</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Limit to 16 threads and 32GB memory for local execution</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--max-threads<span class="w"> </span><span class="m">16</span><span class="w"> </span>--max-memory<span class="w"> </span><span class="m">32768</span>
 </span></code></pre></div>
 <h3 id="cluster-execution">Cluster Execution<a class="headerlink" href="#cluster-execution" title="Permanent link">#</a></h3>
 <p>On clusters, the scheduler enforces resources based on the generated directives. oxo-flow does not manage resources during cluster execution — the scheduler handles that.</p>
@@ -4557,34 +4643,34 @@ personal mode — in team and hpc mode (they hold shared SSH credentials);
 every run remains owned by the acting user.</p>
 <h2 id="monitoring-jobs">Monitoring Jobs<a class="headerlink" href="#monitoring-jobs" title="Permanent link">#</a></h2>
 <p>After submission, use your cluster's native tools:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># SLURM</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>squeue<span class="w"> </span>-u<span class="w"> </span><span class="nv">$USER</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># PBS</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>qstat<span class="w"> </span>-u<span class="w"> </span><span class="nv">$USER</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1"># SGE</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>qstat
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="c1"># LSF</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>bjobs
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># SLURM</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>squeue<span class="w"> </span>-u<span class="w"> </span><span class="nv">$USER</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># PBS</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>qstat<span class="w"> </span>-u<span class="w"> </span><span class="nv">$USER</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># SGE</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>qstat
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="c1"># LSF</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>bjobs
 </span></code></pre></div>
 <p>Or use oxo-flow's status command with a checkpoint file:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/checkpoint.json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>oxo-flow<span class="w"> </span>status<span class="w"> </span>.oxo-flow/checkpoint.json
 </span></code></pre></div>
 <p><code>oxo-flow cluster status</code> answers two questions. <strong>With no ids</strong> it lists
 every job the scheduler currently reports for your user — the natural check
 right after a submit:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span>job<span class="o">(</span>s<span class="o">)</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>Cluster:<span class="w"> </span>Executing<span class="w"> </span><span class="s1">'squeue -u alice --noheader -o %i|%T'</span>...
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>Cluster:<span class="w"> </span><span class="m">2</span><span class="w"> </span>queued<span class="w"> </span>job<span class="o">(</span>s<span class="o">)</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="m">12345</span>:<span class="w"> </span>running
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="m">12346</span>:<span class="w"> </span>pending
 </span></code></pre></div>
 <p><strong>With ids</strong> (the ones submit/run printed) it answers exactly those,
 settling finished jobs from the scheduler's accounting store:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span><span class="m">12345</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>status<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="m">12346</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>oxo-flow<span class="w"> </span>cluster<span class="w"> </span>cancel<span class="w"> </span><span class="m">12345</span>
 </span></code></pre></div>
 <p>Every cluster action resolves its backend the same way: the <code>--backend</code> /
 <code>-b</code> flag if given, then <code>$OXO_FLOW_CLUSTER_BACKEND</code>, then <code>slurm</code>. On a
@@ -4623,15 +4709,15 @@ built-in defaults are:</p>
 </tbody>
 </table>
 <p>Override them in the profile's <code>[cluster]</code> block:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">[cluster]</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">[cluster]</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">backend</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"slurm"</span><span class="w">   </span><span class="c1"># required: slurm | pbs | sge | lsf</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">partition</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">"compute"</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">account</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"lab01"</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">walltime</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">"24h"</span><span class="w">     </span><span class="c1"># a rule's own time_limit wins</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">max_submitted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">max_array_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1001</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="n">poll_interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"30s"</span><span class="w">     </span><span class="c1"># duration string</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="n">extra_args</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--exclusive"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--constraint=haswell"</span><span class="p">]</span><span class="w">  </span><span class="c1"># verbatim scheduler args</span>
 </span></code></pre></div>
 <p><code>extra_args</code> entries are emitted as scheduler directives <strong>verbatim and
 unvalidated</strong> — a typo reaches the scheduler as written (the same applies to

@@ -3248,6 +3248,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#matching-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matching semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#error-pattern-library" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3767,6 +3778,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#matching-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matching semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#error-pattern-library" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3903,6 +3925,18 @@ against a curated library of 30 error patterns (tool, resource, data,
 system, and config classes — see
 <code>crates/oxo-flow-web/src/domains/execution/diagnostics.rs</code> for the full
 list).</p>
+<h2 id="matching-semantics">Matching semantics<a class="headerlink" href="#matching-semantics" title="Permanent link">#</a></h2>
+<ul>
+<li><code>stderr_patterns</code> are <strong>case-insensitive regular expressions</strong>, compiled
+  once per engine and shared process-wide. Entries must stay specific
+  (loader lines, tool error prefixes) — near-miss words must not fire
+  (issue #708).</li>
+<li>A pattern <strong>without exit codes</strong> fires on any non-zero or unknown exit
+  code — never on exit 0. A rule that exited 0 has nothing to diagnose.</li>
+<li>The same pattern table backs <code>monitor_agent::is_known_error_pattern</code>, so
+  the AI monitor and the diagnostics service never disagree on a
+  classification.</li>
+</ul>
 <h2 id="error-pattern-library">Error Pattern Library<a class="headerlink" href="#error-pattern-library" title="Permanent link">#</a></h2>
 <p>30 patterns total across five categories — Tool (5), Resource (5), Data (7),
 System (6), Config (7). The tables below cover the most common; the
@@ -3925,7 +3959,7 @@ authoritative list is
 </tr>
 <tr>
 <td>Version incompatibility</td>
-<td>"version", "incompatible", "unsupported"</td>
+<td>"version mismatch/conflict", "incompatible … version", "unsupported version"</td>
 <td>❌ Suggest version switch</td>
 </tr>
 <tr>
@@ -3957,7 +3991,7 @@ authoritative list is
 <tbody>
 <tr>
 <td>Out of memory</td>
-<td>exit 137/9, "out of memory", "cannot allocate memory"</td>
+<td>exit 137/9, "out of memory", "bad_alloc", <code>\boom\b</code></td>
 <td>✅ Increase memory limit</td>
 </tr>
 <tr>
@@ -3972,12 +4006,12 @@ authoritative list is
 </tr>
 <tr>
 <td>Too many open files</td>
-<td>"too many open files", EMFILE</td>
+<td>"too many open files", EMFILE, "ulimit" + failure word</td>
 <td>✅ Raise <code>ulimit -n</code> before starting</td>
 </tr>
 <tr>
 <td>CPU limit exceeded</td>
-<td>"cpu time", "cpu limit", EAGAIN</td>
+<td>"cpu time limit", "cpu limit", EAGAIN</td>
 <td>✅ Increase thread/CPU allocation</td>
 </tr>
 </tbody>
@@ -3994,7 +4028,7 @@ authoritative list is
 <tbody>
 <tr>
 <td>Input file missing</td>
-<td>"no such file or directory", "cannot open", exit 1</td>
+<td>"no such file or directory", "cannot open", "file not found", exit 1</td>
 <td>❌ Point to missing path</td>
 </tr>
 <tr>
@@ -4004,27 +4038,27 @@ authoritative list is
 </tr>
 <tr>
 <td>Corrupt gzip file</td>
-<td>"not in gzip format", "corrupt input", exit 1</td>
+<td>"not in gzip format", "invalid compressed data", exit 1</td>
 <td>❌ Verify file is valid gzip</td>
 </tr>
 <tr>
 <td>FASTQ quality low</td>
-<td>"per base sequence quality.*fail", "low quality", "poor quality"</td>
+<td>"per base sequence quality … fail/warn", "low quality", "poor quality"</td>
 <td>✅ Suggest fastp insertion</td>
 </tr>
 <tr>
 <td>Empty file</td>
-<td>"empty file", "zero length", "no data"</td>
+<td>"empty file", "zero length", "is empty"</td>
 <td>❌ Check upstream rule</td>
 </tr>
 <tr>
-<td>BAM truncated / index</td>
-<td>"truncated file", "bam index", "EOF marker", exit 1</td>
+<td>BAM truncated</td>
+<td>"truncated file", "EOF marker", "bgzf", exit 1</td>
 <td>✅ Suggest <code>samtools index</code></td>
 </tr>
 <tr>
 <td>BAM index missing</td>
-<td>"could not open index file", "no index available", exit 1</td>
+<td>"could not open/retrieve index file", "no index available", exit 1</td>
 <td>✅ Suggest <code>samtools index</code></td>
 </tr>
 </tbody>
@@ -4046,12 +4080,12 @@ authoritative list is
 </tr>
 <tr>
 <td>Network error</td>
-<td>"connection refused", "cannot resolve", "timeout"</td>
+<td>"connection refused", "could not resolve host", "network is unreachable"</td>
 <td>❌ Check network</td>
 </tr>
 <tr>
 <td>Shared library missing</td>
-<td>"error while loading shared libraries", "cannot open shared object" (exit 127/1)</td>
+<td>"error while loading shared libraries", "cannot open shared object", "undefined symbol" (exit 127/1)</td>
 <td>✅ Suggest conda install</td>
 </tr>
 <tr>
@@ -4061,7 +4095,7 @@ authoritative list is
 </tr>
 <tr>
 <td>Signal kill (SIGTERM)</td>
-<td>exit 143/15, "terminated", "killed"</td>
+<td>exit 143/15, "terminated", <code>\bkilled\b</code></td>
 <td>❌ Check system logs</td>
 </tr>
 <tr>
@@ -4088,22 +4122,22 @@ authoritative list is
 </tr>
 <tr>
 <td>Missing required parameter</td>
-<td>"required", "must specify", "missing", exit 1</td>
+<td>"arguments are required", "missing required <arg>", "must specify", exit 1</td>
 <td>❌ Add the missing parameter</td>
 </tr>
 <tr>
 <td>Wildcard expanded empty</td>
-<td>"no matches", "no files", "wildcard", "empty"</td>
+<td>"no files/matches", "wildcard … did not match"</td>
 <td>❌ Check naming</td>
 </tr>
 <tr>
 <td>Conda environment failed</td>
-<td>"conda", "environment", "create failed", exit 1</td>
+<td>"CondaError", "Solving environment: failed", "environment.yml", exit 1</td>
 <td>❌ Verify conda env name</td>
 </tr>
 <tr>
 <td>Docker failed</td>
-<td>exit 125/126, "docker", "cannot connect", "daemon"</td>
+<td>exit 125/126, "docker daemon", "error response from daemon"</td>
 <td>❌ Check Docker daemon</td>
 </tr>
 <tr>
@@ -4168,13 +4202,23 @@ their declared limit (issue #67 §4):</p>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="s">"new_pattern_id"</span><span class="p">,</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="nc">ErrorCategory</span><span class="p">::</span><span class="n">Tool</span><span class="p">,</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="n">exit_codes</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="mi">134</span><span class="p">],</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="n">stderr_patterns</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="s">"specific error text"</span><span class="p">],</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="n">likely_cause</span><span class="p">:</span><span class="w"> </span><span class="s">"Description of the likely cause"</span><span class="p">,</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="n">fix_desc</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">"Suggested fix"</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="n">fix_config_path</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="c1">// Case-insensitive regexes — keep them specific enough that benign</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="c1">// output cannot match ("tool version 1.2" must not fire).</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="n">stderr_patterns</span><span class="p">:</span><span class="w"> </span><span class="nc">compile</span><span class="p">(</span><span class="o">&amp;</span><span class="p">[</span><span class="s">"specific error text"</span><span class="p">]),</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="n">likely_cause</span><span class="p">:</span><span class="w"> </span><span class="s">"Description of the likely cause"</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="n">auto_fixable</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="n">fix_desc</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">"Suggested fix"</span><span class="p">),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="n">fix_config_path</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">}</span>
 </span></code></pre></div>
+<p>Every new pattern must ship with two test rows in the module's tests
+(issue #708):</p>
+<ul>
+<li>a canonical trigger line in <code>CANONICAL_TRIGGERS</code> (proves the pattern is
+  not dead — the test fails if a pattern has no row, or a row no pattern),</li>
+<li>and, when near-miss words exist, a benign line in <code>BENIGN_LOG_LINES</code>
+  that mentions the vocabulary without being a real error.</li>
+</ul>
 
 
 
