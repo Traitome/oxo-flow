@@ -151,6 +151,51 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             });
         }
     }
+    // Abort-killed sibling rules (issue #767): on a fail-fast abort the
+    // CLI records each not-yet-finished sibling in `rule_runs` with
+    // status "cancelled" (+ skip_reason) but in NONE of the completed/
+    // failed/when sets — they fell through to Pending forever, inflating
+    // pending_nodes and the ETA. Derive from rule_runs, not set
+    // membership: any rule_runs-only terminal state surfaces as Skipped
+    // (the #739 reconciliation, extended to the cancelled source).
+    {
+        let accounted: HashSet<&String> = checkpoint
+            .completed_rules
+            .iter()
+            .chain(checkpoint.failed_rules.iter())
+            .collect();
+        let mut cancelled: Vec<&String> = checkpoint
+            .rule_runs
+            .iter()
+            .filter(|(name, rec)| {
+                // Modern records carry status "cancelled"; pre-#498 legacy
+                // records only have skip_reason + no exit_code (the status
+                // field was added later) — treat both as abort-cancelled.
+                let cancelled = rec.status.as_deref() == Some("cancelled")
+                    || (rec.status.is_none()
+                        && rec.skip_reason.is_some()
+                        && rec.exit_code.is_none());
+                cancelled
+                    && !accounted.contains(*name)
+                    && checkpoint.when_verdicts.get(*name) != Some(&false)
+                    && !running.iter().any(|r| r == *name)
+            })
+            .map(|(name, _)| name)
+            .collect();
+        cancelled.sort();
+        for rule in cancelled {
+            items.push(NodeStatusItem {
+                rule: rule.clone(),
+                status: NodeStatus::Skipped,
+                started_at: None,
+                duration_ms: None,
+                exit_code: None,
+                progress_pct: None,
+                stderr_tail: None,
+                stdout_tail: None,
+            });
+        }
+    }
     for rule in &running {
         items.push(NodeStatusItem {
             rule: rule.clone(),
@@ -398,6 +443,73 @@ mod tests {
         assert_eq!(
             read_tail_bounded(&dir.join("execution.log"), 256 * 1024),
             ""
+        );
+    }
+
+    #[test]
+    fn abort_killed_siblings_surface_as_skipped_not_pending() {
+        // #767: the CLI records abort-killed siblings in rule_runs with
+        // status "cancelled" but in none of the completed/failed/when
+        // sets — the web showed them Pending forever (inflating
+        // pending_nodes and the ETA).
+        let dir = std::env::temp_dir().join("cp-cancelled-siblings");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["fastqc"],
+                "failed_rules": ["trim"],
+                "benchmarks": {},
+                "rule_runs": {
+                    "trim": {"exit_code": 1},
+                    "align": {
+                        "status": "cancelled",
+                        "skip_reason": "run aborted before this rule finished — required rule 'trim' failed"
+                    }
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let align = items
+            .iter()
+            .find(|i| i.rule == "align")
+            .expect("abort-killed sibling must appear");
+        assert!(
+            matches!(align.status, NodeStatus::Skipped),
+            "abort-killed sibling must be Skipped, not absent/Pending: {:?}",
+            align.status
+        );
+        let trim = items.iter().find(|i| i.rule == "trim").unwrap();
+        assert!(matches!(trim.status, NodeStatus::Failed));
+    }
+
+    #[test]
+    fn legacy_cancelled_entry_without_status_field_surfaces_as_skipped() {
+        // Pre-#498 checkpoints record aborts as skip_reason + no exit_code
+        // without the status field — the same Skipped surfacing applies.
+        let dir = std::env::temp_dir().join("cp-cancelled-legacy");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": [],
+                "failed_rules": ["trim"],
+                "benchmarks": {},
+                "rule_runs": {
+                    "align": {
+                        "skip_reason": "run aborted before this rule finished — required rule 'trim' failed"
+                    }
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let align = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(
+            matches!(align.status, NodeStatus::Skipped),
+            "{:?}",
+            align.status
         );
     }
 
