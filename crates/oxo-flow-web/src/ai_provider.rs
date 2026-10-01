@@ -125,15 +125,21 @@ impl AiProviderRegistry {
                     // they do not need a real API key.
                     Ok(AiProvider::Scripted(_)) => true,
                     Ok(AiProvider::Noop) => false,
+                    // The active provider is real — trust it. Env-only
+                    // deployments (ANTHROPIC_AUTH_TOKEN exported, no key in
+                    // the registry snapshot) previously reported
+                    // is_configured: false here even though /api/ai/test and
+                    // every generation surface succeeded, because the
+                    // snapshot's api_key is None while the provider carries
+                    // its env-discovered credential internally. Status
+                    // probes (metrics ai_provider component, settings UI)
+                    // must agree with what actually executes.
                     Ok(_) if provider == "ollama" => {
                         // Ollama is local and needs no key, but a reachable URL
                         // must be configured (the backend default is localhost).
                         c.enabled && c.api_url.is_some()
                     }
-                    Ok(_) => {
-                        // API-key providers require a non-empty key to be usable.
-                        c.enabled && c.api_key.as_ref().is_some_and(|k| !k.trim().is_empty())
-                    }
+                    Ok(_) => c.enabled && !provider.is_empty(),
                     Err(_) => false,
                 };
                 ProviderConfig {
