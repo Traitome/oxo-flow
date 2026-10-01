@@ -142,6 +142,23 @@ const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
 static PLACEHOLDER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{(\w+(?:\.\w+)?)\}").expect("valid placeholder regex"));
 
+/// Whether a declared output path still carries a fan-out wildcard.
+///
+/// `{config.x}` references are resolved to literal constants before any
+/// fan-out happens — they are not wildcards. Counting them as such
+/// exempted aggregation rules whose outputs live under
+/// `{config.results_dir}` while every other path component is
+/// wildcard-free (the exact tutorial race from issue #443): each
+/// expanded instance resolved the same `results/multiqc/report.html`
+/// path and the detector stayed silent. Only non-`config` placeholders
+/// (`{sample}`, `{values.t}`, `{meta.col}`, fresh wildcards, …) multiply
+/// the output path per fan-out element.
+fn output_has_fanout_wildcard(output: &str) -> bool {
+    PLACEHOLDER_RE
+        .captures_iter(output)
+        .any(|cap| !cap[1].starts_with("config."))
+}
+
 /// Whether the rule takes one of the early paths in `expand_wildcards`
 /// that never multiply per fan-out dimension (issue #443 exclusion set).
 /// `input_groups` rules take the groupTuple-style path — the discovered
@@ -266,8 +283,9 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         }
 
         // Wildcard-free declared outputs → every expanded instance writes
-        // the same paths.
-        let outputs_have_wildcards = rule.output.iter().any(|o| PLACEHOLDER_RE.is_match(o));
+        // the same paths. `{config.x}` refs resolve to the same constant
+        // on every instance — only fan-out wildcards key outputs.
+        let outputs_have_wildcards = rule.output.iter().any(|o| output_has_fanout_wildcard(o));
         if outputs_have_wildcards {
             continue;
         }
@@ -283,7 +301,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
         let has_dir_output = rule
             .output
             .iter()
-            .any(|o| crate::dag::looks_like_directory(o) && !PLACEHOLDER_RE.is_match(o));
+            .any(|o| crate::dag::looks_like_directory(o) && !output_has_fanout_wildcard(o));
         if has_dir_output {
             continue;
         }
@@ -713,6 +731,73 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "SCI-AGG-RACE");
         assert_eq!(warnings[0].rule, "multiqc");
+    }
+
+    #[test]
+    fn agg_race_config_var_in_output_does_not_mask_the_race() {
+        // Live repro from the first-workflow tutorial: outputs live under
+        // `{config.results_dir}` — a resolved constant, not a fan-out
+        // wildcard. The old check treated any `{...}` placeholder as an
+        // output wildcard and exempted the rule, so both expanded
+        // instances wrote the same results/multiqc/report.html silently.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [config]
+            samples_dir = "raw_data"
+            results_dir = "results"
+
+            [[sample_groups]]
+            name = "auto"
+            samples = ["sample1", "sample2"]
+
+            [[rules]]
+            name = "fastqc_raw"
+            input = ["{config.samples_dir}/{sample}_R1.fastq.gz"]
+            output = ["{config.results_dir}/fastqc/{sample}_R1_fastqc.html"]
+            shell = "echo html > {output}"
+
+            [[rules]]
+            name = "multiqc_per_sample"
+            input = ["{config.results_dir}/fastqc/{sample}_R1_fastqc.html"]
+            output = ["{config.results_dir}/multiqc/report.html"]
+            shell = "cat {input} >> {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+        assert_eq!(warnings[0].rule, "multiqc_per_sample");
+    }
+
+    #[test]
+    fn agg_race_config_keyed_output_still_silent() {
+        // A genuinely keyed output under a config dir — the fan-out
+        // wildcard is present, so the normal per-instance shape holds and
+        // the rule stays silent.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [config]
+            results_dir = "results"
+
+            [[sample_groups]]
+            name = "auto"
+            samples = ["sample1", "sample2"]
+
+            [[rules]]
+            name = "fastqc_raw"
+            input = ["{sample}_R1.fastq.gz"]
+            output = ["{config.results_dir}/fastqc/{sample}.html"]
+            shell = "echo html > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert!(warnings.iter().all(|w| w.code != "SCI-AGG-RACE"));
     }
 
     #[test]
