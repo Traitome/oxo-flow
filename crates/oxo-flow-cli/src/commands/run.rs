@@ -860,6 +860,15 @@ fn ai_attempts(cli_max_retries: Option<u32>) -> u32 {
 ///                        be silently swallowed as an override, issue #71)
 ///   --arg KEY=VALUE      legacy `--arg` form (backward compatible)
 ///
+/// Override keys are canonicalized onto their declared `[config]` spelling:
+/// `--api-token=x` names the declared key `api_token` (hyphen/underscore
+/// variants resolve when the normalization is unambiguous, issue #794).
+/// This matters most for `sensitive` keys — validation, masking, and the
+/// checkpoint snapshot are keyed on the declared spelling — but it applies
+/// to every declared key. Keys that match nothing declared are untouched:
+/// `KEY=VALUE` keeps its issue #62 injection semantics, and an unknown
+/// `--` token is rejected (issue #71).
+///
 /// `command` names the invoking subcommand ("run", "dry-run", …) so a
 /// swallowed run flag under a command that does not support it says so
 /// (issue #430): under `dry-run`, `-j` reads "not supported by dry-run",
@@ -933,11 +942,20 @@ pub(crate) fn parse_cli_overrides(
             };
             anyhow::bail!("{hint}");
         }
-        let (k, v) = if let Some(eq) = arg_str.find('=') {
+        let (mut k, v) = if let Some(eq) = arg_str.find('=') {
             let k = arg_str[..eq].trim_start_matches('-').to_string();
             (k, arg_str[eq + 1..].to_string())
         } else if let Some(k) = arg_str.strip_prefix("--") {
-            if declared_config_keys.contains(k) {
+            // Space form: the declared check accepts hyphen-spelled keys that
+            // canonicalize onto a declared key (`--api-token VALUE` names
+            // `api_token`, issue #794). Unknown tokens still get the issue
+            // #71 rejection — canonicalization never widens that gate.
+            let space_form_key = if declared_config_keys.contains(k) {
+                Some(k.to_string())
+            } else {
+                canonicalize_override_key(k, declared_config_keys)
+            };
+            if let Some(k) = space_form_key {
                 // `--KEY VALUE` — consume the next argument as the value.
                 // A following token that starts with `--` is a command flag
                 // the user meant to pass, never a config value: swallowing
@@ -986,6 +1004,17 @@ pub(crate) fn parse_cli_overrides(
         if k.is_empty() {
             anyhow::bail!("invalid config value format: '{arg_str}' — KEY must be non-empty");
         }
+        // issue #794: canonicalize onto the declared spelling so a hyphen-
+        // spelled override (`--api-token=x` for declared `api_token`) lands
+        // on the key the workflow declared — inheriting its validation,
+        // sensitive masking, and space-form eligibility. Without this the
+        // override is stored under the dashed alias, the declared key keeps
+        // its default, and the value leaks into the checkpoint unmasked.
+        if !declared_config_keys.contains(&k)
+            && let Some(canonical) = canonicalize_override_key(&k, declared_config_keys)
+        {
+            k = canonical;
+        }
         // issue #430: an EMPTY VALUE is a legitimate override — pipelines
         // branch on `[ -n "{config.x}" ]` for derive-if-empty behavior
         // (rnaseq gene_bed/chrom_sizes/transcript_fasta), and the CLI must
@@ -994,6 +1023,34 @@ pub(crate) fn parse_cli_overrides(
         cli_arg_values.insert(k, v);
     }
     Ok(cli_arg_values)
+}
+
+/// Resolve an override key that does not exactly match a declared `[config]`
+/// key by normalizing hyphens to underscores (issue #794). Returns the
+/// declared key only when the normalization is unambiguous — a normalized
+/// form that would map to two declared keys is left alone (the caller then
+/// applies issue #62/#71 semantics to the literal spelling). Callers invoke
+/// this only after an exact-match check, and a key reaching here always
+/// contains a hyphen, so the result never equals the input.
+fn canonicalize_override_key(
+    key: &str,
+    declared_config_keys: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if !key.contains('-') {
+        return None;
+    }
+    let normalized = key.replace('-', "_");
+    if declared_config_keys.contains(&normalized) {
+        return Some(normalized);
+    }
+    let matches: Vec<&String> = declared_config_keys
+        .iter()
+        .filter(|d| d.replace('-', "_") == normalized)
+        .collect();
+    match matches.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    }
 }
 
 /// Apply parsed overrides and the defaults of declarative config entries
@@ -7121,7 +7178,7 @@ pub async fn resume_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        age_ready_list, ai_attempts, cleanup_cache_dir, closest_declared_key,
+        age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
         config_placeholder_values, known_modules_hint, missing_source_findings,
         missing_source_lines, parse_cli_overrides, parse_spawn_watchdog_threshold,
         reconcile_failed_rules, substitute_source_placeholder, suggest_jobs,
@@ -7581,6 +7638,111 @@ shell = "cat {{{{input}}}} > {{{{output}}}}"
         )
         .unwrap();
         assert_eq!(map["min_quality"], "45");
+    }
+
+    #[test]
+    fn canonicalizes_hyphen_spelled_override_to_declared_key() {
+        // issue #794: `--api-token=x` names the declared key `api_token`.
+        // Without canonicalization the override is stored under the dashed
+        // alias: the declared key keeps its default and the value bypasses
+        // sensitive masking in the checkpoint snapshot.
+        let map = parse_cli_overrides(
+            vec![
+                "--api-token=sk-OVERRIDE-123".to_string(),
+                "min-quality=45".to_string(),
+            ],
+            &declared(&["api_token", "min_quality"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["api_token"], "sk-OVERRIDE-123");
+        assert_eq!(map["min_quality"], "45");
+        assert!(!map.contains_key("api-token"), "{map:?}");
+        assert!(!map.contains_key("min-quality"), "{map:?}");
+    }
+
+    #[test]
+    fn canonicalizes_space_form_for_hyphen_spelled_declared_key() {
+        // issue #794: `--api-token VALUE` must be accepted when only the
+        // underscore-spelled `api_token` is declared.
+        let map = parse_cli_overrides(
+            vec!["--api-token".to_string(), "sk-OVERRIDE-123".to_string()],
+            &declared(&["api_token"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["api_token"], "sk-OVERRIDE-123");
+    }
+
+    #[test]
+    fn canonicalization_wins_on_exact_match_and_stays_silent_on_ambiguity() {
+        // Exact declared match beats normalization: `mode` declared plus
+        // `sub-mode` hyphen-spelled keeps its literal key.
+        let map = parse_cli_overrides(
+            vec!["--sub-mode=2".to_string()],
+            &declared(&["sub_mode"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["sub_mode"], "2");
+
+        // Two declared keys normalizing to the same form is pathological but
+        // must not crash or silently pick one: the literal spelling is kept
+        // and the usual undeclared-injection / unknown-token rules apply.
+        let map = parse_cli_overrides(
+            vec!["--a-b=1".to_string()],
+            &declared(&["a_b", "a-b"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["a-b"], "1");
+
+        // Nothing declared matches → literal key, issue #62 injection.
+        let map = parse_cli_overrides(
+            vec!["--totally-unknown=7".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap();
+        assert_eq!(map["totally-unknown"], "7");
+
+        // Space form for an unresolvable dashed token stays rejected (#71).
+        let err = parse_cli_overrides(
+            vec!["--totally-unknown".to_string(), "7".to_string()],
+            &declared(&["min_quality"]),
+            "run",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("unknown argument"), "{err:?}");
+    }
+
+    #[test]
+    fn apply_cli_overrides_puts_override_on_declared_sensitive_key() {
+        // issue #794 end-to-end at the apply layer: the canonicalized
+        // override must win over the declarative default (precedence
+        // CLI > default) instead of leaving the default in place.
+        let mut config = config_with_rules(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+api_token = { default = "sk-DEFAULT-abc", sensitive = true, help = "API token" }
+
+[[rules]]
+name = "r"
+shell = "true"
+"#,
+        );
+        let overrides = parse_cli_overrides(
+            vec!["--api-token=sk-OVERRIDE-123".to_string()],
+            &declared(&["api_token"]),
+            "run",
+        )
+        .unwrap();
+        apply_cli_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.config["api_token"].as_str(), Some("sk-OVERRIDE-123"));
     }
 
     #[test]
