@@ -880,6 +880,12 @@ path, size, and modification time — plus a content hash for files up to
   rewrite is detected even when the mtime is preserved, and a mere `touch`
   no longer invalidates. Larger files compare size and mtime, closing the
   same stale-reuse hole for ordinary files.
+- **`expand_inputs`-baked inputs** whose producer is `when`-gated off under
+  the active config are tolerated as absent: the manifest records the
+  existing subset instead of erroring, so a no-op rerun does not
+  invalidate the rule and cascade its producers (issue #757). If a later
+  config change produces the missing files, the manifest then mismatches
+  and the rule invalidates — the flip is still caught.
 
 ```console
 # a new file appears in data/ after the last run
