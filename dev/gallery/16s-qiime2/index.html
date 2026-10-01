@@ -4045,21 +4045,26 @@
 <h2 id="key-design-decisions">Key Design Decisions<a class="headerlink" href="#key-design-decisions" title="Permanent link">#</a></h2>
 <h3 id="sampling-depth">Sampling Depth<a class="headerlink" href="#sampling-depth" title="Permanent link">#</a></h3>
 <p>Rarefaction (<code>{config.sampling_depth}</code>, default 1000) is required by <code>core-metrics-phylogenetic</code> so that alpha diversity values are comparable across samples. Inspect <code>table-summary.qzv</code> before lowering it — samples below the depth are dropped from the diversity analysis (not from the feature table).</p>
+<p>If <strong>all</strong> samples fall below the depth — the common case on a small pilot dataset, where the template default of 1000 exceeds every sample's merged-read count — <code>core_diversity</code> hard-fails:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>The rarefied table contains no samples or features. Verify your table is
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>valid and that you provided a shallow enough sampling depth.
+</span></code></pre></div>
+<p>The fix is to lower <code>sampling_depth</code> (CLI override <code>sampling_depth=200</code>, or edit the value in the workflow file). Because oxo-flow tracks config changes, the re-run invalidates only <code>core_diversity</code> and its dependents — every other rule is skipped from checkpoint.</p>
 <h3 id="taxonomy-classifier">Taxonomy Classifier<a class="headerlink" href="#taxonomy-classifier" title="Permanent link">#</a></h3>
 <p><code>{config.classifier}</code> must point to a pre-trained classifier matching your target region (e.g. <code>silva-138-99-515-806-nb-classifier.qza</code> for V4). QIIME2 does not ship classifiers; download or train one before running this rule.</p>
 <p>Two hard-won gotchas surfaced in live testing:</p>
 <ul>
 <li><strong>scikit-learn version gate.</strong> <code>classify-sklearn</code> hard-fails when the classifier artifact was trained under a different scikit-learn version than the one in your QIIME2 env:</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>ValueError: The scikit-learn version (0.24.1) used to generate this
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>artifact does not match the current version of scikit-learn installed
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>(1.4.2). Please retrain your classifier for your current deployment ...
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ValueError: The scikit-learn version (0.24.1) used to generate this
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>artifact does not match the current version of scikit-learn installed
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>(1.4.2). Please retrain your classifier for your current deployment ...
 </span></code></pre></div>
 <p>Release-matched downloads from <code>data.qiime2.org/&lt;release&gt;/common/</code> only carry reference sequences and taxonomy (e.g. <code>silva-138-99-seqs-515-806.qza</code> + <code>silva-138-99-tax-515-806.qza</code>), <strong>not</strong> pre-trained classifiers — the historical pre-trained <code>.qza</code> files predate 2024.10. Train a compatible classifier in your own env (single-threaded, ~40–60 min for the 515-806 SILVA subset):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>qiime<span class="w"> </span>feature-classifier<span class="w"> </span>fit-classifier-naive-bayes<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--i-reference-reads<span class="w"> </span>silva-138-99-seqs-515-806.qza<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--i-reference-taxonomy<span class="w"> </span>silva-138-99-tax-515-806.qza<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--o-classifier<span class="w"> </span>silva-515-806-nb-classifier.qza
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>qiime<span class="w"> </span>feature-classifier<span class="w"> </span>fit-classifier-naive-bayes<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--i-reference-reads<span class="w"> </span>silva-138-99-seqs-515-806.qza<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--i-reference-taxonomy<span class="w"> </span>silva-138-99-tax-515-806.qza<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--o-classifier<span class="w"> </span>silva-515-806-nb-classifier.qza
 </span></code></pre></div>
 <ul>
 <li><strong>Empty default fails opaquely.</strong> <code>classifier = ""</code> is the workflow default; with it unset, <code>classify_taxonomy</code> fails with <code>--i-classifier option requires an argument</code> plus a full usage dump — the error never mentions <code>config.classifier</code>. Always pass <code>classifier=/path/to/classifier.qza</code> on the command line, or skip the rule (<code>oxo-flow run -t</code> on the other rules).</li>
@@ -4073,10 +4078,10 @@
 <li>The optional <code>#q2:types</code> directive row must sit <strong>immediately after the header row</strong> — placing it first (or omitting the header) fails with <code>Found directive '#q2:types' while searching for header. Directives may only appear immediately after the header.</code></li>
 </ul>
 <h2 id="running-it">Running It<a class="headerlink" href="#running-it" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># The workflow expects `qiime` on PATH — activate your QIIME2 conda env first:</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>qiime2-amplicon-2024.10
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/16_16s_qiime2_amplicon.oxoflow<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nv">classifier</span><span class="o">=</span>/path/to/silva-515-806-nb-classifier.qza
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># The workflow expects `qiime` on PATH — activate your QIIME2 conda env first:</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>qiime2-amplicon-2024.10
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>examples/gallery/16_16s_qiime2_amplicon.oxoflow<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nv">classifier</span><span class="o">=</span>/path/to/silva-515-806-nb-classifier.qza
 </span></code></pre></div>
 <p>The env name <code>qiime2-amplicon-2024.10</code> is QIIME2's default naming; any env providing <code>qiime</code> works (the example was live-tested against an env named <code>qiime2-amplicon</code> with q2cli 2024.10.1). Seven of the eight rules are independent of the classifier: <code>classify_taxonomy</code> is the only one that needs it, and the run verifies outputs (53 MB of artifacts across 10 files) before reporting success.</p>
 <div class="admonition note">
