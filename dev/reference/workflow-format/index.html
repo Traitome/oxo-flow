@@ -9055,6 +9055,7 @@ Use shell conditionals or declarative <code>[config]</code> entries to handle th
 </tr>
 </tbody>
 </table>
+<p>Any other token — a bare identifier like <code>params_mode</code>, or an unknown function call — is a validation <strong>error</strong> (E018): the evaluator treats unrecognizable atoms as true, so a typo'd condition would silently let the rule run. Reference config keys as <code>config.&lt;key&gt;</code>, or use a quoted literal, a <code>{...}</code> placeholder, or one of the built-in functions.</p>
 <h3 id="data-dependent-when-gates">Data-Dependent <code>when</code> Gates<a class="headerlink" href="#data-dependent-when-gates" title="Permanent link">#</a></h3>
 <p>The runtime functions <code>reads_count(path)</code>, <code>wc_lines(path)</code>,
 <code>file_size(path)</code>, and <code>regex_extract(path, pattern, group?)</code> let a <code>when</code>

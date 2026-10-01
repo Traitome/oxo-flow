@@ -5012,6 +5012,10 @@ below cover the codes referenced across this documentation.</p>
 <td><code>E017</code></td>
 <td>Unknown key in a rule — usually a foreign workflow dialect (e.g. <code>foreach</code>, <code>inputs = {...}</code>)</td>
 </tr>
+<tr>
+<td><code>E018</code></td>
+<td>A <code>when</code> condition uses an unrecognized bare identifier (e.g. <code>params_mode == 1</code>) — the evaluator would treat it as true and the rule would silently run. Reference config keys as <code>config.key</code>, or use a quoted literal, a <code>{...}</code> placeholder, or a built-in function</td>
+</tr>
 </tbody>
 </table>
 <h3 id="lint-warnings-lint">Lint warnings (<code>lint</code>)<a class="headerlink" href="#lint-warnings-lint" title="Permanent link">#</a></h3>
