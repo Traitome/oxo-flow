@@ -144,8 +144,18 @@ DAG: 2 rules in execution order
   ✓ transform (0.0s)
 
 Done: 2 succeeded, 0 skipped, 0 failed
+✓ Report snapshot: …/.oxo-flow/reports/report-20261001-093232.json
 ✓ 2 output files verified (42B total)
 ```
+
+!!! note "Progress lines depend on the output stream"
+    `Running:` / `✓` progress lines print when stderr is **not** an
+    interactive terminal (in a TTY the animated progress bar replaces
+    them); the `✓ Report snapshot:` line after `Done:` prints on every
+    run and names the JSON snapshot written under
+    `.oxo-flow/reports/` (see [Run output & logs](../commands/run.md#report-snapshots)).
+    INFO-level tracing lines (workflow start, JSON events) are elided
+    here for readability.
 
 ---
 
