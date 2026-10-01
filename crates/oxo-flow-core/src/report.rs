@@ -2949,11 +2949,30 @@ impl MetricsScanCache {
     }
 }
 
+/// Scan Notes text shared by both metrics generators: names every gap
+/// counter that is non-zero so neither parse failures nor unreadable
+/// files can vanish silently (issue #83 P1-5, #774).
+fn scan_notes_text(skipped: usize, unreadable: usize) -> String {
+    let mut parts = Vec::new();
+    if skipped > 0 {
+        parts.push(format!(
+            "{skipped} file(s) matched known tool patterns but failed to parse"
+        ));
+    }
+    if unreadable > 0 {
+        parts.push(format!(
+            "{unreadable} file(s)/director(y|ies) matched tool patterns but could not be read at all"
+        ));
+    }
+    parts.join("; ")
+}
+
 /// QC metrics parsed from real tool outputs in the working directory (issue
 /// #83 P1-5): fastp report.json, samtools flagstat, STAR Log.final.out,
 /// featureCounts .summary, bcftools stats, kraken2 .report. One subsection
-/// per (tool × sample); the section is hidden entirely when nothing parses
-/// — a report never fabricates metrics.
+/// per (tool × sample); the section is hidden only when the scan found
+/// nothing at all — gap-only scans still surface their Scan Notes (issue
+/// #774), and a report never fabricates metrics.
 struct MetricsGenerator {
     scans: std::sync::Arc<MetricsScanCache>,
 }
@@ -2972,7 +2991,10 @@ impl ReportSectionGenerator for MetricsGenerator {
             return Vec::new();
         };
         let stats = self.scans.scan(&workdir);
-        if stats.parsed.is_empty() {
+        // A gap-only scan (nothing parsed, but files matched patterns and
+        // could not be handled) must still surface its Scan Notes — hiding
+        // the section entirely would look like full coverage (issue #774).
+        if stats.parsed.is_empty() && stats.skipped == 0 && stats.unreadable == 0 {
             return Vec::new();
         }
 
@@ -3027,16 +3049,13 @@ impl ReportSectionGenerator for MetricsGenerator {
         }
 
         // A scanner that hid its gaps would look like full coverage — say
-        // what could not be parsed (issue #83 P1-5 ruling).
-        if stats.skipped > 0 {
+        // what could not be parsed or read (issue #83 P1-5, #774).
+        if stats.skipped > 0 || stats.unreadable > 0 {
             subsections.push(ReportSection {
                 title: "Scan Notes".to_string(),
                 id: "metrics-scan-notes".to_string(),
                 content: ReportContent::Text {
-                    text: format!(
-                        "{} file(s) matched known tool patterns but failed to parse",
-                        stats.skipped
-                    ),
+                    text: scan_notes_text(stats.skipped, stats.unreadable),
                 },
                 subsections: vec![],
             });
@@ -3077,10 +3096,14 @@ impl ReportSectionGenerator for AggregateMetricsGenerator {
             return Vec::new();
         };
         let stats = self.scans.scan(&workdir);
-        // Skipped-only scans still surface their Scan Notes subsection —
-        // a scanner that hit files it could not parse must say so instead
-        // of hiding the section entirely (issue #83 P1-5 honesty rule).
-        if stats.parsed.is_empty() && stats.custom.is_empty() && stats.skipped == 0 {
+        // Gap-only scans still surface their Scan Notes subsection —
+        // a scanner that hit files it could not parse or read must say so
+        // instead of hiding the section entirely (issue #83 P1-5, #774).
+        if stats.parsed.is_empty()
+            && stats.custom.is_empty()
+            && stats.skipped == 0
+            && stats.unreadable == 0
+        {
             return Vec::new();
         }
 
@@ -3204,15 +3227,12 @@ impl ReportSectionGenerator for AggregateMetricsGenerator {
             });
         }
 
-        if stats.skipped > 0 {
+        if stats.skipped > 0 || stats.unreadable > 0 {
             subsections.push(ReportSection {
                 title: "Scan Notes".to_string(),
                 id: "aggregate-scan-notes".to_string(),
                 content: ReportContent::Text {
-                    text: format!(
-                        "{} file(s) matched known tool patterns but failed to parse",
-                        stats.skipped
-                    ),
+                    text: scan_notes_text(stats.skipped, stats.unreadable),
                 },
                 subsections: vec![],
             });
@@ -5102,6 +5122,75 @@ report = { file = "does_not_exist.md" }
         let ctx = ctx_for(&config, Some(&cp), None);
         let sections = SectionRegistry::with_defaults().generate(&ctx, None);
         assert!(!sections.iter().any(|s| s.id == "aggregate-metrics"));
+    }
+
+    // ── Issue #774: unreadable files must surface in Scan Notes ──────────
+
+    /// A tool-pattern file that cannot be *read* (0o000 permissions, like a
+    /// root-owned file left by a cluster run) must not be an invisible gap:
+    /// both generators surface Scan Notes naming it.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_files_surface_scan_notes_in_both_generators() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let config = workflow_config("[[rules]]\nname = \"hello\"\nshell = \"echo hi\"\n");
+        let workdir = tempfile::tempdir().unwrap();
+        let path = workdir.path().join("S1.fastp.json");
+        std::fs::write(&path, fastp_fixture(1234)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root (CI containers) can read 0o000 files after all; in that case
+        // the scan is fully clean and both sections behave as before — skip.
+        if std::fs::read(&path).is_ok() {
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+            return;
+        }
+
+        let mut cp = fixture_checkpoint();
+        cp.workdir = Some(workdir.path().display().to_string());
+        let ctx = ctx_for(&config, Some(&cp), None);
+        let sections = SectionRegistry::with_defaults().generate(&ctx, None);
+
+        // Nothing parsed, nothing skipped — an unreadable-only scan used to
+        // hide both sections entirely.
+        for id in ["metrics", "aggregate-metrics"] {
+            let section = sections
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("{id} section missing for an unreadable-only scan"));
+            assert_eq!(section.subsections.len(), 1);
+            assert_eq!(section.subsections[0].title, "Scan Notes");
+            match &section.subsections[0].content {
+                ReportContent::Text { text } => {
+                    assert!(text.contains("1 file(s)/director(y|ies)"), "{text}");
+                    assert!(text.contains("could not be read at all"), "{text}");
+                    assert!(!text.contains("failed to parse"), "{text}");
+                }
+                _ => panic!("expected text Scan Notes in {id}"),
+            }
+        }
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    }
+
+    #[test]
+    fn skipped_and_unreadable_gaps_both_named_in_scan_notes() {
+        let text = scan_notes_text(2, 1);
+        assert_eq!(
+            text,
+            "2 file(s) matched known tool patterns but failed to parse; \
+             1 file(s)/director(y|ies) matched tool patterns but could not be read at all"
+        );
+        // Each counter is named only when non-zero (issue #774).
+        assert_eq!(
+            scan_notes_text(0, 3),
+            "3 file(s)/director(y|ies) matched tool patterns but could not be read at all"
+        );
+        assert_eq!(
+            scan_notes_text(1, 0),
+            "1 file(s) matched known tool patterns but failed to parse"
+        );
+        assert_eq!(scan_notes_text(0, 0), "");
     }
 
     #[test]
