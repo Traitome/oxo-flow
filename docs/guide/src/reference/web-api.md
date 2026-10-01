@@ -416,7 +416,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 ```
 GET /api/runs/{id}/report
 ```
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`.
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rule(s) and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail}]` from the checkpoint's structured failure data.
 
 ### Report Q&A
 ```
@@ -425,7 +425,10 @@ Content-Type: application/json
 
 {"question": "which rules failed and why"}
 ```
-Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string.
+Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt) — never a completion claim (issue #759).
+
+### Run Status exit codes
+`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus a bounded `stderr_tail` on failed nodes. The AI chat `get_run_status` tool carries the same fields.
 
 ### Report Visualization
 ```
