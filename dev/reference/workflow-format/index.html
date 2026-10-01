@@ -7504,7 +7504,7 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 |---|---|---|
 | Success + <code>temp_output</code> | Kept — no success-path cleanup runs; mark <code>temporary = true</code> instead if you want outputs deleted after the run |
 | Failure + <code>temp_output</code> | Cleaned to prevent stale partial files |
-| Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as <code>&lt;name&gt;.oxo-failed</code>; untouched pre-existing files are preserved |
+| Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors; issue #756) |
 | Transform with <code>cleanup=true</code> | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
 | Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |</p>
 <p><code>temporary</code> is for whole intermediates (e.g. multi-GB per-sample BAMs kept
@@ -7515,15 +7515,18 @@ back only when a dependent actually needs it again.</p>
 leave partial outputs that the freshness gate would mistake for a completed
 run. Before executing, the engine snapshots each declared output's existence
 and modification time; when the rule fails (non-zero exit, timeout, or
-missing outputs after an exit-0 shell), only what THIS attempt produced is
-invalidated: files created during the attempt are deleted, pre-existing
-files the attempt modified are moved aside as <code>&lt;name&gt;.oxo-failed</code> (the
-failed content stays recoverable), and untouched pre-existing files are
-left alone — a failure that never reached a file never destroys user data.
-The next run then re-executes the rule instead of skipping it as
-up-to-date. Note this covers failures the engine observes; a hard kill
-(<code>SIGKILL</code>) mid-rule can still leave outputs behind, since no cleanup code
-runs — the <code>--rerun</code> flag is the escape hatch for that case.</p>
+missing outputs after an exit-0 shell), the declared outputs are
+invalidated: files created during the attempt are deleted, and every
+pre-existing declared output moves aside as <code>&lt;name&gt;.oxo-failed</code> — modified
+or untouched (issue #756). The recorded failure schedules a re-execution,
+and a stale file surviving at the declared path would block that re-run
+inside the script (<code>ln: File exists</code>, <code>mv: cannot move ... File exists</code>);
+move-aside keeps it recoverable, and <code>protected_output</code> remains the escape
+hatch for files that must survive any failure. The next run then
+re-executes the rule instead of skipping it as up-to-date. Note this
+covers failures the engine observes; a hard kill (<code>SIGKILL</code>) mid-rule can
+still leave outputs behind, since no cleanup code runs — the <code>--rerun</code>
+flag is the escape hatch for that case.</p>
 <h3 id="timeout-enforcement">Timeout Enforcement<a class="headerlink" href="#timeout-enforcement" title="Permanent link">#</a></h3>
 <p>On Unix systems (Linux, macOS), a timeout kill walks the rule's <strong>process
 subtree</strong> rather than a process group — rules deliberately run inside the
