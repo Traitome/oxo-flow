@@ -747,7 +747,10 @@ output = ["sub_out.txt"]
             referenced.iter().any(|(name, _)| name == "sub.oxoflow"),
             "included sub-workflow file must be collected into the bundle, got: {referenced:?}"
         );
-        assert!(referenced.iter().any(|(name, _)| name == "host.oxoflow") == false);
+        assert!(
+            !referenced.iter().any(|(name, _)| name == "host.oxoflow"),
+            "host workflow file is added separately by publish_command, not by the scan"
+        );
     }
 
     /// repo/http includes are re-fetched by the consumer from their remote
