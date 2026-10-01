@@ -6,7 +6,7 @@ Rule-level `when` conditions switch pipeline branches on config values: WGS vs W
 
 - `when` supports bare boolean config keys (`config.run_qc`), string comparisons (`config.sequencing_mode == "WGS"`), and compound expressions with `&&` / `||` / `!`
 - Condition-skipped rules count as satisfied for their dependents — safe to `depends_on` them
-- Directory inputs form no file-based DAG edges; the report rule uses `depends_on` to stay behind its QC producers
+- Directory inputs infer edges to producers writing under them; the report rule still uses `depends_on` to keep that ordering explicit
 - Read groups are set at alignment so every downstream tool (GATK included) sees proper SM tags
 
 ## Workflow Definition

@@ -65,8 +65,10 @@ Seven stages, three approval gates. Every stage ends with a
   2. `oxo-flow dry-run --json <workflow.oxoflow>` — expansion preview, resource audit, `-j` suggestion
   3. `oxo-flow lint <workflow.oxoflow>` — best practices
 - Fix and re-run until clean; `oxo-flow graph` to eyeball the DAG.
-  DAG edges match exact strings only — dir/glob inputs form no edges, so
-  declare `depends_on` explicitly.
+  Edge inference is best-effort but broad: exact strings, globs, and
+  directory inputs all form edges when a producer's output matches;
+  keep `depends_on` for ordering files can't express (side-effect-only
+  steps).
 - Optional AI assistance: `[ai] enabled = true` in the workflow activates
   AI validate/lint/debug/recover.
 - Done when: all gates pass; engine-QC role sign-off.
@@ -115,8 +117,9 @@ Seven stages, three approval gates. Every stage ends with a
   validate → dry-run → lint.
 - **Correct, don't restart** — prefer checkpoint resume unless inputs were
   invalidated.
-- **Explicit edges** — exact-string `depends_on`; wildcard inputs form no DAG
-  edges.
+- **Explicit edges** — edge inference covers exact strings, globs, and
+  directory inputs; `depends_on` remains the escape hatch for ordering
+  that file matching can't express.
 - **Version everything** — workflow in git; its SHA lands in checkpoint and
   report.
 - **Budget & stop-loss** — retry caps, human escalation, resource limits from
