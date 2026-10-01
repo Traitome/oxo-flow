@@ -3997,7 +3997,13 @@
 <h3 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>oxo-flow<span class="w"> </span>validate<span class="w"> </span>examples/gallery/03_parallel_samples.oxoflow
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>✓<span class="w"> </span>examples/gallery/03_parallel_samples.oxoflow<span class="w"> </span>—<span class="w"> </span><span class="m">3</span><span class="w"> </span>rules,<span class="w"> </span><span class="m">2</span><span class="w"> </span>dependencies
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>⚠<span class="w"> </span>Warning:<span class="w"> </span>The<span class="w"> </span>following<span class="w"> </span>input<span class="w"> </span>files<span class="w"> </span><span class="k">do</span><span class="w"> </span>not<span class="w"> </span>exist:
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>-<span class="w"> </span>analysis/sampleA.stats.txt
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>-<span class="w"> </span>analysis/sampleB.stats.txt
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>-<span class="w"> </span>analysis/sampleC.stats.txt
 </span></code></pre></div>
+<p>The <code>✓</code> line is what matters — validate exits 0 and the workflow is well-formed. The warning is expected here: <code>aggregate</code> lists its fan-in inputs as literal paths (<code>analysis/sampleA.stats.txt</code>, …), and at validate time oxo-flow compares them against rules' <em>unexpanded</em> output templates (<code>analysis/{sample}.stats.txt</code>), so the match isn't visible yet. At run time the wildcards expand to exactly those concrete paths and the run proceeds normally. Validate only warns for missing inputs; a genuinely missing <em>source</em> file (no rule produces it) fails the run at start — see <a href="../../how-to/troubleshooting/#missing-required-source-input-fail-fast-at-run-start">the troubleshooting entry</a>.</p>
 <h3 id="dag-structure">DAG Structure<a class="headerlink" href="#dag-structure" title="Permanent link">#</a></h3>
 <pre class="mermaid"><code>graph TD
     A1[preprocess&lt;br/&gt;sample=sampleA] --&gt; B1[analyze&lt;br/&gt;sample=sampleA]
@@ -4007,6 +4013,12 @@
     B2 --&gt; C
     B3 --&gt; C</code></pre>
 <h2 id="whats-next">What's Next?<a class="headerlink" href="#whats-next" title="Permanent link">#</a></h2>
+<div class="admonition note">
+<p class="admonition-title">Input data</p>
+<p>The <code>raw/{sample}.txt</code> inputs are placeholders — create your own files
+(e.g. <code>mkdir -p raw &amp;&amp; for s in sampleA sampleB sampleC; do echo "$s" &gt;
+raw/$s.txt; done</code>) before running the workflow.</p>
+</div>
 <p>Move on to <a href="../scatter-gather/">Scatter-Gather</a> to learn how to scatter work by chromosome, process the partitions in parallel, and merge the results.</p>
 
 
