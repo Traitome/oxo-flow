@@ -39,6 +39,13 @@ Process (one harness across all generation surfaces):
   4. Every draft is validated by the engine via the web workflow service;
      validation errors feed the orchestrator's correction loop (bounded)
 Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
+
+**Draft id semantics**: the returned `pipeline_id` is an unsaved draft id —
+the generated TOML lives only in the server's in-memory request cache and is
+never persisted to the pipeline store. `GET /api/pipelines/{pipeline_id}`
+returns 404 for it. To keep a translated pipeline, save the returned
+`toml_content` yourself (e.g. `POST /api/pipelines` or `oxo-flow run`), then
+pass the resulting saved id to `POST /api/ai/optimize`.
 ```
 
 ### POST /api/ai/explain
@@ -73,6 +80,10 @@ Suggest parameter optimizations for speed, cost, or sensitivity.
 Input:  { pipeline_id, goal: "speed"|"cost"|"sensitivity" }
 Output: { optimized_toml, changes, estimated: { time_saved, memory_reduction } }
 ```
+
+`pipeline_id` must reference a **saved** pipeline (the id of a
+`GET /api/pipelines` entry) — the unsaved draft id returned by
+`POST /api/ai/translate` is not accepted and fails with `NOT_FOUND`.
 
 ## Provider Architecture
 
