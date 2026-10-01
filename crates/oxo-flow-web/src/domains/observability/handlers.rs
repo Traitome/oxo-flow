@@ -89,7 +89,11 @@ pub async fn runtime_metrics() -> ApiResult<RuntimeMetricsResponse> {
         (0, 0)
     };
 
-    let uptime = sysinfo::System::uptime();
+    // Process uptime via the shared START_TIME origin — the same source
+    // /api/health and /api/system use. sysinfo::System::uptime() is HOST
+    // boot uptime (verified live: reported ~27.7 days while the server
+    // process was ~2.4h old), which contradicted the sibling endpoints.
+    let uptime = service::uptime_secs();
 
     Ok(Json(RuntimeMetricsResponse {
         uptime_secs: uptime,
