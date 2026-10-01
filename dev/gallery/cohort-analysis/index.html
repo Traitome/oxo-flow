@@ -3747,7 +3747,7 @@
 <ul>
 <li><code>{sample}</code> rules expand once per sample across all groups (case/control here)</li>
 <li>Cohort-level joint genotyping: <code>combine_gvcfs</code> gathers every per-sample GVCF via <code>expand_inputs</code> (<code>config.samples_list</code>), and <code>genotype_gvcfs</code> calls the whole cohort in one pass</li>
-<li>The aggregation rule has no wildcard inputs → exactly one instance; <code>depends_on</code> keeps it behind every per-sample instance of the referenced rules (a template name expands to all its instances; directory inputs form no DAG edges on their own)</li>
+<li>The aggregation rule has no wildcard inputs → exactly one instance; <code>depends_on</code> keeps it behind every per-sample instance of the referenced rules (a template name expands to all its instances; the multiqc rule consumes the QC directory itself, which edge inference links to every producer writing under it)</li>
 <li>Per-rule conda environments keep tool versions isolated (fastp / bwa-mem2+samtools / gatk / multiqc)</li>
 </ul>
 <h2 id="workflow-definition">Workflow Definition<a class="headerlink" href="#workflow-definition" title="Permanent link">#</a></h2>
@@ -3887,8 +3887,8 @@
 </span><span id="__span-0-134"><a id="__codelineno-0-134" name="__codelineno-0-134" href="#__codelineno-0-134"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"reports/multiqc_report.html"</span><span class="p">]</span>
 </span><span id="__span-0-135"><a id="__codelineno-0-135" name="__codelineno-0-135" href="#__codelineno-0-135"></a><span class="n">shell</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"multiqc qc/ -o reports/"</span>
 </span><span id="__span-0-136"><a id="__codelineno-0-136" name="__codelineno-0-136" href="#__codelineno-0-136"></a><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Aggregate QC metrics for the entire cohort"</span>
-</span><span id="__span-0-137"><a id="__codelineno-0-137" name="__codelineno-0-137" href="#__codelineno-0-137"></a><span class="c1"># Directory inputs form no file-based DAG edges; depends_on keeps multiqc</span>
-</span><span id="__span-0-138"><a id="__codelineno-0-138" name="__codelineno-0-138" href="#__codelineno-0-138"></a><span class="c1"># behind every rule that writes into qc/ (expands to all sample instances).</span>
+</span><span id="__span-0-137"><a id="__codelineno-0-137" name="__codelineno-0-137" href="#__codelineno-0-137"></a><span class="c1"># The qc/ directory input already forms edges to every rule writing under</span>
+</span><span id="__span-0-138"><a id="__codelineno-0-138" name="__codelineno-0-138" href="#__codelineno-0-138"></a><span class="c1"># it; depends_on keeps that ordering explicit regardless of file matching.</span>
 </span><span id="__span-0-139"><a id="__codelineno-0-139" name="__codelineno-0-139" href="#__codelineno-0-139"></a><span class="n">depends_on</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-0-140"><a id="__codelineno-0-140" name="__codelineno-0-140" href="#__codelineno-0-140"></a><span class="w">    </span><span class="s2">"fastp"</span><span class="p">,</span>
 </span><span id="__span-0-141"><a id="__codelineno-0-141" name="__codelineno-0-141" href="#__codelineno-0-141"></a><span class="w">    </span><span class="s2">"markdup"</span><span class="p">,</span>

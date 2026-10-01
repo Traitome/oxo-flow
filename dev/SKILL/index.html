@@ -4004,8 +4004,10 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
 <li><code>oxo-flow dry-run --json &lt;workflow.oxoflow&gt;</code> — expansion preview, resource audit, <code>-j</code> suggestion</li>
 <li><code>oxo-flow lint &lt;workflow.oxoflow&gt;</code> — best practices</li>
 <li>Fix and re-run until clean; <code>oxo-flow graph</code> to eyeball the DAG.
-  DAG edges match exact strings only — dir/glob inputs form no edges, so
-  declare <code>depends_on</code> explicitly.</li>
+  Edge inference is best-effort but broad: exact strings, globs, and
+  directory inputs all form edges when a producer's output matches;
+  keep <code>depends_on</code> for ordering files can't express (side-effect-only
+  steps).</li>
 <li>Optional AI assistance: <code>[ai] enabled = true</code> in the workflow activates
   AI validate/lint/debug/recover.</li>
 <li>Done when: all gates pass; engine-QC role sign-off.</li>
@@ -4054,8 +4056,9 @@ a current proxy; ecosystem mirrors: see <code>how-to/china-mirrors</code>.</p>
   validate → dry-run → lint.</li>
 <li><strong>Correct, don't restart</strong> — prefer checkpoint resume unless inputs were
   invalidated.</li>
-<li><strong>Explicit edges</strong> — exact-string <code>depends_on</code>; wildcard inputs form no DAG
-  edges.</li>
+<li><strong>Explicit edges</strong> — edge inference covers exact strings, globs, and
+  directory inputs; <code>depends_on</code> remains the escape hatch for ordering
+  that file matching can't express.</li>
 <li><strong>Version everything</strong> — workflow in git; its SHA lands in checkpoint and
   report.</li>
 <li><strong>Budget &amp; stop-loss</strong> — retry caps, human escalation, resource limits from
