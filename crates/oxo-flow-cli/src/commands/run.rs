@@ -1196,6 +1196,14 @@ fn undefined_config_findings(config: &WorkflowConfig) -> Vec<String> {
 /// Optional rules, when-gated-off rules, and scatter rules with zero
 /// fan-out can legitimately have absent inputs and are skipped — the same
 /// stances the validate/quality gates take (issues #493, #616).
+///
+/// Two further engine-tolerated shapes must not be flagged:
+/// - `[[references]]` outputs: the reference-build machinery creates them
+///   during the run (after this gate) and they are not DAG nodes;
+/// - inputs living in the `sample_pattern` discovery directory: bare
+///   relative inputs resolve from the shell cwd (= workdir) at execution,
+///   but sample data legitimately lives where sample_pattern found it.
+///
 /// Returns human-readable findings, or empty when every required external
 /// source is present.
 fn missing_source_findings(
@@ -1203,8 +1211,40 @@ fn missing_source_findings(
     dag: &WorkflowDag,
     order: &[String],
     workdir: &Path,
+    workflow_dir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> Vec<String> {
+    // Outputs the reference-build machinery will create during this run —
+    // absent from the DAG by design, so a missing one is not a dead source.
+    let reference_outputs: HashSet<String> = config
+        .references
+        .iter()
+        .map(|r| {
+            oxo_flow_core::executor::checkpoint::expand_config_in_path(&r.output, wildcard_values)
+        })
+        .collect();
+    // Directory sample_pattern discovery scanned (parse.rs anchoring):
+    // absolute patterns anchor at their own parent, relative ones at the
+    // workflow file's parent. Bare relative inputs may live here instead
+    // of the workdir.
+    let sample_search_dir = config.workflow.sample_pattern.as_ref().and_then(|pattern| {
+        let expanded =
+            oxo_flow_core::executor::checkpoint::expand_config_in_path(pattern, wildcard_values);
+        let path = Path::new(&expanded);
+        if path.is_absolute() {
+            path.parent().map(|p| p.to_path_buf())
+        } else {
+            // Relative pattern: parse.rs anchors it at the workflow file's
+            // parent (mirror of the sample_pattern split there).
+            let joined = workflow_dir.join(path);
+            Some(
+                joined
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| workflow_dir.to_path_buf()),
+            )
+        }
+    });
     let mut findings = Vec::new();
     for name in order {
         let Some(rule) = config.get_rule(name) else {
@@ -1239,13 +1279,28 @@ fn missing_source_findings(
             wildcard_values,
         );
         for pattern in missing {
+            if reference_outputs.contains(&pattern) {
+                // Built by the [[references]] machinery later in this run.
+                continue;
+            }
             // Only external sources gate here — a missing pattern WITH a
             // producer belongs to the manifest/cascade path below.
-            if dag.producer_of(&pattern).is_none() {
-                findings.push(format!(
-                    "rule '{name}': input '{pattern}' does not exist and no rule produces it"
-                ));
+            if dag.producer_of(&pattern).is_some() {
+                continue;
             }
+            // A bare relative input may resolve inside the sample_pattern
+            // discovery directory rather than the workdir.
+            let absolute = Path::new(&pattern).is_absolute();
+            if !absolute
+                && sample_search_dir
+                    .as_ref()
+                    .is_some_and(|dir| dir.join(&pattern).exists())
+            {
+                continue;
+            }
+            findings.push(format!(
+                "rule '{name}': input '{pattern}' does not exist and no rule produces it"
+            ));
         }
     }
     findings
@@ -1629,6 +1684,7 @@ pub async fn run_command(
         &dag,
         &order,
         workdir.as_ref().unwrap_or(&workdir_default),
+        &workflow_dir,
         &config_placeholder_values(&config.config),
     );
     if !missing_sources.is_empty() {
@@ -7169,11 +7225,29 @@ shell = "true"
         (config, dag, order, wildcard_values)
     }
 
+    fn source_gate_call(
+        config: &oxo_flow_core::config::WorkflowConfig,
+        dag: &WorkflowDag,
+        order: &[String],
+        workdir: &std::path::Path,
+        workflow_dir: &std::path::Path,
+        wildcard_values: &HashMap<String, String>,
+    ) -> Vec<String> {
+        missing_source_findings(config, dag, order, workdir, workflow_dir, wildcard_values)
+    }
+
     #[test]
     fn missing_source_gate_flags_only_unproduced_required_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
-        let findings = missing_source_findings(&config, &dag, &order, dir.path(), &wildcard_values);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
         assert_eq!(
             findings,
             vec!["rule 'use': input 'ext.txt' does not exist and no rule produces it".to_string()],
@@ -7187,7 +7261,14 @@ shell = "true"
         let dir = tempfile::tempdir().unwrap();
         let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
         std::fs::write(dir.path().join("ext.txt"), b"data").unwrap();
-        let findings = missing_source_findings(&config, &dag, &order, dir.path(), &wildcard_values);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
         assert!(findings.is_empty(), "{findings:?}");
     }
 
@@ -7200,8 +7281,106 @@ shell = "true"
         let (config, dag, order, wildcard_values) = source_gate_fixture(dir.path());
         std::fs::write(dir.path().join("out.txt"), b"stale").unwrap();
         std::fs::write(dir.path().join("final.txt"), b"stale").unwrap();
-        let findings = missing_source_findings(&config, &dag, &order, dir.path(), &wildcard_values);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
         assert!(!findings.is_empty(), "missing ext.txt must gate the run");
+    }
+
+    #[test]
+    fn missing_source_gate_skips_reference_outputs() {
+        // [[references]] outputs are built by the reference machinery after
+        // this gate and are not DAG nodes — a missing one must not gate.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "refgate"
+
+[[references]]
+name = "idx"
+source = "genome.fa"
+output = "genome.idx"
+build = "cat genome.fa > genome.idx"
+
+[[rules]]
+name = "use_ref"
+input = ["genome.idx"]
+output = ["result.txt"]
+shell = "cat {input} > {output}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        std::fs::write(dir.path().join("genome.fa"), b"ACGT").unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "reference-built output must not gate the run: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_accepts_sample_pattern_dir_inputs() {
+        // Bare relative input whose data lives in the sample_pattern
+        // discovery directory (absolute pattern, sibling of the workdir) —
+        // the web instance-table shape.
+        let dir = tempfile::tempdir().unwrap(); // workflow dir
+        let data = tempfile::tempdir().unwrap(); // sample_pattern root
+        let toml = format!(
+            r#"
+[workflow]
+name = "samplegate"
+sample_pattern = "{root}/data/{{{{sample}}}}.fq"
+
+[[rules]]
+name = "qc"
+input = ["{{{{sample}}}}.fq"]
+output = ["qc_{{{{sample}}}}.txt"]
+shell = "cat {{{{input}}}} > {{{{output}}}}"
+"#,
+            root = data.path().display(),
+        );
+        let mut config = config_with_rules(&toml);
+        config.apply_defaults();
+        std::fs::create_dir_all(data.path().join("data")).unwrap();
+        std::fs::write(data.path().join("data").join("S1.fq"), b"read").unwrap();
+        let dag = WorkflowDag::from_rules_with_config(
+            &config.rules,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let wildcard_values = config_placeholder_values(&config.config);
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "input present in the sample_pattern dir must not gate: {findings:?}"
+        );
     }
 
     #[test]
