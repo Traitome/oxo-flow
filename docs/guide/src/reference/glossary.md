@@ -338,6 +338,7 @@ below cover the codes referenced across this documentation.
 | `E015` | Re-entry declares a `pair_id` with conflicting content |
 | `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry `pair_id` colliding with an existing instance name (see Checkpoint re-entry) |
 | `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`) |
+| `E018` | A `when` condition uses an unrecognized bare identifier (e.g. `params_mode == 1`) — the evaluator would treat it as true and the rule would silently run. Reference config keys as `config.key`, or use a quoted literal, a `{...}` placeholder, or a built-in function |
 
 ### Lint warnings (`lint`)
 

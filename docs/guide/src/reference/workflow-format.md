@@ -2204,6 +2204,8 @@ shell = "fastqc {input[0]} -o qc/"
 | `<expr> \|\| <expr>` | `config.wgs \|\| config.wes` | Logical OR |
 | `(<expr>)` | `(config.a && config.b) \|\| config.c` | Grouping |
 
+Any other token — a bare identifier like `params_mode`, or an unknown function call — is a validation **error** (E018): the evaluator treats unrecognizable atoms as true, so a typo'd condition would silently let the rule run. Reference config keys as `config.<key>`, or use a quoted literal, a `{...}` placeholder, or one of the built-in functions.
+
 ### Data-Dependent `when` Gates
 
 The runtime functions `reads_count(path)`, `wc_lines(path)`,
