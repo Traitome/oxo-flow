@@ -150,6 +150,11 @@ pub struct NodeStatusItem {
     /// assistant show WHY a rule failed without opening the raw log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+    /// Bounded stdout tail of a failed rule (issue #765) — some tools print
+    /// their root cause on stdout, which #691 persisted for exactly this
+    /// reason; the web surfaces it alongside stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -348,6 +353,7 @@ mod tests {
                 exit_code: None,
                 progress_pct: Some(50),
                 stderr_tail: None,
+                stdout_tail: None,
             }],
             timeline: vec![TimelineEvent {
                 timestamp: "2024-01-01T00:00:00Z".into(),

@@ -72,6 +72,7 @@ impl Tool for RunStatusTool {
                 // answer "why did my rule fail?" without log tailing.
                 "exit_code": n.exit_code,
                 "stderr_tail": n.stderr_tail,
+                "stdout_tail": n.stdout_tail,
             })).collect::<Vec<_>>(),
         })
         .to_string())

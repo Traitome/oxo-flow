@@ -128,6 +128,9 @@ export interface RunInstance {
   exit_code?: number;
   /** Bounded stderr tail of a failed rule (issue #758). */
   stderr_tail?: string;
+  /** Bounded stdout tail of a failed rule (issue #765) — some tools
+   *  print their root cause on stdout. */
+  stdout_tail?: string;
 }
 
 /** Public payload of a share link's landing page (issue #82 P0-6). */
@@ -143,11 +146,11 @@ export interface ShareLanding {
 
 export interface RunStatus {
   status: string; phase: string;
-  nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string }>;
+  nodes: Array<{ rule: string; status: string; started_at: string | null; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
   resources: { cpu_pct: number; memory_mb: number; disk_mb: number };
 }
 export interface DagStatus {
-  nodes: Array<{ id: string; label: string; status: string; color: string; duration_ms: number | null; exit_code: number | null; stderr_tail?: string }>;
+  nodes: Array<{ id: string; label: string; status: string; color: string; duration_ms: number | null; exit_code: number | null; stderr_tail?: string; stdout_tail?: string }>;
   edges: Array<{ source: string; target: string }>;
   parallel_groups: Array<Array<string>>; critical_path: Array<string>;
   metrics: { total_nodes: number; completed_nodes: number; failed_nodes: number; running_nodes: number; pending_nodes: number; eta_ms: number | null };
