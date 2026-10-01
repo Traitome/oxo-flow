@@ -516,6 +516,12 @@ pub fn detect_input_manifest_invalidations(
         if !ck.completed_rules.contains(name) {
             continue;
         }
+        // A rule whose recorded when-verdict is false was gated off — its
+        // inputs are absent by design and snapshotting only re-flags them
+        // (issue #757 part 3; #690/#747 reconcile the rule itself).
+        if ck.when_verdicts.get(name) == Some(&false) {
+            continue;
+        }
         let Some(rule) = config.get_rule(name) else {
             continue;
         };
@@ -569,8 +575,14 @@ pub fn detect_input_manifest_invalidations(
                             // rule deleted its outputs by design after all
                             // dependents finished.
                             Some(producer) => {
-                                ck.tombstones.contains_key(producer)
-                                    && ck.completed_rules.contains(producer)
+                                (ck.tombstones.contains_key(producer)
+                                    && ck.completed_rules.contains(producer))
+                                    // A producer whose recorded when-verdict
+                                    // is false was skipped this configuration:
+                                    // its output is absent by design (issue
+                                    // #757 part 2) — the same reconciliation
+                                    // #690/#747 apply to the rule itself.
+                                    || ck.when_verdicts.get(producer) == Some(&false)
                             }
                             // No producer in the DAG at all: the pattern's
                             // producer rule was never instantiated (input_groups

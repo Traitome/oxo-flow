@@ -1157,6 +1157,24 @@ pub fn snapshot_input_manifest(
                 );
                 continue;
             }
+            if rule.expand_inputs_baked.contains(&expanded) {
+                // expand_inputs-baked literal absent by design (issue
+                // #757): the producer is gated off under the active
+                // config, so the baked path can never exist right now —
+                // but a later config flip that produces it must still
+                // invalidate. Record the existing subset: the manifest
+                // then mismatches when the file set changes, which is
+                // exactly the desired invalidation. Hard-erroring here
+                // instead forfeited the manifest AND invalidated the
+                // completed rule on every subsequent no-op rerun (a
+                // 50-producer cascade in the rnaseq fixture).
+                tracing::warn!(
+                    input = %expanded,
+                    "expand_inputs-baked input absent at snapshot time (producer \
+                     gated off under the active config?); entry skipped"
+                );
+                continue;
+            }
             return Err(e);
         }
     }
@@ -1226,6 +1244,11 @@ pub fn missing_input_patterns(
             continue;
         }
         if crate::storage::StoragePath::parse(&expanded).is_remote() {
+            continue;
+        }
+        // Same skip as the snapshot walk (issue #757): a baked literal
+        // absent by design is tolerated, not reported missing.
+        if rule.expand_inputs_baked.contains(&expanded) {
             continue;
         }
         let mut entries = std::collections::BTreeMap::new();
@@ -2874,6 +2897,37 @@ mod tests {
             vec!["data/also-missing.txt".to_string()],
             "an ancient input is exempt from missing-input reporting"
         );
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn baked_absent_expand_inputs_entry_is_tolerated() {
+        // Issue #757: a missing expand_inputs-baked literal (its producer
+        // is gated off under the active config) must not poison the whole
+        // snapshot — record the existing subset. WITHOUT the baked flag
+        // the same missing literal still hard-errors (genuine invalidation
+        // for non-baken inputs).
+        let wd = temp_workdir("baked-manifest");
+        write_file(&wd, "data/a.txt", "a");
+        let resolver = crate::storage::StorageResolver::new();
+
+        let mut rule = list_rule(
+            "r",
+            &["data/a.txt", "results/star_salmon/log/S1.bowtie2.log"],
+        );
+        let snapshot = snapshot_input_manifest(&rule, &wd, &HashMap::new(), &resolver);
+        assert!(snapshot.is_err(), "non-baken missing input must error");
+
+        rule.expand_inputs_baked
+            .insert("results/star_salmon/log/S1.bowtie2.log".to_string());
+        let snapshot =
+            snapshot_input_manifest(&rule, &wd, &HashMap::new(), &resolver).expect("tolerated");
+        let manifest = snapshot.expect("existing subset recorded");
+        assert_eq!(manifest.len(), 1, "only the existing input recorded");
+        assert_eq!(manifest[0].path, "data/a.txt");
+
+        // The mirror walk reports the tolerated entry as not-missing.
+        assert!(missing_input_patterns(&rule, &wd, &HashMap::new()).is_empty());
         let _ = std::fs::remove_dir_all(&wd);
     }
 

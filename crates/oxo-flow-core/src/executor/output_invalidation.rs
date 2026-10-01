@@ -8,13 +8,18 @@
 //! the downstream sort died reading the header).
 //!
 //! Fix: before executing, snapshot each declared output's existence and
-//! mtime; on failure, invalidate only what THIS attempt produced:
+//! mtime; on failure, invalidate the declared outputs:
 //!
 //! - created during the attempt → deleted;
-//! - pre-existing but modified during the attempt → moved aside as
-//!   `<name>.oxo-failed` (recoverable, never silently destroyed);
-//! - pre-existing and untouched → left alone (user data survives a
-//!   failure that never reached the file).
+//! - pre-existing (modified or untouched) → moved aside as
+//!   `<name>.oxo-failed` (recoverable, never silently destroyed). Keeping
+//!   untouched pre-existing files used to block the re-execution the
+//!   recorded failure schedules: a stale output from an earlier run era
+//!   made the retry die inside the script (`ln: File exists`,
+//!   `mv: cannot move ... File exists`) even though it would succeed on a
+//!   clean tree (issue #756). The checkpoint records the rule as failed,
+//!   so nothing of its outputs is trusted anyway — and `protected_output`
+//!   remains the escape hatch for files that must survive any failure.
 
 use crate::rule::Rule;
 use std::collections::HashMap;
@@ -92,14 +97,16 @@ pub fn snapshot_outputs(
         .collect()
 }
 
-/// Invalidate the outputs a failed rule attempt produced or modified.
+/// Invalidate the outputs of a failed rule attempt.
 ///
-/// Deletes files created during the attempt; moves pre-existing files the
-/// attempt modified aside to `<name>.oxo-failed` so the failure is
-/// recoverable and the freshness gate no longer sees a "fresh" output.
-/// A pre-existing file is considered modified when its mtime or its size
-/// differs from the snapshot — the size check catches rewrites that
-/// restore the old timestamp. Files matching both are left alone.
+/// Deletes files created during the attempt; moves every pre-existing
+/// declared output aside to `<name>.oxo-failed` — modified or untouched —
+/// so the failure is recoverable and the re-execution the recorded failure
+/// schedules starts from a clean slate instead of dying on stale files
+/// from an earlier run era (issue #756). A pre-existing file is considered
+/// modified when its mtime or its size differs from the snapshot — the
+/// size check catches rewrites that restore the old timestamp; the
+/// distinction only refines the log message, both cases move aside.
 /// Outputs declared `protected_output` are skipped entirely (issue #457).
 /// Every step is best-effort with a warning — cleanup must never mask the
 /// rule's own failure.
@@ -147,43 +154,48 @@ pub async fn invalidate_failed_outputs(snapshots: &[OutputSnapshot]) {
             }
             continue;
         }
-        // Pre-existing: invalidate only if the attempt modified it. The
-        // mtime comparison alone misses rewrites that restore the old
-        // timestamp (tools doing that are rare but real, and coarse
-        // filesystems can share mtimes) — a size change catches those
-        // (issue #136).
+        // Pre-existing: move aside, modified or untouched (issue #756).
+        // The recorded failure means the engine re-executes this rule, and
+        // a stale output from an earlier era blocks that re-run inside the
+        // script (`ln: File exists`, `mv: cannot move ... File exists`).
+        // The checkpoint does not trust anything of a failed rule's
+        // outputs, so move-aside — recoverable, never a delete — is the
+        // uniform treatment. The mtime comparison alone misses rewrites
+        // that restore the old timestamp (tools doing that are rare but
+        // real, and coarse filesystems can share mtimes) — a size change
+        // catches those (issue #136); the result only refines the message.
         let mtime_changed = match (&snapshot.mtime, current_meta.modified().ok()) {
             (Some(before), Some(after)) => after != *before,
-            // Unreadable mtime: be conservative and leave the file alone.
             _ => false,
         };
         let size_changed = snapshot.size != Some(current_meta.len());
-        if mtime_changed || size_changed {
-            let aside = aside_path(&snapshot.path);
-            if tokio::fs::metadata(&aside).await.is_ok() {
-                // `rename` would silently overwrite a previous failure's
-                // evidence — skip it so recovery keeps every snapshot of
-                // what failed, and leave the current file in place (issue
-                // #136).
-                tracing::warn!(
-                    file = %snapshot.path.display(),
-                    aside = %aside.display(),
-                    "not moving failed output aside: the aside name is already \
-                     held by a previous failure — keeping the current file in place"
-                );
-            } else if let Err(e) = tokio::fs::rename(&snapshot.path, &aside).await {
-                tracing::warn!(
-                    file = %snapshot.path.display(),
-                    error = %e,
-                    "failed to move aside output modified by a failed rule"
-                );
-            } else {
-                tracing::warn!(
-                    file = %snapshot.path.display(),
-                    aside = %aside.display(),
-                    "moved aside pre-existing output modified by a failed rule"
-                );
-            }
+        let modified = mtime_changed || size_changed;
+        let aside = aside_path(&snapshot.path);
+        if tokio::fs::metadata(&aside).await.is_ok() {
+            // `rename` would silently overwrite a previous failure's
+            // evidence — skip it so recovery keeps every snapshot of
+            // what failed, and leave the current file in place (issue
+            // #136).
+            tracing::warn!(
+                file = %snapshot.path.display(),
+                aside = %aside.display(),
+                "not moving failed output aside: the aside name is already \
+                 held by a previous failure — keeping the current file in place"
+            );
+        } else if let Err(e) = tokio::fs::rename(&snapshot.path, &aside).await {
+            tracing::warn!(
+                file = %snapshot.path.display(),
+                error = %e,
+                "failed to move aside pre-existing output of a failed rule"
+            );
+        } else {
+            tracing::warn!(
+                file = %snapshot.path.display(),
+                aside = %aside.display(),
+                modified,
+                "moved aside pre-existing output of a failed rule (stale from an \
+                 earlier era — the recorded failure schedules a re-execution)"
+            );
         }
     }
 }
@@ -419,19 +431,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn untouched_preexisting_output_survives() {
+    async fn untouched_preexisting_output_is_moved_aside() {
+        // #756: a stale output from an earlier run era blocks the
+        // re-execution the recorded failure schedules (`ln: File exists`,
+        // `mv: cannot move ... File exists`) — untouched pre-existing
+        // outputs now move aside (recoverably) instead of surviving to
+        // block the retry.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("out.txt"), b"user-data").unwrap();
         let rule = rule_with_outputs(&["out.txt"]);
         let values = HashMap::new();
         let snapshots = snapshot_outputs(&rule, dir.path(), &values);
         assert!(snapshots[0].existed);
-        // No modification — the file must survive byte-identical.
+        // No modification during the attempt — the file still moves aside,
+        // byte-identical, recoverable under the .oxo-failed name.
         invalidate_failed_outputs(&snapshots).await;
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
-            "user-data"
+        assert!(
+            !dir.path().join("out.txt").exists(),
+            "the stale output must leave the declared path"
         );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt.oxo-failed")).unwrap(),
+            "user-data",
+            "the moved-aside file stays recoverable"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_directory_output_is_moved_aside_for_rerun() {
+        // #756 live case: `mv: cannot move 'size_factors' ... File exists`
+        // — a whole stale DIRECTORY from an earlier era at the declared
+        // output path must not survive to block the retry.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("size_factors")).unwrap();
+        std::fs::write(dir.path().join("size_factors/old.tsv"), b"stale").unwrap();
+        let rule = rule_with_outputs(&["size_factors"]);
+        let values = HashMap::new();
+        let snapshots = snapshot_outputs(&rule, dir.path(), &values);
+        invalidate_failed_outputs(&snapshots).await;
+        assert!(!dir.path().join("size_factors").exists());
+        assert!(dir.path().join("size_factors.oxo-failed").exists());
     }
 
     #[tokio::test]
