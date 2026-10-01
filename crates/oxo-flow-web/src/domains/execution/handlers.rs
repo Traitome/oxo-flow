@@ -2030,6 +2030,7 @@ async fn build_report_for_run(
                                 rule: name.clone(),
                                 exit_code: rec.and_then(|r| r.exit_code),
                                 stderr_tail: rec.and_then(|r| r.stderr_tail.clone()),
+                                stdout_tail: rec.and_then(|r| r.stdout_tail.clone()),
                             }
                         })
                         .collect::<Vec<_>>()

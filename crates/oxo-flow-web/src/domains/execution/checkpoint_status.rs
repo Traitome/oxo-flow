@@ -77,6 +77,7 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
                 .or(Some(0)),
             progress_pct: None,
             stderr_tail: None,
+            stdout_tail: None,
         });
     }
     for rule in &checkpoint.failed_rules {
@@ -107,6 +108,11 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             progress_pct: None,
             stderr_tail: if is_failed {
                 record.and_then(|r| r.stderr_tail.clone())
+            } else {
+                None
+            },
+            stdout_tail: if is_failed {
+                record.and_then(|r| r.stdout_tail.clone())
             } else {
                 None
             },
@@ -141,6 +147,7 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
                 exit_code: None,
                 progress_pct: None,
                 stderr_tail: None,
+                stdout_tail: None,
             });
         }
     }
@@ -153,6 +160,7 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             exit_code: None,
             progress_pct: None,
             stderr_tail: None,
+            stdout_tail: None,
         });
     }
     items
@@ -215,6 +223,7 @@ fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusI
             exit_code: None,
             progress_pct: None,
             stderr_tail: None,
+            stdout_tail: None,
         };
     };
     let status = if items.iter().any(|i| i.status == NodeStatus::Failed) {
@@ -236,6 +245,7 @@ fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusI
         exit_code: items.iter().find_map(|i| i.exit_code),
         progress_pct: items.iter().filter_map(|i| i.progress_pct).max(),
         stderr_tail: items.iter().find_map(|i| i.stderr_tail.clone()),
+        stdout_tail: items.iter().find_map(|i| i.stdout_tail.clone()),
     }
 }
 
@@ -315,7 +325,8 @@ mod tests {
                     "fastqc": {"exit_code": 0},
                     "trim": {
                         "exit_code": -1,
-                        "stderr_tail": "output pattern contains unbound wildcard {sample}"
+                        "stderr_tail": "output pattern contains unbound wildcard {sample}",
+                        "stdout_tail": "root cause printed on stdout"
                     }
                 }
             }"#,
@@ -327,6 +338,11 @@ mod tests {
         assert_eq!(
             trim.stderr_tail.as_deref(),
             Some("output pattern contains unbound wildcard {sample}")
+        );
+        assert_eq!(
+            trim.stdout_tail.as_deref(),
+            Some("root cause printed on stdout"),
+            "stdout tail must surface too — root causes live there for some tools (#765)"
         );
         let fastqc = items.iter().find(|i| i.rule == "fastqc").unwrap();
         assert_eq!(fastqc.exit_code, Some(0));
@@ -545,6 +561,7 @@ mod aggregation_tests {
             exit_code: None,
             progress_pct: None,
             stderr_tail: None,
+            stdout_tail: None,
         }
     }
 

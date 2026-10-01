@@ -299,7 +299,14 @@ fn failure_answer(report: &ReportData) -> String {
             .map(|c| format!(" (exit {c})"))
             .unwrap_or_default();
         let mut entry = format!("rule `{}`{code}", f.rule);
-        if let Some(tail) = f.stderr_tail.as_deref() {
+        // stderr first; stdout is the fallback (issue #765) — some tools
+        // print their root cause on stdout and leave stderr empty.
+        let tail = f
+            .stderr_tail
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .or(f.stdout_tail.as_deref());
+        if let Some(tail) = tail {
             let trimmed = tail.trim();
             if !trimmed.is_empty() {
                 // Bounded excerpt: the stored tail is up to 64 KiB —
@@ -509,6 +516,7 @@ mod tests {
                 rule: "trim".into(),
                 exit_code: Some(-1),
                 stderr_tail: Some("output pattern contains unbound wildcard {sample}".into()),
+                stdout_tail: None,
             }],
         );
         assert!(
@@ -553,6 +561,7 @@ mod tests {
                 rule: "trim".into(),
                 exit_code: Some(-1),
                 stderr_tail: Some("output pattern contains unbound wildcard {sample}".into()),
+                stdout_tail: None,
             }],
         );
         let answer = answer_question(&report, "why did it fail");
@@ -607,6 +616,7 @@ mod tests {
                 rule: "trim".into(),
                 exit_code: Some(-1),
                 stderr_tail: Some("unbound wildcard {sample}".into()),
+                stdout_tail: None,
             }],
         );
         let answer = answer_question(&report, "summarize this run");
@@ -616,6 +626,45 @@ mod tests {
         );
         assert!(answer.contains("failed"), "{answer}");
         assert!(answer.contains("trim"), "{answer}");
+    }
+
+    #[test]
+    fn stdout_tail_is_the_fallback_when_stderr_is_empty() {
+        // #765: some tools print their root cause on stdout — the answer
+        // must surface it instead of showing an empty error tail.
+        let report = generate_report(
+            "stdout-tool",
+            &sample_files(),
+            "",
+            &[],
+            "failed",
+            vec![FailedRuleInfo {
+                rule: "kickoff".into(),
+                exit_code: Some(1),
+                stderr_tail: None,
+                stdout_tail: Some("Traceback (most recent call last): ValueError".into()),
+            }],
+        );
+        let answer = answer_question(&report, "why did it fail");
+        assert!(answer.contains("ValueError"), "{answer}");
+
+        // stderr wins when both are present.
+        let report = generate_report(
+            "both-tools",
+            &sample_files(),
+            "",
+            &[],
+            "failed",
+            vec![FailedRuleInfo {
+                rule: "kickoff".into(),
+                exit_code: Some(1),
+                stderr_tail: Some("stderr-side error".into()),
+                stdout_tail: Some("stdout-side noise".into()),
+            }],
+        );
+        let answer = answer_question(&report, "why did it fail");
+        assert!(answer.contains("stderr-side error"), "{answer}");
+        assert!(!answer.contains("stdout-side noise"), "{answer}");
     }
 
     #[test]
