@@ -4063,8 +4063,19 @@ transcripts copied from redirected output will not show it.</p>
 </span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>  ✓ transform (0.0s)
 </span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
 </span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>Done: 2 succeeded, 0 skipped, 0 failed
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>✓ 2 output files verified (42B total)
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>✓ Report snapshot: …/.oxo-flow/reports/report-20261001-093232.json
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>✓ 2 output files verified (42B total)
 </span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Progress lines depend on the output stream</p>
+<p><code>Running:</code> / <code>✓</code> progress lines print when stderr is <strong>not</strong> an
+interactive terminal (in a TTY the animated progress bar replaces
+them); the <code>✓ Report snapshot:</code> line after <code>Done:</code> prints on every
+run and names the JSON snapshot written under
+<code>.oxo-flow/reports/</code> (see <a href="../../commands/run/#report-snapshots">Run output &amp; logs</a>).
+INFO-level tracing lines (workflow start, JSON events) are elided
+here for readability.</p>
+</div>
 <hr />
 <h2 id="6-check-the-results">6. Check the results<a class="headerlink" href="#6-check-the-results" title="Permanent link">#</a></h2>
 <p>You are already inside <code>my-pipeline/</code> (step 1 changed into it), so read the
