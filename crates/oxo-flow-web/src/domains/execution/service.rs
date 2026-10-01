@@ -434,6 +434,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: Some(1),
                 progress_pct: None,
+                stderr_tail: None,
             },
             NodeStatusItem {
                 rule: "step2".into(),
@@ -442,6 +443,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: None,
                 progress_pct: None,
+                stderr_tail: None,
             },
         ];
         let plan = compute_retry_plan(&nodes, &dag, true).unwrap();
@@ -458,6 +460,7 @@ output = ["b.txt"]
             duration_ms: None,
             exit_code: Some(0),
             progress_pct: None,
+            stderr_tail: None,
         }];
         assert_eq!(compute_overall_status(&nodes, None), RunStatus::Completed);
     }
@@ -472,6 +475,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: Some(0),
                 progress_pct: None,
+                stderr_tail: None,
             },
             NodeStatusItem {
                 rule: "r2".into(),
@@ -480,6 +484,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: Some(1),
                 progress_pct: None,
+                stderr_tail: None,
             },
         ];
         assert_eq!(compute_overall_status(&nodes, None), RunStatus::Failed);
@@ -495,6 +500,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: Some(0),
                 progress_pct: None,
+                stderr_tail: None,
             },
             NodeStatusItem {
                 rule: "r2".into(),
@@ -503,6 +509,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: None,
                 progress_pct: None,
+                stderr_tail: None,
             },
         ];
         assert_eq!(compute_overall_status(&nodes, None), RunStatus::Running);
@@ -518,6 +525,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: Some(137),
                 progress_pct: None,
+                stderr_tail: None,
             },
             NodeStatusItem {
                 rule: "skipped_rule".into(),
@@ -526,6 +534,7 @@ output = ["b.txt"]
                 duration_ms: None,
                 exit_code: None,
                 progress_pct: None,
+                stderr_tail: None,
             },
         ];
         let log = "FATAL: out of memory\nprocess killed";

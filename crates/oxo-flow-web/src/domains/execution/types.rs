@@ -145,6 +145,11 @@ pub struct NodeStatusItem {
     pub duration_ms: Option<u64>,
     pub exit_code: Option<i32>,
     pub progress_pct: Option<u8>,
+    /// Bounded stderr tail of a failed rule, straight from the checkpoint's
+    /// `rule_runs` record (issue #758) — lets the monitor and the AI
+    /// assistant show WHY a rule failed without opening the raw log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -336,6 +341,7 @@ mod tests {
                 duration_ms: Some(1000),
                 exit_code: None,
                 progress_pct: Some(50),
+                stderr_tail: None,
             }],
             timeline: vec![TimelineEvent {
                 timestamp: "2024-01-01T00:00:00Z".into(),
