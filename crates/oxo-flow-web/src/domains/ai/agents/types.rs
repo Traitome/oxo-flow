@@ -166,6 +166,26 @@ pub struct ReportData {
     pub suggested_next: Vec<String>,
     pub file_tree: Vec<ReportFile>,
     pub charts: Vec<ChartConfig>,
+    /// Terminal status of the run (issue #759) — "failed" drives the
+    /// failure-aware narrative headline and Q&A branches; the report used
+    /// to be run-status-blind, claiming "Pipeline completed" for failed
+    /// runs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_status: String,
+    /// Structured failure data from the checkpoint's `rule_runs`, so the
+    /// narrative and Q&A can name the failed rule and its error.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_rules: Vec<FailedRuleInfo>,
+}
+
+/// One failed rule's structured failure data for the report (issue #759).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FailedRuleInfo {
+    pub rule: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tail: Option<String>,
 }
 
 /// A single finding in a report.
