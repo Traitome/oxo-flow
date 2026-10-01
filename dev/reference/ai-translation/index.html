@@ -3940,6 +3940,13 @@ endpoints — it does not bypass them.</p>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  4. Every draft is validated by the engine via the web workflow service;
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>     validation errors feed the orchestrator's correction loop (bounded)
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>Output: { pipeline_id, toml_content, explanation, alternatives, confidence }
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>**Draft id semantics**: the returned `pipeline_id` is an unsaved draft id —
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>the generated TOML lives only in the server's in-memory request cache and is
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>never persisted to the pipeline store. `GET /api/pipelines/{pipeline_id}`
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>returns 404 for it. To keep a translated pipeline, save the returned
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>`toml_content` yourself (e.g. `POST /api/pipelines` or `oxo-flow run`), then
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>pass the resulting saved id to `POST /api/ai/optimize`.
 </span></code></pre></div>
 <h3 id="post-apiaiexplain">POST /api/ai/explain<a class="headerlink" href="#post-apiaiexplain" title="Permanent link">#</a></h3>
 <p>Explain why a run failed and suggest fixes.</p>
@@ -3960,6 +3967,9 @@ explanation.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Input:  { pipeline_id, goal: "speed"|"cost"|"sensitivity" }
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Output: { optimized_toml, changes, estimated: { time_saved, memory_reduction } }
 </span></code></pre></div>
+<p><code>pipeline_id</code> must reference a <strong>saved</strong> pipeline (the id of a
+<code>GET /api/pipelines</code> entry) — the unsaved draft id returned by
+<code>POST /api/ai/translate</code> is not accepted and fails with <code>NOT_FOUND</code>.</p>
 <h2 id="provider-architecture">Provider Architecture<a class="headerlink" href="#provider-architecture" title="Permanent link">#</a></h2>
 <p>The AI layer uses an enum-based dispatch system:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>caller's own provider → configured provider → env-discovered Claude →
