@@ -170,7 +170,7 @@ Two constraints apply:
 On startup, oxo-flow prints the version banner, the serve mode and address, and tracing log lines:
 
 ```
-oxo-flow v0.21.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.21.1 — Rust-native bioinformatics pipeline engine
 Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
  INFO Logging initialized at logs
  INFO AI registry initialized: provider=disabled, model=default, enabled=false

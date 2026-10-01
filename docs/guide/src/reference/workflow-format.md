@@ -165,7 +165,7 @@ shell = "true"
 | `outputs` | Array of String | Files the module exposes to the host. A declared output not produced by a module rule fails validation; a host rule reading a module-internal file that is **not** declared here produces an encapsulation warning. Wildcarded host inputs are matched structurally (identical literal prefix and suffix, e.g. `qc/{sample}.tmp`), so patterns that could address the same files warn too; patterns that resolve to different literals are not statically checkable |
 | `params` | Table | Defaults for config keys the module reads, filled in profile-style (`or_insert` — explicit host values win). The module's own `[config]` entries fill any remaining gaps: a module declaring `[config] trim_quality = "20"` keeps that default when included without `params`, while any host value (its own `[config]` table or `[[include]]` `params`) still wins. A key referenced but defined nowhere remains an E005 error |
 | `name` | String | Module identity for partial runs (`run --module <name>`). Defaults to the included file's stem (`rules/20_germline.oxoflow` → `20_germline`), so existing composed workflows are addressable without changes |
-| `repo` + `ref` | String pair | Pin the included path to a git repository at a tag/branch/commit: `repo = "https://github.com/org/oxo-flow-modules"`, `ref = "v0.21.0"`, `path = "rules/qc.oxoflow"`. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under `~/.cache/oxo-flow/modules/<repo>@<ref>@<hash>` (the hash disambiguates confusable repo/ref pairs; `OXO_FLOW_MODULE_CACHE` overrides the cache root) — versioned modules, reproducible composition |
+| `repo` + `ref` | String pair | Pin the included path to a git repository at a tag/branch/commit: `repo = "https://github.com/org/oxo-flow-modules"`, `ref = "v0.21.1"`, `path = "rules/qc.oxoflow"`. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under `~/.cache/oxo-flow/modules/<repo>@<ref>@<hash>` (the hash disambiguates confusable repo/ref pairs; `OXO_FLOW_MODULE_CACHE` overrides the cache root) — versioned modules, reproducible composition |
 
 ---
 
@@ -187,7 +187,7 @@ author = "Your Name"
 | `author` | String | No | — | Author name or email |
 | `interpreter_map` | Table | No | `{}` | Custom interpreter mapping for script extensions |
 | `genome_build` | String | No | — | Genome reference build identifier (e.g., `"GRCh38"`, `"hg38"`) |
-| `min_version` | String | No | — | Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; `"0.21"` equals `"0.21.0"`) |
+| `min_version` | String | No | — | Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; `"0.21"` equals `"0.21.1"`) |
 | `format_version` | String | No | — | Format specification version for compatibility |
 | `pairs_file` | String | No | — | External TSV/CSV/JSON file defining experiment-control pairs |
 | `sample_groups_file` | String | No | — | External TSV/CSV/JSON file defining sample groups |
