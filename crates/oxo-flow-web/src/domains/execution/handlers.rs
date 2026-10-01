@@ -2004,7 +2004,81 @@ async fn build_report_for_run(
         None => String::new(),
     };
 
-    report_agent::generate_report(&pipeline_name, &files, &log_summary, &[])
+    // Failure context (issue #759): the report used to be status-blind —
+    // a failed run's headline read "Pipeline completed" and Q&A answered
+    // "No unexpected findings reported". Read the checkpoint directly
+    // (not a hot path) for the structured failure data.
+    let (run_status, failed_rules) = match run.workdir.as_deref() {
+        Some(wd) => {
+            let dir = std::path::Path::new(wd);
+            let ck = oxo_flow_core::executor::CheckpointState::load_from_file(
+                &oxo_flow_core::executor::CheckpointState::default_path(dir),
+            )
+            .ok();
+            let failed = ck
+                .as_ref()
+                .map(|ck| {
+                    ck.failed_rules
+                        .iter()
+                        // A stale failed entry whose when-verdict is false
+                        // was gated off, not failed (#690) — not a failure
+                        // to report.
+                        .filter(|name| ck.when_verdicts.get(*name) != Some(&false))
+                        .map(|name| {
+                            let rec = ck.rule_runs.get(name);
+                            crate::domains::ai::agents::types::FailedRuleInfo {
+                                rule: name.clone(),
+                                exit_code: rec.and_then(|r| r.exit_code),
+                                stderr_tail: rec.and_then(|r| r.stderr_tail.clone()),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            (run.status.clone(), failed)
+        }
+        None => (run.status.clone(), Vec::new()),
+    };
+
+    // Wire the same diagnostics /api/runs/{id}/diagnostics computes
+    // (issue #759): the OOM/137 finding branch in generate_report used to
+    // be unreachable because this call site passed &[].
+    let diagnostics: Vec<String> = match run.workdir.as_deref() {
+        Some(wd) => {
+            let dir = std::path::Path::new(wd);
+            let node_items = checkpoint_status::load_node_statuses(dir, run.status == "running");
+            let benchmarks = checkpoint_status::load_benchmarks(dir);
+            let diag = service::diagnose_run(&node_items, &log_summary, &benchmarks);
+            diag.failed_nodes
+                .iter()
+                .map(|n| {
+                    format!(
+                        "{}: {} — {}",
+                        n.rule,
+                        n.error_pattern
+                            .clone()
+                            .unwrap_or_else(|| "unknown_error".into()),
+                        n.likely_cause
+                    )
+                })
+                .chain(
+                    diag.warnings
+                        .iter()
+                        .map(|w| format!("{}: {}", w.rule, w.suggestion)),
+                )
+                .collect()
+        }
+        None => Vec::new(),
+    };
+
+    report_agent::generate_report(
+        &pipeline_name,
+        &files,
+        &log_summary,
+        &diagnostics,
+        &run_status,
+        failed_rules,
+    )
 }
 
 #[utoipa::path(

@@ -6,11 +6,17 @@
 use super::types::*;
 
 /// Generate a structured report from pipeline results.
+///
+/// `run_status` and `failed_rules` make the report failure-aware (issue
+/// #759): a failed run's headline says so and Q&A answers from the
+/// checkpoint's structured failure data instead of the completed-fallback.
 pub fn generate_report(
     pipeline_name: &str,
     files: &[ReportFile],
     log_summary: &str,
     diagnostics: &[String],
+    run_status: &str,
+    failed_rules: Vec<FailedRuleInfo>,
 ) -> ReportData {
     let mut findings = Vec::new();
     let mut caveats = Vec::new();
@@ -29,10 +35,13 @@ pub fn generate_report(
         "file_types": extract_file_types(files),
     });
 
-    // Generate key findings from log/diagnostics
+    // Generate key findings from log/diagnostics. The OOM match is
+    // case-insensitive so the engine's lowercase pattern ids
+    // (`oom_killed`) trigger it too, not just hand-written "OOM" strings.
     if !diagnostics.is_empty() {
         for diag in diagnostics {
-            if diag.contains("OOM") || diag.contains("137") {
+            let lower = diag.to_lowercase();
+            if lower.contains("oom") || lower.contains("out of memory") || diag.contains("137") {
                 findings.push(ReportFinding {
                     finding: format!("Memory issue detected: {diag}"),
                     significance: "high".into(),
@@ -45,6 +54,10 @@ pub fn generate_report(
     // Standard findings from the log
     if log_summary.contains("error") || log_summary.contains("Error") {
         caveats.push("Some steps reported errors — review diagnostics".into());
+    }
+    if run_status == "failed" && !failed_rules.is_empty() {
+        let names: Vec<&str> = failed_rules.iter().map(|f| f.rule.as_str()).collect();
+        caveats.push(format!("Failed rule(s): {}", names.join(", ")));
     }
 
     // Suggest next steps based on typical RNA-seq/variant analysis
@@ -72,6 +85,8 @@ pub fn generate_report(
         &findings,
         &caveats,
         &suggested_next,
+        run_status,
+        &failed_rules,
     );
 
     ReportData {
@@ -82,6 +97,8 @@ pub fn generate_report(
         suggested_next,
         file_tree: files.to_vec(),
         charts,
+        run_status: run_status.to_string(),
+        failed_rules,
     }
 }
 
@@ -92,14 +109,48 @@ fn build_narrative(
     findings: &[ReportFinding],
     caveats: &[String],
     suggested_next: &[String],
+    run_status: &str,
+    failed_rules: &[FailedRuleInfo],
 ) -> String {
     let mut md = format!("# Pipeline Report: {pipeline_name}\n\n");
 
     md.push_str("## Summary\n\n");
-    md.push_str(&format!(
-        "Pipeline completed with **{}** output files.\n\n",
-        qc_summary["total_files"]
-    ));
+    if run_status == "failed" {
+        // A failed run must never read "completed" (issue #759).
+        if failed_rules.is_empty() {
+            md.push_str("Pipeline **failed** before completing all steps.\n\n");
+        } else if failed_rules.len() == 1 {
+            let f = &failed_rules[0];
+            let code = f
+                .exit_code
+                .map(|c| format!(" (exit {c})"))
+                .unwrap_or_default();
+            md.push_str(&format!(
+                "Pipeline **failed** at rule `{}`{code}.\n\n",
+                f.rule
+            ));
+        } else {
+            let names: Vec<&str> = failed_rules.iter().map(|f| f.rule.as_str()).collect();
+            md.push_str(&format!(
+                "Pipeline **failed** at {} rules: {}.\n\n",
+                failed_rules.len(),
+                names
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        md.push_str(&format!(
+            "The run stopped at the failure; **{}** output files were produced before it.\n\n",
+            qc_summary["total_files"]
+        ));
+    } else {
+        md.push_str(&format!(
+            "Pipeline completed with **{}** output files.\n\n",
+            qc_summary["total_files"]
+        ));
+    }
     md.push_str(&format!(
         "Total output size: **{}**.\n\n",
         qc_summary["total_size_mb"].as_str().unwrap_or("unknown")
@@ -235,6 +286,52 @@ fn extract_file_types(files: &[ReportFile]) -> Vec<String> {
 pub fn answer_question(report: &ReportData, question: &str) -> String {
     let lower = question.to_lowercase();
 
+    // Failure-aware first (issue #759): on a failed run, questions about
+    // failure/error/why answer from the checkpoint's structured failure
+    // data — never the "pipeline completed" fallback, which actively
+    // contradicted the run state.
+    let asks_failure = ["fail", "error", "why", "wrong", "broke", "crash"]
+        .iter()
+        .any(|k| lower.contains(k));
+    if asks_failure && report.run_status == "failed" {
+        if report.failed_rules.is_empty() {
+            return "The run failed before executing any rule completed its record — check the \
+                    execution log for the reported error (likely a configuration or \
+                    expansion failure at spawn)."
+                .to_string();
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for f in &report.failed_rules {
+            let code = f
+                .exit_code
+                .map(|c| format!(" (exit {c})"))
+                .unwrap_or_default();
+            let mut entry = format!("rule `{}`{code}", f.rule);
+            if let Some(tail) = f.stderr_tail.as_deref() {
+                let trimmed = tail.trim();
+                if !trimmed.is_empty() {
+                    // Bounded excerpt: the stored tail is up to 64 KiB —
+                    // an answer is not the place for the whole thing.
+                    let excerpt: String = trimmed
+                        .chars()
+                        .rev()
+                        .take(600)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    entry.push_str(&format!(" — error tail: …{excerpt}"));
+                }
+            }
+            parts.push(entry);
+        }
+        return format!(
+            "The run failed: {}. Fix the reported error before retrying — the retry \
+             re-executes the failed rule and its downstream dependents.",
+            parts.join("; ")
+        );
+    }
+
     if lower.contains("file") || lower.contains("output") || lower.contains("result") {
         let total = report.file_tree.len();
         let total_size: i64 = report.file_tree.iter().map(|f| f.size_bytes).sum();
@@ -330,6 +427,8 @@ mod tests {
             &sample_files(),
             "All steps completed successfully",
             &[],
+            "completed",
+            Vec::new(),
         );
         assert!(report.narrative_md.contains("Pipeline Report"));
         assert!(!report.file_tree.is_empty());
@@ -343,6 +442,8 @@ mod tests {
             &sample_files(),
             "OOM error",
             &["OOM detected at step 2".into()],
+            "completed",
+            Vec::new(),
         );
         assert!(!report.key_findings.is_empty());
         assert!(report.key_findings[0].finding.contains("OOM"));
@@ -350,21 +451,28 @@ mod tests {
 
     #[test]
     fn test_answer_about_files() {
-        let report = generate_report("test", &sample_files(), "", &[]);
+        let report = generate_report("test", &sample_files(), "", &[], "completed", Vec::new());
         let answer = answer_question(&report, "What output files were generated?");
         assert!(answer.contains("output files"));
     }
 
     #[test]
     fn test_answer_about_quality() {
-        let report = generate_report("test", &sample_files(), "", &[]);
+        let report = generate_report("test", &sample_files(), "", &[], "completed", Vec::new());
         let answer = answer_question(&report, "How is the quality?");
         assert!(!answer.is_empty());
     }
 
     #[test]
     fn test_answer_about_charts() {
-        let report = generate_report("rnaseq-test", &sample_files(), "", &[]);
+        let report = generate_report(
+            "rnaseq-test",
+            &sample_files(),
+            "",
+            &[],
+            "completed",
+            Vec::new(),
+        );
         let answer = answer_question(&report, "What charts are available?");
         assert!(answer.contains("visualization") || answer.contains("chart"));
     }
@@ -374,6 +482,103 @@ mod tests {
         let types = extract_file_types(&sample_files());
         assert!(types.contains(&"bam".to_string()));
         assert!(types.contains(&"tsv".to_string()));
+    }
+
+    #[test]
+    fn failed_run_headline_says_failed_not_completed() {
+        // #759: a failed run's narrative used to read "Pipeline completed
+        // with N output files" — actively contradicting the run state.
+        let report = generate_report(
+            "when-gate-690",
+            &sample_files(),
+            "Error: output pattern contains unbound wildcard",
+            &[],
+            "failed",
+            vec![FailedRuleInfo {
+                rule: "trim".into(),
+                exit_code: Some(-1),
+                stderr_tail: Some("output pattern contains unbound wildcard {sample}".into()),
+            }],
+        );
+        assert!(
+            report.narrative_md.contains("failed"),
+            "headline must name the failure: {}",
+            report.narrative_md
+        );
+        assert!(
+            report.narrative_md.contains("`trim`"),
+            "headline must name the failed rule: {}",
+            report.narrative_md
+        );
+        assert_eq!(report.run_status, "failed");
+        assert_eq!(report.failed_rules.len(), 1);
+    }
+
+    #[test]
+    fn completed_run_narrative_unchanged() {
+        let report = generate_report(
+            "rnaseq-test",
+            &sample_files(),
+            "All steps completed successfully",
+            &[],
+            "completed",
+            Vec::new(),
+        );
+        assert!(report.narrative_md.contains("Pipeline completed"));
+        assert!(!report.narrative_md.contains("**failed**"));
+    }
+
+    #[test]
+    fn why_did_it_fail_answers_from_failure_data() {
+        // #759: this used to fall through to "the pipeline completed with
+        // N output files. No unexpected findings reported."
+        let report = generate_report(
+            "when-gate-690",
+            &sample_files(),
+            "",
+            &[],
+            "failed",
+            vec![FailedRuleInfo {
+                rule: "trim".into(),
+                exit_code: Some(-1),
+                stderr_tail: Some("output pattern contains unbound wildcard {sample}".into()),
+            }],
+        );
+        let answer = answer_question(&report, "why did it fail");
+        assert!(
+            answer.contains("failed"),
+            "answer must state the failure: {answer}"
+        );
+        assert!(
+            answer.contains("trim"),
+            "answer must name the failed rule: {answer}"
+        );
+        assert!(
+            answer.contains("unbound wildcard"),
+            "answer must surface the stderr tail: {answer}"
+        );
+        assert!(
+            !answer.contains("completed with"),
+            "answer must not use the completed fallback: {answer}"
+        );
+    }
+
+    #[test]
+    fn failure_question_on_pre_execution_failure_stays_honest() {
+        let report = generate_report(
+            "broken",
+            &[],
+            "Error: failed to expand wildcard rules",
+            &[],
+            "failed",
+            Vec::new(),
+        );
+        let answer = answer_question(&report, "why did it fail?");
+        assert!(answer.contains("failed"), "{answer}");
+        assert!(
+            answer.contains("execution log"),
+            "must point at the log when no per-rule record exists: {answer}"
+        );
     }
 
     #[test]
