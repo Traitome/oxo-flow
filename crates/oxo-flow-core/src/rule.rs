@@ -1116,6 +1116,16 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expand_inputs: Vec<ExpandConfig>,
 
+    /// Concrete input paths baked in by `materialize_expand_inputs`
+    /// (issue #757): provenance for the appended literals, so the input
+    /// manifest can tolerate a baked path that is absent by design —
+    /// e.g. an aligner-gated producer skipped under the active config —
+    /// without poisoning the whole snapshot. Engine-internal: not a
+    /// workflow authoring field.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub expand_inputs_baked: std::collections::BTreeSet<String>,
+
     /// Per-sample multi-file grouping (groupTuple pattern, issue #227
     /// item 3): files discovered on disk are grouped by the `group_by`
     /// wildcard and each group fans into ONE instance whose `{input}`

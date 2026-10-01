@@ -3103,6 +3103,24 @@ pub async fn run_command(
             let rule_caption = config.get_rule(&rule_name).and_then(|r| {
                 oxo_flow_core::executor::process::rule_report_caption(r, workdir_actual.as_ref())
             });
+            // When-gate verdict BEFORE the spawn (issue #757 part 3): the
+            // input snapshot used to run before when-evaluation, so a
+            // gated-off rule emitted spurious "cannot stat input" warnings
+            // for files absent by design (and an empty-config path even
+            // rendered as a double slash). Same evaluator + raw-config
+            // `{` guard as readiness/deep-check.
+            let when_gated_off = rule
+                .when
+                .as_deref()
+                .is_some_and(|when| {
+                    !when.contains('{')
+                        && !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                            when,
+                            &config.config,
+                            &wildcard_values,
+                            Some(workdir_actual.as_ref().as_path()),
+                        )
+                });
             let instance_bindings = instance_bindings.clone();
             // Register the task name BEFORE the spawn: the closure moves
             // `rule_name` in, so the id→name map needs its own clone.
@@ -3121,7 +3139,12 @@ pub async fn run_command(
                 // A failed snapshot is narrated, not swallowed (issue #633):
                 // with no manifest recorded, every later run re-invalidates
                 // this rule — the least the user can expect is to be told.
-                let input_manifest =
+                let input_manifest = if when_gated_off {
+                    // Gated-off rule: it will be skipped this run — its
+                    // inputs are absent by design, and snapshotting them
+                    // only emits spurious warnings (#757 part 3).
+                    None
+                } else {
                     match oxo_flow_core::executor::checkpoint::snapshot_input_manifest_async(
                         &rule,
                         workdir_actual.as_ref(),
@@ -3147,7 +3170,8 @@ pub async fn run_command(
                             );
                             None
                         }
-                    };
+                    }
+                };
 
                 let result = executor
                     .execute_rule_with_bindings(&rule, &wildcard_values, &typed_config, &instance_bindings)

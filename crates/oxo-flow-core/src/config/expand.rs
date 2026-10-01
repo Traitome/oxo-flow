@@ -1626,6 +1626,11 @@ impl WorkflowConfig {
                 }
             }
             let mut current_input = rule.input.to_vec();
+            // Provenance for the baked literals (issue #757): the input
+            // manifest tolerates a baked path absent by design (an
+            // aligner-gated producer skipped under the active config)
+            // instead of letting it poison the whole snapshot.
+            rule.expand_inputs_baked.extend(expanded.iter().cloned());
             current_input.extend(expanded);
             rule.input = FilePatterns::List(current_input);
         }

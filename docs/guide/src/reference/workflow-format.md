@@ -921,7 +921,7 @@ oxo-flow automatically cleans up temporary outputs:
 |---|---|---|
 | Success + `temp_output` | Kept — no success-path cleanup runs; mark `temporary = true` instead if you want outputs deleted after the run |
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
-| Failure + declared `output` | Partial outputs created by the failed attempt are deleted; pre-existing files the attempt modified are moved aside as `<name>.oxo-failed`; untouched pre-existing files are preserved |
+| Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors; issue #756) |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
 | Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |
 
@@ -934,15 +934,18 @@ back only when a dependent actually needs it again.
 leave partial outputs that the freshness gate would mistake for a completed
 run. Before executing, the engine snapshots each declared output's existence
 and modification time; when the rule fails (non-zero exit, timeout, or
-missing outputs after an exit-0 shell), only what THIS attempt produced is
-invalidated: files created during the attempt are deleted, pre-existing
-files the attempt modified are moved aside as `<name>.oxo-failed` (the
-failed content stays recoverable), and untouched pre-existing files are
-left alone — a failure that never reached a file never destroys user data.
-The next run then re-executes the rule instead of skipping it as
-up-to-date. Note this covers failures the engine observes; a hard kill
-(`SIGKILL`) mid-rule can still leave outputs behind, since no cleanup code
-runs — the `--rerun` flag is the escape hatch for that case.
+missing outputs after an exit-0 shell), the declared outputs are
+invalidated: files created during the attempt are deleted, and every
+pre-existing declared output moves aside as `<name>.oxo-failed` — modified
+or untouched (issue #756). The recorded failure schedules a re-execution,
+and a stale file surviving at the declared path would block that re-run
+inside the script (`ln: File exists`, `mv: cannot move ... File exists`);
+move-aside keeps it recoverable, and `protected_output` remains the escape
+hatch for files that must survive any failure. The next run then
+re-executes the rule instead of skipping it as up-to-date. Note this
+covers failures the engine observes; a hard kill (`SIGKILL`) mid-rule can
+still leave outputs behind, since no cleanup code runs — the `--rerun`
+flag is the escape hatch for that case.
 
 ### Timeout Enforcement
 
