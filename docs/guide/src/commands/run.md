@@ -887,6 +887,19 @@ path, size, and modification time — plus a content hash for files up to
   config change produces the missing files, the manifest then mismatches
   and the rule invalidates — the flip is still caught.
 
+- **Missing external source inputs fail fast before any work starts**:
+  a required input that no rule in the DAG produces and whose concrete
+  files are absent aborts the run before scheduling with
+  `workflow is missing required source input(s) — no rule produces them`,
+  naming each affected rule and pattern (exit non-zero). Previously a
+  fully-completed checkpoint plus a deleted raw data file could exit 0
+  from stale checkpoint credit ("re-running 0 producer rule(s)"); that
+  silent-success hole is closed. The gate never fires for generated
+  intermediates (they have producers and are governed by the manifest
+  cascade below), `[[references]]` outputs (built later in the same run),
+  inputs discoverable through the workflow's `sample_pattern` directory,
+  when-gated-off rules, zero-fan-out scatter rules, or `optional` rules.
+
 ```console
 # a new file appears in data/ after the last run
 oxo-flow run pipeline.oxoflow
