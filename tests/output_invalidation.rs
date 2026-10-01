@@ -1,5 +1,7 @@
 //! Issue #118: failed rules must not leave partial outputs behind, and
-//! pre-existing user files at declared output paths must survive untouched.
+//! pre-existing files at declared output paths move aside recoverably
+//! (`<name>.oxo-failed`) so they cannot block the scheduled re-execution
+//! (issue #756).
 
 mod common;
 use common::workspace_bin;
@@ -60,11 +62,12 @@ fn failed_rule_outputs_are_invalidated_and_rerun() {
     );
 }
 
-/// A failed run must not corrupt pre-existing files at declared output
-/// paths that the rule never touched: an untouched pre-existing output
-/// survives the failure byte-identical.
+/// A failed run moves untouched pre-existing files at declared output
+/// paths aside (recoverably) instead of leaving them to block the
+/// re-execution the recorded failure schedules (issue #756): the retry
+/// used to die inside the script with `File exists`.
 #[test]
-fn failed_rule_preserves_untouched_preexisting_outputs() {
+fn failed_rule_moves_untouched_preexisting_outputs_aside() {
     let dir = tempfile::tempdir().unwrap();
     let wf = dir.path().join("preserve.oxoflow");
     fs::write(
@@ -82,10 +85,14 @@ fn failed_rule_preserves_untouched_preexisting_outputs() {
         .output()
         .unwrap();
     assert!(!run.status.success());
+    assert!(
+        !dir.path().join("out.txt").exists(),
+        "the stale output must leave the declared path"
+    );
     assert_eq!(
-        fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+        fs::read_to_string(dir.path().join("out.txt.oxo-failed")).unwrap(),
         "user-data",
-        "an untouched pre-existing output must survive a failed run"
+        "the moved-aside output stays recoverable byte-identical"
     );
 }
 
