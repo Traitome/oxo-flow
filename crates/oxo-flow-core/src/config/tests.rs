@@ -4353,8 +4353,9 @@ fn merge_profile_tolerates_quoted_threads_in_defaults() {
 fn values_name_colliding_with_executor_placeholder_rejected() {
     // A [[values]] table named like an executor placeholder (`input`,
     // `output`, `log`, `threads`, `memory`) would replace the
-    // placeholder in every rule's shell — expansion must reject it
-    // (run/dry-run both expand before executing).
+    // placeholder in every rule's shell — parse/validate must reject it
+    // (issue #760: the check used to live only in expand_wildcards, so
+    // the web accepted the run and failed post-spawn).
     for name in ["input", "output", "log", "threads", "memory"] {
         let toml = format!(
             r#"
@@ -4372,8 +4373,7 @@ fn values_name_colliding_with_executor_placeholder_rejected() {
             shell = "echo hi"
             "#
         );
-        let mut config = WorkflowConfig::parse(&toml).unwrap();
-        let err = config.expand_wildcards().unwrap_err();
+        let err = WorkflowConfig::parse(&toml).expect_err("parse must reject");
         let message = err.to_string();
         assert!(
             message.contains("collides with a built-in wildcard"),
@@ -5048,8 +5048,10 @@ fn values_from_resolves_fan_out_from_config() {
         shell = "{assembler} -o {output[0]} {input[0]}"
         "#,
     );
-    let mut config = WorkflowConfig::parse(&bad).unwrap();
-    let err = config.expand_wildcards().unwrap_err().to_string();
+    // Issue #760: parse/validate catches it before expansion.
+    let err = WorkflowConfig::parse(&bad)
+        .expect_err("parse must reject")
+        .to_string();
     assert!(err.contains("missing_key"), "{err}");
 }
 
@@ -5791,8 +5793,8 @@ fn values_duplicate_table_names_rejected() {
         shell = "echo hi"
         "#,
     );
-    let mut config = WorkflowConfig::parse(&toml).unwrap();
-    let err = config.expand_wildcards().unwrap_err();
+    // Issue #760: parse/validate catches it before expansion.
+    let err = WorkflowConfig::parse(&toml).expect_err("parse must reject");
     assert!(err.to_string().contains("duplicate [[values]] table"));
 }
 
@@ -5810,8 +5812,10 @@ fn values_colliding_with_builtin_wildcard_rejected() {
         shell = "echo hi"
         "#,
     );
-    let mut config = WorkflowConfig::parse(&toml).unwrap();
-    let err = config.expand_wildcards().unwrap_err();
+    // Issue #760: parse/validate rejects — both the CLI and the web plan
+    // path call parse, so the reserved-name collision can no longer reach
+    // a spawned run.
+    let err = WorkflowConfig::parse(&toml).expect_err("parse must reject");
     assert!(
         err.to_string()
             .contains("collides with a built-in wildcard")
@@ -5832,8 +5836,8 @@ fn values_empty_table_rejected() {
         shell = "echo hi"
         "#,
     );
-    let mut config = WorkflowConfig::parse(&toml).unwrap();
-    let err = config.expand_wildcards().unwrap_err();
+    // Issue #760: parse/validate catches it before expansion.
+    let err = WorkflowConfig::parse(&toml).expect_err("parse must reject");
     assert!(err.to_string().contains("has no values"));
 }
 

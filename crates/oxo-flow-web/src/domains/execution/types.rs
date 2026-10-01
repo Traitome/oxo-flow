@@ -267,6 +267,12 @@ pub struct RetryResponse {
     pub new_run_id: String,
     pub will_rerun: Vec<String>,
     pub will_skip: Vec<String>,
+    /// Honesty note when the plan cannot describe the retry (issue #760):
+    /// a previous run that failed before executing any rule yields an
+    /// empty `will_rerun`/`will_skip` — the retry re-attempts the same
+    /// pipeline and re-fails unless the configuration error is fixed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[cfg(test)]
@@ -397,9 +403,19 @@ mod tests {
             new_run_id: "run2".into(),
             will_rerun: vec!["rule1".into()],
             will_skip: vec!["rule2".into()],
+            note: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: RetryResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.new_run_id, "run2");
+        assert!(back.note.is_none());
+        // The note survives serialization when set.
+        let noted = RetryResponse {
+            note: Some("previous run failed before executing any rule".into()),
+            ..resp
+        };
+        let json = serde_json::to_string(&noted).unwrap();
+        let back: RetryResponse = serde_json::from_str(&json).unwrap();
+        assert!(back.note.is_some());
     }
 }

@@ -166,6 +166,7 @@ pub fn compute_retry_plan(
         new_run_id: uuid::Uuid::new_v4().to_string(),
         will_rerun,
         will_skip,
+        note: None,
     })
 }
 
@@ -288,6 +289,33 @@ pub fn diagnose_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_run_rejects_reserved_values_name() {
+        // #760: the reserved-name collision must fail at PLAN time — the
+        // web used to accept the run, persist it as queued, and fail 13 ms
+        // after spawn.
+        let toml = r#"
+[workflow]
+name = "test"
+version = "0.1.0"
+
+[[values]]
+name = "sample"
+values = ["s1", "s2"]
+"#;
+        let config = RunConfig {
+            max_jobs: Some(2),
+            dry_run: None,
+            keep_going: None,
+            resource_budget: None,
+        };
+        let err = create_run(toml, &config, None).expect_err("reserved name must fail");
+        assert!(
+            err.contains("collides with a built-in wildcard"),
+            "error must name the collision: {err}"
+        );
+    }
 
     #[test]
     fn test_create_run() {
