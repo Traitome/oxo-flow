@@ -2403,6 +2403,12 @@ pub fn diff_workflows(a: &WorkflowConfig, b: &WorkflowConfig) -> Vec<WorkflowDif
                     description: format!("rule \"{}\": shell command changed", rule_name),
                 });
             }
+            if a_rule.script != b_rule.script {
+                diffs.push(WorkflowDiff {
+                    category: "rules".to_string(),
+                    description: format!("rule \"{}\": script changed", rule_name),
+                });
+            }
             if a_rule.effective_threads() != b_rule.effective_threads() {
                 diffs.push(WorkflowDiff {
                     category: "rules".to_string(),
@@ -4450,6 +4456,41 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
             diffs
                 .iter()
                 .any(|d| d.description.contains("threads changed"))
+        );
+    }
+
+    #[test]
+    fn diff_changed_script_field() {
+        // The `script` field is the script-file counterpart of `shell` —
+        // a change there must surface in the diff just the same (live API
+        // test: swapping old.sh → new.sh reported zero diffs).
+        let toml_a = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            script = "old.sh"
+        "#;
+        let toml_b = r#"
+            [workflow]
+            name = "test"
+            version = "1.0.0"
+
+            [[rules]]
+            name = "step1"
+            output = ["out.txt"]
+            script = "new.sh"
+        "#;
+        let a = WorkflowConfig::parse(toml_a).unwrap();
+        let b = WorkflowConfig::parse(toml_b).unwrap();
+        let diffs = diff_workflows(&a, &b);
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.description.contains("script changed"))
         );
     }
 
