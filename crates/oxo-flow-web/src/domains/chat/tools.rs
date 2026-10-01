@@ -68,6 +68,10 @@ impl Tool for RunStatusTool {
                 "rule": n.rule,
                 "status": n.status.to_string(),
                 "duration_ms": n.duration_ms,
+                // Structured failure data (issue #758): the assistant can
+                // answer "why did my rule fail?" without log tailing.
+                "exit_code": n.exit_code,
+                "stderr_tail": n.stderr_tail,
             })).collect::<Vec<_>>(),
         })
         .to_string())

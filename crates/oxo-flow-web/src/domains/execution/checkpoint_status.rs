@@ -68,8 +68,15 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
                     Some((b.wall_time_secs * 1000.0).round() as u64)
                 }
             }),
-            exit_code: None,
+            // The persisted rule_runs record (issue #758): completed rules
+            // exited 0; a recorded code (legacy or 0) wins.
+            exit_code: checkpoint
+                .rule_runs
+                .get(rule)
+                .and_then(|r| r.exit_code)
+                .or(Some(0)),
             progress_pct: None,
+            stderr_tail: None,
         });
     }
     for rule in &checkpoint.failed_rules {
@@ -82,13 +89,27 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
         } else {
             NodeStatus::Failed
         };
+        let record = checkpoint.rule_runs.get(rule);
+        let is_failed = status == NodeStatus::Failed;
         items.push(NodeStatusItem {
             rule: rule.clone(),
             status,
             started_at: None,
             duration_ms: None,
-            exit_code: None,
+            // The persisted failure data the CLI narrates (issue #758) —
+            // the web used to hardcode None here even though the frontend
+            // already renders a non-null exit code.
+            exit_code: if is_failed {
+                record.and_then(|r| r.exit_code)
+            } else {
+                None
+            },
             progress_pct: None,
+            stderr_tail: if is_failed {
+                record.and_then(|r| r.stderr_tail.clone())
+            } else {
+                None
+            },
         });
     }
     // When-skipped rules have no completed/failed entry at all — the
@@ -119,6 +140,7 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
                 duration_ms: None,
                 exit_code: None,
                 progress_pct: None,
+                stderr_tail: None,
             });
         }
     }
@@ -130,6 +152,7 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             duration_ms: None,
             exit_code: None,
             progress_pct: None,
+            stderr_tail: None,
         });
     }
     items
@@ -191,6 +214,7 @@ fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusI
             duration_ms: None,
             exit_code: None,
             progress_pct: None,
+            stderr_tail: None,
         };
     };
     let status = if items.iter().any(|i| i.status == NodeStatus::Failed) {
@@ -211,6 +235,7 @@ fn aggregate_rule(name: &str, items: Option<Vec<NodeStatusItem>>) -> NodeStatusI
         duration_ms: items.iter().filter_map(|i| i.duration_ms).max(),
         exit_code: items.iter().find_map(|i| i.exit_code),
         progress_pct: items.iter().filter_map(|i| i.progress_pct).max(),
+        stderr_tail: items.iter().find_map(|i| i.stderr_tail.clone()),
     }
 }
 
@@ -269,6 +294,43 @@ mod tests {
         // full rule list from the pipeline snapshot.
         let items = load_node_statuses(&dir, false);
         assert!(!items.iter().any(|i| i.rule == "align"));
+    }
+
+    #[test]
+    fn rule_runs_exit_code_and_stderr_surface_on_failed_nodes() {
+        // #758: the checkpoint persists rich failure data in rule_runs,
+        // but the web hardcoded exit_code: None — the frontend already
+        // renders a non-null exit code, and the AI assistant needs the
+        // stderr tail to answer "why did my rule fail?".
+        let dir = std::env::temp_dir().join("cp-rule-runs-exit");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": ["fastqc"],
+                "failed_rules": ["trim"],
+                "benchmarks": {},
+                "rule_runs": {
+                    "fastqc": {"exit_code": 0},
+                    "trim": {
+                        "exit_code": -1,
+                        "stderr_tail": "output pattern contains unbound wildcard {sample}"
+                    }
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let trim = items.iter().find(|i| i.rule == "trim").unwrap();
+        assert!(matches!(trim.status, NodeStatus::Failed));
+        assert_eq!(trim.exit_code, Some(-1));
+        assert_eq!(
+            trim.stderr_tail.as_deref(),
+            Some("output pattern contains unbound wildcard {sample}")
+        );
+        let fastqc = items.iter().find(|i| i.rule == "fastqc").unwrap();
+        assert_eq!(fastqc.exit_code, Some(0));
+        assert!(fastqc.stderr_tail.is_none());
     }
 
     #[test]
@@ -482,6 +544,7 @@ mod aggregation_tests {
             duration_ms: None,
             exit_code: None,
             progress_pct: None,
+            stderr_tail: None,
         }
     }
 
