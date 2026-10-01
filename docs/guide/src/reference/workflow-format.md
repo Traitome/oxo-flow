@@ -347,6 +347,13 @@ oxo-flow run pipeline.oxoflow --arg database=refs/nt --arg threshold=1e-3
 
 CLI override > declared `default` > error if `required` and unset.
 
+An override key that differs from a declared key only by hyphens vs underscores
+resolves onto the declared spelling: with `threads_max = { default = "4" }` in
+`[config]`, `--threads-max=8` sets `threads_max` (and the `--threads-max 8`
+space form is accepted too). This matters most for `sensitive` keys — masking
+and the checkpoint snapshot are keyed on the declared spelling — but it applies
+to every declared key. Keys matching nothing declared are untouched.
+
 ---
 
 ## `[[references]]` — Auto-Built Indexes & Reference Data
