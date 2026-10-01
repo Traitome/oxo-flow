@@ -340,41 +340,56 @@ fn result_is_admin_identity(response: &LoginResponse) -> bool {
 )]
 /// GET /api/auth/me
 pub async fn auth_me(headers: axum::http::HeaderMap) -> ApiResult<AuthMeResponse> {
-    let token = extract_token(&headers).unwrap_or_default();
-
-    if token.is_empty() {
-        return Ok(Json(AuthMeResponse {
+    let response = match get_pool() {
+        Ok(pool) => auth_me_in(pool, &headers).await,
+        Err(_) => AuthMeResponse {
             authenticated: false,
             username: None,
             role: None,
-        }));
+        },
+    };
+    Ok(Json(response))
+}
+
+/// Pool-taking core of [`auth_me`] (testable against an in-memory pool).
+async fn auth_me_in(pool: &sqlx::SqlitePool, headers: &axum::http::HeaderMap) -> AuthMeResponse {
+    // API keys are first-class machine credentials (issue #82 P1-13): the
+    // router's `require_auth` accepts X-API-Key on every protected route,
+    // so "who am I?" must honor it too — a key holder querying /auth/me
+    // used to get `authenticated:false` while the same key authenticated
+    // quota, users, and every other endpoint. An invalid/revoked key falls
+    // through: /auth/me is a status probe, not a gate, so it answers
+    // `authenticated:false` rather than 401.
+    if let Some(key) = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .filter(|k| !k.is_empty())
+        && let Some(user) = resolve_api_key_in(pool, key).await
+    {
+        return AuthMeResponse {
+            authenticated: true,
+            username: Some(user.id),
+            role: Some(user.role),
+        };
     }
 
-    // Validate against sessions table
-    if let Ok(pool) = get_pool() {
-        match validate_token(pool, &token).await {
-            Ok((username, role)) => {
-                return Ok(Json(AuthMeResponse {
-                    authenticated: true,
-                    username: Some(username),
-                    role: Some(role),
-                }));
-            }
-            Err(_) => {
-                return Ok(Json(AuthMeResponse {
-                    authenticated: false,
-                    username: None,
-                    role: None,
-                }));
-            }
-        }
+    let token = extract_token(headers).unwrap_or_default();
+
+    if !token.is_empty()
+        && let Ok((username, role)) = validate_token(pool, &token).await
+    {
+        return AuthMeResponse {
+            authenticated: true,
+            username: Some(username),
+            role: Some(role),
+        };
     }
 
-    Ok(Json(AuthMeResponse {
+    AuthMeResponse {
         authenticated: false,
         username: None,
         role: None,
-    }))
+    }
 }
 
 #[utoipa::path(
@@ -1100,5 +1115,39 @@ mod tests {
             .unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body.0.code, "AUTH_REQUIRED");
+    }
+
+    /// /auth/me must recognize X-API-Key — the router's `require_auth`
+    /// accepts it on every protected route, so "who am I?" returning
+    /// `authenticated:false` for the same key was an inconsistent answer
+    /// (live API test: key authenticated /quota and /users but /auth/me
+    /// reported `authenticated:false`).
+    #[tokio::test]
+    async fn auth_me_recognizes_api_keys() {
+        let pool = admin_pool().await;
+        seed_key(&pool, "u-admin", "admin", "oxo_admin_key").await;
+        seed_key(&pool, "u-user", "user", "oxo_user_key").await;
+
+        // Valid admin key → authenticated with identity.
+        let admin = headers_with("x-api-key", "oxo_admin_key");
+        let me = auth_me_in(&pool, &admin).await;
+        assert!(me.authenticated);
+        assert_eq!(me.username.as_deref(), Some("u-admin"));
+        assert_eq!(me.role.as_deref(), Some("admin"));
+
+        // Valid non-admin key → authenticated with its role.
+        let user = headers_with("x-api-key", "oxo_user_key");
+        let me = auth_me_in(&pool, &user).await;
+        assert!(me.authenticated);
+        assert_eq!(me.role.as_deref(), Some("user"));
+
+        // Invalid key → not authenticated (status probe, not a gate).
+        let bad = headers_with("x-api-key", "not-a-key");
+        let me = auth_me_in(&pool, &bad).await;
+        assert!(!me.authenticated);
+
+        // No credential → not authenticated.
+        let me = auth_me_in(&pool, &axum::http::HeaderMap::new()).await;
+        assert!(!me.authenticated);
     }
 }
