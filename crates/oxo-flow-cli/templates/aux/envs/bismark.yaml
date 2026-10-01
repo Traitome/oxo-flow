@@ -1,0 +1,9 @@
+# Bisulfite-seq alignment (gallery 08): bismark + bowtie2 + samtools.
+name: bismark
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bismark=0.24.2
+  - bowtie2=2.5.2
+  - samtools=1.18

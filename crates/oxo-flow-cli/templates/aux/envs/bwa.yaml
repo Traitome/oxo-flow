@@ -1,0 +1,8 @@
+# bwa mem alignment (conditional_workflow example).
+name: bwa
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bwa=0.7.17
+  - samtools=1.18

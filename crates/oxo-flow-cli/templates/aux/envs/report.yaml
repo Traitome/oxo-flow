@@ -1,0 +1,7 @@
+# Report generation (python scripts referenced by the examples).
+name: report
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - jinja2=3.1
