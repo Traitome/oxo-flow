@@ -132,10 +132,10 @@ While they use the same `{}` syntax, built-in placeholders are NOT wildcards; th
 |---|---|
 | `{input}` | Space-separated list of all input files |
 | `{input[N]}` | The Nth input file (0-indexed) |
-| `{input.name}` | The value of the `name` entry in the rule's `input` map (`input = { name = "..." }`) |
+| `{input.name}` | The value of the `name` entry in the rule's `input` map (`input = { name = "..." }` → `{input.name}`); any key works: `input = { reads = "..." }` → `{input.reads}` |
 | `{output}` | Space-separated list of all output files |
 | `{output[N]}` | The Nth output file (0-indexed) |
-| `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }`) |
+| `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }` → `{output.name}`); any key works: `output = { bam = "..." }` → `{output.bam}` |
 | `{threads}` | CPU thread count assigned to the task |
 | `{memory}` | Memory allocation assigned to the task |
 | `{config.X}` | Value of variable `X` from the `[config]` section |
@@ -222,7 +222,7 @@ If your data legitimately needs other characters, declare an explicit `[wildcard
 When a rule is expanded from wildcards, its unique name in the DAG is modified to include the wildcard values to avoid collisions:
 
 - **Sample/group wildcards**: `align` → `align_control_S1` — one expanded rule per (group, sample) combination
-- **Group-less declared samples**: a flat sample list with no `[[sample_groups]]` collapses into a single implicit group named `samples`, so `align` → `align_samples_S1`. The same applies to `--samples` overrides of a workflow that declares no groups
+- **`--samples` overrides**: filtering a workflow that declares no `[[sample_groups]]` collapses the selection into a single implicit group named `samples`, so `align` → `align_samples_S1` (there is no flat `samples` key in `[workflow]`; the implicit group arises from the `--samples` override)
 - **Pairs**: `mutect2` → `mutect2_CASE_001`
 
 ---

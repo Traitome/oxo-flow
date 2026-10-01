@@ -1553,10 +1553,10 @@ Built-in placeholders use the same syntax but have reserved meanings:
 |---|---|
 | `{input}` | Space-separated list of all input files |
 | `{input[N]}` | The Nth input file (0-indexed) |
-| `{input.name}` | The value of the `name` entry in the rule's `input` map (`input = { name = "..." }`) |
+| `{input.name}` | The value of the `name` entry in the rule's `input` map (`input = { name = "..." }` → `{input.name}`); any key works: `input = { reads = "..." }` → `{input.reads}` |
 | `{output}` | Space-separated list of all output files |
 | `{output[N]}` | The Nth output file (0-indexed) |
-| `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }`) |
+| `{output.name}` | The value of the `name` entry in the rule's `output` map (`output = { name = "..." }` → `{output.name}`); any key works: `output = { bam = "..." }` → `{output.bam}` |
 | `{threads}` | Thread count assigned to this rule |
 | `{memory}` | Memory allocation assigned to this rule |
 | `{effective_threads}` | Declared threads clamped to the machine's CPUs — the tool-facing concurrency. Use it for flags like `--threads`/`-t` when the declared value is an HPC-scale label (e.g. a rule declaring `threads = 12` renders `4` on a 4-core box). Unset threads render as `1` |
