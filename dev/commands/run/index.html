@@ -5471,12 +5471,28 @@ path, size, and modification time — plus a content hash for files up to
   rewrite is detected even when the mtime is preserved, and a mere <code>touch</code>
   no longer invalidates. Larger files compare size and mtime, closing the
   same stale-reuse hole for ordinary files.</li>
-<li><strong><code>expand_inputs</code>-baked inputs</strong> whose producer is <code>when</code>-gated off under
+<li>
+<p><strong><code>expand_inputs</code>-baked inputs</strong> whose producer is <code>when</code>-gated off under
   the active config are tolerated as absent: the manifest records the
   existing subset instead of erroring, so a no-op rerun does not
   invalidate the rule and cascade its producers (issue #757). If a later
   config change produces the missing files, the manifest then mismatches
-  and the rule invalidates — the flip is still caught.</li>
+  and the rule invalidates — the flip is still caught.</p>
+</li>
+<li>
+<p><strong>Missing external source inputs fail fast before any work starts</strong>:
+  a required input that no rule in the DAG produces and whose concrete
+  files are absent aborts the run before scheduling with
+  <code>workflow is missing required source input(s) — no rule produces them</code>,
+  naming each affected rule and pattern (exit non-zero). Previously a
+  fully-completed checkpoint plus a deleted raw data file could exit 0
+  from stale checkpoint credit ("re-running 0 producer rule(s)"); that
+  silent-success hole is closed. The gate never fires for generated
+  intermediates (they have producers and are governed by the manifest
+  cascade below), <code>[[references]]</code> outputs (built later in the same run),
+  inputs discoverable through the workflow's <code>sample_pattern</code> directory,
+  when-gated-off rules, zero-fan-out scatter rules, or <code>optional</code> rules.</p>
+</li>
 </ul>
 <div class="language-console highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>

@@ -1879,6 +1879,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#missing-required-source-input-fail-fast-at-run-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing required source input (fail-fast at run start)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rule-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4363,6 +4374,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#missing-required-source-input-fail-fast-at-run-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing required source input (fail-fast at run start)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rule-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4739,6 +4761,20 @@ and that the specified module names and versions are correct:</p>
 <h3 id="missing-input">Missing input<a class="headerlink" href="#missing-input" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>missing input for rule 'step2': intermediate.txt</code></p>
 <p><strong>Solution</strong>: Ensure that some other rule produces <code>intermediate.txt</code> as an output, or that the file already exists before the workflow runs.</p>
+<h3 id="missing-required-source-input-fail-fast-at-run-start">Missing required source input (fail-fast at run start)<a class="headerlink" href="#missing-required-source-input-fail-fast-at-run-start" title="Permanent link">#</a></h3>
+<p><strong>Symptom</strong>: <code>workflow is missing required source input(s) — no rule produces them: rule 'qc': input 'raw/S1.fq' does not exist and no rule produces it</code></p>
+<p><strong>Cause</strong>: A required rule input resolves to files that are absent <strong>and</strong> no
+rule in the DAG produces them — typically deleted raw data, a mistyped path,
+or a <code>sample_pattern</code> that no longer matches. The run aborts before any rule
+executes instead of "succeeding" from stale checkpoint outputs.</p>
+<p><strong>Solution</strong>:</p>
+<ol>
+<li>Restore the source files (re-download, re-copy, or fix the path in the
+   workflow config)</li>
+<li>Check the <code>sample_pattern</code>/<code>samples</code> declaration if the file layout changed</li>
+<li>If the input is genuinely optional, mark the rule <code>optional = true</code></li>
+<li>Re-run <code>oxo-flow validate workflow.oxoflow</code> to confirm the fix</li>
+</ol>
 <h3 id="rule-not-found">Rule not found<a class="headerlink" href="#rule-not-found" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>rule not found: 'algn'</code> with a list of available rule names</p>
 <p><strong>Solution</strong>: The target name passed to <code>-t</code> or referenced in <code>depends_on</code> doesn't match any rule. oxo-flow supports <strong>prefix matching</strong> — try a shorter prefix:</p>
