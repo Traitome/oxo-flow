@@ -191,6 +191,23 @@ module avail cuda
 
 **Solution**: Ensure that some other rule produces `intermediate.txt` as an output, or that the file already exists before the workflow runs.
 
+### Missing required source input (fail-fast at run start)
+
+**Symptom**: `workflow is missing required source input(s) — no rule produces them: rule 'qc': input 'raw/S1.fq' does not exist and no rule produces it`
+
+**Cause**: A required rule input resolves to files that are absent **and** no
+rule in the DAG produces them — typically deleted raw data, a mistyped path,
+or a `sample_pattern` that no longer matches. The run aborts before any rule
+executes instead of "succeeding" from stale checkpoint outputs.
+
+**Solution**:
+
+1. Restore the source files (re-download, re-copy, or fix the path in the
+   workflow config)
+2. Check the `sample_pattern`/`samples` declaration if the file layout changed
+3. If the input is genuinely optional, mark the rule `optional = true`
+4. Re-run `oxo-flow validate workflow.oxoflow` to confirm the fix
+
 ### Rule not found
 
 **Symptom**: `rule not found: 'algn'` with a list of available rule names
