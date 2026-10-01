@@ -168,7 +168,14 @@ pub fn load_node_statuses(run_dir: &Path, is_running: bool) -> Vec<NodeStatusIte
             .rule_runs
             .iter()
             .filter(|(name, rec)| {
-                rec.status.as_deref() == Some("cancelled")
+                // Modern records carry status "cancelled"; pre-#498 legacy
+                // records only have skip_reason + no exit_code (the status
+                // field was added later) — treat both as abort-cancelled.
+                let cancelled = rec.status.as_deref() == Some("cancelled")
+                    || (rec.status.is_none()
+                        && rec.skip_reason.is_some()
+                        && rec.exit_code.is_none());
+                cancelled
                     && !accounted.contains(*name)
                     && checkpoint.when_verdicts.get(*name) != Some(&false)
                     && !running.iter().any(|r| r == *name)
@@ -475,6 +482,35 @@ mod tests {
         );
         let trim = items.iter().find(|i| i.rule == "trim").unwrap();
         assert!(matches!(trim.status, NodeStatus::Failed));
+    }
+
+    #[test]
+    fn legacy_cancelled_entry_without_status_field_surfaces_as_skipped() {
+        // Pre-#498 checkpoints record aborts as skip_reason + no exit_code
+        // without the status field — the same Skipped surfacing applies.
+        let dir = std::env::temp_dir().join("cp-cancelled-legacy");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_checkpoint(
+            &dir,
+            r#"{
+                "completed_rules": [],
+                "failed_rules": ["trim"],
+                "benchmarks": {},
+                "rule_runs": {
+                    "align": {
+                        "skip_reason": "run aborted before this rule finished — required rule 'trim' failed"
+                    }
+                }
+            }"#,
+        );
+        let items = load_node_statuses(&dir, false);
+        let align = items.iter().find(|i| i.rule == "align").unwrap();
+        assert!(
+            matches!(align.status, NodeStatus::Skipped),
+            "{:?}",
+            align.status
+        );
     }
 
     #[test]
