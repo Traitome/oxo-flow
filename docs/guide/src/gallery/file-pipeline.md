@@ -100,7 +100,7 @@ $ oxo-flow run examples/gallery/02_file_pipeline.oxoflow
   ✓ summarize (0.0s)
 
 Done: 3 succeeded, 0 skipped, 0 failed
-✓ 3 output files verified (2309B total)
+✓ 3 output files verified (2303B total)
 ```
 
 ### DAG Visualization
