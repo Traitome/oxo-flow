@@ -439,22 +439,75 @@ fn scan_workflow_env_files(
     if let Some(includes) = toml_value.get("include").and_then(|v| v.as_array()) {
         let file_base = wf_path.parent().unwrap_or(workflow_dir).to_path_buf();
         for inc in includes {
-            if let Some(inc_path) = inc.get("path").and_then(|v| v.as_str()) {
-                let included_wf = file_base.join(inc_path);
-                if included_wf.exists() {
-                    scan_workflow_env_files(
-                        &included_wf,
-                        workflow_dir,
-                        referenced_files,
-                        container_refs,
-                        scanned,
-                    )?;
-                }
+            let Some(inc_path) = inc.get("path").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // repo/http includes are re-fetched from their remote source by
+            // the consumer — the local checkout is not what runs, so don't
+            // vendor it (and don't scan it: its env paths resolve inside the
+            // module cache / URL, not beside this workflow).
+            if inc.get("repo").is_some()
+                || inc_path.starts_with("http://")
+                || inc_path.starts_with("https://")
+            {
+                continue;
+            }
+            let included_wf = file_base.join(inc_path);
+            if included_wf.exists() {
+                // The included file itself must travel in the bundle: core
+                // re-reads it at parse time on the consumer side, and a
+                // bundle that omits it fails there with
+                // `failed to read include '<path>': No such file or directory`.
+                add_include_workflow_file(&included_wf, workflow_dir, referenced_files);
+                scan_workflow_env_files(
+                    &included_wf,
+                    workflow_dir,
+                    referenced_files,
+                    container_refs,
+                    scanned,
+                )?;
             }
         }
     }
 
     Ok(())
+}
+
+/// Add an included sub-workflow file to the bundle at its workflow-dir-relative
+/// path, so consumer-side include resolution (relative to the including file)
+/// finds it.
+fn add_include_workflow_file(
+    included_wf: &Path,
+    workflow_dir: &Path,
+    referenced_files: &mut Vec<(String, PathBuf)>,
+) {
+    let Ok(rel) = included_wf.strip_prefix(workflow_dir) else {
+        eprintln!(
+            "  {} included workflow '{}' is outside the workflow directory — cannot bundle",
+            "⚠".yellow(),
+            included_wf.display()
+        );
+        return;
+    };
+    let member = rel
+        .to_string_lossy()
+        .trim_start_matches("./")
+        .replace('\\', "/");
+    if member.starts_with('/')
+        || member
+            .split('/')
+            .any(|component| component.is_empty() || component == "..")
+    {
+        eprintln!(
+            "  {} include path '{}' is not a clean relative path — skipping",
+            "⚠".yellow(),
+            member
+        );
+        return;
+    }
+    if !referenced_files.iter().any(|(name, _)| name == &member) {
+        referenced_files.push((member, included_wf.to_path_buf()));
+    }
 }
 
 /// Add a single environment file reference if it exists on disk.
@@ -632,4 +685,116 @@ fn generate_lockfiles(
     // Not cleaned here — the caller holds the TempDir guard until the
     // archive builder has read the lockfiles out of it.
     Some(lock_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression (live doc test): publish followed `[[include]]` references
+    /// to scan sub-workflow env files but never bundled the sub-workflow
+    /// files themselves — the archive passed checksum verification and then
+    /// failed on the consumer side with
+    /// `failed to read include '<path>': No such file or directory`.
+    #[test]
+    fn test_publish_bundles_included_workflow_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = dir.path().join("host.oxoflow");
+        let sub = dir.path().join("sub.oxoflow");
+        std::fs::write(
+            &host,
+            r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "sub.oxoflow"
+
+[[rules]]
+name = "host_rule"
+shell = "echo host > host.txt"
+output = ["host.txt"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &sub,
+            r#"[workflow]
+name = "sub"
+version = "1.0.0"
+
+[[rules]]
+name = "sub_rule"
+shell = "echo sub > sub_out.txt"
+output = ["sub_out.txt"]
+"#,
+        )
+        .unwrap();
+
+        let mut referenced = Vec::new();
+        let mut containers = Vec::new();
+        let mut scanned = std::collections::HashSet::new();
+        scan_workflow_env_files(
+            &host,
+            dir.path(),
+            &mut referenced,
+            &mut containers,
+            &mut scanned,
+        )
+        .unwrap();
+
+        assert!(
+            referenced.iter().any(|(name, _)| name == "sub.oxoflow"),
+            "included sub-workflow file must be collected into the bundle, got: {referenced:?}"
+        );
+        assert!(
+            !referenced.iter().any(|(name, _)| name == "host.oxoflow"),
+            "host workflow file is added separately by publish_command, not by the scan"
+        );
+    }
+
+    /// repo/http includes are re-fetched by the consumer from their remote
+    /// source — the local checkout must not be vendored into the bundle.
+    #[test]
+    fn test_publish_skips_repo_and_remote_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = dir.path().join("host.oxoflow");
+        std::fs::write(
+            &host,
+            r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[include]]
+path = "mod.oxoflow"
+repo = "github:example/org"
+
+[[include]]
+path = "https://example.com/remote.oxoflow"
+
+[[rules]]
+name = "host_rule"
+shell = "echo hi"
+"#,
+        )
+        .unwrap();
+
+        let mut referenced = Vec::new();
+        let mut containers = Vec::new();
+        let mut scanned = std::collections::HashSet::new();
+        scan_workflow_env_files(
+            &host,
+            dir.path(),
+            &mut referenced,
+            &mut containers,
+            &mut scanned,
+        )
+        .unwrap();
+
+        assert!(
+            !referenced
+                .iter()
+                .any(|(name, _)| name.contains("mod.oxoflow") || name.contains("remote"))
+        );
+    }
 }
