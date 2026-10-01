@@ -1,0 +1,2 @@
+# Gallery 05 venv demo — deliberately empty: the sanity rule uses the
+# Python standard library only, so the env stays lean and reproducible.

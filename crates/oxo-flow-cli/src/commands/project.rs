@@ -297,22 +297,180 @@ const EMBEDDED_GALLERY_AUX: &[(&str, &str)] = &[
         "templates/sc_report.Rmd",
         include_str!("../../templates/aux/templates/sc_report.Rmd"),
     ),
+    // Environment YAMLs referenced by `conda = "envs/..."` in templates
+    // 04-15 — without these the generated workflows fail out of the box.
+    (
+        "envs/alignment.yaml",
+        include_str!("../../templates/aux/envs/alignment.yaml"),
+    ),
+    (
+        "envs/analysis.yaml",
+        include_str!("../../templates/aux/envs/analysis.yaml"),
+    ),
+    (
+        "envs/bismark.yaml",
+        include_str!("../../templates/aux/envs/bismark.yaml"),
+    ),
+    (
+        "envs/bwa_mem2.yaml",
+        include_str!("../../templates/aux/envs/bwa_mem2.yaml"),
+    ),
+    (
+        "envs/bwa.yaml",
+        include_str!("../../templates/aux/envs/bwa.yaml"),
+    ),
+    (
+        "envs/fastp.yaml",
+        include_str!("../../templates/aux/envs/fastp.yaml"),
+    ),
+    (
+        "envs/fastqc.yaml",
+        include_str!("../../templates/aux/envs/fastqc.yaml"),
+    ),
+    (
+        "envs/gatk.yaml",
+        include_str!("../../templates/aux/envs/gatk.yaml"),
+    ),
+    (
+        "envs/mosdepth.yaml",
+        include_str!("../../templates/aux/envs/mosdepth.yaml"),
+    ),
+    (
+        "envs/multiqc.yaml",
+        include_str!("../../templates/aux/envs/multiqc.yaml"),
+    ),
+    (
+        "envs/qc.yaml",
+        include_str!("../../templates/aux/envs/qc.yaml"),
+    ),
+    (
+        "envs/report.yaml",
+        include_str!("../../templates/aux/envs/report.yaml"),
+    ),
+    (
+        "envs/rmarkdown.yaml",
+        include_str!("../../templates/aux/envs/rmarkdown.yaml"),
+    ),
+    (
+        "envs/samtools.yaml",
+        include_str!("../../templates/aux/envs/samtools.yaml"),
+    ),
+    (
+        "envs/seurat.yaml",
+        include_str!("../../templates/aux/envs/seurat.yaml"),
+    ),
+    (
+        "envs/star.yaml",
+        include_str!("../../templates/aux/envs/star.yaml"),
+    ),
+    (
+        "envs/subread.yaml",
+        include_str!("../../templates/aux/envs/subread.yaml"),
+    ),
+    (
+        "envs/venv-requirements.txt",
+        include_str!("../../templates/aux/envs/venv-requirements.txt"),
+    ),
+    (
+        "envs/vep.yaml",
+        include_str!("../../templates/aux/envs/vep.yaml"),
+    ),
 ];
 
 /// Which templates reference which auxiliary files (by template stem).
+/// One entry per template — scripts/report templates and `conda = "envs/..."`
+/// environment files are merged into a single list.
 const TEMPLATE_AUX_FILES: &[(&str, &[&str])] = &[
     (
-        "09_single_cell_rnaseq",
-        &["scripts/seurat_analysis.R", "templates/sc_report.Rmd"],
+        "04_scatter_gather",
+        &["envs/gatk.yaml"],
     ),
-    ("11_conditional_workflow", &["scripts/report.py"]),
+    (
+        "05_conda_environments",
+        &["envs/qc.yaml", "envs/analysis.yaml", "envs/venv-requirements.txt"],
+    ),
+    (
+        "06_rnaseq_quantification",
+        &[
+            "envs/fastp.yaml",
+            "envs/multiqc.yaml",
+            "envs/samtools.yaml",
+            "envs/star.yaml",
+            "envs/subread.yaml",
+        ],
+    ),
+    (
+        "07_wgs_germline",
+        &["envs/alignment.yaml", "envs/fastp.yaml", "envs/vep.yaml"],
+    ),
+    (
+        "08_multiomics_integration",
+        &[
+            "envs/alignment.yaml",
+            "envs/bismark.yaml",
+            "envs/star.yaml",
+            "envs/subread.yaml",
+        ],
+    ),
+    (
+        "09_single_cell_rnaseq",
+        &[
+            "scripts/seurat_analysis.R",
+            "templates/sc_report.Rmd",
+            "envs/rmarkdown.yaml",
+            "envs/seurat.yaml",
+        ],
+    ),
+    (
+        "10_transform_operator",
+        &["envs/gatk.yaml", "envs/samtools.yaml"],
+    ),
+    (
+        "11_conditional_workflow",
+        &[
+            "scripts/report.py",
+            "envs/bwa.yaml",
+            "envs/fastqc.yaml",
+            "envs/gatk.yaml",
+            "envs/mosdepth.yaml",
+            "envs/report.yaml",
+            "envs/vep.yaml",
+        ],
+    ),
+    (
+        "12_cohort_analysis",
+        &[
+            "envs/bwa_mem2.yaml",
+            "envs/fastp.yaml",
+            "envs/gatk.yaml",
+            "envs/multiqc.yaml",
+        ],
+    ),
+    (
+        "13_simple_variant_calling",
+        &["envs/alignment.yaml", "envs/fastp.yaml", "envs/qc.yaml"],
+    ),
     (
         "14_paired_experiment_control",
-        &["scripts/generate_report.py"],
+        &[
+            "scripts/generate_report.py",
+            "envs/bwa_mem2.yaml",
+            "envs/fastp.yaml",
+            "envs/gatk.yaml",
+            "envs/report.yaml",
+            "envs/vep.yaml",
+        ],
     ),
     (
         "15_paired_experiment_control_pairs",
-        &["scripts/generate_report.py"],
+        &[
+            "scripts/generate_report.py",
+            "envs/bwa_mem2.yaml",
+            "envs/fastp.yaml",
+            "envs/gatk.yaml",
+            "envs/report.yaml",
+            "envs/vep.yaml",
+        ],
     ),
 ];
 
@@ -688,7 +846,7 @@ mod tests {
         // comparing the full sorted (path, content) lists covers both
         // additions/removals and content drift.
         let mut disk_aux: Vec<(String, String)> = Vec::new();
-        for sub in ["scripts", "templates"] {
+        for sub in ["scripts", "templates", "envs"] {
             let sub_dir = disk_dir.join(sub);
             if !sub_dir.is_dir() {
                 continue;
@@ -710,9 +868,9 @@ mod tests {
         embedded_aux.sort();
         assert_eq!(
             embedded_aux, disk_aux,
-            "embedded aux files diverged from examples/gallery/scripts and \
-             examples/gallery/templates — update EMBEDDED_GALLERY_AUX and \
-             crates/oxo-flow-cli/templates/aux/"
+            "embedded aux files diverged from examples/gallery/scripts, \
+             examples/gallery/templates and examples/gallery/envs — update \
+             EMBEDDED_GALLERY_AUX and crates/oxo-flow-cli/templates/aux/"
         );
     }
 
@@ -723,6 +881,7 @@ mod tests {
         apply_template("09_single_cell_rnaseq", Some(dir.path().to_path_buf())).unwrap();
         assert!(dir.path().join("scripts/seurat_analysis.R").exists());
         assert!(dir.path().join("templates/sc_report.Rmd").exists());
+        assert!(dir.path().join("envs/seurat.yaml").exists());
 
         apply_template(
             "14_paired_experiment_control",
@@ -730,6 +889,7 @@ mod tests {
         )
         .unwrap();
         assert!(dir.path().join("scripts/generate_report.py").exists());
+        assert!(dir.path().join("envs/vep.yaml").exists());
 
         // 15 shares scripts/generate_report.py with 14: re-writing the same
         // content must succeed, not bail.

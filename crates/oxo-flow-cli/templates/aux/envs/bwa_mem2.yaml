@@ -1,0 +1,9 @@
+# bwa-mem2 alignment (cohort_analysis example). The rule pipes into
+# samtools, so both tools must be present.
+name: bwa_mem2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bwa-mem2=2.2.1
+  - samtools=1.18

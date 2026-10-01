@@ -19,11 +19,12 @@ from a one-rule hello-world to production-grade multi-omics pipelines. The
 gallery is embedded in the binary at build time, so it works identically
 whether oxo-flow is installed from a release or run from a source checkout.
 
-Templates that reference auxiliary files (scripts and report templates —
-`09_single_cell_rnaseq`, `11_conditional_workflow`,
-`14_paired_experiment_control`, `15_paired_experiment_control_pairs`) copy
-them next to the generated workflow, so the generated pipeline is
-immediately complete and runnable.
+Templates that reference auxiliary files copy them next to the generated
+workflow, so the generated pipeline is immediately complete and runnable.
+This covers report scripts and report templates (`09_single_cell_rnaseq`,
+`11_conditional_workflow`, `14_paired_experiment_control`,
+`15_paired_experiment_control_pairs`) as well as the conda environment
+definitions referenced by `conda = "envs/..."` in templates 04-15.
 
 ## Options
 
