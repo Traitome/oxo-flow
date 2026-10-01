@@ -54,7 +54,14 @@ This example writes the fan-in inputs out explicitly to keep it minimal. In real
 ```bash
 $ oxo-flow validate examples/gallery/03_parallel_samples.oxoflow
 ✓ examples/gallery/03_parallel_samples.oxoflow — 3 rules, 2 dependencies
+
+  ⚠ Warning: The following input files do not exist:
+    - analysis/sampleA.stats.txt
+    - analysis/sampleB.stats.txt
+    - analysis/sampleC.stats.txt
 ```
+
+The `✓` line is what matters — validate exits 0 and the workflow is well-formed. The warning is expected here: `aggregate` lists its fan-in inputs as literal paths (`analysis/sampleA.stats.txt`, …), and at validate time oxo-flow compares them against rules' *unexpanded* output templates (`analysis/{sample}.stats.txt`), so the match isn't visible yet. At run time the wildcards expand to exactly those concrete paths and the run proceeds normally. Validate only warns for missing inputs; a genuinely missing *source* file (no rule produces it) fails the run at start — see [the troubleshooting entry](../how-to/troubleshooting.md#missing-required-source-input-fail-fast-at-run-start).
 
 ### DAG Structure
 
@@ -69,5 +76,11 @@ graph TD
 ```
 
 ## What's Next?
+
+!!! note "Input data"
+
+    The `raw/{sample}.txt` inputs are placeholders — create your own files
+    (e.g. `mkdir -p raw && for s in sampleA sampleB sampleC; do echo "$s" >
+    raw/$s.txt; done`) before running the workflow.
 
 Move on to [Scatter-Gather](scatter-gather.md) to learn how to scatter work by chromosome, process the partitions in parallel, and merge the results.
