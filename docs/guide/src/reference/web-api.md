@@ -380,13 +380,13 @@ page.
 ```
 GET /api/runs/{id}/status
 ```
-Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule skipped by its `when` gate (`when_verdicts == false`, no completed/failed entry) is surfaced as `skipped`, never as a forever-`pending` node (issue #739).
+Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration_ms, exit_code }], timeline, resources }`. A rule that did not run — when-gated off (`when_verdicts == false`) or abort-cancelled (`rule_runs` status `cancelled`, which records no set membership) — is surfaced as `skipped`, never as a forever-`pending` node (issues #739, #767).
 
 ### DAG Status
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics.pending_nodes` and the ETA count only rules that can still run — when-gated-off rules are `skipped`, not pending (issue #739).
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics.pending_nodes` and the ETA count only rules that can still run — skipped rules (when-gated off or abort-cancelled) are `skipped`, not pending (issues #739, #767).
 
 ### Diagnostics
 ```
@@ -416,7 +416,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 ```
 GET /api/runs/{id}/report
 ```
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rule(s) and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail}]` from the checkpoint's structured failure data.
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rule(s) and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data (stdout captured since #691, surfaced since #765).
 
 ### Report Q&A
 ```
@@ -425,10 +425,10 @@ Content-Type: application/json
 
 {"question": "which rules failed and why"}
 ```
-Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt) — never a completion claim (issue #759).
+Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim (issues #759, #765).
 
-### Run Status exit codes
-`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus a bounded `stderr_tail` on failed nodes. The AI chat `get_run_status` tool carries the same fields.
+### Run Status exit codes and failure tails
+`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (issue #765; some tools print their root cause on stdout). The AI chat `get_run_status` tool carries the same fields.
 
 ### Report Visualization
 ```
@@ -457,7 +457,10 @@ The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with `--resume-failed
 --rerun` so the failed rules re-execute despite their existing outputs and
 the checkpoint's cascade invalidation re-runs their downstream dependents.
-Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }`.
+Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }` — plus an
+optional `note` when the plan is empty on a previously failed run (it died
+before executing any rule, e.g. a configuration error at spawn; the retry
+re-fails identically unless the error is fixed — issue #760).
 
 ### Cancel
 ```
