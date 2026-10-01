@@ -4326,11 +4326,13 @@ of seven adapters in <code>report_metrics</code>:</p>
 optional QC flag from fixed thresholds (e.g. fastp <code>q30_rate</code> Pass ≥ 0.85 /
 Warn ≥ 0.75, STAR <code>uniquely_mapped_pct</code> Pass ≥ 70 / Warn ≥ 60, kraken2
 <code>unclassified_rate</code> Pass ≤ 20 / Warn ≤ 40), or <code>None</code> for informational
-values. Files that match a pattern but fail to parse are counted in a Scan
-Notes subsection — a scanner that hides its gaps would look like full
-coverage. The <code>metrics</code> section and the checkpoint-derived <code>sample-matrix</code>
+values. Files that match a pattern but fail to parse — or cannot be read
+at all (permissions, I/O errors) — are counted in a Scan Notes subsection
+— a scanner that hides its gaps would look like full coverage. The
+<code>metrics</code> section and the checkpoint-derived <code>sample-matrix</code>
 section (rule × sample success/failure grid from real expanded instance
-names) are both hidden when they have no data.</p>
+names) are both hidden when they have no data; a gap-only scan still
+surfaces its Scan Notes.</p>
 <h3 id="benchmarks-honesty">Benchmarks honesty<a class="headerlink" href="#benchmarks-honesty" title="Permanent link">#</a></h3>
 <p>The Benchmarks table's CPU column reports CPU seconds from whichever
 source ran the rule, and the two differ:</p>
