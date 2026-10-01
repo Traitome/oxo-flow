@@ -14,7 +14,7 @@ use crate::domains::observability::types::*;
 /// the server startup path does not explicitly seed it.
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
-fn uptime_secs() -> u64 {
+pub fn uptime_secs() -> u64 {
     START_TIME.get_or_init(Instant::now).elapsed().as_secs()
 }
 
@@ -188,5 +188,14 @@ mod tests {
         let h = build_health("personal", true, true, None);
         assert!(h.components.engine.is_none());
         assert_eq!(h.status, "ok");
+    }
+
+    #[test]
+    fn test_uptime_secs_is_small_for_fresh_process() {
+        // The process-relative origin (shared with /api/health and
+        // /api/system) must stay far below HOST boot uptime — /api/metrics
+        // previously used sysinfo::System::uptime() and reported host boot
+        // time (~27 days) for a server up for hours.
+        assert!(uptime_secs() < 3600, "test process just started");
     }
 }
