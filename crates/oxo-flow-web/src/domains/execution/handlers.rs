@@ -1354,6 +1354,21 @@ pub async fn retry_run(
     let plan = service::compute_retry_plan(&node_items, &dag, skip_succeeded)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "RETRY_ERROR", e))?;
 
+    // Honesty note (issue #760): an empty plan on a FAILED run means the
+    // previous run died before executing any rule (e.g. an expansion error
+    // at spawn) — the retry re-attempts the same pipeline and re-fails
+    // unless the configuration error is fixed. Saying so beats a silent
+    // `will_rerun: [] / will_skip: []`.
+    let mut plan = plan;
+    if plan.will_rerun.is_empty() && plan.will_skip.is_empty() && run.status == "failed" {
+        plan.note = Some(format!(
+            "previous run failed before executing any rule (phase: {}); the retry \
+             re-attempts the same pipeline — fix the reported error first or it will \
+             fail identically",
+            run.phase
+        ));
+    }
+
     // The retry is a REAL run (issue #82 P0-3 — previously the plan was
     // returned with a new_run_id that never existed). Re-executing in the
     // SAME workdir lets the CLI's checkpoint do the work: failed rules have

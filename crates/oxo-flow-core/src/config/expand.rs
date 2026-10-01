@@ -304,76 +304,10 @@ impl WorkflowConfig {
             })?;
         }
 
-        // Validate [[values]] tables: non-empty names/values, unique names,
-        // and no collisions with built-in wildcards (a rule referencing
-        // `{sample}` must not be ambiguous between group and value fan-out).
-        let mut seen_value_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        const RESERVED_VALUE_NAMES: &[&str] = &[
-            "sample",
-            "group",
-            "pair_id",
-            "experiment",
-            "control",
-            "tumor",
-            "normal",
-            "experiment_type",
-            "tumor_type",
-            // Executor placeholders — a value table named `input` (etc.)
-            // would replace the placeholder in every rule's shell.
-            "input",
-            "output",
-            "log",
-            "threads",
-            "memory",
-        ];
-        for table in &self.values {
-            if table.name.is_empty() {
-                return Err(OxoFlowError::Validation {
-                    message: "[[values]] table must have a non-empty name".to_string(),
-                    rule: None,
-                    suggestion: None,
-                });
-            }
-            let effective_len = match &table.values_from {
-                Some(from) => self.resolve_config_list(from).map(|v| v.len()).unwrap_or(0),
-                None => table.values.len(),
-            };
-            if effective_len == 0 {
-                let hint = if table.values_from.is_some() {
-                    format!(
-                        "values_from '{}' resolved to no values — check the config key exists and is non-empty",
-                        table.values_from.as_deref().unwrap_or("")
-                    )
-                } else {
-                    "add at least one value, or remove the table".to_string()
-                };
-                return Err(OxoFlowError::Validation {
-                    message: format!("[[values]] table '{}' has no values: {hint}", table.name),
-                    rule: None,
-                    suggestion: Some(hint),
-                });
-            }
-            if RESERVED_VALUE_NAMES.contains(&table.name.as_str()) {
-                return Err(OxoFlowError::Validation {
-                    message: format!(
-                        "[[values]] name '{}' collides with a built-in wildcard",
-                        table.name
-                    ),
-                    rule: None,
-                    suggestion: Some(
-                        "rename the table (e.g. use a tool-specific parameter name)".to_string(),
-                    ),
-                });
-            }
-            if !seen_value_names.insert(table.name.clone()) {
-                return Err(OxoFlowError::Validation {
-                    message: format!("duplicate [[values]] table '{}'", table.name),
-                    rule: None,
-                    suggestion: Some("merge the tables or rename one of them".to_string()),
-                });
-            }
-        }
+        // [[values]] tables: the shared validation (issue #760) — also
+        // enforced at parse/validate time, so this call keeps the
+        // standalone-expansion path equally strict.
+        self.validate_values_tables()?;
 
         // Pre-compile constraints for performance
         let compiled_constraints = self.compiled_wildcard_constraints()?;
