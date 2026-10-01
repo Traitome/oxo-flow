@@ -4487,7 +4487,11 @@ shell = "echo {config.alpha} > {config.results}/done.txt"
         let a = WorkflowConfig::parse(toml_a).unwrap();
         let b = WorkflowConfig::parse(toml_b).unwrap();
         let diffs = diff_workflows(&a, &b);
-        assert!(diffs.iter().any(|d| d.description.contains("script changed")));
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.description.contains("script changed"))
+        );
     }
 
     // ---- format_workflow new-fields tests -----------------------------------
