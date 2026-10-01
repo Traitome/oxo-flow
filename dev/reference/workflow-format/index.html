@@ -6713,6 +6713,12 @@ paths, and <code>when</code> conditions:</p>
 </span></code></pre></div>
 <h3 id="precedence">Precedence<a class="headerlink" href="#precedence" title="Permanent link">#</a></h3>
 <p>CLI override &gt; declared <code>default</code> &gt; error if <code>required</code> and unset.</p>
+<p>An override key that differs from a declared key only by hyphens vs underscores
+resolves onto the declared spelling: with <code>threads_max = { default = "4" }</code> in
+<code>[config]</code>, <code>--threads-max=8</code> sets <code>threads_max</code> (and the <code>--threads-max 8</code>
+space form is accepted too). This matters most for <code>sensitive</code> keys — masking
+and the checkpoint snapshot are keyed on the declared spelling — but it applies
+to every declared key. Keys matching nothing declared are untouched.</p>
 <hr />
 <h2 id="references-auto-built-indexes-reference-data"><code>[[references]]</code> — Auto-Built Indexes &amp; Reference Data<a class="headerlink" href="#references-auto-built-indexes-reference-data" title="Permanent link">#</a></h2>
 <p><code>[[references]]</code> is for <strong>external, pre-staged</strong> reference artifacts: the
