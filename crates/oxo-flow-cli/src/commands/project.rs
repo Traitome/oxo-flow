@@ -381,13 +381,14 @@ const EMBEDDED_GALLERY_AUX: &[(&str, &str)] = &[
 /// One entry per template — scripts/report templates and `conda = "envs/..."`
 /// environment files are merged into a single list.
 const TEMPLATE_AUX_FILES: &[(&str, &[&str])] = &[
-    (
-        "04_scatter_gather",
-        &["envs/gatk.yaml"],
-    ),
+    ("04_scatter_gather", &["envs/gatk.yaml"]),
     (
         "05_conda_environments",
-        &["envs/qc.yaml", "envs/analysis.yaml", "envs/venv-requirements.txt"],
+        &[
+            "envs/qc.yaml",
+            "envs/analysis.yaml",
+            "envs/venv-requirements.txt",
+        ],
     ),
     (
         "06_rnaseq_quantification",
