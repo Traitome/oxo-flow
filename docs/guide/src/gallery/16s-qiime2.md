@@ -45,6 +45,15 @@ graph TD
 
 Rarefaction (`{config.sampling_depth}`, default 1000) is required by `core-metrics-phylogenetic` so that alpha diversity values are comparable across samples. Inspect `table-summary.qzv` before lowering it — samples below the depth are dropped from the diversity analysis (not from the feature table).
 
+If **all** samples fall below the depth — the common case on a small pilot dataset, where the template default of 1000 exceeds every sample's merged-read count — `core_diversity` hard-fails:
+
+```
+The rarefied table contains no samples or features. Verify your table is
+valid and that you provided a shallow enough sampling depth.
+```
+
+The fix is to lower `sampling_depth` (CLI override `sampling_depth=200`, or edit the value in the workflow file). Because oxo-flow tracks config changes, the re-run invalidates only `core_diversity` and its dependents — every other rule is skipped from checkpoint.
+
 ### Taxonomy Classifier
 
 `{config.classifier}` must point to a pre-trained classifier matching your target region (e.g. `silva-138-99-515-806-nb-classifier.qza` for V4). QIIME2 does not ship classifiers; download or train one before running this rule.

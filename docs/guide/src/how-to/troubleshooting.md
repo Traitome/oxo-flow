@@ -114,6 +114,29 @@ namespace = "shared"
 **Solution**: Increase the timeout via `--timeout` flag or allocate more
 resources (threads/memory) to the rule.
 
+### Rarefaction depth exceeds all samples (QIIME2 core diversity)
+
+**Symptom**: `core-metrics-phylogenetic` (or any rule running QIIME2
+rarefaction) fails with:
+
+```
+The rarefied table contains no samples or features. Verify your table is
+valid and that you provided a shallow enough sampling depth.
+```
+
+**Cause**: every sample in the feature table has fewer merged reads than
+`sampling_depth`, so the rarefied table is empty. This commonly bites
+pilot datasets run with a workflow default (e.g. 1000) sized for real
+cohort data.
+
+**Solution**:
+
+1. Inspect per-sample depths (`feature-table summarize` / the workflow's
+   summary rule) to find the actual maximum
+2. Lower the depth: `oxo-flow run workflow.oxoflow sampling_depth=500`
+3. Re-run — config-tracking re-executes only the affected rule and its
+   dependents; earlier rules are skipped from checkpoint
+
 ## Wildcard Issues
 
 ### Unresolved wildcards
