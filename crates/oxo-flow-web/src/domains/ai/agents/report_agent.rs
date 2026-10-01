@@ -282,6 +282,48 @@ fn extract_file_types(files: &[ReportFile]) -> Vec<String> {
     types
 }
 
+/// Summarize a failed run from its structured failure data (issue #759) —
+/// shared by the keyword branch and the fallback so NO question on a
+/// failed run ever reaches the "pipeline completed" text.
+fn failure_answer(report: &ReportData) -> String {
+    if report.failed_rules.is_empty() {
+        return "The run failed before any rule completed its record — check the \
+                execution log for the reported error (likely a configuration or \
+                expansion failure at spawn)."
+            .to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for f in &report.failed_rules {
+        let code = f
+            .exit_code
+            .map(|c| format!(" (exit {c})"))
+            .unwrap_or_default();
+        let mut entry = format!("rule `{}`{code}", f.rule);
+        if let Some(tail) = f.stderr_tail.as_deref() {
+            let trimmed = tail.trim();
+            if !trimmed.is_empty() {
+                // Bounded excerpt: the stored tail is up to 64 KiB —
+                // an answer is not the place for the whole thing.
+                let excerpt: String = trimmed
+                    .chars()
+                    .rev()
+                    .take(600)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                entry.push_str(&format!(" — error tail: …{excerpt}"));
+            }
+        }
+        parts.push(entry);
+    }
+    format!(
+        "The run failed: {}. Fix the reported error before retrying — the retry \
+         re-executes the failed rule and its downstream dependents.",
+        parts.join("; ")
+    )
+}
+
 /// Answer a question about the report using context.
 pub fn answer_question(report: &ReportData, question: &str) -> String {
     let lower = question.to_lowercase();
@@ -294,42 +336,7 @@ pub fn answer_question(report: &ReportData, question: &str) -> String {
         .iter()
         .any(|k| lower.contains(k));
     if asks_failure && report.run_status == "failed" {
-        if report.failed_rules.is_empty() {
-            return "The run failed before executing any rule completed its record — check the \
-                    execution log for the reported error (likely a configuration or \
-                    expansion failure at spawn)."
-                .to_string();
-        }
-        let mut parts: Vec<String> = Vec::new();
-        for f in &report.failed_rules {
-            let code = f
-                .exit_code
-                .map(|c| format!(" (exit {c})"))
-                .unwrap_or_default();
-            let mut entry = format!("rule `{}`{code}", f.rule);
-            if let Some(tail) = f.stderr_tail.as_deref() {
-                let trimmed = tail.trim();
-                if !trimmed.is_empty() {
-                    // Bounded excerpt: the stored tail is up to 64 KiB —
-                    // an answer is not the place for the whole thing.
-                    let excerpt: String = trimmed
-                        .chars()
-                        .rev()
-                        .take(600)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect();
-                    entry.push_str(&format!(" — error tail: …{excerpt}"));
-                }
-            }
-            parts.push(entry);
-        }
-        return format!(
-            "The run failed: {}. Fix the reported error before retrying — the retry \
-             re-executes the failed rule and its downstream dependents.",
-            parts.join("; ")
-        );
+        return failure_answer(report);
     }
 
     if lower.contains("file") || lower.contains("output") || lower.contains("result") {
@@ -365,6 +372,10 @@ pub fn answer_question(report: &ReportData, question: &str) -> String {
     {
         let charts: Vec<String> = report.charts.iter().map(|c| c.title.clone()).collect();
         format!("Available visualizations: {}", charts.join(", "))
+    } else if report.run_status == "failed" {
+        // The generic fallback must never claim completion on a failed
+        // run, whatever the question said (issue #759).
+        failure_answer(report)
     } else {
         format!(
             "Based on the analysis report for this run: the pipeline completed with {} output files. \
@@ -579,6 +590,32 @@ mod tests {
             answer.contains("execution log"),
             "must point at the log when no per-rule record exists: {answer}"
         );
+    }
+
+    #[test]
+    fn keywordless_question_on_failed_run_never_claims_completion() {
+        // #759 residual: "summarize" matches no keyword branch — the
+        // generic fallback used to answer "the pipeline completed with N
+        // output files" on a failed run.
+        let report = generate_report(
+            "when-gate-690",
+            &sample_files(),
+            "",
+            &[],
+            "failed",
+            vec![FailedRuleInfo {
+                rule: "trim".into(),
+                exit_code: Some(-1),
+                stderr_tail: Some("unbound wildcard {sample}".into()),
+            }],
+        );
+        let answer = answer_question(&report, "summarize this run");
+        assert!(
+            !answer.contains("completed with"),
+            "no completion claim on a failed run: {answer}"
+        );
+        assert!(answer.contains("failed"), "{answer}");
+        assert!(answer.contains("trim"), "{answer}");
     }
 
     #[test]
