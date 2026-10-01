@@ -207,6 +207,80 @@ fn lint_regex_extract_calls(when: &str, rule: &Rule, diagnostics: &mut Vec<Diagn
     }
 }
 
+/// E018 (issue #791): a bare identifier in `when` — anything outside the
+/// condition vocabulary (`config.*`, `wildcard.*`, `{...}` placeholders,
+/// the built-in functions, `true`/`false`) — falls through every evaluator
+/// handler to its default-true fallback, so the rule silently RUNS. Every
+/// other unresolved-reference path is fail-closed (E005, absent-key
+/// truthiness, snparcher-incident wildcard comparison), so an unrecognized
+/// atom must be loud at validate/lint time, not exit-0 at run time.
+fn lint_when_bare_identifiers(when: &str, rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
+    const KNOWN_FNS: [&str; 6] = [
+        "len",
+        "file_exists",
+        "regex_extract",
+        "reads_count",
+        "wc_lines",
+        "file_size",
+    ];
+    for span in crate::executor::process::unquoted_spans(when) {
+        let chars: Vec<char> = span.chars().collect();
+        let mut i = 0usize;
+        let mut brace_depth = 0usize;
+        while i < chars.len() {
+            match chars[i] {
+                '{' => {
+                    brace_depth += 1;
+                    i += 1;
+                }
+                '}' => {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    i += 1;
+                }
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    let start = i;
+                    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                        i += 1;
+                    }
+                    // `{sample}`-style placeholder vocabulary is expanded at
+                    // plan time — never a bare atom.
+                    if brace_depth > 0 {
+                        continue;
+                    }
+                    let ident: String = chars[start..i].iter().collect();
+                    let prev = if start == 0 { ' ' } else { chars[start - 1] };
+                    let next = if i < chars.len() { chars[i] } else { ' ' };
+                    // Dotted members are the E005 scanner's job; the
+                    // `config.`/`wildcard.` namespace heads are vocabulary.
+                    if prev == '.' || (next == '.' && (ident == "config" || ident == "wildcard")) {
+                        continue;
+                    }
+                    // Known function heads are vocabulary; an unknown
+                    // `name(` is exactly as fail-open as a bare atom.
+                    if next == '(' && KNOWN_FNS.contains(&ident.as_str()) {
+                        continue;
+                    }
+                    if ident == "true" || ident == "false" {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "when condition uses unrecognized bare identifier '{ident}' - the gate would silently evaluate true and the rule would run"
+                        ),
+                        rule: Some(rule.name.clone()),
+                        code: "E018".to_string(),
+                        suggestion: Some(format!(
+                            "reference config keys as 'config.{ident}' (define them in [config]), or use a quoted literal, a {{...}} placeholder, or a built-in function (len/file_exists/regex_extract/reads_count/wc_lines/file_size)"
+                        )),
+                    });
+                }
+                _ => i += 1,
+            }
+        }
+    }
+}
+
 pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     // Compiled once per process, not once per rule: this function runs for
@@ -294,6 +368,9 @@ pub fn undefined_config_refs(rule: &Rule, config: &WorkflowConfig) -> Vec<Diagno
         // silent always-false gate at execution time — authoring errors
         // must be loud at validate/lint time.
         lint_regex_extract_calls(when, rule, &mut diagnostics);
+        // E018 (issue #791): an unrecognized bare identifier falls through
+        // to the evaluator's default-true fallback — the rule silently RUNS.
+        lint_when_bare_identifiers(when, rule, &mut diagnostics);
         // `len(config.<key>)` (issue #252): a length comparison against a
         // non-numeric literal is a silent always-false — flag it.
         static LEN_REF_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -3397,6 +3474,129 @@ mod tests {
                 .contains("command substitution via backticks")
         );
         assert!(shell_msg.message.contains("recursive force removal"));
+    }
+
+    #[test]
+    fn when_bare_identifier_flagged_e018() {
+        // Issue #791: an unrecognized bare identifier falls through to the
+        // evaluator's default-true fallback — the rule silently RUNS. The
+        // shared gate must reject it at validate/lint time.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step"
+            when = 'params_mode == 1'
+            output = ["out.txt"]
+            shell = "echo ran > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diags = undefined_config_refs(&config.rules[0].clone(), &config);
+        let e018: Vec<_> = diags.iter().filter(|d| d.code == "E018").collect();
+        assert_eq!(e018.len(), 1, "bare identifier must fire E018: {diags:?}");
+        assert_eq!(e018[0].severity, Severity::Error);
+        assert!(e018[0].message.contains("params_mode"));
+
+        // Bare-identifier truthiness is equally fail-open.
+        let toml_truthy = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step"
+            when = "foo"
+            output = ["out.txt"]
+            shell = "echo ran > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml_truthy).unwrap();
+        let diags = undefined_config_refs(&config.rules[0].clone(), &config);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == "E018" && d.message.contains("foo")),
+            "bare truthiness must fire E018: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn when_vocabulary_shapes_not_flagged_e018() {
+        // Every documented `when` shape must stay clean.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [config]
+            mode = "WGS"
+            min_reads = 1000
+            gene_sets = ["a", "b"]
+            samples = ["S1"]
+
+            [[rules]]
+            name = "cmp"
+            when = 'config.mode == "WGS" && len(config.gene_sets) > 0'
+            output = ["a.txt"]
+            shell = "touch a.txt"
+
+            [[rules]]
+            name = "truthy"
+            when = "config.samples"
+            output = ["b.txt"]
+            shell = "touch b.txt"
+
+            [[rules]]
+            name = "fns"
+            when = 'file_exists("panel.vcf.gz") && reads_count("{sample}/trim.fq") > config.min_reads'
+            output = ["c.txt"]
+            shell = "touch c.txt"
+
+            [[rules]]
+            name = "placeholders"
+            when = "{sample} != ''"
+            output = ["d.txt"]
+            shell = "touch d.txt"
+
+            [[rules]]
+            name = "literals"
+            when = "'S1' == 'S1'"
+            output = ["e.txt"]
+            shell = "touch e.txt"
+
+            [[rules]]
+            name = "bools"
+            when = "true"
+            output = ["f.txt"]
+            shell = "touch f.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        for rule in &config.rules {
+            let diags = undefined_config_refs(rule, &config);
+            assert!(
+                !diags.iter().any(|d| d.code == "E018"),
+                "rule '{}' must be clean: {diags:?}",
+                rule.name
+            );
+        }
+    }
+
+    #[test]
+    fn when_unknown_function_head_flagged_e018() {
+        // An unknown `name(` call is exactly as fail-open as a bare atom.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "step"
+            when = "metadata_mode('sample_sheet.tsv') == 'paired'"
+            output = ["out.txt"]
+            shell = "echo ran > out.txt"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diags = undefined_config_refs(&config.rules[0].clone(), &config);
+        let e018: Vec<_> = diags.iter().filter(|d| d.code == "E018").collect();
+        assert_eq!(e018.len(), 1, "unknown fn head must fire E018: {diags:?}");
+        assert!(e018[0].message.contains("metadata_mode"));
     }
 
     #[test]
