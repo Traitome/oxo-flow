@@ -186,6 +186,10 @@ pub struct FailedRuleInfo {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+    /// Bounded stdout tail (issue #765) — some tools print their root cause
+    /// on stdout; the Q&A falls back to it when stderr is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tail: Option<String>,
 }
 
 /// A single finding in a report.
