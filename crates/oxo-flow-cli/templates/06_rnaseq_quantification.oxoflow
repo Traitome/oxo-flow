@@ -102,7 +102,8 @@ conda = "envs/subread.yaml"
 name = "multiqc"
 # The rule has no {sample} in its inputs, so it expands to ONE instance.
 # depends_on keeps it behind every per-sample rule that feeds its qc/ and
-# counts/ directories (directory inputs form no file-based DAG edges).
+# counts/ directories (directory inputs also infer edges to producers that
+# write under them; depends_on makes the ordering explicit).
 depends_on = ["fastp_trim", "featurecounts"]
 output = ["results/multiqc_report.html"]
 description = "Aggregate QC metrics into a single report"
