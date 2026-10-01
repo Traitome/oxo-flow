@@ -133,8 +133,8 @@ input = ["qc/"]
 output = ["reports/multiqc_report.html"]
 shell = "multiqc qc/ -o reports/"
 description = "Aggregate QC metrics for the entire cohort"
-# Directory inputs form no file-based DAG edges; depends_on keeps multiqc
-# behind every rule that writes into qc/ (expands to all sample instances).
+# The qc/ directory input already forms edges to every rule writing under
+# it; depends_on keeps that ordering explicit regardless of file matching.
 depends_on = [
     "fastp",
     "markdup",

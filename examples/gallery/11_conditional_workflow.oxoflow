@@ -109,8 +109,9 @@ input = [
 output = ["reports/sample_report.html"]
 shell = "python scripts/report.py --vcf {input[0]} --qc qc/ --out {output[0]}"
 when = "config.run_annotation && config.run_qc"
-# Directory inputs form no file-based DAG edges; keep the report behind the
-# qc producers (condition-skipped deps count as satisfied).
+# The qc/ directory input infers edges to producers writing under it;
+# depends_on keeps the ordering explicit (condition-skipped deps count
+# as satisfied).
 depends_on = [
     "fastqc",
     "wgs_coverage",

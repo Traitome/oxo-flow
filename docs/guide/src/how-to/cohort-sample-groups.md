@@ -88,9 +88,9 @@ shell  = "gatk HaplotypeCaller -I {input[0]} -R {config.reference} -O {output[0]
 threads = 4
 
 # Aggregation step — runs ONCE for all samples.
-# Directory inputs form no file-based DAG edges, so depends_on keeps the
-# aggregation behind every rule that writes into qc/ (declared names
-# expand to all sample instances).
+# The qc/ directory input infers edges to producers writing under it;
+# depends_on keeps that ordering explicit (declared names expand to all
+# sample instances).
 [[rules]]
 name   = "multiqc"
 input  = ["qc/"]
