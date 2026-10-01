@@ -17,7 +17,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | Argument | Description |
 |---|---|
 | `[WORKFLOW]` | Path to the `.oxoflow` workflow file. **Optional** — if not specified, auto-discovery searches for: (1) `main.oxoflow` in current directory, (2) alphabetically first `*.oxoflow` file in current directory. |
-| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE` and `--KEY=VALUE` work for any key; the `--KEY VALUE` space form also works for any key present in `[config]` (plain `key = "value"` entries included) — a key absent from `[config]` is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd `--key=val` after the workflow still sets a config var, so prefer the `=` forms for undeclared keys) |
+| `[KEY=VALUE]...` | Direct config overrides: `KEY=VALUE` and `--KEY=VALUE` work for any key; the `--KEY VALUE` space form also works for any key present in `[config]` (plain `key = "value"` entries included) — a key absent from `[config]` is a hard error (an unknown flag would otherwise be indistinguishable from a mistyped option; a typo'd `--key=val` after the workflow still sets a config var, so prefer the `=` forms for undeclared keys). An override key that differs from a declared key only by hyphens vs underscores is canonicalized onto the declared spelling — `--api-token=x` sets the declared key `api_token` (and inherits its `sensitive` masking); keys matching nothing declared keep the literal spelling |
 
 ---
 
