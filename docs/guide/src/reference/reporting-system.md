@@ -264,11 +264,13 @@ Every adapter returns metrics in a stable order; each metric carries an
 optional QC flag from fixed thresholds (e.g. fastp `q30_rate` Pass ≥ 0.85 /
 Warn ≥ 0.75, STAR `uniquely_mapped_pct` Pass ≥ 70 / Warn ≥ 60, kraken2
 `unclassified_rate` Pass ≤ 20 / Warn ≤ 40), or `None` for informational
-values. Files that match a pattern but fail to parse are counted in a Scan
-Notes subsection — a scanner that hides its gaps would look like full
-coverage. The `metrics` section and the checkpoint-derived `sample-matrix`
+values. Files that match a pattern but fail to parse — or cannot be read
+at all (permissions, I/O errors) — are counted in a Scan Notes subsection
+— a scanner that hides its gaps would look like full coverage. The
+`metrics` section and the checkpoint-derived `sample-matrix`
 section (rule × sample success/failure grid from real expanded instance
-names) are both hidden when they have no data.
+names) are both hidden when they have no data; a gap-only scan still
+surfaces its Scan Notes.
 
 ### Benchmarks honesty
 
