@@ -98,25 +98,45 @@ pub async fn diagnose_failure(
     );
 
     // Parse the AI response
-    let root_cause = extract_section(&response_text, "Root Cause")
-        .unwrap_or_else(|| "Unknown — see full analysis".into());
-    let fix_action =
-        extract_section(&response_text, "Fix").unwrap_or_else(|| "Manual review needed".into());
+    let root_cause = extract_section(&response_text, "Root Cause");
+    let fix_action = extract_section(&response_text, "Fix");
     let safe = parse_safe_to_auto_apply(&response_text);
 
     // Extract modified TOML
     let modified_toml = extract_toml_block(&response_text);
 
-    eprintln!("\n{}\n{}", "Root Cause:".bold().red(), root_cause);
-    eprintln!("{}\n{}", "Suggested Fix:".bold().yellow(), fix_action);
+    eprintln!(
+        "\n{}\n{}",
+        "Root Cause:".bold().red(),
+        root_cause
+            .as_deref()
+            .unwrap_or("Unknown — see full analysis below")
+    );
+    eprintln!(
+        "{}\n{}",
+        "Suggested Fix:".bold().yellow(),
+        fix_action
+            .as_deref()
+            .unwrap_or("Manual review needed — see full analysis below")
+    );
     eprintln!(
         "Safe to auto-apply: {}",
         if safe { "yes".green() } else { "no".red() }
     );
+    // When section parsing failed the model answered off-format; surface the
+    // raw analysis instead of a dead-end pointer (the old "see full analysis"
+    // wording pointed at output that was never printed).
+    if root_cause.is_none() || fix_action.is_none() {
+        eprintln!(
+            "\n{}\n{}",
+            "Full Analysis:".bold().underline(),
+            response_text
+        );
+    }
 
     Ok(DiagnoseResult {
-        root_cause,
-        fix_action,
+        root_cause: root_cause.unwrap_or_else(|| "Unknown — see full analysis".into()),
+        fix_action: fix_action.unwrap_or_else(|| "Manual review needed".into()),
         modified_toml,
         safe_to_auto_apply: safe,
     })
@@ -240,12 +260,15 @@ Respond in this exact structure:
 }
 
 /// Extract TOML code block from AI response.
+///
+/// The diagnostic prompt allows "only the changed portions" — a `[[rules]]`
+/// block is a valid fix on its own, so accept it alongside `[workflow]`.
 fn extract_toml_block(response: &str) -> Option<String> {
     if let Some(start) = response.find("```toml") {
         let start = start + 7;
         if let Some(end) = response[start..].find("```") {
             let content = response[start..start + end].trim().to_string();
-            if content.contains("[workflow]") {
+            if content.contains("[workflow]") || content.contains("[[rules]") {
                 return Some(content);
             }
         }
@@ -254,6 +277,12 @@ fn extract_toml_block(response: &str) -> Option<String> {
 }
 
 /// Extract a named section from the AI response.
+///
+/// Tries the inline patterns first (`Marker:`, `**Marker**:`, ...), then the
+/// markdown headings the diagnostic prompt itself mandates (`## Root Cause`,
+/// `## Proposed Fix`). The heading form is what conforming replies actually
+/// use — without it every well-formed answer fell through to the fallback
+/// text and the real analysis was dropped.
 fn extract_section(text: &str, marker: &str) -> Option<String> {
     let patterns = [
         format!("[{marker}]:"),
@@ -269,7 +298,40 @@ fn extract_section(text: &str, marker: &str) -> Option<String> {
                 .or_else(|| remainder.find("\n**"))
                 .or_else(|| remainder.find("\n```"))
                 .unwrap_or(remainder.len());
-            return Some(remainder[..end].trim().to_string());
+            let found = remainder[..end].trim();
+            if !found.is_empty() {
+                return Some(found.to_string());
+            }
+        }
+    }
+    extract_heading_section(text, marker)
+}
+
+/// Capture the body under a markdown heading whose title contains `marker`
+/// (case-insensitive), ending at the next heading of any level or a code fence.
+fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
+    let marker_lower = marker.to_ascii_lowercase();
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('#') {
+            continue;
+        }
+        let title = trimmed.trim_start_matches('#').trim().to_ascii_lowercase();
+        if !title.contains(&marker_lower) {
+            continue;
+        }
+        let body: String = text
+            .lines()
+            .skip(idx + 1)
+            .take_while(|l| {
+                let t = l.trim();
+                !(t.starts_with('#') || t.starts_with("```"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = body.trim();
+        if !body.is_empty() {
+            return Some(body.to_string());
         }
     }
     None
@@ -277,7 +339,7 @@ fn extract_section(text: &str, marker: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_safe_to_auto_apply;
+    use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
 
     #[test]
     fn safe_gate_requires_an_explicit_yes() {
@@ -295,5 +357,56 @@ mod tests {
             "## Root Cause\nbwa ran out of memory"
         ));
         assert!(!parse_safe_to_auto_apply(""));
+    }
+
+    /// A fully-conforming reply uses the heading format the prompt mandates.
+    #[test]
+    fn section_extraction_matches_prompt_mandated_headings() {
+        let reply = "## Root Cause\nThe rule requested 16 threads but the \
+machine exposes 4; the scheduler killed it (exit 137).\n\n## Proposed Fix\n\
+Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
+```toml\n[[rules]]\nname = \"align\"\nthreads = 4\n```\n\n## Safety Assessment\n\
+- Safe to auto-apply: yes\n- Risk level: low\n";
+
+        let cause = extract_section(reply, "Root Cause").expect("root cause parsed");
+        assert!(cause.contains("exit 137"), "got: {cause}");
+        let fix = extract_section(reply, "Fix").expect("fix parsed");
+        assert!(fix.contains("threads = 4"), "got: {fix}");
+    }
+
+    #[test]
+    fn section_extraction_stops_at_next_heading_or_fence() {
+        let reply = "## Root Cause\nbad reference genome\n\n## Proposed Fix\npoint to hg38";
+        assert_eq!(
+            extract_section(reply, "Root Cause").as_deref(),
+            Some("bad reference genome")
+        );
+        assert_eq!(
+            extract_section(reply, "Fix").as_deref(),
+            Some("point to hg38")
+        );
+    }
+
+    #[test]
+    fn section_extraction_still_supports_inline_markers() {
+        assert_eq!(
+            extract_section("**Root Cause**: typo in path", "Root Cause").as_deref(),
+            Some("typo in path")
+        );
+        assert_eq!(
+            extract_section("Root Cause: typo in path", "Root Cause").as_deref(),
+            Some("typo in path")
+        );
+    }
+
+    /// The prompt permits "only the changed portions" — a [[rules]]-only
+    /// block is a legitimate fix and must not be discarded.
+    #[test]
+    fn toml_block_accepts_rules_only_fragments() {
+        let fragment = "```toml\n[[rules]]\nname = \"align\"\nthreads = 4\n```";
+        assert!(extract_toml_block(fragment).is_some());
+        assert!(extract_toml_block("```toml\n[workflow]\nname = \"x\"\n```").is_some());
+        assert!(extract_toml_block("```toml\nnot toml at all\n```").is_none());
+        assert!(extract_toml_block("no fence here").is_none());
     }
 }

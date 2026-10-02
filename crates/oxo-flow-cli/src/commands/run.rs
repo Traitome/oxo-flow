@@ -849,6 +849,21 @@ fn ai_attempts(cli_max_retries: Option<u32>) -> u32 {
     cli_max_retries.unwrap_or(1).max(1)
 }
 
+/// Pull the real exit code out of a failure reason ("exit code 137 — OOM …").
+/// Panics and aborts have no code in the reason and keep -1.
+fn failure_exit_code(failure_reason: &str) -> i32 {
+    failure_reason
+        .lines()
+        .next()
+        .and_then(|line| line.split("exit code ").nth(1))
+        .and_then(|rest| {
+            rest.split_whitespace()
+                .next()
+                .and_then(|tok| tok.parse().ok())
+        })
+        .unwrap_or(-1)
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Parse CLI config overrides — the SAME accepted forms for `run` and
 /// `dry-run` (issue #77 parity):
@@ -4432,8 +4447,14 @@ pub async fn run_command(
                     let mut result: Result<crate::commands::ai_recover::DiagnoseResult> =
                         Err(anyhow::anyhow!("AI recovery did not run"));
                     for attempt in 1..=attempts {
+                        // Feed the real exit code when the failure record has
+                        // one: the banner previously always showed -1, and the
+                        // prompt's exit-code→category triage (137=OOM,
+                        // 139=segfault, 127=command not found) needs the true
+                        // value to classify correctly. Panics/aborts keep -1.
+                        let exit_code = failure_exit_code(error);
                         result = crate::commands::ai_recover::diagnose_failure(
-                            &workflow, rule, -1, error, &provider,
+                            &workflow, rule, exit_code, error, &provider,
                         )
                         .await;
                         if result.is_ok() || attempt == attempts {
@@ -7179,7 +7200,7 @@ pub async fn resume_command(
 mod tests {
     use super::{
         age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
-        config_placeholder_values, known_modules_hint, missing_source_findings,
+        config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
         missing_source_lines, parse_cli_overrides, parse_spawn_watchdog_threshold,
         reconcile_failed_rules, substitute_source_placeholder, suggest_jobs,
     };
@@ -7848,6 +7869,21 @@ shell = "true"
         assert_eq!(ai_attempts(None), 1);
         assert_eq!(ai_attempts(Some(0)), 1);
         assert_eq!(ai_attempts(Some(3)), 3);
+    }
+
+    #[test]
+    fn failure_exit_code_parses_recorded_reasons() {
+        // The failure summary format from the executor path.
+        assert_eq!(
+            failure_exit_code("exit code 3 — ERROR: unknown reference genome hg999"),
+            3
+        );
+        assert_eq!(failure_exit_code("exit code 137"), 137);
+        assert_eq!(failure_exit_code("exit code 137\nstderr: ..."), 137);
+        // Panics/aborts carry no code in the reason → keep -1.
+        assert_eq!(failure_exit_code("task panicked: boom"), -1);
+        assert_eq!(failure_exit_code(""), -1);
+        assert_eq!(failure_exit_code("exit code notanumber"), -1);
     }
 
     #[test]
