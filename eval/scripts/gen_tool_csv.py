@@ -312,9 +312,12 @@ def emit():
     for row in sample_rows([r for r in biotools if r.get("description")], "n", stride=157, offset=31):
         name = row["n"]
         add(
+            # Cite the registry entry itself: the query asks what the ENTRY
+            # says, and the entry's content is the graded answer source
+            # (#172 audit — homepages describe the tool, not the entry).
             f"what does the bio.tools entry for {name} say it does",
             "purpose", name, "", "biotools", 0,
-            row.get("homepage") or f"https://bio.tools/{name}",
+            f"https://bio.tools/{name}",
             dates.get("biotools_overlay.jsonl", ""), "hard",
         )
 

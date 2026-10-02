@@ -148,6 +148,27 @@ class ExpectedToolTests(unittest.TestCase):
         findings, checked = check_gold.check_expected_tools(rows, {"fastp"})
         self.assertEqual((findings, checked), ([], 1))
 
+    def test_canonical_display_names_resolve_against_package_names(self):
+        rows = [
+            {"id": "tool-027", "negative_sample": "0", "review_status": "corrected", "expected_tool": "Seurat"},
+            {"id": "tool-038", "negative_sample": "0", "review_status": "corrected", "expected_tool": "VEP"},
+        ]
+        findings, checked = check_gold.check_expected_tools(rows, {"rseurat", "ensemblvep"})
+        self.assertEqual(findings, [])
+        self.assertEqual(checked, 2)
+
+
+class NegativeOverlapTests(unittest.TestCase):
+    def test_embedded_real_token_is_warned(self):
+        rows = [{"id": "tool-047", "negative_sample": "1", "query": "what does rnaseq_ultra_aligner do"}]
+        warnings = check_gold.check_negative_overlaps(rows, {"ultra", "fastq"})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ultra", warnings[0])
+
+    def test_clean_fake_names_do_not_warn(self):
+        rows = [{"id": "tool-049", "negative_sample": "1", "query": "what does gene_exploder do"}]
+        self.assertEqual(check_gold.check_negative_overlaps(rows, {"ultra"}), [])
+
 
 class VersionIntentTests(unittest.TestCase):
     def test_query_without_version_is_warned(self):

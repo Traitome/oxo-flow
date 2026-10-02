@@ -88,7 +88,13 @@ def check_negative_names(tool_rows, kb_norms):
 
 
 def check_expected_tools(tool_rows, kb_norms):
-    """Reviewed tool rows must expect a tool that exists in the knowledge base."""
+    """Reviewed tool rows must expect a tool that exists in the knowledge base.
+
+    Canonical display names count as present when a KB package name contains
+    them or vice versa (Seurat -> r-seurat, VEP -> ensembl-vep, DADA2 ->
+    bioconductor-dada2): those rows deliberately expect the name a scientist
+    would answer with.
+    """
     findings, checked = [], 0
     for row in tool_rows:
         if row.get("negative_sample") == "1" or row.get("review_status") not in REVIEWED:
@@ -97,8 +103,16 @@ def check_expected_tools(tool_rows, kb_norms):
         if not tool:
             continue
         checked += 1
-        if common.norm(tool) not in kb_norms:
-            findings.append(f"{row['id']}: expected_tool {tool!r} is absent from every knowledge-base table")
+        expected = common.norm(tool)
+        if expected in kb_norms:
+            continue
+        if any(
+            (expected in kb_name or kb_name in expected)
+            for kb_name in kb_norms
+            if len(kb_name) >= 4
+        ):
+            continue
+        findings.append(f"{row['id']}: expected_tool {tool!r} is absent from every knowledge-base table")
     return findings, checked
 
 
@@ -263,6 +277,28 @@ def check_workflow_edges(workflow_rows, repo_root, graph_source, fetch_community
     return findings, checked, skipped, fetch_warnings
 
 
+def check_negative_overlaps(tool_rows, kb_norms):
+    """Warn when a fabricated name embeds a KB tool name token (>=5 chars).
+
+    tool-047 (`rnaseq_ultra_aligner`) embeds the real `ultra`; the exact-form
+    collision check cannot see it, and a "did you mean ULTRA?" answer is
+    penalised by design — flag such rows for review attention (not a hard
+    failure: the item is still negative, it is just confusable).
+    """
+    warnings = []
+    for row in tool_rows:
+        if row.get("negative_sample") != "1":
+            continue
+        name = common.fake_tool_name(row.get("query", ""))
+        if not name:
+            continue
+        tokens = {common.norm(tok) for tok in re.split(r"[-_/]", name.lower()) if len(tok) >= 5}
+        hits = sorted(tokens & kb_norms)
+        if hits:
+            warnings.append(f"{row['id']}: fabricated name {name!r} embeds KB name(s) {hits}")
+    return warnings
+
+
 def check_version_intent(tool_rows):
     warnings = []
     for row in tool_rows:
@@ -305,6 +341,7 @@ def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
 
     warnings = check_version_intent(tool_rows)
     report["warnings"] += [f"[version-intent] {row_id}" for row_id in warnings]
+    report["warnings"] += [f"[negative-overlap] {w}" for w in check_negative_overlaps(tool_rows, kb_name_norms())]
 
     report["rows"] = {"tool": len(tool_rows), "workflow": len(workflow_rows)}
     return report
