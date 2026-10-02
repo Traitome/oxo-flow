@@ -542,11 +542,17 @@ impl EnvironmentSpec {
     }
 
     /// Returns the primary environment kind as a string.
+    ///
+    /// The chain mirrors the resolver's dispatch order (`mamba` before
+    /// `conda` — [`crate::environment::EnvironmentResolver::wrap_command`]),
+    /// so labels in `env check`, reports, and software-version provenance
+    /// name the backend that would actually wrap the rule when both keys
+    /// are declared.
     pub fn kind(&self) -> &str {
-        if self.conda.is_some() {
-            "conda"
-        } else if self.mamba.is_some() {
+        if self.mamba.is_some() {
             "mamba"
+        } else if self.conda.is_some() {
+            "conda"
         } else if self.pixi.is_some() {
             "pixi"
         } else if self.docker.is_some() {
