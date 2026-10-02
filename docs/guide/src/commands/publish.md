@@ -15,6 +15,12 @@ to discover all environment spec files, collects `scripts/` and `bin/`
 directories, and produces a single `.tar.zst` archive containing:
 
 - The workflow file
+- Every included sub-workflow `.oxoflow` file (at its
+  including-file-relative path, so consumer-side include resolution
+  resolves unchanged), together with each sub-workflow's own environment
+  spec files, `[workflow]` data files, and container references — local
+  `path` includes only; `repo`/URL includes are re-fetched by the
+  consumer and are not vendored
 - All referenced environment files (conda, mamba, pixi, venv)
 - The `[workflow]` data files the workflow cannot parse without —
   `metadata_file`, `pairs_file`, and `sample_groups_file` (kept at their
