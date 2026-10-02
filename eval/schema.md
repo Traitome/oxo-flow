@@ -84,12 +84,30 @@ workflow repositories.
 | `reference_file` | Path to the reference workflow |
 | `provenance_url` | Source of the gold steps (repo file URL) |
 
-Judging (runner): `validate` + `lint` exit codes, step-name coverage (including namespaced rules such as `qc::fastqc`), tool coverage, DAG-edge coverage inferred from normalized input/output path suffixes, and output-pattern coverage. See `eval/README.md` for the exact scoring formulas.
+Judging (runner): `validate` + `lint` exit codes, step-name coverage (including namespaced rules such as `qc::fastqc`), tool coverage, DAG-edge coverage against the engine's own dependency graph (`oxo-flow graph -f dot`, which also connects directory inputs, `depends_on` and scatter-aware links), and output-pattern coverage. See `eval/README.md` for the exact scoring formulas.
 
 ## Review workflow (publication-track)
 
-1. Open the CSV in a spreadsheet editor (Excel/Numbers/LibreOffice all handle RFC 4180; Google Sheets imports it directly).
-2. For each row: click `provenance_url` and compare the gold answer with the source. Only mark `review_status = approved` when the row is scientifically unambiguous and the cited source still matches the gold fields. Fill `reviewer` and `review_date`.
+Reviewer identity: `reviewer` records a **human handle**; `*-automated` is
+reserved for machine sweeps and never counts as sign-off. Machine repairs
+still use `review_status = corrected` with the repair described in
+`review_comment`, but stay flagged for human re-verification until a human
+re-reads them.
+
+1. Do **not** open the gold CSVs in a spreadsheet editor: rows carry long
+   single-line JSON cells and ISO dates, and Excel/Numbers rewrite quoting
+   and dates on save. Edit through a CSV-aware editor or script instead.
+2. For each row, open `provenance_url` (or the reference workflow file) and
+   compare the gold answer with the source. Record in `review_comment` what
+   was checked — the external artifact, what matched, the date. Only mark
+   `review_status = approved` when the row is scientifically unambiguous and
+   the cited source still matches the gold fields. Fill `reviewer` and
+   `review_date`.
 3. If the draft is wrong, fix the gold columns, set `review_status = corrected`, and describe the change in `review_comment`.
 4. If the item is ambiguous, unverifiable, or depends on hidden local context, set `review_status = rejected` and explain why in `review_comment`.
 5. Rows left at `draft` are excluded from final reporting. `--include-unreviewed` is for previewing harness behavior only and must not be presented as the benchmark result.
+6. Run `python3 eval/scripts/check_gold.py` (`make eval-lint`; needs a built
+   engine binary) before and after a review batch: it flags fabricated names
+   that collide with the knowledge base, gold-vs-KB version drift, missing
+   provenance evidence, and declared DAG edges absent from the reference's
+   engine graph.
