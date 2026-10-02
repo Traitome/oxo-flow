@@ -19,11 +19,11 @@
       "auto": true
     },
     "nfcore_modules": {
-      "count": 2000,
+      "count": 2095,
       "url": "https://github.com/nf-core/modules",
       "description": "",
       "data_file": "nfcore_modules.jsonl",
-      "generated_at": "2026-10-01T10:12:32Z",
+      "generated_at": "2026-10-02T16:23:24Z",
       "auto": true
     },
     "commercial_tools": {
@@ -85,5 +85,5 @@
       "auto": true
     }
   },
-  "generated_at": "2026-10-01T10:12:52Z"
+  "generated_at": "2026-10-02T16:23:24Z"
 }

@@ -38,7 +38,6 @@ from common import default_out_dir, http_get, http_get_json, log, update_meta, w
 TREE_URL = "https://api.github.com/repos/nf-core/modules/git/trees/master?recursive=1"
 RAW_BASE = "https://raw.githubusercontent.com/nf-core/modules/master/"
 CONCURRENCY = 8
-MAX_ENTRIES = 2000
 
 
 # ── Minimal YAML subset parser ─────────────────────────────────────────────
@@ -92,6 +91,13 @@ def _fold_block_scalars(text: str) -> str:
         # Strip trailing blank lines; '>' folds with spaces, '|' keeps newlines.
         while block and block[-1] == "":
             block.pop()
+        # Strip the block content's own common indentation (the collection
+        # loop only removed the key's indent, which left the content indent in
+        # every line — `description: |` text kept its leading spaces).
+        non_empty = [b for b in block if b.strip()]
+        if non_empty:
+            content_indent = min(len(b) - len(b.lstrip(" ")) for b in non_empty)
+            block = [b[content_indent:] if b.strip() else "" for b in block]
         value = " ".join(part.strip() for part in block) if kind.startswith(">") else "\n".join(block)
         # Emit as a JSON-escaped double-quoted string (valid YAML too) so the
         # re-emitted line stays a single physical line for MAP_ITEM_RE.
@@ -171,8 +177,29 @@ def _consume_value(lines: list[str], j: int, indent: int, val: str) -> tuple[obj
     becomes "first line second line". Continuation applies only to plain
     (unquoted, non-inline-list) scalars.
     """
-    if val.startswith("[") or val.startswith('"') or val.startswith("'"):
+    if val.startswith("["):
         return _scalar(val), j + 1
+    if val.startswith('"') or val.startswith("'"):
+        quote = val[0]
+        if len(val) > 1 and val.endswith(quote):
+            return _scalar(val), j + 1
+        # Unterminated quoted scalar: YAML folds the continuation lines into
+        # it (`description: "3DUnet for ...` on two lines). Without this the
+        # record kept a stray leading quote and a truncated description.
+        parts = [val]
+        k = j + 1
+        while k < len(lines):
+            nxt = lines[k].strip()
+            if not nxt or nxt.startswith("#"):
+                break
+            if _indent_of(lines[k]) > indent:
+                parts.append(nxt)
+                k += 1
+                if nxt.endswith(quote):
+                    break
+                continue
+            break
+        return _scalar(" ".join(parts)), k
     parts = [val]
     k = j + 1
     while k < len(lines):
@@ -319,7 +346,13 @@ def fetch_module_yml(path: str, is_env: bool) -> tuple[str, str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Refresh nfcore_modules.jsonl from nf-core/modules")
     ap.add_argument("--out", default=default_out_dir(), help="output dir (default: crates/oxo-flow-ai/src/knowledge/)")
-    ap.add_argument("--max-entries", type=int, default=MAX_ENTRIES, help="hard cap on emitted rows")
+    ap.add_argument(
+        "--max-entries",
+        type=int,
+        default=None,
+        help="hard cap on emitted rows (default: none — an alphabetically truncated "
+        "cap silently dropped 96 real modules, see #172 audit)",
+    )
     args = ap.parse_args()
     out_dir = args.out
 
@@ -374,8 +407,13 @@ def main() -> int:
         rows.append(rec)
 
     rows.sort(key=lambda r: r["n"])
-    if len(rows) > args.max_entries:
-        log(f"  Trimming {len(rows)} rows to --max-entries={args.max_entries}.")
+    if args.max_entries is not None and len(rows) > args.max_entries:
+        dropped = sorted(r["n"] for r in rows[args.max_entries :])
+        log(
+            f"WARNING: trimming {len(rows)} rows to --max-entries={args.max_entries} — "
+            f"DROPPING {len(dropped)} modules from the knowledge base "
+            f"(first: {', '.join(dropped[:5])})"
+        )
         rows = rows[: args.max_entries]
 
     if failed:
