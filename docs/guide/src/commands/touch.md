@@ -61,7 +61,7 @@ oxo-flow touch pipeline.oxoflow out_dir=results/cohort-A
 ## Output
 
 ```
-oxo-flow v0.21.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.21.2 — Rust-native bioinformatics pipeline engine
   ✓ sample1.bam
   ✓ sample1.bam.bai
   ✓ sample2.bam

@@ -9,7 +9,7 @@ corruption only.
 
 ## Quick Start
 
-> **Inert as of v0.21.1**: the `[plugins]` section, registry API, and
+> **Inert as of v0.21.2**: the `[plugins]` section, registry API, and
 > manifest discovery are parsed but nothing is executed from them yet —
 > see the warning at the end of this page. The API below is the
 > compile-time contract for engine-side wiring.
@@ -161,7 +161,7 @@ use oxo_flow_core::plugin::PluginOutput;
 ```
 
 `success` and `command` are the fields the engine would act on; `errors`,
-`logs`, and `exit_code` carry diagnostics. Note that as of v0.21.1 the
+`logs`, and `exit_code` carry diagnostics. Note that as of v0.21.2 the
 whole plugin surface is defined but inert: a workflow `[plugins]` section
 is parsed and logs a one-time warning ("parsed but not executed by this
 version"), and there is no engine-side runner that invokes plugin

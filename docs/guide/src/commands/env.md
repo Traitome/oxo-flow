@@ -28,7 +28,7 @@ When given a workflow file, lists the environments used by each rule.
 **Output:**
 
 ```
-oxo-flow v0.21.1 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.21.2 — Rust-native bioinformatics pipeline engine
 https://github.com/Traitome/oxo-flow
 Available environment backends:
   ✓ conda
