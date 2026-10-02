@@ -240,7 +240,7 @@ When generating cluster scripts, oxo-flow automatically wraps commands through t
 | Backend | Wrapping |
 |---|---|
 | Conda | `conda run --no-capture-output -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` |
-| Mamba | `<mamba\|micromamba\|conda> run -n <env> bash -c '<command>'` |
+| Mamba | `<mamba\|micromamba\|conda> run -n <env> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` (`--no-capture-output` added when the detected binary is conda) |
 | Docker | `docker run --rm --user $(id -u):$(id -g) -v <workdir>:<workdir> -w <workdir> <image> sh -c '<shim>' sh '<command>'` |
 | Singularity / Apptainer | `<apptainer\|singularity> exec --bind <workdir>:<workdir> <image> sh -c '<shim>' sh '<command>'` |
 | Pixi | `pixi run --manifest-path <pixi.toml> bash -c '<command>'` |

@@ -117,7 +117,7 @@ or rename it, build the suffixed env, or drop `--skip-env-setup`.
 
 - **Detection**: Checks for `mamba`, then `micromamba`, then falls back to `conda` on `$PATH`
 - **Resolution**: Parses YAML environment file (same format as conda)
-- **Activation**: Runs `<mamba|micromamba|conda> run -n <env_name> bash -c '<command>'` (mamba has no `--no-capture-output` flag, so it is not added)
+- **Activation**: Runs `<mamba|micromamba|conda> run -n <env_name> bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; <command>'` — the `PATH` prefix makes the rule see the env's own tools first on hybrid boxes (same rationale as conda). When the detected binary is `conda` (fallback), `--no-capture-output` is added like the conda backend; native mamba/micromamba reject that flag, so it is only added for conda
 - **Caching**: Environments are created once and reused across rules that share the same YAML file
 - **Usage**: Set `environment.mamba = "envs/qc.yaml"` in the rule. Uses the same YAML format as conda but with the mamba/micromamba binary for faster solving.
 
