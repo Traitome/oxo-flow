@@ -413,6 +413,22 @@ def name_present(name, text):
     return norm(name) in norm(text)
 
 
+FAKE_TOOL_NAME_RE = re.compile(
+    r"^\s*what\s+(?:is|does)\s+(.+?)(?:\s+do)?\s*\??\s*$", re.IGNORECASE
+)
+
+
+def fake_tool_name(query):
+    """The fabricated tool name a negative-sample query asks about.
+
+    Negative queries follow `what is <name>` / `what does <name> do`; the
+    judge uses the extracted name to drop the answer's own echo of it before
+    scanning for real tool mentions. Returns "" when the shape is unknown.
+    """
+    match = FAKE_TOOL_NAME_RE.match(query or "")
+    return match.group(1).strip() if match else ""
+
+
 def step_tokens(text):
     return [norm(part) for part in re.split(r"[:/_.-]+", text) if norm(part)]
 

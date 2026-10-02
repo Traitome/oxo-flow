@@ -254,9 +254,63 @@ def path_hits(expected_paths, declared_paths):
 
 # ── Tool layer ──────────────────────────────────────────────────────────────
 
-def answer_mentions_known_tool(answer, known_names):
-    normalized = common.norm(answer)
-    return any(common.norm(name) in normalized for name in known_names if common.norm(name))
+MIN_MENTION_NAME_LEN = 3
+
+
+def _mention_tokens(text):
+    """Lowercase alphanumeric tokens; -, _ and / collapse into breaks."""
+    text = re.sub(r"[-_/]", " ", text.lower())
+    text = re.sub(r"[^a-z0-9 ]", " ", text)
+    return text.split()
+
+
+def _drop_token_span(tokens, span):
+    """Remove every contiguous occurrence of `span` from `tokens`."""
+    if not span:
+        return tokens
+    out, i = [], 0
+    while i < len(tokens):
+        if tokens[i : i + len(span)] == span:
+            i += len(span)
+        else:
+            out.append(tokens[i])
+            i += 1
+    return out
+
+
+def answer_mentions_known_tool(answer, known_names, exclude_name=""):
+    """True when the answer names a known tool (whole-token match).
+
+    A correct rejection has to echo the fabricated tool's name, so the
+    queried name (`exclude_name`) is dropped from the answer first —
+    otherwise names like `fastq_super_cleaner` would count as a mention of
+    the real tool `fastq`. Matching is exact on tokens (or a fused token),
+    so short KB names no longer match inside longer words (`bio` in
+    `bioconda`, `fc` in `nf-core`). Names shorter than
+    MIN_MENTION_NAME_LEN characters are skipped: as bare tokens they
+    collide with ordinary words without carrying signal.
+    """
+    tokens = _mention_tokens(answer)
+    if exclude_name:
+        excluded = _mention_tokens(exclude_name)
+        tokens = _drop_token_span(tokens, excluded)
+        if excluded:
+            fused_excluded = "".join(excluded)
+            tokens = [token for token in tokens if token != fused_excluded]
+    if not tokens:
+        return False
+    wordset = set(tokens)
+    joined = " " + " ".join(tokens) + " "
+    for name in known_names:
+        name_tokens = _mention_tokens(name)
+        if not name_tokens:
+            continue
+        fused = "".join(name_tokens)
+        if len(fused) < MIN_MENTION_NAME_LEN:
+            continue
+        if fused in wordset or f" {' '.join(name_tokens)} " in joined:
+            return True
+    return False
 
 
 def judge_tool(gold_rows, captures_path):
@@ -284,7 +338,11 @@ def judge_tool(gold_rows, captures_path):
                 )
             if row["negative_sample"] == "1":
                 rejected = bool(NOT_FOUND_RE.search(answer))
-                hallucinated = answer_mentions_known_tool(answer, known_names)
+                hallucinated = answer_mentions_known_tool(
+                    answer,
+                    known_names,
+                    exclude_name=common.fake_tool_name(row.get("query", "")),
+                )
                 scores["no_hallucination"] = 1.0 if rejected and not hallucinated else 0.0
             scores["overall"] = mean(list(scores.values())) if scores else 0.0
             results.append(
