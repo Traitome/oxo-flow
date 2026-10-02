@@ -8335,7 +8335,7 @@ operator's <code>combine</code> stage instead (see
 </tr>
 <tr>
 <td><code>{input.name}</code></td>
-<td>The value of the <code>name</code> entry in the rule's <code>input</code> map (<code>input = { name = "..." }</code>)</td>
+<td>The value of the <code>name</code> entry in the rule's <code>input</code> map (<code>input = { name = "..." }</code> → <code>{input.name}</code>); any key works: <code>input = { reads = "..." }</code> → <code>{input.reads}</code></td>
 </tr>
 <tr>
 <td><code>{output}</code></td>
@@ -8347,7 +8347,7 @@ operator's <code>combine</code> stage instead (see
 </tr>
 <tr>
 <td><code>{output.name}</code></td>
-<td>The value of the <code>name</code> entry in the rule's <code>output</code> map (<code>output = { name = "..." }</code>)</td>
+<td>The value of the <code>name</code> entry in the rule's <code>output</code> map (<code>output = { name = "..." }</code> → <code>{output.name}</code>); any key works: <code>output = { bam = "..." }</code> → <code>{output.bam}</code></td>
 </tr>
 <tr>
 <td><code>{threads}</code></td>

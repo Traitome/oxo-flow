@@ -4269,7 +4269,7 @@
 </tr>
 <tr>
 <td><code>{input.name}</code></td>
-<td>The value of the <code>name</code> entry in the rule's <code>input</code> map (<code>input = { name = "..." }</code>)</td>
+<td>The value of the <code>name</code> entry in the rule's <code>input</code> map (<code>input = { name = "..." }</code> → <code>{input.name}</code>); any key works: <code>input = { reads = "..." }</code> → <code>{input.reads}</code></td>
 </tr>
 <tr>
 <td><code>{output}</code></td>
@@ -4281,7 +4281,7 @@
 </tr>
 <tr>
 <td><code>{output.name}</code></td>
-<td>The value of the <code>name</code> entry in the rule's <code>output</code> map (<code>output = { name = "..." }</code>)</td>
+<td>The value of the <code>name</code> entry in the rule's <code>output</code> map (<code>output = { name = "..." }</code> → <code>{output.name}</code>); any key works: <code>output = { bam = "..." }</code> → <code>{output.bam}</code></td>
 </tr>
 <tr>
 <td><code>{threads}</code></td>
@@ -4377,7 +4377,7 @@
 <p>When a rule is expanded from wildcards, its unique name in the DAG is modified to include the wildcard values to avoid collisions:</p>
 <ul>
 <li><strong>Sample/group wildcards</strong>: <code>align</code> → <code>align_control_S1</code> — one expanded rule per (group, sample) combination</li>
-<li><strong>Group-less declared samples</strong>: a flat sample list with no <code>[[sample_groups]]</code> collapses into a single implicit group named <code>samples</code>, so <code>align</code> → <code>align_samples_S1</code>. The same applies to <code>--samples</code> overrides of a workflow that declares no groups</li>
+<li><strong><code>--samples</code> overrides</strong>: filtering a workflow that declares no <code>[[sample_groups]]</code> collapses the selection into a single implicit group named <code>samples</code>, so <code>align</code> → <code>align_samples_S1</code> (there is no flat <code>samples</code> key in <code>[workflow]</code>; the implicit group arises from the <code>--samples</code> override)</li>
 <li><strong>Pairs</strong>: <code>mutect2</code> → <code>mutect2_CASE_001</code></li>
 </ul>
 <hr />
