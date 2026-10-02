@@ -3840,6 +3840,12 @@ to discover all environment spec files, collects <code>scripts/</code> and <code
 directories, and produces a single <code>.tar.zst</code> archive containing:</p>
 <ul>
 <li>The workflow file</li>
+<li>Every included sub-workflow <code>.oxoflow</code> file (at its
+  including-file-relative path, so consumer-side include resolution
+  resolves unchanged), together with each sub-workflow's own environment
+  spec files, <code>[workflow]</code> data files, and container references — local
+  <code>path</code> includes only; <code>repo</code>/URL includes are re-fetched by the
+  consumer and are not vendored</li>
 <li>All referenced environment files (conda, mamba, pixi, venv)</li>
 <li>The <code>[workflow]</code> data files the workflow cannot parse without —
   <code>metadata_file</code>, <code>pairs_file</code>, and <code>sample_groups_file</code> (kept at their
