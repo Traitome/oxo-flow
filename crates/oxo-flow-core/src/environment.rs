@@ -805,18 +805,22 @@ impl MambaBackend {
         spec: &str,
         prefix: Option<&str>,
     ) -> Result<String> {
-        let escaped = escape_for_sh_single_quote(command);
+        // Same PATH re-export + conda-only --no-capture-output rationale as
+        // wrap_command below.
         if let Some(prefix) = prefix {
-            Ok(format!(
-                "{} run -p {prefix} bash -c '{escaped}'",
-                self.binary
-            ))
+            let escaped = escape_for_sh_single_quote(command);
+            if self.binary == "conda" {
+                Ok(format!(
+                    "conda run --no-capture-output -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'"
+                ))
+            } else {
+                Ok(format!(
+                    "{} run -p {prefix} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
+                    self.binary
+                ))
+            }
         } else {
-            let env_name = conda_env_name_from_spec("mamba", spec)?;
-            Ok(format!(
-                "{} run -n {env_name} bash -c '{escaped}'",
-                self.binary
-            ))
+            self.wrap_command(command, spec, None, std::path::Path::new("."))
         }
     }
 
@@ -887,11 +891,30 @@ impl EnvironmentBackend for MambaBackend {
         _workdir: &std::path::Path,
     ) -> Result<String> {
         let env_name = conda_env_name_from_spec("mamba", spec)?;
-        let escaped = escape_for_sh_single_quote(command);
-        Ok(format!(
-            "{} run -n {env_name} bash -c '{escaped}'",
-            self.binary
-        ))
+        // Same CONDA_PREFIX/bin-first rationale as CondaBackend::wrap_command:
+        // `conda run` puts the env's bin AFTER the host PATH on hybrid boxes
+        // (conda+pixi et al.), so host tools shadow the env's pinned ones —
+        // live: a [defaults] mamba rule on this repo's doc-test server ran
+        // host pixi samtools 1.23.1 instead of the env's samtools 1.21.
+        // Re-prepending $CONDA_PREFIX/bin (set by `run` itself) makes the env
+        // win regardless of host PATH ordering.
+        //
+        // `--no-capture-output` is conda-specific (conda >= 4.13): mamba and
+        // micromamba reject the flag, so only add it when the detected
+        // binary actually is conda. Without it, the conda-fallback path has
+        // the same EOF-park hazard documented on CondaBackend::wrap_command.
+        if self.binary == "conda" {
+            Ok(format!(
+                "conda run --no-capture-output -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
+                escaped = escape_for_sh_single_quote(command)
+            ))
+        } else {
+            let escaped = escape_for_sh_single_quote(command);
+            Ok(format!(
+                "{} run -n {env_name} bash -c 'export PATH=\"$CONDA_PREFIX/bin:$PATH\"; {escaped}'",
+                self.binary
+            ))
+        }
     }
 
     fn setup_command(&self, spec: &str) -> Result<String> {
@@ -3296,8 +3319,59 @@ mod tests {
                 std::path::Path::new("."),
             )
             .unwrap();
-        assert!(result.contains("run -n"), "expected 'run -n' in: {result}");
-        assert!(result.contains("fastqc reads.fq"));
+        // Binary-dependent rendering (conda fallback interleaves
+        // --no-capture-output), so assert on the detected binary + `-n`.
+        assert!(
+            result.contains(&format!("{} run", backend.binary)) && result.contains(" -n "),
+            "expected '{binary} run … -n' in: {result}",
+            binary = backend.binary
+        );
+        // Hybrid-box PATH guard (parity with CondaBackend): the env's own bin
+        // must win over the host PATH regardless of which conda-family
+        // binary was detected.
+        assert!(
+            result.contains("export PATH=\"$CONDA_PREFIX/bin:$PATH\""),
+            "expected CONDA_PREFIX PATH re-export in: {result}"
+        );
+    }
+
+    #[test]
+    fn mamba_wrap_conda_fallback_adds_no_capture_output() {
+        // On a mamba/micromamba-less box the backend falls back to conda;
+        // the wrap must then carry conda's --no-capture-output EOF-park fix
+        // (same as CondaBackend::wrap_command).
+        let backend = MambaBackend {
+            binary: "conda".to_string(),
+        };
+        let result = backend
+            .wrap_command(
+                "fastqc reads.fq",
+                "envs/qc.yaml",
+                None,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        assert!(
+            result.contains("conda run --no-capture-output -n"),
+            "expected conda-fallback to add --no-capture-output: {result}"
+        );
+        assert!(result.contains("export PATH=\"$CONDA_PREFIX/bin:$PATH\""));
+    }
+
+    #[test]
+    fn mamba_wrap_native_binary_omits_no_capture_output() {
+        // Native mamba rejects --no-capture-output (conda >= 4.13 flag).
+        let backend = MambaBackend {
+            binary: "mamba".to_string(),
+        };
+        let result = backend
+            .wrap_command("echo test", "envs/qc.yaml", None, std::path::Path::new("."))
+            .unwrap();
+        assert!(
+            !result.contains("--no-capture-output"),
+            "native mamba must not get conda's flag: {result}"
+        );
+        assert!(result.starts_with("mamba run -n"));
     }
 
     #[test]
@@ -3368,6 +3442,8 @@ mod tests {
             .unwrap();
         assert!(result.contains("-p .oxo-conda"));
         assert!(result.contains("fastqc reads.fq"));
+        // Prefix arm carries the same hybrid-box PATH guard.
+        assert!(result.contains("export PATH=\"$CONDA_PREFIX/bin:$PATH\""));
     }
 
     #[test]
@@ -3388,7 +3464,7 @@ mod tests {
             .wrap_command("fastqc reads.fq", &spec, None, std::path::Path::new("."))
             .unwrap();
         assert!(
-            result.contains("run -n"),
+            result.contains(" -n ") && result.contains("fastqc reads.fq"),
             "expected wrapped mamba command: {result}"
         );
     }
@@ -3411,8 +3487,10 @@ mod tests {
         // hardcoded "mamba" — the old `contains("run -n")` was satisfied by
         // the conda fallback too (audit finding).
         let binary = MambaBackend::new().binary.clone();
+        // The conda-fallback binary interleaves --no-capture-output before
+        // -n, so assert `{binary} run` and ` -n ` separately.
         assert!(
-            wrapped.contains(&format!("{binary} run -n")),
+            wrapped.contains(&format!("{binary} run")) && wrapped.contains(" -n "),
             "expected the mamba wrapper (binary {binary}): {wrapped}"
         );
         let cache_key = resolver.cache_key(&spec);
