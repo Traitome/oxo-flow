@@ -60,6 +60,43 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual([f["trial"] for f in files], [1, 2])
 
 
+class VersionGateTests(unittest.TestCase):
+    """#172: version_match is scored only when the query asks for a version
+    (schema.md: expected_version is empty when the query does not ask; 45
+    rows carried a version anyway and penalised correct answers)."""
+
+    def _judge(self, query, expected_version, answer):
+        with tempfile.TemporaryDirectory() as td:
+            captures = Path(td) / "answers.csv"
+            with open(captures, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["id", "trial", "answer", "error"])
+                writer.writeheader()
+                writer.writerow({"id": "tool-900", "trial": 1, "answer": answer, "error": ""})
+            gold_rows = [
+                {
+                    "id": "tool-900",
+                    "query": query,
+                    "expected_tool": "fastp",
+                    "expected_version": expected_version,
+                    "negative_sample": "0",
+                }
+            ]
+            return runner.judge_tool(gold_rows, str(captures))[0]
+
+    def test_version_not_scored_when_query_never_asks(self):
+        row = self._judge("adapter trimming and quality filtering", "1.3.7", "fastp")
+        self.assertNotIn("version_match", row)
+        self.assertEqual(row["overall"], 1.0)
+
+    def test_version_scored_when_query_asks(self):
+        row = self._judge("what is the latest version of fastp in bioconda", "1.3.7", "fastp 1.3.7")
+        self.assertEqual(row["version_match"], 1.0)
+
+    def test_missing_version_fails_when_query_asks(self):
+        row = self._judge("what is the latest version of fastp in bioconda", "1.3.7", "fastp")
+        self.assertEqual(row["version_match"], 0.0)
+
+
 class DotEdgeParsingTests(unittest.TestCase):
     def test_parse_dot_edges_maps_labels(self):
         dot = 'digraph {\n    0 [ label = "fastp"]\n    1 [ label = "multiqc"]\n    0 -> 1 [ ]\n}'
