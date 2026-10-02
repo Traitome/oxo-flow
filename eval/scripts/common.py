@@ -409,8 +409,19 @@ def norm(text):
 
 
 def name_present(name, text):
-    """The normalized tool name occurs in the text."""
-    return norm(name) in norm(text)
+    """The normalized tool name occurs in the text.
+
+    Names shorter than 5 characters must match whole tokens: `tw` must not
+    hit "between"/"network" (#172 audit). Longer names keep the normalized
+    substring behaviour that tolerates separator variants (bwa_mem2 vs
+    bwa-mem2).
+    """
+    n = norm(name)
+    if not n:
+        return False
+    if len(n) >= 5:
+        return n in norm(text)
+    return n in re.findall(r"[a-z0-9]+", text.lower())
 
 
 FAKE_TOOL_NAME_RE = re.compile(
