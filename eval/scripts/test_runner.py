@@ -60,6 +60,19 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual([f["trial"] for f in files], [1, 2])
 
 
+class DotEdgeParsingTests(unittest.TestCase):
+    def test_parse_dot_edges_maps_labels(self):
+        dot = 'digraph {\n    0 [ label = "fastp"]\n    1 [ label = "multiqc"]\n    0 -> 1 [ ]\n}'
+        self.assertEqual(runner.parse_dot_edges(dot), {("fastp", "multiqc")})
+
+    def test_parse_dot_edges_ignores_dangling_references(self):
+        dot = 'digraph {\n    0 [ label = "a"]\n    0 -> 9 [ ]\n}'
+        self.assertEqual(runner.parse_dot_edges(dot), set())
+
+    def test_parse_dot_edges_empty_graph(self):
+        self.assertEqual(runner.parse_dot_edges("digraph {\n}"), set())
+
+
 class NegativeSampleJudgingTests(unittest.TestCase):
     """Regression tests for #172: a correct rejection of a fabricated tool has
     to be earnable — the answer necessarily echoes the queried name — while a

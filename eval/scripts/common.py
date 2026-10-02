@@ -453,6 +453,26 @@ def loose_step_match(gold_step, candidate_name):
     return len(short) >= 2 and all(token in long for token in short)
 
 
+def map_expected_steps(expected_steps, names):
+    """Expected step name -> workflow rule name.
+
+    Exact (normalized) name equality wins over loose matching: with both
+    `vqsr_indels` and `apply_vqsr_indels` present, loose matching alone binds
+    the wrong rule and silently mis-scores DAG edges.
+    """
+    exact = {norm(name): name for name in names}
+    mapping = {}
+    for step in expected_steps:
+        if norm(step) in exact:
+            mapping[step] = exact[norm(step)]
+            continue
+        for name in names:
+            if loose_step_match(step, name):
+                mapping[step] = name
+                break
+    return mapping
+
+
 def path_parts(path):
     """Normalize a path pattern but keep directory structure."""
     normalized = re.sub(r"\{[^}]*\}", "X", path.replace("\\", "/"))

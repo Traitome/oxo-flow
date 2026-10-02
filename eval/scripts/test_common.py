@@ -137,6 +137,21 @@ class GoldLoadingTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
 
 
+class StepMappingTests(unittest.TestCase):
+    def test_map_expected_steps_prefers_exact_match(self):
+        mapping = common.map_expected_steps(
+            ["apply_vqsr_indels"], ["vqsr_indels", "apply_vqsr_indels"]
+        )
+        self.assertEqual(mapping["apply_vqsr_indels"], "apply_vqsr_indels")
+
+    def test_map_expected_steps_falls_back_to_loose_match(self):
+        mapping = common.map_expected_steps(["fastqc"], ["qc::fastqc"])
+        self.assertEqual(mapping["fastqc"], "qc::fastqc")
+
+    def test_map_expected_steps_leaves_unmatched_steps_out(self):
+        self.assertEqual(common.map_expected_steps(["missing"], ["a", "b"]), {})
+
+
 class MatchingTests(unittest.TestCase):
     def test_path_matches_allows_config_prefix_but_not_wrong_directory(self):
         self.assertTrue(

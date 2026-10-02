@@ -205,6 +205,39 @@ def inferred_edges(rules):
     return sorted(set(edges))
 
 
+DOT_NODE_RE = re.compile(r'^\s*(\d+)\s*\[\s*label\s*=\s*"([^"]*)"\s*\]', re.MULTILINE)
+DOT_EDGE_RE = re.compile(r"^\s*(\d+)\s*->\s*(\d+)\s*\[", re.MULTILINE)
+
+
+def parse_dot_edges(text):
+    """(from_name, to_name) rule pairs from `oxo-flow graph -f dot` output."""
+    labels = {idx: name for idx, name in DOT_NODE_RE.findall(text)}
+    edges = set()
+    for src, dst in DOT_EDGE_RE.findall(text):
+        if src in labels and dst in labels:
+            edges.add((labels[src], labels[dst]))
+    return edges
+
+
+def engine_edges(oxo_flow_bin, path):
+    """The engine's own rule-level DAG for a workflow file.
+
+    The engine connects rules through more than io suffixes (directory
+    inputs, `depends_on`, scatter-aware links), so its graph — not the
+    python suffix inference — is the reference for edge_coverage. Falls
+    back to `inferred_edges` with a warning when the engine cannot produce
+    a graph, so a graph failure never silently zeroes the metric.
+    """
+    code, out, err = common.oxo_flow_cmd(
+        oxo_flow_bin, ["graph", os.path.basename(path), "-f", "dot"], cwd=os.path.dirname(path)
+    )
+    if code != 0:
+        print(f"WARN: `oxo-flow graph` failed for {path} ({err.strip() or f'exit {code}'}); using suffix inference")
+        _, rules, _ = load_generated(path)
+        return set(inferred_edges(rules))
+    return parse_dot_edges(out)
+
+
 def pick_capture_file(captures_dir, item_id):
     direct = os.path.join(captures_dir, f"{item_id}.oxoflow")
     if os.path.isfile(direct):
@@ -485,13 +518,8 @@ def judge_workflow(gold_rows, captures_dir, oxo_flow_bin):
                 hits = sum(1 for tool in expected_tools if common.name_present(tool, text))
                 scores["tool_coverage"] = round(hits / len(expected_tools), 3)
 
-            name_map = {}
-            for step in expected_steps:
-                for name in names:
-                    if common.loose_step_match(step, name):
-                        name_map[step] = name
-                        break
-            edges = inferred_edges(rules)
+            name_map = common.map_expected_steps(expected_steps, names)
+            edges = engine_edges(oxo_flow_bin, capture["path"])
             if expected_edges:
                 hits = sum(1 for src, dst in expected_edges if (name_map.get(src), name_map.get(dst)) in edges)
                 scores["edge_coverage"] = round(hits / len(expected_edges), 3)
