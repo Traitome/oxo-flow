@@ -1,0 +1,16 @@
+# The packaged VSIX contains only the runtime payload: the bundled
+# dist/extension.js plus the static contribution assets. Everything needed to
+# rebuild is in the repository checkout.
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+node_modules/**
+node_modules/.bin/**
+scripts/**
+esbuild.mjs
+tsconfig.json
+.vscode-test.mjs
+package-lock.json
+**/*.map
+**/*.ts

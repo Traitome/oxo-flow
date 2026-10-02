@@ -142,11 +142,53 @@ Check the [Releases page](https://github.com/Traitome/oxo-flow/releases):
 all platform assets present, release notes match the changelog section,
 and the crates.io publish job succeeded.
 
-### 4. Post-Release
+### 4. VS Code Extension Publishing
+
+The `publish-vsix` job runs after the release job on every tag. It packages
+`editors/vscode` into `oxo-flow-vscode-vX.Y.Z.vsix`, asserts the extension
+manifest version equals the tag (`scripts/bump-version.sh --print` is the
+arbitrator), attaches the VSIX + `.sha256` to the GitHub release, and
+publishes the **same artifact** to:
+
+- **Open VSX** (`open-vsx.org/extension/traitome/oxo-flow`) — requires the
+  repository secret `OVSX_PAT`
+- **VS Code Marketplace**
+  (`marketplace.visualstudio.com/items?itemName=traitome.oxo-flow`) —
+  requires the repository secret `VSCE_PAT` (PAT from the `traitome`
+  publisher with *Marketplace → Manage* scope); the step passes
+  `--skip-duplicate`, so re-running the job is idempotent for the
+  Marketplace but NOT for Open VSX (re-publishing an existing Open VSX
+  version fails — if Open VSX succeeded and only the Marketplace step
+  failed, re-run with `OVSX_PAT` temporarily cleared, or publish that one
+  VSIX by hand)
+
+One-time publisher setup (per marketplace account, not per release):
+
+```bash
+# Open VSX: create an Eclipse account, link a GitHub ID, generate an access
+# token at open-vsx.org → Settings → Access Tokens, then create the
+# namespace once:
+npx ovsx create-namespace traitome -p "$OVSX_PAT"
+# Marketplace: create the `traitome` publisher at
+# https://marketplace.visualstudio.com/manage and mint a PAT scoped to
+# Marketplace → Manage.
+```
+
+Both tokens live as repository secrets. A missing secret is a loud CI
+warning, not a release failure — the VSIX is always attached to the GitHub
+release, so offline installs
+(`code --install-extension oxo-flow-vscode-vX.Y.Z.vsix`) never depend on the
+marketplaces.
+
+### 5. Post-Release
 
 - Announce the release on project communication channels
 - Update documentation site if applicable
 - Verify the published crates on [crates.io](https://crates.io/)
+- Verify the extension on the
+  [Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow)
+  and [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) listings
+  (and the VSIX on the release assets)
 
 No development-version bump is needed afterwards: `main` stays at the
 released version until the next dispatch, and `sync-version` syncs it then.

@@ -1,0 +1,127 @@
+{
+  "Pipeline skeleton": {
+    "prefix": "pipeline",
+    "body": [
+      "[workflow]",
+      "name = \"${1:my-pipeline}\"",
+      "version = \"0.1.0\"",
+      "description = \"${2:What this pipeline does}\"",
+      "author = \"${3:Your Name}\"",
+      "",
+      "[[rules]]",
+      "name = \"${4:rule_name}\"",
+      "output = [\"${5:out.txt}\"]",
+      "shell = \"${6:echo done > {output[0]}}\"",
+      "",
+      "[ai]",
+      "enabled = ${7|false,true|}"
+    ],
+    "description": "Minimal runnable oxo-flow pipeline"
+  },
+  "Rule (basic)": {
+    "prefix": "rule",
+    "body": [
+      "[[rules]]",
+      "name = \"${1:rule_name}\"",
+      "input = [\"${2:in.txt}\"]",
+      "output = [\"${3:out.txt}\"]",
+      "threads = ${4:1}",
+      "memory = \"${5:4GB}\"",
+      "shell = \"${6:mytool -i {input[0]} -o {output[0]}}\""
+    ],
+    "description": "Basic rule with input/output/shell"
+  },
+  "Rule (wildcards)": {
+    "prefix": "wildcard-rule",
+    "body": [
+      "[[rules]]",
+      "name = \"${1:per_sample}\"",
+      "input = [\"data/{sample}.fastq.gz\"]",
+      "output = [\"results/{sample}/counts.txt\"]",
+      "shell = \"${2:tool --input {input[0]} --out {output[0]}}\"",
+      "",
+      "[wildcard_constraints]",
+      "sample = \"${3:[A-Za-z0-9_-]+}\""
+    ],
+    "description": "Rule keyed by a {sample} wildcard plus constraint"
+  },
+  "Rule (conda environment)": {
+    "prefix": "conda-rule",
+    "body": [
+      "[[rules]]",
+      "name = \"${1:rule_name}\"",
+      "input = [\"${2:in.fastq.gz}\"]",
+      "output = [\"${3:out.bam}\"]",
+      "environment = { conda = \"${4:envs/tool.yaml}\" }",
+      "shell = \"${5:tool {input[0]} > {output[0]}}\""
+    ],
+    "description": "Rule pinned to a conda environment file"
+  },
+  "Rule (docker environment)": {
+    "prefix": "docker-rule",
+    "body": [
+      "[[rules]]",
+      "name = \"${1:rule_name}\"",
+      "environment = { docker = \"${2:biocontainers/tool:tag}\" }",
+      "shell = \"${3:tool}\""
+    ],
+    "description": "Rule pinned to a docker image"
+  },
+  "Rule (when-gated)": {
+    "prefix": "when-rule",
+    "body": [
+      "[[rules]]",
+      "name = \"${1:conditional_step}\"",
+      "when = \"${2:config.mode == 'deep'}\"",
+      "output = [\"${3:out.txt}\"]",
+      "shell = \"${4:echo gated > {output[0]}}\""
+    ],
+    "description": "Rule that only enters the DAG when the condition holds"
+  },
+  "Config section": {
+    "prefix": "config",
+    "body": [
+      "[config]",
+      "[config.${1:key}]",
+      "type = \"${2|string,int,float,bool,path|}\"",
+      "default = \"${3:value}\"",
+      "description = \"${4:Meaning of this knob}\""
+    ],
+    "description": "Typed config knob with default"
+  },
+  "Sample groups": {
+    "prefix": "sample-groups",
+    "body": [
+      "[sample_groups.${1:cohort}]",
+      "samples = [\"${2:S1}\", \"${3:S2}\"]"
+    ],
+    "description": "Named cohort of samples"
+  },
+  "Environment groups": {
+    "prefix": "env-groups",
+    "body": [
+      "[env_groups.${1:rnaseq}]",
+      "environment = { conda = \"${2:envs/rnaseq.yaml}\" }"
+    ],
+    "description": "Reusable environment group"
+  },
+  "AI section": {
+    "prefix": "ai-section",
+    "body": [
+      "[ai]",
+      "enabled = ${1|true,false|}",
+      "max_retries = ${2:3}"
+    ],
+    "description": "Enable AI-assisted commands for this pipeline"
+  },
+  "Cluster section (SLURM)": {
+    "prefix": "cluster-slurm",
+    "body": [
+      "[cluster]",
+      "backend = \"slurm\"",
+      "partition = \"${1:normal}\"",
+      "walltime = \"${2:04:00:00}\""
+    ],
+    "description": "SLURM cluster submission defaults"
+  }
+}

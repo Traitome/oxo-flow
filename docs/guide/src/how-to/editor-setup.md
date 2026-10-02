@@ -5,7 +5,24 @@ declarative workflow format. Most editors do not recognize the `.oxoflow`
 extension yet, so configure one small file-type association and you get full
 TOML support: syntax highlighting, bracket matching, folding, and formatting.
 
-## VS Code
+## VS Code: the official extension (recommended)
+
+In VS Code, skip the manual association entirely — install the
+**oxo-flow Pipeline** extension (`traitome.oxo-flow`):
+
+```bash
+code --install-extension traitome.oxo-flow
+```
+
+or search *oxo-flow* in the Extensions view (also available on
+[Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) for VSCodium,
+Cursor, and other forks). It provides TOML+ syntax highlighting,
+schema-driven completion with hover docs, background `validate`/`lint`
+diagnostics, canonical formatting, one-click run/dry-run/resume, and AI
+pipeline generation — see the [VS Code Extension](../reference/vscode-extension.md)
+reference. The rest of this page covers manual setups and other editors.
+
+## VS Code (without the extension)
 
 ### Workspace (per repository)
 
@@ -103,5 +120,6 @@ reference lives in the
 
 ## See also
 
+- [VS Code Extension](../reference/vscode-extension.md)
 - [Create a Workflow](create-workflow.md)
 - [Workflow Format](../reference/workflow-format.md)

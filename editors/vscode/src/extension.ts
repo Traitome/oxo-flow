@@ -1,0 +1,295 @@
+import * as vscode from "vscode";
+import { aiStatusArgs, schemaArgs, validateArgs, lintArgs } from "./core/cliArgs";
+import { runCli } from "./core/exec";
+import { parseReport } from "./core/jsonReport";
+import { OxoflowCompletionProvider } from "./providers/completion";
+import { OxoflowDiagnostics } from "./providers/diagnostics";
+import { OxoflowFormattingProvider } from "./providers/formatting";
+import { OxoflowHoverProvider } from "./providers/hover";
+import { StatusBar } from "./providers/statusBar";
+import {
+  createTask,
+  OxoflowTaskProvider,
+  relativeWorkflow,
+  type OxoflowTaskDefinition,
+  type TaskKind,
+} from "./providers/taskProvider";
+
+const DOCS_URL = "https://traitome.github.io/oxo-flow/";
+
+export function activate(context: vscode.ExtensionContext): void {
+  const output = vscode.window.createOutputChannel("oxo-flow");
+  context.subscriptions.push(output);
+
+  const statusBar = new StatusBar();
+  statusBar.activate(context);
+
+  const diagnostics = new OxoflowDiagnostics(output);
+  diagnostics.activate(context);
+
+  const taskProvider = new OxoflowTaskProvider(() => statusBar.executable());
+  context.subscriptions.push(
+    vscode.tasks.registerTaskProvider("oxo-flow", taskProvider),
+    vscode.languages.registerCompletionItemProvider("oxoflow", new OxoflowCompletionProvider(), "[", "{", ".", '"'),
+    vscode.languages.registerHoverProvider("oxoflow", new OxoflowHoverProvider()),
+    vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider())
+  );
+
+  const register = (id: string, fn: () => unknown) => {
+    context.subscriptions.push(vscode.commands.registerCommand(id, fn));
+  };
+
+  register("oxo-flow.run", () => executePipelineTask(statusBar, "run"));
+  register("oxo-flow.dryRun", () => executePipelineTask(statusBar, "dry-run"));
+  register("oxo-flow.graph", () => executePipelineTask(statusBar, "graph"));
+  register("oxo-flow.validate", () => runQualityCommand(output, statusBar, "validate"));
+  register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
+  register("oxo-flow.format", () => formatDocument());
+  register("oxo-flow.resume", () => resumePipeline(statusBar));
+  register("oxo-flow.generate", () => generateWithAI(statusBar));
+  register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
+  register("oxo-flow.exportSchema", () => exportSchema(statusBar));
+  register("oxo-flow.openDocs", () => vscode.env.openExternal(vscode.Uri.parse(DOCS_URL)));
+  register("oxo-flow.openSettings", () =>
+    vscode.commands.executeCommand("workbench.action.openSettings", "oxo-flow.executablePath")
+  );
+  register("oxo-flow.pickCommand", () => pickCommand());
+}
+
+export function deactivate(): void {
+  // All disposables are registered on the extension context.
+}
+
+// ─── pipeline selection ───────────────────────────────────────────────────
+
+async function pipelineTarget(): Promise<{ folder: vscode.WorkspaceFolder; file: vscode.Uri } | undefined> {
+  const active = vscode.window.activeTextEditor?.document;
+  if (active && active.languageId === "oxoflow" && active.uri.scheme === "file") {
+    const folder = folderFor(active.uri);
+    if (folder) return { folder, file: active.uri };
+  }
+  const files = await vscode.workspace.findFiles("**/*.oxoflow", "**/node_modules/**", 50);
+  if (files.length === 0) {
+    void vscode.window.showInformationMessage("No .oxoflow pipeline found in this workspace.");
+    return undefined;
+  }
+  const file =
+    files.length === 1
+      ? files[0]
+      : await vscode.window
+          .showQuickPick(
+            files.map((f) => ({ label: vscode.workspace.asRelativePath(f), file: f })),
+            { placeHolder: "Select a pipeline" }
+          )
+          .then((pick) => pick?.file);
+  if (!file) return undefined;
+  const folder = folderFor(file);
+  if (!folder) {
+    void vscode.window.showErrorMessage(`Cannot determine the workspace folder for ${file.fsPath}.`);
+    return undefined;
+  }
+  return { folder, file };
+}
+
+function folderFor(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+}
+
+async function executePipelineTask(
+  statusBar: StatusBar,
+  kind: "run" | "dry-run" | "graph"
+): Promise<void> {
+  const target = await pipelineTarget();
+  if (!target) return;
+  const def: OxoflowTaskDefinition = {
+    type: "oxo-flow",
+    workflow: relativeWorkflow(target.folder, target.file),
+  };
+  const cfg = vscode.workspace.getConfiguration("oxo-flow", target.file);
+  if (kind === "run") {
+    def.extraArgs = cfg.get<string[]>("runArgs", []);
+  }
+  await vscode.tasks.executeTask(createTask(statusBar.executable(), target.folder, def, kind));
+}
+
+// ─── validate / lint ──────────────────────────────────────────────────────
+
+async function runQualityCommand(
+  output: vscode.OutputChannel,
+  statusBar: StatusBar,
+  kind: "validate" | "lint"
+): Promise<void> {
+  const target = await pipelineTarget();
+  if (!target) return;
+  const doc = vscode.window.activeTextEditor?.document;
+  const dirty = doc?.uri.toString() === target.file.toString() && doc.isDirty;
+  const executable = statusBar.executable();
+  const args = kind === "validate" ? validateArgs(target.file.fsPath) : lintArgs(target.file.fsPath);
+  const res = await runCli(executable, args, { cwd: target.folder.uri.fsPath });
+
+  if (res.spawnError) {
+    void vscode.window.showErrorMessage(
+      `Cannot run \`${executable}\` (${res.spawnError}). Set oxo-flow.executablePath in settings.`
+    );
+    return;
+  }
+
+  const lines = [`$ oxo-flow ${args.map((a) => JSON.stringify(a)).join(" ")}`];
+  if (dirty) lines.push("(document has unsaved changes — the saved file was analyzed)");
+  if (res.stderr.trim()) lines.push(res.stderr.trimEnd());
+  try {
+    const report = parseReport(res.stdout);
+    lines.push("```json", JSON.stringify(report, null, 2), "```");
+  } catch {
+    if (res.stdout.trim()) lines.push(res.stdout.trimEnd());
+  }
+  output.appendLine(lines.join("\n"));
+  output.show(true);
+
+  if (kind === "validate") {
+    const ok = res.exitCode === 0;
+    const pick = await vscode.window.showInformationMessage(
+      ok ? "Pipeline is valid." : "Validation failed — see the oxo-flow output panel.",
+      "Show Problems"
+    );
+    if (pick === "Show Problems") void vscode.commands.executeCommand("workbench.actions.view.problems");
+  } else {
+    void vscode.window.showInformationMessage(
+      res.exitCode === 0 ? "Lint passed." : "Lint found issues — see the oxo-flow output panel."
+    );
+  }
+}
+
+async function formatDocument(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "oxoflow") {
+    void vscode.window.showInformationMessage("Open a .oxoflow file to format it.");
+    return;
+  }
+  await vscode.commands.executeCommand("editor.action.formatDocument");
+}
+
+// ─── resume / AI / schema ─────────────────────────────────────────────────
+
+async function resumePipeline(statusBar: StatusBar): Promise<void> {
+  const checkpoints = await vscode.workspace.findFiles("**/.oxo-flow/checkpoint.json", "**/node_modules/**", 20);
+  if (checkpoints.length === 0) {
+    void vscode.window.showInformationMessage("No .oxo-flow/checkpoint.json found in this workspace.");
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(
+    checkpoints.map((c) => ({ label: vscode.workspace.asRelativePath(c), file: c })),
+    { placeHolder: "Select a checkpoint to resume" }
+  );
+  if (!pick) return;
+  const folder = folderFor(pick.file);
+  if (!folder) return;
+  await vscode.tasks.executeTask(
+    createTask(
+      statusBar.executable(),
+      folder,
+      { type: "oxo-flow", workflow: vscode.workspace.asRelativePath(pick.file) },
+      "resume"
+    )
+  );
+}
+
+async function generateWithAI(statusBar: StatusBar): Promise<void> {
+  const description = await vscode.window.showInputBox({
+    prompt: "Describe the pipeline to generate (e.g. 'RNA-seq with STAR and featureCounts')",
+    placeHolder: "Natural-language description",
+  });
+  if (!description) return;
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    void vscode.window.showErrorMessage("Open a workspace folder first — the pipeline needs a home.");
+    return;
+  }
+  const slug =
+    description
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "generated-pipeline";
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
+    filters: { "oxo-flow pipeline": ["oxoflow"] },
+  });
+  if (!target) return;
+
+  const quoted = `"${description.replace(/["\\$`]/g, (c) => `\\${c}`)}"`;
+  const outPath = `"${target.fsPath.replace(/["\\$`]/g, (c) => `\\${c}`)}"`;
+  const terminal = vscode.window.createTerminal({ name: "oxo-flow template", cwd: folder.uri.fsPath });
+  terminal.show();
+  terminal.sendText([statusBar.executable(), "template", quoted, "--ai", "-o", outPath].join(" "));
+  void vscode.window.showInformationMessage(
+    "AI generation runs in the terminal; the file appears when the CLI finishes."
+  );
+}
+
+async function showAiStatus(output: vscode.OutputChannel, statusBar: StatusBar): Promise<void> {
+  const executable = statusBar.executable();
+  const res = await runCli(executable, aiStatusArgs(), { timeoutMs: 30_000 });
+  if (res.spawnError) {
+    void vscode.window.showErrorMessage(`Cannot run \`${executable}\` (${res.spawnError}).`);
+    return;
+  }
+  output.appendLine(`$ oxo-flow ${aiStatusArgs().join(" ")}\n${res.stdout.trimEnd()}\n${res.stderr.trimEnd()}`);
+  output.show(true);
+  let summary = "AI status — see the oxo-flow output panel.";
+  try {
+    const parsed = JSON.parse(res.stdout) as { provider?: string };
+    if (parsed.provider) summary = `AI provider: ${parsed.provider}`;
+  } catch {
+    // Human output — the panel already shows it.
+  }
+  void vscode.window.showInformationMessage(summary);
+}
+
+async function exportSchema(statusBar: StatusBar): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    void vscode.window.showErrorMessage("Open a workspace folder first.");
+    return;
+  }
+  const executable = statusBar.executable();
+  const res = await runCli(executable, schemaArgs(), { cwd: folder.uri.fsPath });
+  if (res.spawnError || res.exitCode !== 0) {
+    void vscode.window.showErrorMessage(`oxo-flow schema failed: ${res.spawnError ?? res.stderr}`);
+    return;
+  }
+  const dest = vscode.Uri.joinPath(folder.uri, "oxo-flow-schema.json");
+  await vscode.workspace.fs.writeFile(dest, Buffer.from(res.stdout, "utf8"));
+  const open = await vscode.window.showInformationMessage(
+    'Exported oxo-flow-schema.json. Pair it with Even Better TOML via "evenBetterToml.schema.associations".',
+    "Open editor setup docs"
+  );
+  if (open) {
+    await vscode.env.openExternal(vscode.Uri.parse(`${DOCS_URL}how-to/editor-setup/`));
+  }
+}
+
+// ─── command quick pick (status bar) ──────────────────────────────────────
+
+const COMMAND_PICKS: { label: string; command: string }[] = [
+  { label: "$(play) Run Pipeline", command: "oxo-flow.run" },
+  { label: "$(debug-step-over) Dry Run (plan only)", command: "oxo-flow.dryRun" },
+  { label: "$(checklist) Validate Pipeline", command: "oxo-flow.validate" },
+  { label: "$(shield) Lint Pipeline", command: "oxo-flow.lint" },
+  { label: "$(alignment-align) Format Document", command: "oxo-flow.format" },
+  { label: "$(graph) Show DAG Graph", command: "oxo-flow.graph" },
+  { label: "$(debug-restart) Resume from Checkpoint", command: "oxo-flow.resume" },
+  { label: "$(sparkle) Generate Pipeline with AI…", command: "oxo-flow.generate" },
+  { label: "$(hubot) Show AI Provider Status", command: "oxo-flow.aiStatus" },
+  { label: "$(book) Open Documentation", command: "oxo-flow.openDocs" },
+  { label: "$(gear) Open Settings", command: "oxo-flow.openSettings" },
+];
+
+async function pickCommand(): Promise<void> {
+  const pick = await vscode.window.showQuickPick(COMMAND_PICKS, { placeHolder: "oxo-flow command" });
+  if (pick) await vscode.commands.executeCommand(pick.command);
+}
+
+// TaskKind re-export guard: keeps the union honest if a kind is added to the
+// task provider but not wired here.
+export type _WiredTaskKinds = TaskKind;

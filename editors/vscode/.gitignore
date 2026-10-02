@@ -1,0 +1,8 @@
+# Build artifacts and dependencies (the VSIX itself is built by CI and
+# attached to releases, never committed).
+node_modules/
+out/
+dist/
+.vscode-test/
+*.vsix
+.vscode/

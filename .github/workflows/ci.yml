@@ -441,6 +441,103 @@ jobs:
       - name: Secret scan
         run: gitleaks detect
 
+  # ─── VS Code extension: build, test, and package the VSIX ──────────────────
+  # editors/vscode is a self-contained npm project (zero runtime deps, esbuild
+  # bundle). The extension job gates every PR; publish-vsix re-runs the
+  # packaging on release tags and ships it to the marketplaces.
+  extension:
+    name: VS Code extension (build + test + package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [sync-version, test]
+    if: >-
+      always() &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.test.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+
+      # Same treatment as the frontend job: prod deps gate hard, dev advisories
+      # warn. The extension has zero runtime dependencies, so this mostly
+      # guards the build toolchain.
+      - name: Audit npm dependencies
+        working-directory: editors/vscode
+        run: |
+          npm audit --omit=dev --registry=https://registry.npmjs.org
+          npm audit --registry=https://registry.npmjs.org || \
+            echo "::warning::dev-dependency advisories present — triage before merging"
+
+      - name: License drift check
+        run: cmp editors/vscode/LICENSE LICENSE
+
+      - name: Check generated completion data freshness
+        working-directory: editors/vscode
+        run: npm run generate:check
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v6
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-ext-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ext-build-
+
+      - name: Build the CLI binary (integration tests drive it)
+        run: cargo build -p oxo-flow-cli
+
+      - name: Compile
+        working-directory: editors/vscode
+        run: npm run compile
+
+      - name: Unit tests
+        working-directory: editors/vscode
+        run: npm run unit-test
+
+      - name: Integration tests (headless VS Code)
+        working-directory: editors/vscode
+        env:
+          OXOFLOW_TEST_BIN: ${{ github.workspace }}/target/debug/oxo-flow
+        run: xvfb-run -a npm run integration-test
+
+      - name: Package VSIX
+        working-directory: editors/vscode
+        run: npm run package
+
+      - name: Upload VSIX artifact
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-extension
+          path: editors/vscode/oxo-flow-*.vsix
+          retention-days: 7
+          if-no-files-found: error
+
   # ─── Build Linux binaries ──────────────────────────────────────────────────
   build-linux:
     name: Build Linux (${{ matrix.target }})
@@ -1060,6 +1157,104 @@ jobs:
             [ "$STATUS" = "000" ] && echo "::warning::crates.io reachability check failed, attempting publish anyway"
             cargo publish -p oxo-flow-cli
           fi
+
+  # ─── VS Code extension publishing (Open VSX + Marketplace) ─────────────────
+  # Runs after the release job created the GitHub release, then attaches the
+  # packaged VSIX (+ sha256) to it and publishes the SAME artifact to:
+  #   * Open VSX (Eclipse)      — needs the OVSX_PAT secret (repository secret)
+  #   * VS Code Marketplace     — needs the VSCE_PAT secret (publisher: traitome)
+  # A missing secret is a loud warning, not a release failure: the marketplaces
+  # are third-party accounts that must be provisioned once per publisher (see
+  # RELEASING.md, "VS Code extension publishing").
+  publish-vsix:
+    name: Publish VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [sync-version, release]
+    permissions:
+      contents: write
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) &&
+      inputs.publish_images_only != true &&
+      (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
+      needs.release.result == 'success'
+    env:
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+
+      - name: Verify version lockstep (tag == manifest == canonical)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          CANONICAL="$(scripts/bump-version.sh --print)"
+          MANIFEST="$(node -p "require('./editors/vscode/package.json').version")"
+          if [ "$VERSION" != "$CANONICAL" ] || [ "$VERSION" != "$MANIFEST" ]; then
+            echo "::error::version mismatch: tag ${VERSION}, canonical ${CANONICAL}, extension manifest ${MANIFEST}"
+            exit 1
+          fi
+          echo "version ${VERSION} consistent across tag, Cargo.toml and extension manifest"
+
+      - name: Package VSIX
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          npm run compile
+          npm run unit-test
+          npm run package
+          mv "oxo-flow-${VERSION}.vsix" "oxo-flow-vscode-${RELEASE_TAG}.vsix"
+          sha256sum "oxo-flow-vscode-${RELEASE_TAG}.vsix" \
+            > "oxo-flow-vscode-${RELEASE_TAG}.vsix.sha256"
+          cat "oxo-flow-vscode-${RELEASE_TAG}.vsix.sha256"
+
+      - name: Attach VSIX to the GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            editors/vscode/oxo-flow-vscode-*.vsix
+            editors/vscode/oxo-flow-vscode-*.vsix.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        working-directory: editors/vscode
+        run: npx ovsx publish --pat "$OVSX_PAT" "oxo-flow-vscode-${RELEASE_TAG}.vsix"
+
+      - name: Open VSX skipped (no OVSX_PAT)
+        if: env.OVSX_PAT == ''
+        run: echo "::warning::OVSX_PAT is not set — skipped Open VSX publishing (set it up per RELEASING.md)"
+
+      - name: Publish to VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        working-directory: editors/vscode
+        # --skip-duplicate makes re-runs idempotent when the version is
+        # already listed; --packagePath publishes the exact VSIX that was
+        # attached to the release and pushed to Open VSX.
+        run: npx vsce publish --packagePath "oxo-flow-vscode-${RELEASE_TAG}.vsix" --skip-duplicate
+
+      - name: Marketplace skipped (no VSCE_PAT)
+        if: env.VSCE_PAT == ''
+        run: echo "::warning::VSCE_PAT is not set — skipped VS Code Marketplace publishing (set it up per RELEASING.md)"
 
   # ─── Docker: the shipped Dockerfile must actually build ───────────────────
   # Issue #276: rust:1.92-slim < MSRV 1.98 broke `docker build .` for every

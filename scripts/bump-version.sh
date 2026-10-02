@@ -15,6 +15,7 @@
 #   CITATION.cff            version + date-released
 #   Dockerfile              ARG VERSION default (local-dev only; CI passes it)
 #   frontend/package.json + package-lock.json         ships in the desktop app
+#   editors/vscode/package.json + package-lock.json   VSIX must match the tag
 #   README.md, Dockerfile.release, docs/guide/src/**   current-version refs
 #
 # Only references to the CURRENT version are rewritten — never "any
@@ -157,13 +158,21 @@ patch_dockerfile() {
 }
 
 # frontend/package.json: the SPA version ships inside the desktop bundle.
+# editors/vscode/package.json: the VS Code extension version must stay in
+# lockstep so release tags publish matching VSIX artifacts.
+# Both manifests keep the version on the first `"version":` line (dependency
+# objects carry none).
 package_json_version() {
-  [ -f "$ROOT/frontend/package.json" ] || return 0
-  sed -n 's/^  "version": "\(.*\)",/\1/p' "$ROOT/frontend/package.json" | head -1
+  local rel="$1"
+  [ -f "$ROOT/$rel" ] || return 0
+  sed -n 's/^  "version": "\(.*\)",/\1/p' "$ROOT/$rel" | head -1
 }
 
 patch_package_json() {
-  local v="$1" f="$ROOT/frontend/package.json"
+  # NB: `local a=x b=$a` expands all words before assigning, so $rel must
+  # live on its own `local` line under `set -u`.
+  local rel="$1" v="$2"
+  local f="$ROOT/$rel"
   [ -f "$f" ] || return 0
   # Replace the FIRST `"version":` line only, and leave the file's own
   # formatting untouched (BSD sed does not implement GNU's `0,/re/` address,
@@ -174,12 +183,13 @@ patch_package_json() {
   ' "$f" > "$f.bump-tmp" && mv "$f.bump-tmp" "$f"
 }
 
-# frontend/package-lock.json: two version fields (root + packages[""]).
+# package-lock.json: two version fields (root + packages[""]).
 # npm rewrites this on install, but the release job never runs npm — so it
 # used to be `git add`ed while still carrying the OLD version.
 package_lock_version() {
-  [ -f "$ROOT/frontend/package-lock.json" ] || return 0
-  python3 - "$ROOT/frontend/package-lock.json" <<'PY'
+  local rel="$1"
+  [ -f "$ROOT/$rel" ] || return 0
+  python3 - "$ROOT/$rel" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 root = d.get("version") or "?"
@@ -189,7 +199,8 @@ PY
 }
 
 patch_package_lock() {
-  local v="$1" f="$ROOT/frontend/package-lock.json"
+  local rel="$1" v="$2"
+  local f="$ROOT/$rel"
   [ -f "$f" ] || return 0
   python3 - "$f" "$v" <<'PY'
 import json, sys
@@ -282,6 +293,8 @@ Dockerfile.release
 README.md
 frontend/package.json
 frontend/package-lock.json
+editors/vscode/package.json
+editors/vscode/package-lock.json
 crates/oxo-flow-desktop/Cargo.toml
 crates/oxo-flow-desktop/Cargo.lock
 LIST
@@ -314,9 +327,12 @@ run_check() {
 
   want "CITATION.cff version" "$(citation_version)" "$cur"
   want "Dockerfile ARG VERSION default" "$(dockerfile_version)" "$cur"
-  want "frontend/package.json version" "$(package_json_version)" "$cur"
-  local plv; plv="$(package_lock_version)"
+  want "frontend/package.json version" "$(package_json_version frontend/package.json)" "$cur"
+  local plv; plv="$(package_lock_version frontend/package-lock.json)"
   [ -z "$plv" ] || want "frontend/package-lock.json version" "$plv" "$cur/$cur"
+  want "editors/vscode/package.json version" "$(package_json_version editors/vscode/package.json)" "$cur"
+  local vlv; vlv="$(package_lock_version editors/vscode/package-lock.json)"
+  [ -z "$vlv" ] || want "editors/vscode/package-lock.json version" "$vlv" "$cur/$cur"
 
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
@@ -350,8 +366,10 @@ run_set() {
   patch_desktop_toml "$v"
   patch_citation "$cur" "$v"
   patch_dockerfile "$v"
-  patch_package_json "$v"
-  patch_package_lock "$v"
+  patch_package_json "frontend/package.json" "$v"
+  patch_package_lock "frontend/package-lock.json" "$v"
+  patch_package_json "editors/vscode/package.json" "$v"
+  patch_package_lock "editors/vscode/package-lock.json" "$v"
   patch_text_refs "$cur" "$v"
 
   # Lockfiles: cargo is authoritative when available (it also resolves the
@@ -388,7 +406,8 @@ run_self_test() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp:-}"' EXIT
   local fixture="$tmp/repo"
-  mkdir -p "$fixture/frontend" "$fixture/docs/guide/src" "$fixture/crates/oxo-flow-desktop"
+  mkdir -p "$fixture/frontend" "$fixture/docs/guide/src" "$fixture/crates/oxo-flow-desktop" \
+    "$fixture/editors/vscode"
   cat > "$fixture/Cargo.toml" <<'EOF'
 [package]
 name = "oxo-flow"
@@ -407,6 +426,9 @@ EOF
   printf 'ARG VERSION=1.2.3\n' > "$fixture/Dockerfile"
   printf '{\n  "name": "frontend",\n  "version": "1.2.3",\n  "private": true\n}\n' > "$fixture/frontend/package.json"
   printf '{\n  "name": "frontend",\n  "version": "1.2.3",\n  "packages": {\n    "": {\n      "version": "1.2.3"\n    }\n  }\n}\n' > "$fixture/frontend/package-lock.json"
+  printf '{\n  "name": "oxo-flow",\n  "displayName": "oxo-flow Pipeline",\n  "version": "1.2.3",\n  "publisher": "traitome"\n}\n' \
+    > "$fixture/editors/vscode/package.json"
+  printf '{\n  "name": "oxo-flow",\n  "version": "1.2.3",\n  "packages": {\n    "": {\n      "version": "1.2.3"\n    }\n  }\n}\n' > "$fixture/editors/vscode/package-lock.json"
   printf '[package]\nname = "oxo-flow-desktop"\nversion = "1.2.3"\n\n[dependencies]\noxo-flow-web = { path = "../oxo-flow-web", version = "1.2.3" }\n' \
     > "$fixture/crates/oxo-flow-desktop/Cargo.toml"
   printf 'oxo-flow 1.2.3 and v1.2.3\nghcr.io/traitome/oxo-flow:1.2\n' > "$fixture/README.md"
@@ -445,6 +467,8 @@ EOF
   grep -q 'ARG VERSION=4.5.6' "$fixture/Dockerfile" || { echo "FAIL: Dockerfile not bumped"; fails=$((fails+1)); }
   grep -q '"version": "4.5.6"' "$fixture/frontend/package.json" || { echo "FAIL: package.json not bumped"; fails=$((fails+1)); }
   grep -q '"version": "4.5.6"' "$fixture/frontend/package-lock.json" || { echo "FAIL: package-lock.json not bumped"; fails=$((fails+1)); }
+  grep -q '"version": "4.5.6"' "$fixture/editors/vscode/package.json" || { echo "FAIL: extension package.json not bumped"; fails=$((fails+1)); }
+  grep -q '"version": "4.5.6"' "$fixture/editors/vscode/package-lock.json" || { echo "FAIL: extension package-lock.json not bumped"; fails=$((fails+1)); }
   grep -q 'version = "4.5.6"' "$fixture/crates/oxo-flow-desktop/Cargo.toml" || { echo "FAIL: desktop manifest not bumped"; fails=$((fails+1)); }
   grep -q 'v4.5.6' "$fixture/README.md" || { echo "FAIL: README not bumped"; fails=$((fails+1)); }
   grep -q 'oxo-flow:4.5' "$fixture/README.md" || { echo "FAIL: README container tag not bumped"; fails=$((fails+1)); }

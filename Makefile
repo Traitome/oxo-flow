@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check extension-test extension-integration contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests
+ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests extension-test
 
 fmt:
 	cargo fmt -- --check
@@ -73,6 +73,19 @@ eval-tests:
 ## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
 frontend-test:
 	cd frontend && npx playwright test
+
+## VS Code extension (editors/vscode) fast gate: compile, unit tests, and a
+## real `vsce package` so manifest/packaging problems fail before CI does.
+## The extension has zero runtime dependencies; this needs network only for
+## the first `npm ci`.
+extension-test:
+	cd editors/vscode && npm ci --no-audit --no-fund && npm run compile && npm run unit-test && npm run package
+
+## VS Code extension integration tests: headless VS Code driving the locally
+## built CLI (cargo build -p oxo-flow-cli). Linux needs xvfb on PATH.
+extension-integration:
+	cargo build -p oxo-flow-cli
+	cd editors/vscode && OXOFLOW_TEST_BIN="$(CURDIR)/target/debug/oxo-flow" npm run integration-test
 
 ## Single-source rule: the CLI-embedded workflow schema must match the
 ## docs copy (the docs copy is canonical; `oxo-flow schema` serves the

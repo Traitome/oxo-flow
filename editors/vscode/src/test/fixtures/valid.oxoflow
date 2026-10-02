@@ -1,0 +1,10 @@
+[workflow]
+name = "extension-fixture-valid"
+version = "1.0.0"
+description = "Fixture used by the VS Code extension integration tests"
+author = "oxo-flow CI"
+
+[[rules]]
+name = "greet"
+output = ["hello.txt"]
+shell = "echo 'Hello from oxo-flow!' > {output[0]}"

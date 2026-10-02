@@ -1,0 +1,9 @@
+[workflow]
+name = "extension-fixture-missing-input"
+description = "Fixture whose input file never exists — validate must flag it"
+
+[[rules]]
+name = "copy_missing"
+input = ["__no_such_input_fixture__.txt"]
+output = ["copy.txt"]
+shell = "cp {input[0]} {output[0]}"
