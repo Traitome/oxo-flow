@@ -4275,7 +4275,7 @@ or rename it, build the suffixed env, or drop <code>--skip-env-setup</code>.</p>
 <ul>
 <li><strong>Detection</strong>: Checks for <code>mamba</code>, then <code>micromamba</code>, then falls back to <code>conda</code> on <code>$PATH</code></li>
 <li><strong>Resolution</strong>: Parses YAML environment file (same format as conda)</li>
-<li><strong>Activation</strong>: Runs <code>&lt;mamba|micromamba|conda&gt; run -n &lt;env_name&gt; bash -c '&lt;command&gt;'</code> (mamba has no <code>--no-capture-output</code> flag, so it is not added)</li>
+<li><strong>Activation</strong>: Runs <code>&lt;mamba|micromamba|conda&gt; run -n &lt;env_name&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code> — the <code>PATH</code> prefix makes the rule see the env's own tools first on hybrid boxes (same rationale as conda). When the detected binary is <code>conda</code> (fallback), <code>--no-capture-output</code> is added like the conda backend; native mamba/micromamba reject that flag, so it is only added for conda</li>
 <li><strong>Caching</strong>: Environments are created once and reused across rules that share the same YAML file</li>
 <li><strong>Usage</strong>: Set <code>environment.mamba = "envs/qc.yaml"</code> in the rule. Uses the same YAML format as conda but with the mamba/micromamba binary for faster solving.</li>
 </ul>

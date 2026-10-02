@@ -4481,7 +4481,7 @@ script was submitted from.</p>
 </tr>
 <tr>
 <td>Mamba</td>
-<td><code>&lt;mamba\|micromamba\|conda&gt; run -n &lt;env&gt; bash -c '&lt;command&gt;'</code></td>
+<td><code>&lt;mamba\|micromamba\|conda&gt; run -n &lt;env&gt; bash -c 'export PATH="$CONDA_PREFIX/bin:$PATH"; &lt;command&gt;'</code> (<code>--no-capture-output</code> added when the detected binary is conda)</td>
 </tr>
 <tr>
 <td>Docker</td>
