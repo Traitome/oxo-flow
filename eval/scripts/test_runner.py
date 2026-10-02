@@ -96,6 +96,88 @@ class VersionGateTests(unittest.TestCase):
         row = self._judge("what is the latest version of fastp in bioconda", "1.3.7", "fastp")
         self.assertEqual(row["version_match"], 0.0)
 
+    def test_version_match_is_boundary_checked(self):
+        # 2.0.40 / 12.0.4 must not satisfy expected 2.0.4; v-prefix still does.
+        self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x 2.0.40")["version_match"], 0.0)
+        self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x 12.0.4")["version_match"], 0.0)
+        self.assertEqual(self._judge("what is the latest version of x", "2.0.4", "x v2.0.4")["version_match"], 1.0)
+
+
+class RuleJudgingTests(unittest.TestCase):
+    """#172 audit: reference-faithful answers must not be zeroed by
+    package-name pins, docker build suffixes, or expand_inputs io."""
+
+    def _judge(self, gold_row, capture_text):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / f"{gold_row['id']}.oxoflow"
+            path.write_text(capture_text, encoding="utf-8")
+            with mock.patch("common.oxo_flow_cmd", return_value=(0, "", "")):
+                return runner.judge_rule([gold_row], td, "/bin/true")[0]
+
+    def _row(self, **overrides):
+        row = {
+            "id": "rule-900",
+            "expected_tool": "gatk",
+            "expected_version": "4.5.0.0",
+            "expected_key_params": "[]",
+            "expected_inputs": "[]",
+            "expected_outputs": "[]",
+            "resource_range": "{}",
+        }
+        row.update(overrides)
+        return row
+
+    def test_executable_resolves_to_its_package_pin(self):
+        result = self._judge(
+            self._row(),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "haplotype_caller"\n'
+            'shell = "gatk4=4.5.0.0; gatk HaplotypeCaller -R r -O o"\n',
+        )
+        self.assertEqual(result["version_pinned"], 1.0)
+
+    def test_docker_build_suffix_is_truncated(self):
+        self.assertEqual(
+            runner.find_pinned_version(
+                'docker = "quay.io/biocontainers/ucsc-bedgraphtobigwig:445--h954228d_0"',
+                "bedGraphToBigWig",
+            ),
+            "445",
+        )
+
+    def test_expand_inputs_patterns_count_as_declared_io(self):
+        result = self._judge(
+            self._row(expected_inputs='["variants/{sample}.g.vcf.gz"]'),
+            '[workflow]\nname = "x"\n\n[[rules]]\nname = "combine_gvcfs"\ninput = []\n'
+            'expand_inputs = [\n    { pattern = "variants/{sample}.g.vcf.gz", variables = { sample = "config.samples" } }\n]\n'
+            'output = ["variants/cohort.g.vcf.gz"]\n',
+        )
+        self.assertEqual(result["io_declared"], 1.0)
+
+
+class ParserTests(unittest.TestCase):
+    def test_load_generated_merges_defaults_into_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "wf.oxoflow"
+            path.write_text(
+                '[workflow]\nname = "x"\n\n'
+                "[defaults]\nthreads = 4\nmemory = \"8G\"\n\n"
+                '[[rules]]\nname = "a"\noutput = ["x.txt"]\n\n'
+                '[[rules]]\nname = "b"\nthreads = 8\noutput = ["y.txt"]\n',
+                encoding="utf-8",
+            )
+            _, rules, err = runner.load_generated(str(path))
+            self.assertIsNone(err)
+            self.assertEqual(rules[0]["threads"], 4)
+            self.assertEqual(rules[0]["memory"], "8G")
+            self.assertEqual(rules[1]["threads"], 8)  # rule value wins over defaults
+
+    def test_metric_fields_unions_across_rows(self):
+        results = [
+            {"id": "a", "trial": 1, "name_match": 1.0},
+            {"id": "b", "trial": 1, "no_hallucination": 0.0},
+        ]
+        self.assertEqual(runner.metric_fields(results), ["name_match", "no_hallucination"])
+
 
 class DotEdgeParsingTests(unittest.TestCase):
     def test_parse_dot_edges_maps_labels(self):
@@ -164,13 +246,50 @@ class NegativeSampleJudgingTests(unittest.TestCase):
         )
         self.assertEqual(score, 0.0)
 
-    def test_mentioning_any_other_known_tool_fails(self):
+    def test_unrelated_tool_mention_without_a_cue_is_not_a_suggestion(self):
+        # "not related to bwameth" rejects the fake without suggesting bwameth.
         score = self._judge(
             "what does aligninator do",
             "I could not find aligninator; it is not related to bwameth.",
             {"bwameth"},
         )
+        self.assertEqual(score, 1.0)
+
+    def test_cue_scoped_suggestion_still_fails(self):
+        score = self._judge(
+            "what does aligninator do",
+            "I could not find aligninator — did you mean bwameth?",
+            {"bwameth"},
+        )
         self.assertEqual(score, 0.0)
+
+    def test_format_word_mention_in_a_rejection_passes(self):
+        # `sam`/`bam` are real KB entries; a rejection mentioning the file
+        # format without a cue must not be read as a fallback suggestion.
+        score = self._judge(
+            "what is seq_polisher_pro",
+            "No tool named seq_polisher_pro exists; it is not a SAM/BAM format tool.",
+            {"sam", "bam"},
+        )
+        self.assertEqual(score, 1.0)
+
+    def test_hyphen_spellings_of_real_tools_are_still_caught(self):
+        self.assertEqual(
+            self._judge(
+                "what is seq_polisher_pro",
+                "No tool named seq_polisher_pro — maybe you meant fast-qc?",
+                {"fastqc"},
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            self._judge(
+                "what is seq_polisher_pro",
+                "No tool named seq_polisher_pro — perhaps multi-qc covers this?",
+                {"multiqc"},
+            ),
+            0.0,
+        )
 
     def test_short_names_do_not_match_inside_longer_words(self):
         self.assertFalse(
