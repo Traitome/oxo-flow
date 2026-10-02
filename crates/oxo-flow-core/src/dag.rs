@@ -665,10 +665,7 @@ impl WorkflowDag {
                         }
                         !producers.is_empty() && producers.iter().all(|p| pruned.contains(p))
                     });
-                    if is_unrunnable
-                        && !optional_any
-                        && pruned.insert(name.clone())
-                    {
+                    if is_unrunnable && !optional_any && pruned.insert(name.clone()) {
                         grew = true;
                     }
                 }
