@@ -6,7 +6,7 @@
 //! export for visualization.
 
 use crate::error::{OxoFlowError, Result};
-use crate::rule::{FilePatterns, Rule};
+use crate::rule::{FilePatterns, OptionalMode, Rule};
 use petgraph::algo::{kosaraju_scc, toposort};
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -23,6 +23,12 @@ pub struct DagNode {
 
     /// Index into the original rule list.
     pub rule_index: usize,
+
+    /// The rule's `optional` mode — dead-node propagation must mirror the
+    /// executor's runtime semantics for `optional = "any"` (see the
+    /// fixpoint in
+    /// [`WorkflowDag::execution_order_for_targets_skipping_with_source_check`]).
+    pub optional: OptionalMode,
 }
 
 impl std::fmt::Display for DagNode {
@@ -127,6 +133,7 @@ impl WorkflowDag {
             let node = graph.add_node(DagNode {
                 name: rule.name.clone(),
                 rule_index: idx,
+                optional: rule.optional,
             });
             name_to_node.insert(rule.name.clone(), node);
 
@@ -637,6 +644,18 @@ impl WorkflowDag {
                     continue;
                 }
                 if let Some(groups) = self.input_producers.get(name) {
+                    // `optional = "any"` rules must NOT be plan-pruned here.
+                    // The executor — not the planner — decides their fate at
+                    // runtime: it runs the rule when at least one declared
+                    // input exists and skips it otherwise ("optional inputs
+                    // missing", process.rs). Pruning them at plan time turns
+                    // every downstream consumer into a dead node and silently
+                    // removes entire workflow arms (live evidence: the
+                    // varlociraptor port's calling arm vanished because
+                    // filter_group_regions_expanded, an optional="any" rule,
+                    // sat behind a when-false sole producer of
+                    // target_regions.bed).
+                    let optional_any = self.graph[idx].optional.is_any();
                     let is_unrunnable = groups.iter().any(|(input_path, producers)| {
                         // Pre-built input: the file is already on disk — the
                         // group is satisfiable even with every producer
@@ -646,7 +665,7 @@ impl WorkflowDag {
                         }
                         !producers.is_empty() && producers.iter().all(|p| pruned.contains(p))
                     });
-                    if is_unrunnable && pruned.insert(name.clone()) {
+                    if is_unrunnable && !optional_any && pruned.insert(name.clone()) {
                         grew = true;
                     }
                 }
@@ -2670,6 +2689,48 @@ mod tests {
             .unwrap();
         assert_eq!(skipped, vec!["bwa_mem".to_string()]);
         assert!(order.is_empty());
+    }
+
+    #[test]
+    fn execution_order_for_targets_skipping_optional_any_survives_when_false_producer() {
+        // `optional = "any"` rules (varlociraptor
+        // regions::filter_group_regions_expanded shape, live finding): the
+        // sole producer of one input is when-gated false, but the rule runs
+        // as long as ANY declared input exists — the executor runtime-skips
+        // it ("optional inputs missing") only when none do. Plan-time
+        // pruning here killed the rule AND every downstream consumer,
+        // silently dropping the whole calling arm from the execution set.
+        let mut consumer = make_rule(
+            "filter_regions",
+            vec!["target_regions.bed", "sample.recal.bam"],
+            vec!["filtered.bed"],
+        );
+        consumer.optional = crate::rule::OptionalMode::Any;
+        let rules = vec![
+            make_rule("gated_producer", vec![], vec!["target_regions.bed"]),
+            make_rule("mapper", vec!["sample.r1.fq.gz"], vec!["sample.recal.bam"]),
+            consumer,
+            make_rule("reporter", vec!["filtered.bed"], vec!["report.html"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let skip = std::collections::HashSet::from(["gated_producer".to_string()]);
+
+        // The any-mode consumer and its whole downstream stay scheduled; the
+        // when-false producer stays pruned. The executor runs the consumer
+        // (sample.recal.bam exists via mapper) or runtime-skips it if no
+        // input exists — either way the decision belongs to the executor.
+        let (order, skipped) = dag
+            .execution_order_for_targets_skipping(&["reporter"], &skip)
+            .unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        for expected in ["mapper", "filter_regions", "reporter"] {
+            assert!(
+                order.contains(&expected.to_string()),
+                "missing {expected}: {order:?}"
+            );
+        }
+        assert!(!order.contains(&"gated_producer".to_string()), "{order:?}");
     }
 
     #[test]
