@@ -92,6 +92,21 @@ Problems-panel diagnostics:
 the engine's canonical TOML formatter (`oxo-flow format`) on the current
 buffer — unsaved changes included.
 
+## Run CodeLens
+
+Every `[[rules]]` header shows two CodeLens buttons when you open a
+`.oxoflow` file:
+
+- **▶ Run this rule** — runs `oxo-flow run -t <name>`, which the CLI resolves
+  to that rule plus its upstream closure.
+- **▶ Run to here** — repeats `-t` for every rule at or before this one in
+  file order, so the pipeline runs up to (and including) this rule.
+
+Both honor `oxo-flow.runArgs` and reuse the cached run task. Editors who
+prefer the keyboard can pass the same targets by hand:
+`Run Pipeline` accepts `target` in its task definition, or list several
+rules via repeated `-t` in `extraArgs`.
+
 ## Onboarding walkthrough
 
 First launch surfaces a **Get Started with oxo-flow** walkthrough
@@ -118,6 +133,7 @@ title bar.
 | Command | CLI equivalent |
 | --- | --- |
 | Run Pipeline (<kbd>Ctrl+Alt+R</kbd>) | `oxo-flow run <file>` + `oxo-flow.runArgs` |
+| Run Rule Targets… (CodeLens) | `oxo-flow run <file> -t <name>…` (▶ Run this rule / ▶ Run to here above each `[[rules]]`) |
 | Dry Run (plan only) | `oxo-flow dry-run <file>` |
 | Validate Pipeline (<kbd>Ctrl+Alt+V</kbd>) | `oxo-flow validate <file> --json` |
 | Lint Pipeline | `oxo-flow lint <file> --json` |

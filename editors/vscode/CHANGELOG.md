@@ -9,6 +9,9 @@ The extension version is kept in lockstep with the oxo-flow project version
 - **Get Started walkthrough** — four-step onboarding (welcome → connect
   the CLI → open/create a pipeline → validate, then run) with checklist
   steps that complete as you use the corresponding commands.
+- **Run CodeLens** on `[[rules]]` headers — ▶ Run this rule (`-t <name>`,
+  rule + upstream) and ▶ Run to here (repeated `-t` over file-order rules),
+  plus a `Run Rule Targets…` palette command.
 - Editor title-bar **Run** and **Validate** buttons for `.oxoflow`
   editors.
 - Editor context-menu group (Run / Dry Run / Validate / Lint / Format).

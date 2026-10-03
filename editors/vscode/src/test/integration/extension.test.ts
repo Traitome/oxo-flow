@@ -51,9 +51,42 @@ describe("oxo-flow extension", () => {
     await ext!.activate();
     assert.ok(ext!.isActive);
     const commands = await vscode.commands.getCommands(true);
-    for (const id of ["oxo-flow.run", "oxo-flow.validate", "oxo-flow.format", "oxo-flow.pickCommand"]) {
+    for (const id of [
+      "oxo-flow.run",
+      "oxo-flow.runTargets",
+      "oxo-flow.validate",
+      "oxo-flow.format",
+      "oxo-flow.pickCommand",
+    ]) {
       assert.ok(commands.includes(id), `command ${id} not registered`);
     }
+  });
+
+  it("shows Run CodeLens on [[rules]] headers", async () => {
+    const content = [
+      "[workflow]",
+      'name = "codelens-fixture"',
+      "",
+      "[[rules]]",
+      'name = "greet"',
+      'output = ["hello.txt"]',
+      'shell = "echo hello > {output}"',
+      "",
+      "[[rules]]",
+      'name = "second"',
+      'depends_on = ["greet"]',
+    ].join("\n");
+    const doc = await vscode.workspace.openTextDocument({ content, language: "oxoflow" });
+    await vscode.window.showTextDocument(doc);
+    const lenses = await vscode.commands.executeCommand<vscode.CodeLens[]>(
+      "vscode.executeCodeLensProvider",
+      doc.uri
+    );
+    const titles = lenses.map((l) => (l.command?.title ?? ""));
+    assert.ok(
+      titles.includes("▶ Run this rule") && titles.includes("▶ Run to here"),
+      `expected run lenses; got: ${JSON.stringify(titles)}`
+    );
   });
 
   it("recognizes .oxoflow documents as the oxoflow language", async () => {
