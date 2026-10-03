@@ -3910,19 +3910,30 @@ extension id <code>traitome.oxo-flow</code>) that turns VS Code into a full edit
 <code>.oxoflow</code> pipelines: smart syntax, schema-driven completion, background
 diagnostics, canonical formatting, and one-click access to the CLI lifecycle.</p>
 <p>The extension lives in <a href="https://github.com/Traitome/oxo-flow/tree/main/editors/vscode"><code>editors/vscode/</code></a>
-and is released in lockstep with the engine: every oxo-flow release publishes
-the same version as a VSIX to the GitHub release, <a href="https://open-vsx.org/">Open VSX</a>
-and the VS Code Marketplace.</p>
+and is released in lockstep with the engine: every oxo-flow release attaches
+the same version as a VSIX (with a <code>.sha256</code> checksum) to the GitHub release
+and publishes it to <a href="https://open-vsx.org/">Open VSX</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">About the VS Code Marketplace</p>
+<p>Publishing to the VS Code Marketplace is <strong>not currently supported</strong> —
+it requires a publisher account tied to Azure DevOps that the project
+does not maintain yet. Two good alternatives cover every VS Code fork:</p>
+<ol>
+<li><strong>Open VSX</strong> — VSCodium, Cursor, Windsurf and most forks search it by
+   default; the same <code>traitome.oxo-flow</code> id is there.</li>
+<li><strong>Offline VSIX</strong> — download the release artifact and install it with
+   one command (below); this works in stock VS Code and any fork.</li>
+</ol>
+</div>
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">#</a></h2>
-<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Marketplace / Open VSX</label><label for="__tabbed_1_2">Offline VSIX</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Open VSX (recommended for forks)</label><label for="__tabbed_1_2">Offline VSIX (works in any VS Code)</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
-<p>Search for <strong>oxo-flow Pipeline</strong> in the VS Code Extensions view, or:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>code<span class="w"> </span>--install-extension<span class="w"> </span>traitome.oxo-flow
+<p>VSCodium / Cursor / Windsurf and most VS Code forks search
+<a href="https://open-vsx.org/extension/traitome/oxo-flow">Open VSX</a> by default —
+install the extension from the Extensions view like any other, or:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>codium<span class="w"> </span>--install-extension<span class="w"> </span>traitome.oxo-flow
 </span></code></pre></div>
-<p>On VSCodium / Cursor / Windsurf, install from
-<a href="https://open-vsx.org/extension/traitome/oxo-flow">Open VSX</a> — most
-VS Code forks search it by default.</p>
 </div>
 <div class="tabbed-block">
 <p>Download <code>oxo-flow-vscode-v&lt;version&gt;.vsix</code> (with a <code>.sha256</code> checksum)
@@ -3978,7 +3989,9 @@ the engine's canonical TOML formatter (<code>oxo-flow format</code>) on the curr
 buffer — unsaved changes included.</p>
 <h2 id="cli-lifecycle-commands">CLI lifecycle commands<a class="headerlink" href="#cli-lifecycle-commands" title="Permanent link">#</a></h2>
 <p>All commands are prefixed <code>oxo-flow:</code> in the command palette; the status bar
-item shows the detected CLI version and opens a quick pick of all of them.</p>
+item shows the detected CLI version and opens a quick pick of all of them.
+<code>.oxoflow</code> editors also get <strong>Run</strong> and <strong>Validate</strong> buttons in the editor
+title bar.</p>
 <table>
 <thead>
 <tr>
@@ -4014,6 +4027,14 @@ item shows the detected CLI version and opens a quick pick of all of them.</p>
 <tr>
 <td>Resume from Checkpoint</td>
 <td><code>oxo-flow resume &lt;checkpoint&gt;</code> (quick pick over <code>**/.oxo-flow/checkpoint.json</code>)</td>
+</tr>
+<tr>
+<td>Show Run Status</td>
+<td><code>oxo-flow status &lt;checkpoint&gt; --timing</code> (quick pick over checkpoint files)</td>
+</tr>
+<tr>
+<td>Clean Outputs…</td>
+<td><code>oxo-flow clean &lt;file&gt; -n</code> preview → confirmation → <code>--force</code> (optionally <code>--orphans</code>)</td>
 </tr>
 <tr>
 <td>Generate Pipeline with AI…</td>
