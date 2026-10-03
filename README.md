@@ -38,6 +38,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 - 📦 **8 environment backends** — conda, mamba, pixi, docker, singularity, venv, system, and HPC modules — with per-rule isolation
 - ⚡ **Rust performance** — Fearless concurrency, zero-cost abstractions, `#![forbid(unsafe_code)]` in every workspace crate
 - 🌐 **Professional Web UI** — React 19 SPA with DAG visualization (React Flow + d3-dag), TOML editor (CodeMirror 6), and AI chat
+- 🧩 **VS Code extension** — first-party `traitome.oxo-flow` IDE for `.oxoflow`: schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (Open VSX + release VSIX)
 - 📊 **Built-in reporting** — HTML/JSON/Markdown/PDF reports with execution summaries, failure diagnosis, resource metrics, and checkpoint-verified file manifests; QC metrics parsed from real tool outputs (fastp, flagstat, STAR, featureCounts, bcftools, kraken2), R-friendly TSV export (`--r-data`), and a JSON report snapshot auto-written after every run
 - 🔒 **Security hardened** — Shell injection prevention, path traversal protection, secret scanning, and per-IP rate limiting
 - 🗄️ **Checkpoint & resume** — JSON-persisted execution state; resume interrupted workflows from the last completed rule
@@ -238,10 +239,13 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 ## Editor Support (VS Code)
 
-The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX attached to every GitHub release, published to the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) and [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow)):
+The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX with checksum attached to every GitHub release, published to [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow)):
+
+> **Note** — the **VS Code Marketplace is not currently supported** (requires an Azure DevOps publisher account the project does not maintain yet). VSCodium, Cursor, Windsurf and most forks get the extension from **Open VSX** (searched by default); stock VS Code users can install the release VSIX offline:
 
 ```bash
-code --install-extension traitome.oxo-flow
+codium --install-extension traitome.oxo-flow              # Open VSX (forks)
+code --install-extension oxo-flow-vscode-v<version>.vsix  # offline VSIX (any VS Code)
 ```
 
 It provides `[[rules]]`-aware syntax highlighting (wildcards and `{input[0]}` placeholders), completion and hover docs generated from the canonical workflow JSON Schema, background `validate`/`lint` diagnostics anchored to the failing rule, canonical formatting, and one-click run / dry-run / graph / resume / AI-generate commands. See the [VS Code Extension](https://traitome.github.io/oxo-flow/latest/reference/vscode-extension/) reference, or [Editor Setup](https://traitome.github.io/oxo-flow/latest/how-to/editor-setup/) for other editors (Zed, Helix, Neovim, JetBrains, …).
