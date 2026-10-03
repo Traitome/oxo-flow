@@ -200,16 +200,15 @@ describe("oxo-flow extension", () => {
         const found = vscode.languages.getDiagnostics(doc.uri).filter((d) => d.source === "oxo-flow");
         return found.length > 0 ? found : undefined;
       });
-      const context: vscode.CodeActionContext = {
-        triggerKind: vscode.CodeActionTriggerKind.Invoke,
-        diagnostics: diags,
-        only: vscode.CodeActionKind.QuickFix,
-      };
+      // NB: the runtime command takes a CodeActionKind here (the .d.ts
+      // claims a CodeActionContext — the runtime rejects that with
+      // "Invalid argument 'kind'"); the provider receives the diagnostics
+      // at the range from VS Code's own controller.
       const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
         "vscode.executeCodeActionProvider",
         doc.uri,
         diags[0].range,
-        context
+        vscode.CodeActionKind.QuickFix
       );
       const titles = (actions ?? []).map((a) => a.title);
       assert.ok(
