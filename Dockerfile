@@ -24,6 +24,9 @@ RUN mkdir -p src && echo "//! stub" > src/lib.rs \
 # The root manifest is both workspace and package: without its src/lib.rs
 # cargo rejects the manifest ("no targets specified") inside the container.
 COPY src/lib.rs src/
+# Restore the REAL member sources (the dependency layer above ran with
+# stubbed files; this copy invalidates only the workspace crates themselves).
+COPY crates/ ./crates/
 # -p is required: the workspace root's default package (oxo-flow) has no bin
 # targets, so `--bin oxo-flow-web` aborts with "no bin target named".
 # oxo-flow-cli provides the `oxo-flow` binary: web-triggered runs shell out to
