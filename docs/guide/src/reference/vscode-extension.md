@@ -92,6 +92,12 @@ Problems-panel diagnostics:
 the engine's canonical TOML formatter (`oxo-flow format`) on the current
 buffer — unsaved changes included.
 
+To format automatically on save, enable `oxo-flow.formatOnSave` (off by
+default). It is an independent opt-in: it formats `.oxoflow` documents on
+save even when the global *Editor: Format On Save* is off for other
+languages, and stays out of the way when that toggle is already on (VS Code
+then invokes the same formatter through the standard pathway).
+
 ## Run CodeLens
 
 Every `[[rules]]` header shows two CodeLens buttons when you open a
@@ -175,6 +181,7 @@ the description.
 | `oxo-flow.diagnosticMode` | `save` | `off`, `save`, or `type` |
 | `oxo-flow.enableLintDiagnostics` | `true` | Merge `lint` findings into the Problems panel |
 | `oxo-flow.runArgs` | `[]` | Extra arguments for Run Pipeline |
+| `oxo-flow.formatOnSave` | `false` | Format the document with `oxo-flow format` on every save |
 | `oxo-flow.trace` | `false` | Log CLI invocations to the *oxo-flow* output channel |
 
 ## Remote and untrusted workspaces
