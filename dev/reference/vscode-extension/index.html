@@ -4078,7 +4078,7 @@ title bar.</p>
 </thead>
 <tbody>
 <tr>
-<td>Run Pipeline (<kbd>Ctrl+Alt+R</kbd>)</td>
+<td>Run Pipeline (<kbd>Cmd/Ctrl+Alt+R</kbd>)</td>
 <td><code>oxo-flow run &lt;file&gt;</code> + <code>oxo-flow.runArgs</code></td>
 </tr>
 <tr>
@@ -4090,11 +4090,11 @@ title bar.</p>
 <td><code>oxo-flow dry-run &lt;file&gt;</code></td>
 </tr>
 <tr>
-<td>Validate Pipeline (<kbd>Ctrl+Alt+V</kbd>)</td>
+<td>Validate Pipeline (<kbd>Cmd/Ctrl+Alt+V</kbd>)</td>
 <td><code>oxo-flow validate &lt;file&gt; --json</code></td>
 </tr>
 <tr>
-<td>Lint Pipeline</td>
+<td>Lint Pipeline (<kbd>Cmd/Ctrl+Alt+L</kbd>)</td>
 <td><code>oxo-flow lint &lt;file&gt; --json</code></td>
 </tr>
 <tr>
@@ -4102,7 +4102,7 @@ title bar.</p>
 <td><code>oxo-flow format &lt;file&gt;</code></td>
 </tr>
 <tr>
-<td>Show DAG Graph</td>
+<td>Show DAG Graph (<kbd>Cmd/Ctrl+Alt+G</kbd>)</td>
 <td><code>oxo-flow graph &lt;file&gt; [-f &lt;format&gt;]</code> — quick pick over <code>ascii</code>, <code>mermaid</code>, <code>dot</code>, <code>dot-clustered</code>, <code>tree</code>, <code>metro</code> (last choice remembered)</td>
 </tr>
 <tr>
@@ -4129,8 +4129,17 @@ title bar.</p>
 <td>Export JSON Schema</td>
 <td><code>oxo-flow schema &gt; oxo-flow-schema.json</code></td>
 </tr>
+<tr>
+<td>Report Issue / Suggest Improvement</td>
+<td>opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached)</td>
+</tr>
 </tbody>
 </table>
+<p>Pipeline commands surface in the command palette only while an <code>.oxoflow</code>
+editor is active, so the palette stays quiet in other files. Long-running
+operations (validate, lint, clean preview, status, AI status) show a progress
+notification. Error toasts carry a <strong>Report Issue</strong> button that opens the
+report with the error pre-attached.</p>
 <p>Run / Dry Run / Graph execute as <strong>tasks</strong> (<code>type: "oxo-flow"</code>), so they get
 a dedicated terminal panel, re-run support, and <code>tasks.json</code> customization:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>

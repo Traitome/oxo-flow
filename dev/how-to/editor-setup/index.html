@@ -4023,18 +4023,32 @@ TOML support: syntax highlighting, bracket matching, folding, and formatting.</p
 <h2 id="vs-code-the-official-extension-recommended">VS Code: the official extension (recommended)<a class="headerlink" href="#vs-code-the-official-extension-recommended" title="Permanent link">#</a></h2>
 <p>In VS Code, skip the manual association entirely — install the
 <strong>oxo-flow Pipeline</strong> extension (<code>traitome.oxo-flow</code>):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>code<span class="w"> </span>--install-extension<span class="w"> </span>traitome.oxo-flow
+<table>
+<thead>
+<tr>
+<th>Editor</th>
+<th>Install from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VSCodium / Cursor / Windsurf and most forks</td>
+<td>the Extensions view — search <em>oxo-flow</em> (published on <a href="https://open-vsx.org/extension/traitome/oxo-flow">Open VSX</a>)</td>
+</tr>
+<tr>
+<td>Stock VS Code</td>
+<td>the <a href="https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow">VS Code Marketplace</a>, or the <a href="../../reference/vscode-extension/#install">release VSIX offline</a></td>
+</tr>
+</tbody>
+</table>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>code<span class="w"> </span>--install-extension<span class="w"> </span>traitome.oxo-flow<span class="w">    </span><span class="c1"># stock VS Code (Marketplace)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>codium<span class="w"> </span>--install-extension<span class="w"> </span>traitome.oxo-flow<span class="w">  </span><span class="c1"># VSCodium &amp; forks (Open VSX)</span>
 </span></code></pre></div>
-<p>or search <em>oxo-flow</em> in the Extensions view (published on
-<a href="https://open-vsx.org/extension/traitome/oxo-flow">Open VSX</a> — VSCodium,
-Cursor, and other forks search it by default; stock VS Code users can
-<a href="../../reference/vscode-extension/#install">install the release VSIX offline</a> —
-the VS Code Marketplace is not currently supported). It provides TOML+
-syntax highlighting, schema-driven completion with hover docs, background
-<code>validate</code>/<code>lint</code> diagnostics, canonical formatting, one-click
-run/dry-run/status/clean/resume, and AI pipeline generation — see the
-<a href="../../reference/vscode-extension/">VS Code Extension</a> reference. The rest of
-this page covers manual setups and other editors.</p>
+<p>The extension provides TOML+ syntax highlighting, schema-driven completion
+with hover docs, background <code>validate</code>/<code>lint</code> diagnostics, canonical
+formatting, one-click run/dry-run/status/clean/resume, and AI pipeline
+generation — see the <a href="../../reference/vscode-extension/">VS Code Extension</a>
+reference. The rest of this page covers manual setups and other editors.</p>
 <h2 id="vs-code-without-the-extension">VS Code (without the extension)<a class="headerlink" href="#vs-code-without-the-extension" title="Permanent link">#</a></h2>
 <h3 id="workspace-per-repository">Workspace (per repository)<a class="headerlink" href="#workspace-per-repository" title="Permanent link">#</a></h3>
 <p>The <a href="https://github.com/oxo-flow-community">oxo-flow-community</a> workflow
