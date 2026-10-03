@@ -56,6 +56,17 @@ test("graph/resume/template/format/schema args", () => {
 test("cleanArgs/statusArgs", () => {
   assert.deepEqual(cleanArgs("p.oxoflow", { dryRun: true }), ["clean", "p.oxoflow", "-n"]);
   assert.deepEqual(cleanArgs("p.oxoflow", { force: true }), ["clean", "p.oxoflow", "--force"]);
+  assert.deepEqual(cleanArgs("p.oxoflow", { force: true, orphans: true }), [
+    "clean",
+    "p.oxoflow",
+    "--force",
+    "--orphans",
+  ]);
   assert.deepEqual(statusArgs(), ["status"]);
   assert.deepEqual(statusArgs(".oxo-flow/checkpoint.json"), ["status", ".oxo-flow/checkpoint.json"]);
+  assert.deepEqual(statusArgs(".oxo-flow/checkpoint.json", { timing: true }), [
+    "status",
+    ".oxo-flow/checkpoint.json",
+    "--timing",
+  ]);
 });

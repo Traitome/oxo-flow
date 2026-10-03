@@ -176,6 +176,18 @@
         "category": "oxo-flow"
       },
       {
+        "command": "oxo-flow.status",
+        "title": "Show Run Status",
+        "category": "oxo-flow",
+        "icon": "$(info)"
+      },
+      {
+        "command": "oxo-flow.clean",
+        "title": "Clean Outputs…",
+        "category": "oxo-flow",
+        "icon": "$(trash)"
+      },
+      {
         "command": "oxo-flow.openDocs",
         "title": "Open Documentation",
         "category": "oxo-flow"
@@ -199,6 +211,18 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "oxo-flow.run",
+          "when": "resourceLangId == oxoflow",
+          "group": "navigation@1"
+        },
+        {
+          "command": "oxo-flow.validate",
+          "when": "resourceLangId == oxoflow",
+          "group": "navigation@2"
+        }
+      ],
       "editor/context": [
         {
           "command": "oxo-flow.run",
