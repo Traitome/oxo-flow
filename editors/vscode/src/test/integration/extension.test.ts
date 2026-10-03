@@ -208,7 +208,7 @@ describe("oxo-flow extension", () => {
         "vscode.executeCodeActionProvider",
         doc.uri,
         diags[0].range,
-        vscode.CodeActionKind.QuickFix
+        "quickfix"
       );
       const titles = (actions ?? []).map((a) => a.title);
       assert.ok(
