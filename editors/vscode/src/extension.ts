@@ -46,6 +46,30 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCodeLensProvider("oxoflow", new OxoflowCodeLensProvider())
   );
 
+  // Format-on-save: reuse the canonical formatter when `oxo-flow.formatOnSave`
+  // is enabled for the file. This is an independent opt-in (so users can have
+  // oxo-flow formatting on save without turning on global format-on-save for
+  // every other language); when *Editor: Format On Save* is already on, VS
+  // Code invokes our registered formatting provider itself and we stay out of
+  // the way. waitUntil keeps the save waiting until the CLI formatter applied.
+  context.subscriptions.push(
+    vscode.workspace.onWillSaveTextDocument((event) => {
+      const doc = event.document;
+      if (doc.languageId !== "oxoflow") return;
+      const cfg = vscode.workspace.getConfiguration("oxo-flow", doc.uri);
+      if (!cfg.get<boolean>("formatOnSave", false)) return;
+      const editorCfg = vscode.workspace.getConfiguration("editor", doc.uri);
+      if (editorCfg.get<boolean>("formatOnSave", false)) return;
+      event.waitUntil(
+        new OxoflowFormattingProvider().provideDocumentFormattingEdits(
+          doc,
+          { insertSpaces: true, tabSize: 4 },
+          new vscode.CancellationTokenSource().token
+        )
+      );
+    })
+  );
+
   const register = (id: string, fn: (...args: unknown[]) => unknown) => {
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
   };

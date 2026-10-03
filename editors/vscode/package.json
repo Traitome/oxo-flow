@@ -345,6 +345,11 @@
           "default": [],
           "markdownDescription": "Extra arguments passed to `oxo-flow run` (for example `[\"--profile\", \"slurm\"]`)."
         },
+        "oxo-flow.formatOnSave": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Format `.oxoflow` documents with `oxo-flow format` when they are saved (follows the standard *Editor: Format On Save* toggle too)."
+        },
         "oxo-flow.trace": {
           "type": "boolean",
           "default": false,

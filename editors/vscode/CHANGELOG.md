@@ -12,6 +12,8 @@ The extension version is kept in lockstep with the oxo-flow project version
 - **Run CodeLens** on `[[rules]]` headers — ▶ Run this rule (`-t <name>`,
   rule + upstream) and ▶ Run to here (repeated `-t` over file-order rules),
   plus a `Run Rule Targets…` palette command.
+- **Format on save** — new `oxo-flow.formatOnSave` setting (default off);
+  when enabled, saves of `.oxoflow` documents run `oxo-flow format` first.
 - Editor title-bar **Run** and **Validate** buttons for `.oxoflow`
   editors.
 - Editor context-menu group (Run / Dry Run / Validate / Lint / Format).
