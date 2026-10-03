@@ -220,9 +220,10 @@ marketplaces.
 - Update documentation site if applicable
 - Verify the published crates on [crates.io](https://crates.io/)
 - Verify the extension on the
-  [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) listing and
-  the VSIX on the release assets (Marketplace is not supported while
-  `VSCE_PAT` is unset — do not expect a listing there)
+  [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) listing, the
+  VS Code Marketplace
+  (`marketplace.visualstudio.com/items?itemName=traitome.oxo-flow`), and
+  the VSIX on the release assets
 
 No development-version bump is needed afterwards: `main` stays at the
 released version until the next dispatch, and `sync-version` syncs it then.
