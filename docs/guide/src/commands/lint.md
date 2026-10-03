@@ -52,7 +52,7 @@ oxo-flow lint pipeline.oxoflow --strict
 ## Output
 
 ```
-oxo-flow v0.21.2 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.22.0 — Rust-native bioinformatics pipeline engine
   warning [W003]: rule has no description (rule: bwa_align)
     hint: add description = "Brief one-line description of what bwa_align does" to this rule
   info [W004]: rule has a shell command but no log file specified (rule: bwa_align)
@@ -91,7 +91,7 @@ W033 flags two rules that write the same output path — including
 differently-named wildcards over the same template (`variants/{smp}.vcf`
 vs `variants/{sample}.vcf`) and identical literal paths. The engine does
 not refuse to run: both rules execute and the second to finish silently
-overwrites the first (verified live in v0.21.2 with a run reporting
+overwrites the first (verified live in v0.22.0 with a run reporting
 success while both colliding rules executed), so downstream rules consume
 the wrong file. The repair is distinct output directories per writer —
 or a `when` gate when the two rules are mutually exclusive alternatives
