@@ -137,6 +137,21 @@ class GoldLoadingTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
 
 
+class NamePresentTests(unittest.TestCase):
+    def test_short_names_require_token_boundaries(self):
+        self.assertFalse(common.name_present("tw", "a network of tools"))
+        self.assertFalse(common.name_present("star", "starting point"))
+        self.assertTrue(common.name_present("tw", "the tw CLI"))
+        self.assertTrue(common.name_present("bwa", "bwa-mem2 alignment"))
+
+    def test_short_alias_resolves_against_package_spellings(self):
+        self.assertTrue(common.name_present("VEP", "Ensembl VEP annotates variants"))
+        self.assertTrue(common.name_present("vep", "ensembl-vep was used"))
+
+    def test_long_names_keep_separator_tolerant_substring(self):
+        self.assertTrue(common.name_present("bwa-mem2", "ran bwa_mem2 on the reads"))
+
+
 class StepMappingTests(unittest.TestCase):
     def test_map_expected_steps_prefers_exact_match(self):
         mapping = common.map_expected_steps(

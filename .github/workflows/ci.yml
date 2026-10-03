@@ -406,6 +406,19 @@ jobs:
       - name: Version drift check
         run: make version-check
 
+      # Mirrors `make eval-tests`: unit tests for the deterministic judge
+      # logic in eval/scripts — silent rot there would corrupt AI-benchmark
+      # numbers without any Rust test noticing (see issue #172).
+      - name: Eval harness unit tests
+        run: make eval-tests
+
+      # Mirrors `make eval-lint`: gold-set consistency — fabricated names
+      # colliding with the knowledge base, gold-vs-KB version drift after a
+      # knowledge refresh, missing provenance evidence, and declared DAG
+      # edges absent from the reference's engine graph (issue #172).
+      - name: Eval gold consistency
+        run: make eval-lint
+
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
         with:

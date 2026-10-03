@@ -67,6 +67,12 @@ LIBRARY_SUMMARY_KEYWORDS = [
     "api client",
     "api wrapper",
     "sdk for",
+    # Gaps found by the #172 audit: library/source packages that leaked into
+    # the tool table with descriptions like these.
+    "cythonized function",
+    "contains functions",
+    "set of c++ libraries",
+    "components for",
 ]
 KNOWN_NON_CLI = {"snakemake-wrapper-utils"}
 

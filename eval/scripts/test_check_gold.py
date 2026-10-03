@@ -95,8 +95,8 @@ class WorkflowEdgeTests(unittest.TestCase):
     def test_declared_edge_absent_from_engine_graph_is_flagged(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._repo_with_reference(tmp)
-            findings, checked, skipped = check_gold.check_workflow_edges(
-                [self._row()], tmp, lambda path: (set(), None)
+            findings, checked, skipped, _ = check_gold.check_workflow_edges(
+                [self._row()], tmp, lambda path: (set(), set(), None)
             )
         self.assertEqual((checked, skipped), (1, 0))
         self.assertEqual(len(findings), 1)
@@ -105,8 +105,8 @@ class WorkflowEdgeTests(unittest.TestCase):
     def test_declared_edge_present_in_engine_graph_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._repo_with_reference(tmp)
-            findings, checked, _ = check_gold.check_workflow_edges(
-                [self._row()], tmp, lambda path: ({("a", "b")}, None)
+            findings, checked, _, _ = check_gold.check_workflow_edges(
+                [self._row()], tmp, lambda path: ({"a", "b"}, {("a", "b")}, None)
             )
         self.assertEqual(findings, [])
         self.assertEqual(checked, 1)
@@ -114,20 +114,60 @@ class WorkflowEdgeTests(unittest.TestCase):
     def test_engine_error_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._repo_with_reference(tmp)
-            findings, _, _ = check_gold.check_workflow_edges(
-                [self._row()], tmp, lambda path: (set(), "boom")
+            findings, _, _, _ = check_gold.check_workflow_edges(
+                [self._row()], tmp, lambda path: (set(), set(), "boom")
             )
         self.assertEqual(len(findings), 1)
         self.assertIn("engine graph failed", findings[0])
 
-    def test_community_references_are_skipped(self):
+    def test_community_references_are_skipped_without_fetch(self):
         with tempfile.TemporaryDirectory() as tmp:
             row = self._row()
             row["reference_repo"] = "oxo-flow-rnaseq"
-            findings, checked, skipped = check_gold.check_workflow_edges(
-                [row], tmp, lambda path: (set(), None)
+            findings, checked, skipped, warnings = check_gold.check_workflow_edges(
+                [row], tmp, lambda path: (set(), set(), None)
             )
-        self.assertEqual((findings, checked, skipped), ([], 0, 1))
+        self.assertEqual((findings, checked, skipped, warnings), ([], 0, 1, []))
+
+
+class ExpectedToolTests(unittest.TestCase):
+    def test_tool_absent_from_the_kb_is_flagged(self):
+        rows = [{"id": "tool-131", "negative_sample": "0", "review_status": "approved",
+                 "expected_tool": "upp_align"}]
+        findings, checked = check_gold.check_expected_tools(rows, {"fastqc"})
+        self.assertEqual(checked, 1)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("upp_align", findings[0])
+
+    def test_known_tool_and_unreviewed_rows_are_ignored(self):
+        rows = [
+            {"id": "tool-001", "negative_sample": "0", "review_status": "approved", "expected_tool": "fastp"},
+            {"id": "tool-002", "negative_sample": "0", "review_status": "draft", "expected_tool": "mystery"},
+            {"id": "tool-003", "negative_sample": "1", "review_status": "approved", "expected_tool": ""},
+        ]
+        findings, checked = check_gold.check_expected_tools(rows, {"fastp"})
+        self.assertEqual((findings, checked), ([], 1))
+
+    def test_canonical_display_names_resolve_against_package_names(self):
+        rows = [
+            {"id": "tool-027", "negative_sample": "0", "review_status": "corrected", "expected_tool": "Seurat"},
+            {"id": "tool-038", "negative_sample": "0", "review_status": "corrected", "expected_tool": "VEP"},
+        ]
+        findings, checked = check_gold.check_expected_tools(rows, {"rseurat", "ensemblvep"})
+        self.assertEqual(findings, [])
+        self.assertEqual(checked, 2)
+
+
+class NegativeOverlapTests(unittest.TestCase):
+    def test_embedded_real_token_is_warned(self):
+        rows = [{"id": "tool-047", "negative_sample": "1", "query": "what does rnaseq_ultra_aligner do"}]
+        warnings = check_gold.check_negative_overlaps(rows, {"ultra", "fastq"})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ultra", warnings[0])
+
+    def test_clean_fake_names_do_not_warn(self):
+        rows = [{"id": "tool-049", "negative_sample": "1", "query": "what does gene_exploder do"}]
+        self.assertEqual(check_gold.check_negative_overlaps(rows, {"ultra"}), [])
 
 
 class VersionIntentTests(unittest.TestCase):

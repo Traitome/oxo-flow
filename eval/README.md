@@ -23,6 +23,7 @@ eval/
     capture_tool.py       # tool layer: prompt the AI per item/trial -> answers.csv + manifest
     capture_workflow.py   # rule/workflow layers: generate per-trial .oxoflow files + manifests
     runner.py             # judge captures -> detailed CSV + per-item CSV + summary JSON
+    check_gold.py         # gold-set consistency linter (issue #172)
     common.py             # shared stdlib helpers
 ```
 
@@ -57,7 +58,9 @@ the oxo-flow-community repositories. Every row carries a `provenance_url`
 pointing at the primary source (bioconda recipe, nf-core module, vendor
 page, or the reference workflow file).
 
-Rows start at `review_status = draft` and are skipped by capture/runner until a human reviewer approves them (see the review workflow in `schema.md`). If zero approved rows exist, capture/judging now aborts with a clear error instead of silently producing an empty benchmark. `--include-unreviewed` is still available for preview-only dry runs and must not be reported as final benchmark data.
+Rows start at `review_status = draft` and are skipped by capture/runner until a reviewer accepts them (`approved` / `corrected`; see the review workflow in `schema.md`). If zero reviewable rows exist, capture/judging aborts with a clear error instead of silently producing an empty benchmark. `--include-unreviewed` is still available for preview-only dry runs and must not be reported as final benchmark data.
+
+**Review maturity:** the 257 current rows were machine-swept on 2026-09-07 (`reviewer = wangshx-automated`); a human verification pass is tracked in [#172](https://github.com/Traitome/oxo-flow/issues/172) — treat reported numbers as *machine-swept* until it closes. `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the machine-checkable consistency rules between review passes: fabricated names colliding with the knowledge base, gold-vs-KB version drift after a knowledge refresh, missing provenance evidence, and declared DAG edges absent from the reference's engine graph.
 
 ## What each layer measures
 

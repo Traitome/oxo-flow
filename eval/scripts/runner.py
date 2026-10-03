@@ -26,10 +26,25 @@ import common  # noqa: E402
 
 NOT_FOUND_RE = re.compile(
     r"not found|no such|does not exist|doesn't exist|no tool|unable to find|"
-    r"cannot find|unknown tool|i don'?t know of|no known",
+    r"cannot find|could not find|couldn't find|could not locate|does not appear to exist|"
+    r"unknown tool|i don'?t know of|no known",
     re.IGNORECASE,
 )
 TRIAL_RE = re.compile(r"trial-(\d+)")
+
+# Executable -> bioconda package it ships in, for references that pin the
+# package name while the shell invokes the executable (#172 audit).
+PACKAGE_ALIASES = {
+    "gatk": ("gatk4",),
+    "featureCounts": ("subread",),
+    "deduplicate_bismark": ("bismark",),
+    "bismark_methylation_extractor": ("bismark",),
+    "bismark_genome_preparation": ("bismark",),
+    "coverage2cytosine": ("bismark",),
+    "annotatePeaks.pl": ("homer",),
+    "trim_galore": ("trim-galore",),
+    "computeMatrix": ("deeptools",),
+}
 
 
 # ── Shared helpers ──────────────────────────────────────────────────────────
@@ -43,6 +58,12 @@ def stdev(values):
 
 
 def metric_fields(results):
+    """Numeric metric keys across ALL rows (union, first-seen order).
+
+    Reading only results[0] dropped metrics that appear later — the tool
+    layer's `no_hallucination` never reached the summary because the first
+    judged row was a positive sample (#172 audit).
+    """
     excluded = {
         "id",
         "trial",
@@ -54,11 +75,14 @@ def metric_fields(results):
         "capture_error",
         "perfect",
     }
-    return [
-        key
-        for key in results[0]
-        if key not in excluded and isinstance(results[0][key], (int, float))
-    ]
+    fields = []
+    for row in results:
+        for key, value in row.items():
+            if key in excluded or key in fields:
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                fields.append(key)
+    return fields
 
 
 def summarize_rows(rows, metrics):
@@ -138,14 +162,22 @@ def trial_from_path(path):
 
 
 def load_generated(path):
-    """Parse a generated .oxoflow file; returns (text, rules, err)."""
+    """Parse a generated .oxoflow file; returns (text, rules, err).
+
+    `[defaults]` values are merged into every rule (rule keys win), matching
+    the engine: reference rules that declare threads/memory only via
+    `[defaults]` were otherwise scored as having no resources at all (#172
+    audit).
+    """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     try:
         data = tomllib.loads(text)
-        return text, data.get("rules", []), None
     except tomllib.TOMLDecodeError as exc:
         return text, [], str(exc)
+    defaults = data.get("defaults") or {}
+    rules = [{**defaults, **rule} for rule in data.get("rules", [])]
+    return text, rules, None
 
 
 def find_pinned_version(text, tool):
@@ -163,7 +195,9 @@ def find_pinned_version(text, tool):
     for pattern in patterns:
         m = pattern.search(text)
         if m:
-            return m.group(1)
+            # Docker tags carry build suffixes (`ucsc-bedgraphtobigwig:445--h954228d_0`);
+            # the release identity is the part before `--` (#172 audit).
+            return re.split(r"--", m.group(1), maxsplit=1)[0] or m.group(1)
     return None
 
 
@@ -209,24 +243,30 @@ DOT_NODE_RE = re.compile(r'^\s*(\d+)\s*\[\s*label\s*=\s*"([^"]*)"\s*\]', re.MULT
 DOT_EDGE_RE = re.compile(r"^\s*(\d+)\s*->\s*(\d+)\s*\[", re.MULTILINE)
 
 
-def parse_dot_edges(text):
-    """(from_name, to_name) rule pairs from `oxo-flow graph -f dot` output."""
+def parse_dot_graph(text):
+    """(node labels, (from, to) edge pairs) from `oxo-flow graph -f dot`."""
     labels = {idx: name for idx, name in DOT_NODE_RE.findall(text)}
+    nodes = set(labels.values())
     edges = set()
     for src, dst in DOT_EDGE_RE.findall(text):
         if src in labels and dst in labels:
             edges.add((labels[src], labels[dst]))
-    return edges
+    return nodes, edges
+
+
+def parse_dot_edges(text):
+    """(from_name, to_name) rule pairs from `oxo-flow graph -f dot` output."""
+    return parse_dot_graph(text)[1]
 
 
 def engine_edges(oxo_flow_bin, path):
     """The engine's own rule-level DAG for a workflow file.
 
-    The engine connects rules through more than io suffixes (directory
-    inputs, `depends_on`, scatter-aware links), so its graph — not the
-    python suffix inference — is the reference for edge_coverage. Falls
-    back to `inferred_edges` with a warning when the engine cannot produce
-    a graph, so a graph failure never silently zeroes the metric.
+    The engine connects rules through more than literal io suffixes
+    (`depends_on`, pattern-tolerant input/output matching), so its graph —
+    not the python suffix inference — is the reference for edge_coverage.
+    On engine failure this falls back to suffix inference with a printed
+    warning (best-effort only; the fallback cannot see `depends_on`).
     """
     code, out, err = common.oxo_flow_cmd(
         oxo_flow_bin, ["graph", os.path.basename(path), "-f", "dot"], cwd=os.path.dirname(path)
@@ -288,6 +328,18 @@ def path_hits(expected_paths, declared_paths):
 # ── Tool layer ──────────────────────────────────────────────────────────────
 
 MIN_MENTION_NAME_LEN = 3
+MAX_MENTION_WINDOW = 4
+SUGGESTION_CUES = (
+    "did you", "thinking of", "known as", "available as", "closest", "nearest",
+    "alternative", "meant", "mean", "means", "maybe", "perhaps", "suggest",
+    "instead", "try", "trying", "use", "used", "uses", "using", "refer",
+    "refers", "referring", "similar", "correct", "actually", "probably",
+    "equivalent", "replacement", "called", "calling", "exists",
+)
+_SUGGESTION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(cue) for cue in SUGGESTION_CUES) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def _mention_tokens(text):
@@ -311,38 +363,55 @@ def _drop_token_span(tokens, span):
     return out
 
 
-def answer_mentions_known_tool(answer, known_names, exclude_name=""):
-    """True when the answer names a known tool (whole-token match).
+def _mention_forms(tokens):
+    """Spellings the text can produce: tokens plus adjacent concatenations.
 
-    A correct rejection has to echo the fabricated tool's name, so the
-    queried name (`exclude_name`) is dropped from the answer first —
-    otherwise names like `fastq_super_cleaner` would count as a mention of
-    the real tool `fastq`. Matching is exact on tokens (or a fused token),
-    so short KB names no longer match inside longer words (`bio` in
-    `bioconda`, `fc` in `nf-core`). Names shorter than
-    MIN_MENTION_NAME_LEN characters are skipped: as bare tokens they
-    collide with ordinary words without carrying signal.
+    The window concat catches hyphen/space variants of real tools
+    (`fast-qc`, `multi qc` for `fastqc`, `multiqc`) that pure token matching
+    let through (#172 audit).
     """
-    tokens = _mention_tokens(answer)
-    if exclude_name:
-        excluded = _mention_tokens(exclude_name)
-        tokens = _drop_token_span(tokens, excluded)
-        if excluded:
-            fused_excluded = "".join(excluded)
-            tokens = [token for token in tokens if token != fused_excluded]
-    if not tokens:
-        return False
-    wordset = set(tokens)
-    joined = " " + " ".join(tokens) + " "
-    for name in known_names:
-        name_tokens = _mention_tokens(name)
-        if not name_tokens:
+    forms = set(tokens)
+    for size in range(2, MAX_MENTION_WINDOW + 1):
+        for i in range(len(tokens) - size + 1):
+            forms.add("".join(tokens[i : i + size]))
+    return forms
+
+
+def answer_mentions_known_tool(answer, known_names, exclude_name=""):
+    """True when the answer *suggests* a known tool as the intended answer.
+
+    Only sentences carrying a suggestion/existence cue ("did you mean",
+    "maybe", "use ... instead", "closest", "known as", ...) are scanned, so
+    a rejection that merely mentions a format word or an unrelated tool
+    ("it is not a SAM/BAM tool") is not counted as a fallback suggestion
+    (#172 audit). The queried fabricated name is dropped before the scan —
+    a correct rejection has to echo it — and matching accepts token, fused
+    and adjacent-window spellings. Names shorter than
+    MIN_MENTION_NAME_LEN characters are skipped as too ambiguous to scan.
+    """
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n+", answer):
+        if not sentence or not _SUGGESTION_RE.search(sentence):
             continue
-        fused = "".join(name_tokens)
-        if len(fused) < MIN_MENTION_NAME_LEN:
+        tokens = _mention_tokens(sentence)
+        if exclude_name:
+            excluded = _mention_tokens(exclude_name)
+            tokens = _drop_token_span(tokens, excluded)
+            if excluded:
+                fused_excluded = "".join(excluded)
+                tokens = [token for token in tokens if token != fused_excluded]
+        if not tokens:
             continue
-        if fused in wordset or f" {' '.join(name_tokens)} " in joined:
-            return True
+        forms = _mention_forms(tokens)
+        joined = " " + " ".join(tokens) + " "
+        for name in known_names:
+            name_tokens = _mention_tokens(name)
+            if not name_tokens:
+                continue
+            fused = "".join(name_tokens)
+            if len(fused) < MIN_MENTION_NAME_LEN:
+                continue
+            if fused in forms or f" {' '.join(name_tokens)} " in joined:
+                return True
     return False
 
 
@@ -365,9 +434,21 @@ def judge_tool(gold_rows, captures_path):
             scores = {}
             if row["expected_tool"]:
                 scores["name_match"] = 1.0 if common.name_present(row["expected_tool"], answer) else 0.0
-            if row["expected_version"]:
+            # schema.md: expected_version is empty when the query does not ask
+            # for a version, and version_match is scored only when it is asked
+            # (#172: 45 rows carried a version on non-version queries and
+            # penalised correct answers). Rows without a query keep the old
+            # behaviour for synthetic inputs.
+            query = row.get("query", "")
+            asks_version = "version" in query.lower() if query else True
+            if row["expected_version"] and asks_version:
+                # Boundary-checked match: "2.0.4" must not be satisfied by
+                # "2.0.40" or "12.0.4" (#172 audit), while "v2.0.4" still is.
+                version = re.sub(r"\s", "", row["expected_version"])
                 scores["version_match"] = (
-                    1.0 if re.sub(r"\s", "", row["expected_version"]) in re.sub(r"\s", "", answer) else 0.0
+                    1.0
+                    if re.search(r"(?<![0-9.])" + re.escape(version) + r"(?![0-9A-Za-z])", re.sub(r"\s", "", answer))
+                    else 0.0
                 )
             if row["negative_sample"] == "1":
                 rejected = bool(NOT_FOUND_RE.search(answer))
@@ -412,8 +493,15 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
             scores["tool_present"] = 1.0 if common.name_present(row["expected_tool"], shell + " " + text) else 0.0
 
             if row["expected_version"]:
-                pinned = find_pinned_version(text, row["expected_tool"])
-                known = known_pins.get(row["expected_tool"], set())
+                # References pin the *package* name, which often differs from
+                # the executable the shell invokes (gatk -> gatk4, featureCounts
+                # -> subread); without the alias the pin is invisible and a
+                # reference-faithful answer scores 0 (#172 audit).
+                pinned, known = None, set()
+                for name in (row["expected_tool"],) + PACKAGE_ALIASES.get(row["expected_tool"], ()):
+                    if pinned is None:
+                        pinned = find_pinned_version(text, name)
+                    known |= known_pins.get(name, set())
                 scores["version_pinned"] = 1.0 if pinned and (pinned in known or pinned == row["expected_version"]) else 0.0
 
             try:
@@ -431,7 +519,15 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
                 expected_out = json.loads(row["expected_outputs"])
             except json.JSONDecodeError:
                 expected_in, expected_out = [], []
-            declared_in = rule.get("input", []) if rule else []
+            declared_in = list(rule.get("input", [])) if rule else []
+            if rule:
+                # `expand_inputs` patterns are real declared inputs (the
+                # reference's gather rules take their io from there).
+                declared_in += [
+                    entry.get("pattern", "")
+                    for entry in rule.get("expand_inputs", [])
+                    if isinstance(entry, dict) and entry.get("pattern")
+                ]
             declared_out = rule.get("output", []) if rule else []
             io_scores = []
             if expected_in:
@@ -610,12 +706,14 @@ def report(results, gold_rows, out_path, summary_out=None, item_summary_out=None
     difficulties = sorted({gold.get("difficulty", "") for gold in gold_rows if gold.get("difficulty")})
     for difficulty in difficulties:
         rows = [r for r in results if gold_by_id.get(r["id"], {}).get("difficulty") == difficulty]
-        summary["by_difficulty"][difficulty] = summarize_rows(rows, metrics)
+        if rows:  # skip empty groups — n=0 with mean=0.000 reads as a real score
+            summary["by_difficulty"][difficulty] = summarize_rows(rows, metrics)
 
     query_types = sorted({gold.get("query_type", "") for gold in gold_rows if gold.get("query_type")})
     for query_type in query_types:
         rows = [r for r in results if gold_by_id.get(r["id"], {}).get("query_type") == query_type]
-        summary["by_query_type"][query_type] = summarize_rows(rows, metrics)
+        if rows:
+            summary["by_query_type"][query_type] = summarize_rows(rows, metrics)
 
     summary["validity_warnings"] = build_validity_warnings(summary, gold_rows, capture_manifest)
     common.write_json(summary_out, summary)
@@ -654,10 +752,16 @@ def main():
     else:
         if not args.oxo_flow:
             sys.exit("--oxo-flow <binary> is required for the rule/workflow layers")
+        # Resolve once against the caller's cwd: judge commands run with the
+        # capture dir as cwd, where a relative binary path silently fails and
+        # zeroes validate/lint/edge scores for every row (#172 audit).
+        oxo_flow_bin = os.path.abspath(args.oxo_flow)
+        if not os.path.isfile(oxo_flow_bin):
+            sys.exit(f"--oxo-flow binary not found: {oxo_flow_bin}")
         if args.layer == "rule":
-            results = judge_rule(gold_rows, args.captures, args.oxo_flow)
+            results = judge_rule(gold_rows, args.captures, oxo_flow_bin)
         else:
-            results = judge_workflow(gold_rows, args.captures, args.oxo_flow)
+            results = judge_workflow(gold_rows, args.captures, oxo_flow_bin)
     report(
         results,
         gold_rows,

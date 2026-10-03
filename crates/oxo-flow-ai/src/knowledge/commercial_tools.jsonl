@@ -1,6 +1,6 @@
 {"n":"bases2fastq","v":"","t":"Element Biosciences AVITI bases-to-FASTQ converter","source":"manual","checked_at":"2026-10-01","auto":false,"url":"","note":"Element support portal requires login"}
 {"n":"bcl-convert","v":"","t":"Illumina BCL to FASTQ conversion tool","source":"manual","checked_at":"2026-10-01","auto":false,"url":"https://support.illumina.com/sequencing/sequencing_software/bcl-convert.html","note":"support.illumina.com is JS-rendered; no version in raw HTML"}
-{"n":"bcl2fastq","v":"2.20.0","t":"Illumina BCL to FASTQ conversion tool (legacy)","source":"pin","checked_at":"2026-10-01","auto":false,"url":"","note":"pinned: 2.20.0 is the final Illumina release"}
+{"n":"bcl2fastq","v":"2.20.0","t":"Illumina BCL to FASTQ conversion tool (legacy)","source":"pin","checked_at":"2026-10-01","auto":false,"url":"https://support.illumina.com/downloads/bcl2fastq-conversion-software-v2-20.html","note":"pinned: 2.20.0 is the final Illumina release"}
 {"n":"bionano-solve","v":"","t":"Bionano Genomics Solve structural-variant analysis suite","source":"manual","checked_at":"2026-10-01","auto":false,"url":"","note":"Bionano download pages block scraping (HTTP 403)"}
 {"n":"ccs","v":"6.4.0","t":"PacBio circular consensus sequencing (CCS) tool","source":"github-releases","checked_at":"2026-10-01","auto":true,"url":"https://github.com/PacificBiosciences/ccs/releases"}
 {"n":"cellpose","v":"4.2.1.1","t":"Cell instance segmentation for microscopy images (CPU/GPU)","source":"github-releases","checked_at":"2026-10-01","auto":true,"url":"https://github.com/MouseLand/cellpose/releases"}
@@ -22,4 +22,4 @@
 {"n":"spaceranger","v":"","t":"10x Genomics Visium spatial-transcriptomics analysis pipeline","source":"manual","checked_at":"2026-10-01","auto":false,"url":"","note":"10x Genomics website is JS-rendered; no scriptable version endpoint"}
 {"n":"stardist","v":"0.9.2","t":"Star-convex cell nuclei detection (deep learning)","source":"github-releases","checked_at":"2026-10-01","auto":true,"url":"https://github.com/stardist/stardist/releases"}
 {"n":"torrent-suite","v":"","t":"Ion Torrent (Thermo Fisher) analysis suite","source":"manual","checked_at":"2026-10-01","auto":false,"url":"","note":"Thermo Fisher downloads require login"}
-{"n":"tw","v":"0.40.0","t":"Seqera Tower command-line interface","source":"github-releases","checked_at":"2026-10-01","auto":true,"url":"https://github.com/seqeralabs/tower-cli/releases"}
+{"n":"tw","v":"0.41.0","t":"Seqera Tower command-line interface","source":"github-releases","checked_at":"2026-10-03","auto":true,"url":"https://github.com/seqeralabs/tower-cli/releases"}
