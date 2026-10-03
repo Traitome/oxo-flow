@@ -4031,6 +4031,11 @@ Problems-panel diagnostics:</p>
 <p><code>oxo-flow: Format Document</code> (and the standard <em>Format Document</em> action) runs
 the engine's canonical TOML formatter (<code>oxo-flow format</code>) on the current
 buffer — unsaved changes included.</p>
+<p>To format automatically on save, enable <code>oxo-flow.formatOnSave</code> (off by
+default). It is an independent opt-in: it formats <code>.oxoflow</code> documents on
+save even when the global <em>Editor: Format On Save</em> is off for other
+languages, and stays out of the way when that toggle is already on (VS Code
+then invokes the same formatter through the standard pathway).</p>
 <h2 id="run-codelens">Run CodeLens<a class="headerlink" href="#run-codelens" title="Permanent link">#</a></h2>
 <p>Every <code>[[rules]]</code> header shows two CodeLens buttons when you open a
 <code>.oxoflow</code> file:</p>
@@ -4172,6 +4177,11 @@ the description.</p>
 <td><code>oxo-flow.runArgs</code></td>
 <td><code>[]</code></td>
 <td>Extra arguments for Run Pipeline</td>
+</tr>
+<tr>
+<td><code>oxo-flow.formatOnSave</code></td>
+<td><code>false</code></td>
+<td>Format the document with <code>oxo-flow format</code> on every save</td>
 </tr>
 <tr>
 <td><code>oxo-flow.trace</code></td>
