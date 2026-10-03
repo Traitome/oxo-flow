@@ -155,15 +155,12 @@ arbitrator), attaches the VSIX + `.sha256` to the GitHub release, and
 publishes the **same artifact** to:
 
 - **Open VSX** (`open-vsx.org/extension/traitome/oxo-flow`) — requires the
-  repository secret `OVSX_PAT` (**currently configured**)
+  `OVSX_PAT` secret (**currently configured**, org-level)
 - **VS Code Marketplace**
   (`marketplace.visualstudio.com/items?itemName=traitome.oxo-flow`) —
-  requires the repository secret `VSCE_PAT` (**NOT currently set —
-  Marketplace publishing is therefore NOT supported**; the CI step warns and
-  skips it, which is the honest status reflected in the user-facing docs).
-  To enable it later, mint a PAT from the `traitome` publisher with
-  *Marketplace → Manage* scope (recipe below); the step passes
-  `--skip-duplicate`, so re-running the job is idempotent for the
+  requires the `VSCE_PAT` secret (**currently configured**, org-level, since
+  2026-10-03; the listing goes live at the next tagged release); the step
+  passes `--skip-duplicate`, so re-running the job is idempotent for the
   Marketplace but NOT for Open VSX (re-publishing an existing Open VSX
   version fails — if Open VSX succeeded and only the Marketplace step
   failed, re-run with `OVSX_PAT` temporarily cleared, or publish that one
@@ -179,29 +176,39 @@ One-time publisher setup (per marketplace account, not per release):
    ```
 
 2. **VS Code Marketplace** — mint the PAT like this:
-   - Sign in at [dev.azure.com](https://dev.azure.com/) with the Microsoft
-     account that owns the `traitome` publisher (created at
-     https://marketplace.visualstudio.com/manage).
+   - The PAT must belong to a Microsoft account that is a **member of the
+     `traitome` publisher**
+     (https://marketplace.visualstudio.com/manage) with at least the
+     *Contributor* role. The publisher supports members across accounts: the
+     original owner adds further identities under *Members → Add* using the
+     invitee's **Marketplace User Id** (hover over your name on the manage
+     page — NOT the email; emails are rejected with "invalid domain").
+   - Sign in at [dev.azure.com](https://dev.azure.com/) with that account.
    - Top-right avatar → *Personal access tokens* → **+ New Token**.
-   - Name it (e.g. `vsce-publish`), pick any expiry, set **Organization** to
-     *All accessible organizations*.
+   - Name it (e.g. `vsce-publish`), pick any expiry.
+   - **Organization**: scope it to a single organization (e.g. the one
+     hosting your project). Do NOT use *All accessible organizations* —
+     Microsoft deprecates global all-organizations PATs beginning
+     2026-12-01. The org choice does not affect publishing: `vsce` talks
+     only to the Marketplace, and the *Marketplace → Manage* scope is
+     identity-level.
    - Under **Scopes** choose *Custom defined*, expand **Marketplace**, and
      tick **Manage** — this is the only scope `vsce publish` needs; leave
      every other scope unchecked.
    - *Create*, copy the token immediately (it is shown once).
-   - Upload it as a repository secret:
+   - Upload it as an **organization secret** so every repo's CI can use it
+     (matches how `OVSX_PAT` is stored):
      ```bash
-     gh secret set VSCE_PAT --repo Traitome/oxo-flow
+     gh secret set VSCE_PAT --org Traitome --visibility all
      # paste the token, then Ctrl-D / newline per the prompt
      ```
-     (or repo *Settings → Secrets and variables → Actions → New repository
-     secret*).
+     (or org *Settings → Secrets and variables → Actions*). A repo-level
+     secret of the same name would override the org one — keep exactly one.
 
 Verify both secrets exist under *Settings → Secrets and variables →
-Actions*; `gh secret list --repo Traitome/oxo-flow` shows names only, never
-values.
+Actions*; `gh secret list --org Traitome` shows names only, never values.
 
-Both tokens live as repository secrets. A missing secret is a loud CI
+Both tokens live as org-level secrets. A missing secret is a loud CI
 warning, not a release failure — the VSIX is always attached to the GitHub
 release, so offline installs
 (`code --install-extension oxo-flow-vscode-vX.Y.Z.vsix`) never depend on the

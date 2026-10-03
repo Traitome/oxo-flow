@@ -13,9 +13,9 @@ and publishes it to [Open VSX](https://open-vsx.org/).
 
 !!! note "About the VS Code Marketplace"
 
-    Publishing to the VS Code Marketplace is **not currently supported** —
-    it requires a publisher account tied to Azure DevOps that the project
-    does not maintain yet. Two good alternatives cover every VS Code fork:
+    CI publishes the extension to the VS Code Marketplace (`VSCE_PAT`) and
+    the listing goes live at the next tagged release; until then, two
+    channels already cover every VS Code fork:
 
     1. **Open VSX** — VSCodium, Cursor, Windsurf and most forks search it by
        default; the same `traitome.oxo-flow` id is there.
