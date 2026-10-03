@@ -144,7 +144,7 @@ title bar.
 | Validate Pipeline (<kbd>Ctrl+Alt+V</kbd>) | `oxo-flow validate <file> --json` |
 | Lint Pipeline | `oxo-flow lint <file> --json` |
 | Format Document | `oxo-flow format <file>` |
-| Show DAG Graph | `oxo-flow graph <file>` |
+| Show DAG Graph | `oxo-flow graph <file> [-f <format>]` — quick pick over `ascii`, `mermaid`, `dot`, `dot-clustered`, `tree`, `metro` (last choice remembered) |
 | Resume from Checkpoint | `oxo-flow resume <checkpoint>` (quick pick over `**/.oxo-flow/checkpoint.json`) |
 | Show Run Status | `oxo-flow status <checkpoint> --timing` (quick pick over checkpoint files) |
 | Clean Outputs… | `oxo-flow clean <file> -n` preview → confirmation → `--force` (optionally `--orphans`) |
@@ -182,6 +182,7 @@ the description.
 | `oxo-flow.enableLintDiagnostics` | `true` | Merge `lint` findings into the Problems panel |
 | `oxo-flow.runArgs` | `[]` | Extra arguments for Run Pipeline |
 | `oxo-flow.formatOnSave` | `false` | Format the document with `oxo-flow format` on every save |
+| `oxo-flow.autoOpenGraph` | `false` | Open the DAG graph after a successful run (last picked format, default ASCII) |
 | `oxo-flow.trace` | `false` | Log CLI invocations to the *oxo-flow* output channel |
 
 ## Remote and untrusted workspaces

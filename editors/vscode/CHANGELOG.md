@@ -14,6 +14,10 @@ The extension version is kept in lockstep with the oxo-flow project version
   plus a `Run Rule Targets…` palette command.
 - **Format on save** — new `oxo-flow.formatOnSave` setting (default off);
   when enabled, saves of `.oxoflow` documents run `oxo-flow format` first.
+- **Graph format quick pick** — *Show DAG Graph* now offers all
+  `oxo-flow graph -f` formats (ascii, mermaid, dot, dot-clustered, tree,
+  metro) and remembers the last choice; new `oxo-flow.autoOpenGraph`
+  setting (default off) opens the graph after a successful run.
 - Editor title-bar **Run** and **Validate** buttons for `.oxoflow`
   editors.
 - Editor context-menu group (Run / Dry Run / Validate / Lint / Format).

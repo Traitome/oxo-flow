@@ -52,8 +52,13 @@ export function dryRunArgs(opts: RunOptions): string[] {
   return args;
 }
 
-export function graphArgs(file: string): string[] {
-  return ["graph", file];
+/** Formats accepted by `oxo-flow graph -f` (clap `GraphFormat`). */
+export type GraphFormat = "ascii" | "dot" | "dot-clustered" | "tree" | "mermaid" | "metro";
+
+export function graphArgs(file: string, format?: GraphFormat): string[] {
+  const args = ["graph", file];
+  if (format && format !== "ascii") args.push("-f", format);
+  return args;
 }
 
 export function resumeArgs(checkpoint: string, extraArgs?: string[]): string[] {

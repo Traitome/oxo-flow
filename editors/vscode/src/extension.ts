@@ -9,7 +9,7 @@ import {
   lintArgs,
 } from "./core/cliArgs";
 import { runCli } from "./core/exec";
-import { runArgs } from "./core/cliArgs";
+import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCompletionProvider } from "./providers/completion";
@@ -70,14 +70,32 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  // Auto-open the DAG graph after a successful pipeline run when
+  // `oxo-flow.autoOpenGraph` is enabled. The format is the last one picked
+  // via "Show DAG Graph" (default ASCII) so the flow stays hands-off.
+  context.subscriptions.push(
+    vscode.tasks.onDidEndTaskProcess((event) => {
+      if (event.exitCode !== 0) return;
+      const runDef = event.execution.task.definition as OxoflowTaskDefinition;
+      if (runDef?.type !== "oxo-flow" || (runDef.kind ?? "run") !== "run") return;
+      const cfg = vscode.workspace.getConfiguration("oxo-flow");
+      if (!cfg.get<boolean>("autoOpenGraph", false)) return;
+      const folder = folderFor(vscode.Uri.file(runDef.workflow));
+      if (!folder) return;
+      const format = context.workspaceState.get<GraphFormat>("graphFormat") ?? "ascii";
+      const graphDef: OxoflowTaskDefinition = { type: "oxo-flow", workflow: runDef.workflow, kind: "graph", format };
+      void vscode.tasks.executeTask(createTask(statusBar.executable(), folder, graphDef, "graph"));
+    })
+  );
+
   const register = (id: string, fn: (...args: unknown[]) => unknown) => {
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
   };
 
-  register("oxo-flow.run", () => executePipelineTask(statusBar, "run"));
+  register("oxo-flow.run", () => executePipelineTask(context, statusBar, "run"));
   register("oxo-flow.runTargets", (...args: unknown[]) => executeRunTargets(statusBar, args[0]));
-  register("oxo-flow.dryRun", () => executePipelineTask(statusBar, "dry-run"));
-  register("oxo-flow.graph", () => executePipelineTask(statusBar, "graph"));
+  register("oxo-flow.dryRun", () => executePipelineTask(context, statusBar, "dry-run"));
+  register("oxo-flow.graph", () => executePipelineTask(context, statusBar, "graph"));
   register("oxo-flow.validate", () => runQualityCommand(output, statusBar, "validate"));
   register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
   register("oxo-flow.format", () => formatDocument());
@@ -134,6 +152,7 @@ function folderFor(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
 }
 
 async function executePipelineTask(
+  extContext: vscode.ExtensionContext,
   statusBar: StatusBar,
   kind: "run" | "dry-run" | "graph"
 ): Promise<void> {
@@ -148,7 +167,34 @@ async function executePipelineTask(
   if (kind === "run") {
     def.extraArgs = cfg.get<string[]>("runArgs", []);
   }
+  if (kind === "graph") {
+    const picked = await pickGraphFormat(extContext);
+    if (!picked) return;
+    def.format = picked;
+  }
   await vscode.tasks.executeTask(createTask(statusBar.executable(), target.folder, def, kind));
+}
+
+const GRAPH_FORMATS: { label: string; format: GraphFormat; description?: string; detail: string }[] = [
+  { label: "ASCII DAG", format: "ascii", description: "default", detail: "Terminal DAG with level grouping and metrics" },
+  { label: "Mermaid", format: "mermaid", description: "graph LR", detail: "Paste into GitHub / VS Code markdown preview" },
+  { label: "DOT", format: "dot", description: "needs Graphviz", detail: "Graphviz digraph, machine-consumable" },
+  { label: "DOT (clustered)", format: "dot-clustered", description: "needs Graphviz", detail: "Graphviz digraph grouped into level clusters" },
+  { label: "Dependency tree", format: "tree", detail: "Indented dependency tree" },
+  { label: "Metro map", format: "metro", description: "nf-metro", detail: "Transit-map directives (%%metro) for nf-metro render" },
+];
+
+/** Quick pick over `oxo-flow graph -f` formats; remembers the last choice. */
+async function pickGraphFormat(extContext: vscode.ExtensionContext): Promise<GraphFormat | undefined> {
+  const previous = extContext.workspaceState.get<GraphFormat>("graphFormat");
+  const ordered = previous ? [...GRAPH_FORMATS].sort((a, b) => (a.format === previous ? -1 : b.format === previous ? 1 : 0)) : GRAPH_FORMATS;
+  const pick = await vscode.window.showQuickPick(ordered, {
+    placeHolder: "Graph format (oxo-flow graph -f)",
+    matchOnDescription: true,
+  });
+  if (!pick) return undefined;
+  if (pick.format !== previous) void extContext.workspaceState.update("graphFormat", pick.format);
+  return pick.format;
 }
 
 /**

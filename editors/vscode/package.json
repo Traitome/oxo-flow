@@ -350,6 +350,11 @@
           "default": false,
           "markdownDescription": "Format `.oxoflow` documents with `oxo-flow format` when they are saved (follows the standard *Editor: Format On Save* toggle too)."
         },
+        "oxo-flow.autoOpenGraph": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "After a successful pipeline run, open the DAG graph automatically (uses the last format chosen via **oxo-flow: Show DAG Graph**, default ASCII)."
+        },
         "oxo-flow.trace": {
           "type": "boolean",
           "default": false,

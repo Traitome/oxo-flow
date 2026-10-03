@@ -44,6 +44,9 @@ test("dryRunArgs shares the run surface without --json (terminal view)", () => {
 
 test("graph/resume/template/format/schema args", () => {
   assert.deepEqual(graphArgs("p.oxoflow"), ["graph", "p.oxoflow"]);
+  assert.deepEqual(graphArgs("p.oxoflow", "ascii"), ["graph", "p.oxoflow"]);
+  assert.deepEqual(graphArgs("p.oxoflow", "mermaid"), ["graph", "p.oxoflow", "-f", "mermaid"]);
+  assert.deepEqual(graphArgs("p.oxoflow", "dot-clustered"), ["graph", "p.oxoflow", "-f", "dot-clustered"]);
   assert.deepEqual(resumeArgs(".oxo-flow/checkpoint.json"), ["resume", ".oxo-flow/checkpoint.json"]);
   assert.deepEqual(resumeArgs("c.json", ["-k"]), ["resume", "c.json", "-k"]);
   assert.deepEqual(templateArgs("RNA-seq with STAR"), ["template", "RNA-seq with STAR", "--ai"]);
