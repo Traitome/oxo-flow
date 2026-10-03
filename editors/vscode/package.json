@@ -2,7 +2,7 @@
   "name": "oxo-flow",
   "displayName": "oxo-flow Pipeline",
   "description": "Language support, smart syntax, and one-click CLI lifecycle (run, dry-run, validate, lint, format, resume) for oxo-flow .oxoflow pipeline files.",
-  "version": "0.21.2",
+  "version": "0.22.0",
   "publisher": "traitome",
   "license": "Apache-2.0",
   "pricing": "Free",

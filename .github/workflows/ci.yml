@@ -199,6 +199,14 @@ jobs:
             git add crates/oxo-flow-desktop/Cargo.toml crates/oxo-flow-desktop/Cargo.lock
           # SPA manifest ships inside the desktop app bundle.
           [ -f frontend/package.json ] && git add frontend/package.json frontend/package-lock.json
+          # VS Code extension manifest: publish-vsix asserts the VSIX version
+          # equals the tag (scripts/bump-version.sh --print arbitrates), so a
+          # missed git add here would make the drift check abort the release
+          # on the freshly pushed tag tree (issue found on the v0.22.0
+          # dispatch — sync-version patched the files but never committed
+          # them, so the tag shipped half-bumped and Test failed).
+          [ -f editors/vscode/package.json ] && \
+            git add editors/vscode/package.json editors/vscode/package-lock.json
           # Re-running a release whose tree is already synced leaves nothing
           # to commit; tolerate it — the "Create and push release tag" step
           # still creates the tag against the current tree.
