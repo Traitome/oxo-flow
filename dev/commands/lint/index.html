@@ -3975,7 +3975,7 @@
 </span></code></pre></div>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow v0.22.0 — Rust-native bioinformatics pipeline engine
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oxo-flow v0.23.0 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  warning [W003]: rule has no description (rule: bwa_align)
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    hint: add description = "Brief one-line description of what bwa_align does" to this rule
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  info [W004]: rule has a shell command but no log file specified (rule: bwa_align)
@@ -4013,7 +4013,7 @@ W033 flags two rules that write the same output path — including
 differently-named wildcards over the same template (<code>variants/{smp}.vcf</code>
 vs <code>variants/{sample}.vcf</code>) and identical literal paths. The engine does
 not refuse to run: both rules execute and the second to finish silently
-overwrites the first (verified live in v0.22.0 with a run reporting
+overwrites the first (verified live in v0.23.0 with a run reporting
 success while both colliding rules executed), so downstream rules consume
 the wrong file. The repair is distinct output directories per writer —
 or a <code>when</code> gate when the two rules are mutually exclusive alternatives
