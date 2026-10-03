@@ -292,12 +292,50 @@ jobs:
           git push --force origin "HEAD:refs/tags/${RELEASE_TAG}"
           echo "Tag ${RELEASE_TAG} re-pointed to $(git rev-parse HEAD)"
 
+  # ─── Path filters: skip validation jobs whose subtree did not change ──────
+  # PR/push optimization ONLY. The iron rule: tag and workflow_dispatch runs
+  # bypass every gate below, and a skipped/failed filter job also means "run
+  # everything" (`needs.changes.result != 'success'`) — so the release path
+  # can never be filtered by accident. Release/publish/crates/docker-release
+  # jobs are deliberately NOT gated.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+    outputs:
+      extension: ${{ steps.filter.outputs.extension }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+      eval: ${{ steps.filter.outputs.eval }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            extension:
+              - 'editors/vscode/**'
+              - 'docs/schema/**'
+              - 'scripts/bump-version.sh'
+            frontend:
+              - 'frontend/**'
+            docker:
+              - 'Dockerfile'
+              - 'Dockerfile.release'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            eval:
+              - 'eval/**'
+
   # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
   test:
     name: Test (fmt, clippy, test)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [sync-version]
+    needs: [changes, sync-version]
     if: always() && (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped')
     permissions:
       contents: read
@@ -407,6 +445,7 @@ jobs:
       # logic in eval/scripts — silent rot there would corrupt AI-benchmark
       # numbers without any Rust test noticing (see issue #172).
       - name: Eval harness unit tests
+        if: needs.changes.outputs.eval == 'true' || needs.changes.result != 'success'
         run: make eval-tests
 
       # Mirrors `make eval-lint`: gold-set consistency — fabricated names
@@ -414,6 +453,7 @@ jobs:
       # knowledge refresh, missing provenance evidence, and declared DAG
       # edges absent from the reference's engine graph (issue #172).
       - name: Eval gold consistency
+        if: needs.changes.outputs.eval == 'true' || needs.changes.result != 'success'
         run: make eval-lint
 
       - name: Install cargo-audit
@@ -459,9 +499,13 @@ jobs:
     name: VS Code extension (build + test + package)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [sync-version, test]
+    needs: [changes, sync-version, test]
     if: >-
       always() &&
+      (needs.changes.outputs.extension == 'true' ||
+       needs.changes.result != 'success' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch') &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:
@@ -1352,9 +1396,13 @@ jobs:
     timeout-minutes: 30
     # Need sync-version explicitly: checkout uses its updated_sha output, and
     # GHA only exposes needs.<job>.outputs when <job> is listed in needs.
-    needs: [sync-version, test]
+    needs: [changes, sync-version, test]
     if: >-
       always() &&
+      (needs.changes.outputs.docker == 'true' ||
+       needs.changes.result != 'success' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch') &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:
@@ -1930,9 +1978,13 @@ jobs:
     # sync-version pins the checkout below: on tag-push releases it re-points
     # the tag to the bump commit mid-run, and a bare checkout fails its
     # expected-commit guard against the stale SHA (v0.19.0 run 35037830253).
-    needs: [sync-version, test]
+    needs: [changes, sync-version, test]
     if: >-
       always() &&
+      (needs.changes.outputs.frontend == 'true' ||
+       needs.changes.result != 'success' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch') &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success'
     permissions:
@@ -1986,9 +2038,13 @@ jobs:
     name: Frontend (e2e)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [sync-version, test, frontend-assets]
+    needs: [changes, sync-version, test, frontend-assets]
     if: >-
       always() &&
+      (needs.changes.outputs.frontend == 'true' ||
+       needs.changes.result != 'success' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch') &&
       (needs.sync-version.result == 'success' || needs.sync-version.result == 'skipped') &&
       needs.test.result == 'success' && needs.frontend-assets.result == 'success'
     permissions:
