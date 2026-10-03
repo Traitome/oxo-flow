@@ -108,12 +108,19 @@ a dedicated terminal panel, re-run support, and `tasks.json` customization:
 {
   "type": "oxo-flow",
   "workflow": "pipeline.oxoflow",
+  "kind": "run",
   "jobs": 8,
   "keepGoing": true,
   "target": "results/all",
   "extraArgs": ["--profile", "slurm"]
 }
 ```
+
+`kind` selects the lifecycle: `run` (default), `dry-run`, `graph`,
+`resume`, or `generate`. For `resume`, `workflow` holds the checkpoint path
+(e.g. `.oxo-flow/checkpoint.json`); for `generate`, the task runs
+`oxo-flow template "<description>" --ai -o <file>` with `extraArgs[0]` as
+the description.
 
 ## Settings
 

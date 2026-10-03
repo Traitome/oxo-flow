@@ -60,6 +60,19 @@ export function resumeArgs(checkpoint: string, extraArgs?: string[]): string[] {
   return ["resume", checkpoint, ...(extraArgs ?? [])];
 }
 
+/** `oxo-flow clean <workflow> [--dry-run|--force]` */
+export function cleanArgs(file: string, opts?: { dryRun?: boolean; force?: boolean }): string[] {
+  const args = ["clean", file];
+  if (opts?.dryRun) args.push("-n");
+  if (opts?.force) args.push("--force");
+  return args;
+}
+
+/** `oxo-flow status [checkpoint]` */
+export function statusArgs(checkpoint?: string): string[] {
+  return checkpoint ? ["status", checkpoint] : ["status"];
+}
+
 export function templateArgs(description: string, output?: string): string[] {
   const args = ["template", description, "--ai"];
   if (output) args.push("-o", output);

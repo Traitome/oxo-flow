@@ -80,7 +80,18 @@
         "properties": {
           "workflow": {
             "type": "string",
-            "description": "Path to the .oxoflow pipeline file (relative to the workspace folder)."
+            "description": "Path to the .oxoflow pipeline file (relative to the workspace folder). For kind \"resume\", the path to the checkpoint (e.g. .oxo-flow/checkpoint.json)."
+          },
+          "kind": {
+            "enum": [
+              "run",
+              "dry-run",
+              "graph",
+              "resume",
+              "generate"
+            ],
+            "default": "run",
+            "description": "Which CLI lifecycle the task drives."
           },
           "target": {
             "type": "string",

@@ -5,13 +5,14 @@ export const TASK_TYPE = "oxo-flow";
 
 export interface OxoflowTaskDefinition extends vscode.TaskDefinition {
   workflow: string;
+  kind?: TaskKind;
   target?: string;
   jobs?: number;
   keepGoing?: boolean;
   extraArgs?: string[];
 }
 
-export type TaskKind = "run" | "dry-run" | "graph" | "resume";
+export type TaskKind = "run" | "dry-run" | "graph" | "resume" | "generate";
 
 /**
  * Task integration: `oxo-flow` tasks show up in the task list and run in the
@@ -50,17 +51,21 @@ export class OxoflowTaskProvider implements vscode.TaskProvider {
   resolveTask(task: vscode.Task): vscode.Task | undefined {
     const def = task.definition as OxoflowTaskDefinition;
     if (!def?.workflow) return undefined;
-    const folder =
-      vscode.workspace.getWorkspaceFolder(vscode.Uri.file(def.workflow)) ??
-      vscode.workspace.workspaceFolders?.[0];
+    const folder = resolveFolder(vscode.Uri.file(def.workflow));
     if (!folder) return undefined;
+    // Tasks saved in tasks.json predate the `kind` field — fall back to the
+    // legacy name-prefix sniffing ("dry-run …") for those.
     return createTask(
       this.executable(),
       folder,
       def,
-      (task.name.startsWith("dry-run") ? "dry-run" : "run") as TaskKind
+      def.kind ?? (task.name.startsWith("dry-run") ? "dry-run" : "run")
     );
   }
+}
+
+function resolveFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
 }
 
 export function relativeWorkflow(folder: vscode.WorkspaceFolder, file: vscode.Uri): string {
@@ -77,7 +82,8 @@ export function createTask(
   executable: string,
   folder: vscode.WorkspaceFolder,
   def: OxoflowTaskDefinition,
-  kind: TaskKind
+  kind: TaskKind,
+  overrideArgs?: string[]
 ): vscode.Task {
   const runOpts = {
     file: def.workflow,
@@ -87,13 +93,14 @@ export function createTask(
     extraArgs: def.extraArgs,
   };
   const args =
-    kind === "run"
+    overrideArgs ??
+    (kind === "run"
       ? runArgs(runOpts)
       : kind === "dry-run"
         ? dryRunArgs(runOpts)
         : kind === "resume"
           ? resumeArgs(def.workflow, def.extraArgs)
-          : graphArgs(def.workflow);
+          : graphArgs(def.workflow));
   // ShellQuotedString is a plain object interface, not a constructor: pass
   // {value, quoting} literals so no shell metacharacter in paths/args breaks.
   const strong = (value: string) => ({ value, quoting: vscode.ShellQuoting.Strong });
