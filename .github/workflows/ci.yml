@@ -311,22 +311,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v6
+      - name: Cache cargo (registry + all-target artifacts)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
-
-      - name: Cache build artifacts
-        uses: actions/cache@v6
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
+          workspaces: .
+          cache-all-targets: true
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -512,22 +501,10 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v6
+      - name: Cache cargo (registry + build artifacts)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
-
-      - name: Cache build artifacts
-        uses: actions/cache@v6
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-ext-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-ext-build-
+          workspaces: .
 
       - name: Build the CLI binary (integration tests drive it)
         run: cargo build -p oxo-flow-cli
@@ -544,7 +521,9 @@ jobs:
         working-directory: editors/vscode
         env:
           OXOFLOW_TEST_BIN: ${{ github.workspace }}/target/debug/oxo-flow
-        run: xvfb-run -a npm run integration-test
+        run: |
+          npm run bundle
+          xvfb-run -a npx vscode-test
 
       - name: Package VSIX
         working-directory: editors/vscode
@@ -612,6 +591,17 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-
 
+      # Per-target cache for the cross builds (matches the macOS job's
+      # pattern). cross runs inside a container and writes root-owned files,
+      # so fix ownership after each build or the restored cache breaks the
+      # next cargo invocation.
+      - name: Cache cross build artifacts
+        uses: actions/cache@v6
+        with:
+          path: target/${{ matrix.target }}
+          key: ${{ runner.os }}-cargo-cross-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-cross-${{ matrix.target }}-
+
       - name: Build release binaries (cross)
         run: |
           cross build --release --target ${{ matrix.target }} -p oxo-flow-cli
@@ -622,6 +612,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          # cross builds as root inside its container — de-root before the
+          # cache step snapshots the directory.
+          sudo chown -R "$(id -u):$(id -g)" "target/${{ matrix.target }}" || true
           TARGET_DIR="target/${{ matrix.target }}/release"
           mkdir -p dist
           tar -C "${TARGET_DIR}" -czvf \
@@ -1366,6 +1359,9 @@ jobs:
         with:
           ref: ${{ needs.sync-version.outputs.updated_sha || github.sha }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build the image
         run: |
           set -euo pipefail
@@ -1377,7 +1373,13 @@ jobs:
             echo "::error::could not read workspace.package version from Cargo.toml"
             exit 1
           fi
-          docker build --build-arg "VERSION=$VERSION" -t oxo-flow:ci .
+          # buildx + a dedicated gha cache scope: the per-arch :main publish
+          # jobs rebuild the same Dockerfile and reuse this cache.
+          docker buildx build \
+            --cache-from type=gha,scope=docker-smoke \
+            --cache-to type=gha,mode=max,scope=docker-smoke \
+            --build-arg "VERSION=$VERSION" \
+            --load -t oxo-flow:ci .
 
       - name: Smoke-test the container (health endpoint)
         uses: ./.github/actions/docker-health-check
@@ -1994,22 +1996,10 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v6
+      - name: Cache cargo (registry + build artifacts)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
-
-      - name: Cache build artifacts
-        uses: actions/cache@v6
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
+          workspaces: .
 
       - name: Build the web server (Playwright spawns it)
         run: |
@@ -2040,6 +2030,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Install Playwright browsers
         working-directory: frontend
