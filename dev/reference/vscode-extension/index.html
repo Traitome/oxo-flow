@@ -2846,6 +2846,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#run-codelens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run CodeLens
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#onboarding-walkthrough" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3846,6 +3857,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#run-codelens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run CodeLens
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#onboarding-walkthrough" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4009,6 +4031,19 @@ Problems-panel diagnostics:</p>
 <p><code>oxo-flow: Format Document</code> (and the standard <em>Format Document</em> action) runs
 the engine's canonical TOML formatter (<code>oxo-flow format</code>) on the current
 buffer — unsaved changes included.</p>
+<h2 id="run-codelens">Run CodeLens<a class="headerlink" href="#run-codelens" title="Permanent link">#</a></h2>
+<p>Every <code>[[rules]]</code> header shows two CodeLens buttons when you open a
+<code>.oxoflow</code> file:</p>
+<ul>
+<li><strong>▶ Run this rule</strong> — runs <code>oxo-flow run -t &lt;name&gt;</code>, which the CLI resolves
+  to that rule plus its upstream closure.</li>
+<li><strong>▶ Run to here</strong> — repeats <code>-t</code> for every rule at or before this one in
+  file order, so the pipeline runs up to (and including) this rule.</li>
+</ul>
+<p>Both honor <code>oxo-flow.runArgs</code> and reuse the cached run task. Editors who
+prefer the keyboard can pass the same targets by hand:
+<code>Run Pipeline</code> accepts <code>target</code> in its task definition, or list several
+rules via repeated <code>-t</code> in <code>extraArgs</code>.</p>
 <h2 id="onboarding-walkthrough">Onboarding walkthrough<a class="headerlink" href="#onboarding-walkthrough" title="Permanent link">#</a></h2>
 <p>First launch surfaces a <strong>Get Started with oxo-flow</strong> walkthrough
 (<code>Help → Welcome</code> → <em>Walkthroughs</em>, or "Walkthroughs…" from the
@@ -4040,6 +4075,10 @@ title bar.</p>
 <tr>
 <td>Run Pipeline (<kbd>Ctrl+Alt+R</kbd>)</td>
 <td><code>oxo-flow run &lt;file&gt;</code> + <code>oxo-flow.runArgs</code></td>
+</tr>
+<tr>
+<td>Run Rule Targets… (CodeLens)</td>
+<td><code>oxo-flow run &lt;file&gt; -t &lt;name&gt;…</code> (▶ Run this rule / ▶ Run to here above each <code>[[rules]]</code>)</td>
 </tr>
 <tr>
 <td>Dry Run (plan only)</td>
