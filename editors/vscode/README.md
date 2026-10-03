@@ -113,6 +113,7 @@ highlighting, snippets, completion, and hover docs.
 | `oxo-flow.runArgs` | `[]` | Extra arguments for Run Pipeline |
 | `oxo-flow.formatOnSave` | `false` | Format `.oxoflow` files on save |
 | `oxo-flow.autoOpenGraph` | `false` | Open the DAG graph after a successful run |
+| `oxo-flow.ai.backend` | `auto` | AI generation backend: `auto` (CLI provider → editor language model), `cli`, or `ide` |
 | `oxo-flow.trace` | `false` | Log CLI invocations to the output channel |
 
 ## Tasks
