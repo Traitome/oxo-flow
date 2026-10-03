@@ -251,6 +251,58 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "oxo-flow.getting-started",
+        "title": "Get Started with oxo-flow",
+        "description": "From zero to your first pipeline run: connect the CLI, open a pipeline, validate, run.",
+        "steps": [
+          {
+            "id": "overview",
+            "title": "Welcome to oxo-flow",
+            "description": "See what a `.oxoflow` pipeline is and what the editor gives you.",
+            "media": {
+              "markdown": "walkthroughs/overview.md"
+            }
+          },
+          {
+            "id": "connect-cli",
+            "title": "Connect the extension to the CLI",
+            "description": "Install the `oxo-flow` binary or point the extension at it.",
+            "media": {
+              "markdown": "walkthroughs/connect-cli.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:oxo-flow.executablePath",
+              "onCommand:oxo-flow.openSettings"
+            ]
+          },
+          {
+            "id": "open-pipeline",
+            "title": "Open or create a pipeline",
+            "description": "Open an existing `.oxoflow` file, scaffold one with `oxo-flow init`, or generate with AI.",
+            "media": {
+              "markdown": "walkthroughs/open-pipeline.md"
+            },
+            "completionEvents": [
+              "onCommand:oxo-flow.generate"
+            ]
+          },
+          {
+            "id": "validate-run",
+            "title": "Validate, then run",
+            "description": "Run the static gates, then execute your first DAG.",
+            "media": {
+              "markdown": "walkthroughs/validate-run.md"
+            },
+            "completionEvents": [
+              "onCommand:oxo-flow.validate",
+              "onCommand:oxo-flow.run"
+            ]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "oxo-flow",
       "properties": {
