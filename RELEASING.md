@@ -168,15 +168,35 @@ publishes the **same artifact** to:
 
 One-time publisher setup (per marketplace account, not per release):
 
-```bash
-# Open VSX: create an Eclipse account, link a GitHub ID, generate an access
-# token at open-vsx.org → Settings → Access Tokens, then create the
-# namespace once:
-npx ovsx create-namespace traitome -p "$OVSX_PAT"
-# Marketplace: create the `traitome` publisher at
-# https://marketplace.visualstudio.com/manage and mint a PAT scoped to
-# Marketplace → Manage.
-```
+1. **Open VSX** — create an Eclipse account, link a GitHub ID, generate an
+   access token at `open-vsx.org` → *Settings → Access Tokens*, then create
+   the namespace once:
+   ```bash
+   npx ovsx create-namespace traitome -p "$OVSX_PAT"
+   ```
+
+2. **VS Code Marketplace** — mint the PAT like this:
+   - Sign in at [dev.azure.com](https://dev.azure.com/) with the Microsoft
+     account that owns the `traitome` publisher (created at
+     https://marketplace.visualstudio.com/manage).
+   - Top-right avatar → *Personal access tokens* → **+ New Token**.
+   - Name it (e.g. `vsce-publish`), pick any expiry, set **Organization** to
+     *All accessible organizations*.
+   - Under **Scopes** choose *Custom defined*, expand **Marketplace**, and
+     tick **Manage** — this is the only scope `vsce publish` needs; leave
+     every other scope unchecked.
+   - *Create*, copy the token immediately (it is shown once).
+   - Upload it as a repository secret:
+     ```bash
+     gh secret set VSCE_PAT --repo Traitome/oxo-flow
+     # paste the token, then Ctrl-D / newline per the prompt
+     ```
+     (or repo *Settings → Secrets and variables → Actions → New repository
+     secret*).
+
+Verify both secrets exist under *Settings → Secrets and variables →
+Actions*; `gh secret list --repo Traitome/oxo-flow` shows names only, never
+values.
 
 Both tokens live as repository secrets. A missing secret is a loud CI
 warning, not a release failure — the VSIX is always attached to the GitHub

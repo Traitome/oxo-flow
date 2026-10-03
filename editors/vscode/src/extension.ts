@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { aiStatusArgs, schemaArgs, validateArgs, lintArgs } from "./core/cliArgs";
+import { aiStatusArgs, schemaArgs, templateArgs, validateArgs, lintArgs } from "./core/cliArgs";
 import { runCli } from "./core/exec";
 import { parseReport } from "./core/jsonReport";
 import { OxoflowCompletionProvider } from "./providers/completion";
@@ -104,6 +104,7 @@ async function executePipelineTask(
   const def: OxoflowTaskDefinition = {
     type: "oxo-flow",
     workflow: relativeWorkflow(target.folder, target.file),
+    kind,
   };
   const cfg = vscode.workspace.getConfiguration("oxo-flow", target.file);
   if (kind === "run") {
@@ -188,7 +189,11 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
     createTask(
       statusBar.executable(),
       folder,
-      { type: "oxo-flow", workflow: vscode.workspace.asRelativePath(pick.file) },
+      {
+        type: "oxo-flow",
+        workflow: vscode.workspace.asRelativePath(pick.file),
+        kind: "resume",
+      },
       "resume"
     )
   );
@@ -217,13 +222,25 @@ async function generateWithAI(statusBar: StatusBar): Promise<void> {
   });
   if (!target) return;
 
-  const quoted = `"${description.replace(/["\\$`]/g, (c) => `\\${c}`)}"`;
-  const outPath = `"${target.fsPath.replace(/["\\$`]/g, (c) => `\\${c}`)}"`;
-  const terminal = vscode.window.createTerminal({ name: "oxo-flow template", cwd: folder.uri.fsPath });
-  terminal.show();
-  terminal.sendText([statusBar.executable(), "template", quoted, "--ai", "-o", outPath].join(" "));
+  // Run through a task (not terminal.sendText): the description is natural
+  // language and may contain quotes/newlines — ShellExecution quoting handles
+  // every metacharacter, whereas a hand-quoted shell string breaks on `\n`
+  // (sendText treats it as Enter) and on shell-specific escapes.
+  await vscode.tasks.executeTask(
+    createTask(
+      statusBar.executable(),
+      folder,
+      {
+        type: "oxo-flow",
+        workflow: vscode.workspace.asRelativePath(target),
+        kind: "generate",
+      },
+      "generate",
+      templateArgs(description, target.fsPath)
+    )
+  );
   void vscode.window.showInformationMessage(
-    "AI generation runs in the terminal; the file appears when the CLI finishes."
+    "AI generation runs as a task; the file appears when the CLI finishes."
   );
 }
 

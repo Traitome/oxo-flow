@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  cleanArgs,
   dryRunArgs,
   formatArgs,
   graphArgs,
@@ -8,6 +9,7 @@ import {
   resumeArgs,
   runArgs,
   schemaArgs,
+  statusArgs,
   templateArgs,
   validateArgs,
 } from "../../core/cliArgs";
@@ -49,4 +51,11 @@ test("graph/resume/template/format/schema args", () => {
   assert.deepEqual(formatArgs("p.oxoflow"), ["format", "p.oxoflow"]);
   assert.deepEqual(formatArgs("p.oxoflow", "out.oxoflow"), ["format", "p.oxoflow", "-o", "out.oxoflow"]);
   assert.deepEqual(schemaArgs(), ["schema"]);
+});
+
+test("cleanArgs/statusArgs", () => {
+  assert.deepEqual(cleanArgs("p.oxoflow", { dryRun: true }), ["clean", "p.oxoflow", "-n"]);
+  assert.deepEqual(cleanArgs("p.oxoflow", { force: true }), ["clean", "p.oxoflow", "--force"]);
+  assert.deepEqual(statusArgs(), ["status"]);
+  assert.deepEqual(statusArgs(".oxo-flow/checkpoint.json"), ["status", ".oxo-flow/checkpoint.json"]);
 });

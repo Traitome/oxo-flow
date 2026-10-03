@@ -55,7 +55,12 @@ export class StatusBar implements vscode.Disposable {
   }
 
   executable(): string {
-    return vscode.workspace.getConfiguration("oxo-flow").get<string>("executablePath", "oxo-flow");
+    // Resource-scoped read so a folder-level override (multi-root, SSH remote)
+    // wins; falls back to the merged view when no editor context exists.
+    const uri = vscode.window.activeTextEditor?.document.uri;
+    return vscode.workspace
+      .getConfiguration("oxo-flow", uri)
+      .get<string>("executablePath", "oxo-flow");
   }
 
   dispose(): void {
