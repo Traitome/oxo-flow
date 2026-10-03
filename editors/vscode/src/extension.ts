@@ -19,7 +19,9 @@ import {
   type ReportContext,
   type ReportEnvironment,
 } from "./core/reportIssue";
+import { buildGenerationPrompt, extractToml, resolveBackend } from "./core/aiBackend";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
+import { OxoflowCodeActionProvider } from "./providers/codeActions";
 import { OxoflowCompletionProvider } from "./providers/completion";
 import { OxoflowDiagnostics } from "./providers/diagnostics";
 import { OxoflowFormattingProvider } from "./providers/formatting";
@@ -34,6 +36,20 @@ import {
 } from "./providers/taskProvider";
 
 const DOCS_URL = "https://traitome.github.io/oxo-flow/";
+
+/**
+ * Structural subset of vscode.LanguageModelChat relied upon for the `ide`
+ * AI backend. Casts (not type imports) keep the code loadable in editors
+ * whose language-model API surface differs (VSCodium, forks).
+ */
+interface IdeLanguageModel {
+  readonly family: string;
+  readonly vendor: string;
+  sendRequest(
+    messages: vscode.LanguageModelChatMessage[],
+    options?: Record<string, unknown>
+  ): { text: AsyncIterable<string> };
+}
 
 // Rolling tail of everything written to the output channel — Report Issue
 // attaches the last lines so bug reports carry the failing CLI output.
@@ -94,7 +110,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCompletionItemProvider("oxoflow", new OxoflowCompletionProvider(), "[", "{", ".", '"'),
     vscode.languages.registerHoverProvider("oxoflow", new OxoflowHoverProvider()),
     vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider()),
-    vscode.languages.registerCodeLensProvider("oxoflow", new OxoflowCodeLensProvider())
+    vscode.languages.registerCodeLensProvider("oxoflow", new OxoflowCodeLensProvider()),
+    vscode.languages.registerCodeActionsProvider(
+      "oxoflow",
+      new OxoflowCodeActionProvider(),
+      { providedCodeActionKinds: OxoflowCodeActionProvider.providedKinds }
+    )
   );
 
   // Format-on-save: reuse the canonical formatter when `oxo-flow.formatOnSave`
@@ -151,7 +172,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("oxo-flow.lint", () => runQualityCommand(output, statusBar, "lint"));
   register("oxo-flow.format", () => formatDocument());
   register("oxo-flow.resume", () => resumePipeline(statusBar));
-  register("oxo-flow.generate", () => generateWithAI(statusBar));
+  register("oxo-flow.generate", () => generateWithAI(statusBar, context));
   register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
   register("oxo-flow.exportSchema", () => exportSchema(statusBar));
   register("oxo-flow.clean", () => cleanOutputs(output, statusBar));
@@ -367,7 +388,7 @@ async function resumePipeline(statusBar: StatusBar): Promise<void> {
   );
 }
 
-async function generateWithAI(statusBar: StatusBar): Promise<void> {
+async function generateWithAI(statusBar: StatusBar, extContext: vscode.ExtensionContext): Promise<void> {
   const description = await vscode.window.showInputBox({
     prompt: "Describe the pipeline to generate (e.g. 'RNA-seq with STAR and featureCounts')",
     placeHolder: "Natural-language description",
@@ -375,9 +396,48 @@ async function generateWithAI(statusBar: StatusBar): Promise<void> {
   if (!description) return;
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
-    void vscode.window.showErrorMessage("Open a workspace folder first — the pipeline needs a home.");
+    void showErrorWithReport("Open a workspace folder first — the pipeline needs a home.");
     return;
   }
+
+  const cfg = vscode.workspace.getConfiguration("oxo-flow", folder.uri);
+  const configured = cfg.get<"auto" | "cli" | "ide">("ai.backend", "auto");
+  // Feature-detect the language-model API: forks (VSCodium, some Trae builds)
+  // omit it entirely, and Copilot-signed stock VS Code is where it yields.
+  const lm = vscode.lm as unknown as { selectChatModels?: (q: unknown) => Promise<unknown[]> } | undefined;
+  const ideModels =
+    typeof lm?.selectChatModels === "function"
+      ? ((await lm.selectChatModels({})) as unknown[])
+      : [];
+  const resolution = resolveBackend(configured, {
+    cliAiConfigured: await cliAiConfigured(statusBar),
+    ideModelsAvailable: ideModels.length > 0,
+  });
+  if (resolution.kind === "unavailable") {
+    void showErrorWithReport(resolution.reason);
+    return;
+  }
+  if (resolution.backend === "cli") {
+    await generateWithCli(statusBar, folder, description);
+    return;
+  }
+  await generateWithIdeModel(extContext, statusBar, folder, description, resolution.reason);
+}
+
+/** Best-effort CLI AI probe: `oxo-flow ai` JSON reports the active provider. */
+async function cliAiConfigured(statusBar: StatusBar): Promise<boolean> {
+  const res = await runCli(statusBar.executable(), aiStatusArgs(), { timeoutMs: 15_000 });
+  if (res.spawnError) return false;
+  try {
+    const parsed = JSON.parse(res.stdout) as { provider?: string };
+    return Boolean(parsed.provider) && parsed.provider !== "disabled";
+  } catch {
+    return res.stdout.trim().length > 0 && !/disabled/i.test(res.stdout);
+  }
+}
+
+/** CLI engine path: the eval-tuned generation loop runs as a task. */
+async function generateWithCli(statusBar: StatusBar, folder: vscode.WorkspaceFolder, description: string): Promise<void> {
   const slug =
     description
       .toLowerCase()
@@ -410,6 +470,87 @@ async function generateWithAI(statusBar: StatusBar): Promise<void> {
   void vscode.window.showInformationMessage(
     "AI generation runs as a task; the file appears when the CLI finishes."
   );
+}
+
+/**
+ * Editor language-model path (zero-config): generate with the picked model,
+ * write the file, then ground it through `oxo-flow validate` with ONE
+ * repair round feeding the findings back to the model.
+ */
+async function generateWithIdeModel(
+  extContext: vscode.ExtensionContext,
+  statusBar: StatusBar,
+  folder: vscode.WorkspaceFolder,
+  description: string,
+  via: string
+): Promise<void> {
+  const models = (await (
+    vscode.lm as unknown as { selectChatModels: (q: unknown) => Promise<IdeLanguageModel[]> }
+  ).selectChatModels({}));
+  const picks = models.map((m) => ({ label: `${m.family} — ${m.vendor}`, model: m }));
+  const pick =
+    picks.length === 1
+      ? picks[0]
+      : await vscode.window.showQuickPick(picks, { placeHolder: "Language model for this generation" });
+  if (!pick) return;
+  const slug =
+    description
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "generated-pipeline";
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.joinPath(folder.uri, `${slug}.oxoflow`),
+    filters: { "oxo-flow pipeline": ["oxoflow"] },
+  });
+  if (!target) return;
+
+  const output = vscode.window.createOutputChannel("oxo-flow");
+  extContext.subscriptions.push(output);
+  await withOxoProgress("oxo-flow: generating pipeline via the editor model…", async () => {
+    const prompt = buildGenerationPrompt(description);
+    const chat = async (messages: vscode.LanguageModelChatMessage[]): Promise<string> => {
+      const request = await pick.model.sendRequest(messages, {});
+      let text = "";
+      for await (const chunk of request.text) text += chunk;
+      return text;
+    };
+
+    let response = await chat([vscode.LanguageModelChatMessage.User(prompt)]);
+    appendLog(output, `[ai:ide:${pick.model.family}] ${response.slice(0, 500)}`);
+    let toml = extractToml(response);
+    if (!toml) {
+      void showErrorWithReport("The model response contained no [workflow] pipeline — see the oxo-flow output panel.");
+      output.show(true);
+      return;
+    }
+    await vscode.workspace.fs.writeFile(target, Buffer.from(toml, "utf8"));
+
+    // Grounding gate: the engine validates every draft; on failure, feed the
+    // findings back for exactly one repair round before surfacing the result.
+    const verdict = await runCli(statusBar.executable(), validateArgs(target.fsPath), {
+      cwd: folder.uri.fsPath,
+    });
+    if (verdict.exitCode !== 0) {
+      appendLog(output, "[ai:ide] draft failed validation — one repair round");
+      const findings = `${verdict.stderr.trim() || verdict.stdout.trim()}`.slice(0, 2000);
+      const repaired = await chat([
+        vscode.LanguageModelChatMessage.User(prompt),
+        vscode.LanguageModelChatMessage.Assistant(response),
+        vscode.LanguageModelChatMessage.User(
+          `That pipeline failed \`oxo-flow validate\`:\n\n${findings}\n\nReturn the corrected COMPLETE pipeline as one fenced toml block.`
+        ),
+      ]);
+      const fixed = extractToml(repaired);
+      if (fixed) {
+        toml = fixed;
+        await vscode.workspace.fs.writeFile(target, Buffer.from(fixed, "utf8"));
+      }
+    }
+    void vscode.window.showInformationMessage(
+      `Pipeline written to ${vscode.workspace.asRelativePath(target)} (via ${via}).`
+    );
+  });
 }
 
 async function showAiStatus(output: vscode.OutputChannel, statusBar: StatusBar): Promise<void> {

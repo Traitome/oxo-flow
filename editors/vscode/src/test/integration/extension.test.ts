@@ -187,6 +187,41 @@ describe("oxo-flow extension", () => {
     });
   });
 
+  it("offers quick actions on oxo-flow diagnostics", async function () {
+    const bin = process.env.OXOFLOW_TEST_BIN;
+    if (!bin) {
+      this.skip();
+      return;
+    }
+    await withTestBinary(bin, async () => {
+      const doc = await openFixture("missing-input.oxoflow");
+      await vscode.window.showTextDocument(doc);
+      const diags = await waitFor("diagnostics for quick actions", () => {
+        const found = vscode.languages.getDiagnostics(doc.uri).filter((d) => d.source === "oxo-flow");
+        return found.length > 0 ? found : undefined;
+      });
+      // NB: the runtime command takes a CodeActionKind here (the .d.ts
+      // claims a CodeActionContext — the runtime rejects that with
+      // "Invalid argument 'kind'"); the provider receives the diagnostics
+      // at the range from VS Code's own controller.
+      const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+        "vscode.executeCodeActionProvider",
+        doc.uri,
+        diags[0].range,
+        "quickfix"
+      );
+      const titles = (actions ?? []).map((a) => a.title);
+      assert.ok(
+        titles.some((t) => t.includes("Re-validate")),
+        `expected a Re-validate action; got: ${JSON.stringify(titles)}`
+      );
+      assert.ok(
+        titles.some((t) => t.includes("Report Issue")),
+        `expected a Report Issue action; got: ${JSON.stringify(titles)}`
+      );
+    });
+  });
+
   it("provides hover docs for schema-known keys", async () => {
     const doc = await vscode.workspace.openTextDocument({
       content: '[workflow]\nname = "hover-fixture"\n',

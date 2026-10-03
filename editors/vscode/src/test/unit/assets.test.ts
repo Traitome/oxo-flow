@@ -77,8 +77,8 @@ test("package manifest is publishable and in lockstep", () => {
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
   // @types/vscode must not exceed engines.vscode (vsce packaging rule).
   const types = pkg.devDependencies["@types/vscode"];
-  assert.equal(types, "1.85.0");
-  assert.ok(pkg.engines.vscode.startsWith("^1.85"));
+  assert.equal(types, "1.90.0");
+  assert.ok(pkg.engines.vscode.startsWith("^1.90"));
 
   // Lockstep with the Rust workspace when this checkout is the repository.
   const cargoPath = join(repoRoot, "Cargo.toml");
