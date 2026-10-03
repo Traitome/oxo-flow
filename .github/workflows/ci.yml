@@ -1242,15 +1242,20 @@ jobs:
           fi
           echo "version ${VERSION} consistent across tag, Cargo.toml and extension manifest"
 
-      - name: Package VSIX
+      # Reuse the exact VSIX the extension job already built and tested
+      # (identical trigger conditions) instead of packaging a second copy —
+      # saves ~5-8 min and removes the two-VSIX-per-tag drift surface.
+      - name: Download the VSIX built by the extension job
+        uses: actions/download-artifact@v8
+        with:
+          name: vscode-extension
+          path: editors/vscode
+
+      - name: Rename and checksum the packaged VSIX
         working-directory: editors/vscode
         run: |
           set -euo pipefail
-          VERSION="${RELEASE_TAG#v}"
-          npm run compile
-          npm run unit-test
-          npm run package
-          mv "oxo-flow-${VERSION}.vsix" "oxo-flow-vscode-${RELEASE_TAG}.vsix"
+          mv oxo-flow-*.vsix "oxo-flow-vscode-${RELEASE_TAG}.vsix"
           sha256sum "oxo-flow-vscode-${RELEASE_TAG}.vsix" \
             > "oxo-flow-vscode-${RELEASE_TAG}.vsix.sha256"
           cat "oxo-flow-vscode-${RELEASE_TAG}.vsix.sha256"
