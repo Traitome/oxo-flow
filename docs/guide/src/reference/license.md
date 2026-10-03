@@ -71,8 +71,8 @@ The license is prominently displayed in three locations:
 3. **API response header** — `X-OxoFlow-License` on all HTTP responses
 
 ```
-X-OxoFlow-License: oxo-flow v0.22.0 — oxo-flow-core, oxo-flow-cli: Apache 2.0. oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL). Free for academic use. Commercial use requires authorization. Contact: Shixiang Wang <w_shixiang@163.com>.
-X-OxoFlow-Version: 0.22.0
+X-OxoFlow-License: oxo-flow v0.23.0 — oxo-flow-core, oxo-flow-cli: Apache 2.0. oxo-flow-web: Dual license (LICENSE-ACADEMIC / LICENSE-COMMERCIAL). Free for academic use. Commercial use requires authorization. Contact: Shixiang Wang <w_shixiang@163.com>.
+X-OxoFlow-Version: 0.23.0
 ```
 
 ## Key Principles

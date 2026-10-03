@@ -57,7 +57,7 @@ oxo-flow info [OPTIONS] <WORKFLOW>
   "output_dirs": ["aligned", "dedup", "qc", "recal", "trimmed", "variants"],
   "git_sha": "8f005dab60a0ce024acc5048885d88e246119b5c",
   "git_remote": "https://github.com/example/simple-variant-calling.git",
-  "git_describe": "v0.22.0"
+  "git_describe": "v0.23.0"
 }
 ```
 
@@ -116,7 +116,7 @@ oxo-flow info --format text workflow/rnaseq.oxoflow
 ```
 
 ```
-Workflow: rnaseq v0.22.0
+Workflow: rnaseq v0.23.0
 Rules: 44
 Config keys: fasta = refs/genome.fa, reads_dir = test/fixtures/raw, ...
 ```

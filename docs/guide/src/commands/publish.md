@@ -73,7 +73,7 @@ oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16
 oxo-flow run --bundle my_pipeline-bundle.tar.zst -j 16 --yes
 
 # Pull a remote bundle and run it
-oxo-flow pull gh:user/repo@v0.22.0
+oxo-flow pull gh:user/repo@v0.23.0
 oxo-flow run --bundle repo-bundle.tar.zst --yes
 ```
 
@@ -89,7 +89,7 @@ The `manifest.json` inside each bundle:
 {
   "format": "oxoflow-bundle-v1",
   "workflow": "my_pipeline.oxoflow",
-  "oxo_flow_version": "0.22.0",
+  "oxo_flow_version": "0.23.0",
   "created_at_epoch": 1234567890,
   "entrypoint": "my_pipeline.oxoflow",
   "files": [
