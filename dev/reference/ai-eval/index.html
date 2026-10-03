@@ -3823,7 +3823,21 @@ with <code>python3 eval/scripts/build_workflow_gold.py</code> (defaulting to the
 CSV path); <code>rule.csv</code> and <code>workflow.csv</code> are drafted from the gallery and the
 <a href="https://github.com/oxo-flow-community">oxo-flow-community</a> workflows.
 Every row carries a <code>provenance_url</code> pointing at its primary source.</p>
-<p>Rows start at <code>review_status = draft</code> and are <strong>skipped</strong> by capture and runner until a human reviewer approves them — the benchmark only runs on human-verified gold. If no approved rows exist, the harness now fails fast instead of silently emitting an empty report. See <code>eval/schema.md</code> for the full column contracts and the publication-track review workflow.</p>
+<p>Rows start at <code>review_status = draft</code> and are <strong>skipped</strong> by capture and
+runner until a reviewer accepts them (<code>approved</code> / <code>corrected</code>); if no
+reviewable rows exist the harness fails fast instead of silently emitting an
+empty report.</p>
+<blockquote>
+<p><strong>Status note:</strong> the current gold rows were annotated by a <strong>machine sweep</strong>
+(<code>reviewer = wangshx-automated</code>, 2026-09-07) — structure, knowledge-base
+consistency and URL liveness were checked, but <strong>no human has verified
+scientific correctness yet</strong>; the human verification pass is tracked in
+<a href="https://github.com/Traitome/oxo-flow/issues/172">#172</a>. Until it closes,
+treat reported benchmark numbers as <em>machine-swept</em>, not human-verified.
+<code>python3 eval/scripts/check_gold.py</code> (<code>make eval-lint</code>) guards the
+machine-checkable consistency rules between review passes. See
+<code>eval/schema.md</code> for the column contracts and the review workflow.</p>
+</blockquote>
 <p>The deterministic grounding half of the tool layer is additionally
 guarded in CI by <code>crates/oxo-flow-ai/tests/knowledge_grounding.rs</code> —
 no API key required, runs on every push.</p>
