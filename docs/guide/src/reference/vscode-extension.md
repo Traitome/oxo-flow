@@ -92,6 +92,22 @@ Problems-panel diagnostics:
 the engine's canonical TOML formatter (`oxo-flow format`) on the current
 buffer — unsaved changes included.
 
+## Onboarding walkthrough
+
+First launch surfaces a **Get Started with oxo-flow** walkthrough
+(`Help → Welcome` → *Walkthroughs*, or "Walkthroughs…" from the
+command palette): four checklist steps that light up as you go —
+
+1. **Welcome to oxo-flow** — what a `.oxoflow` pipeline is and what the
+   editor adds.
+2. **Connect the extension to the CLI** — install the binary or set
+   `oxo-flow.executablePath`; completes when the setting changes or
+   settings open.
+3. **Open or create a pipeline** — open a `.oxoflow`, scaffold with
+   `oxo-flow init`, or generate with AI.
+4. **Validate, then run** — the static-gates-first habit; completes on
+   the first Validate or Run.
+
 ## CLI lifecycle commands
 
 All commands are prefixed `oxo-flow:` in the command palette; the status bar

@@ -4,6 +4,17 @@ All notable changes to the oxo-flow VS Code extension are documented here.
 The extension version is kept in lockstep with the oxo-flow project version
 (see the project-level `CHANGELOG.md` for engine changes).
 
+## 0.22.0
+
+- **Get Started walkthrough** — four-step onboarding (welcome → connect
+  the CLI → open/create a pipeline → validate, then run) with checklist
+  steps that complete as you use the corresponding commands.
+- Editor title-bar **Run** and **Validate** buttons for `.oxoflow`
+  editors.
+- Editor context-menu group (Run / Dry Run / Validate / Lint / Format).
+- Schema-driven completion and hover docs regenerated from
+  `oxoflow-v1.schema.json` (17 completion contexts).
+
 ## 0.21.2
 
 Initial release.
