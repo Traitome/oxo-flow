@@ -9,7 +9,9 @@ import {
   lintArgs,
 } from "./core/cliArgs";
 import { runCli } from "./core/exec";
+import { runArgs } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
+import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCompletionProvider } from "./providers/completion";
 import { OxoflowDiagnostics } from "./providers/diagnostics";
 import { OxoflowFormattingProvider } from "./providers/formatting";
@@ -40,14 +42,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.registerTaskProvider("oxo-flow", taskProvider),
     vscode.languages.registerCompletionItemProvider("oxoflow", new OxoflowCompletionProvider(), "[", "{", ".", '"'),
     vscode.languages.registerHoverProvider("oxoflow", new OxoflowHoverProvider()),
-    vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider())
+    vscode.languages.registerDocumentFormattingEditProvider("oxoflow", new OxoflowFormattingProvider()),
+    vscode.languages.registerCodeLensProvider("oxoflow", new OxoflowCodeLensProvider())
   );
 
-  const register = (id: string, fn: () => unknown) => {
+  const register = (id: string, fn: (...args: unknown[]) => unknown) => {
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
   };
 
   register("oxo-flow.run", () => executePipelineTask(statusBar, "run"));
+  register("oxo-flow.runTargets", (...args: unknown[]) => executeRunTargets(statusBar, args[0]));
   register("oxo-flow.dryRun", () => executePipelineTask(statusBar, "dry-run"));
   register("oxo-flow.graph", () => executePipelineTask(statusBar, "graph"));
   register("oxo-flow.validate", () => runQualityCommand(output, statusBar, "validate"));
@@ -121,6 +125,33 @@ async function executePipelineTask(
     def.extraArgs = cfg.get<string[]>("runArgs", []);
   }
   await vscode.tasks.executeTask(createTask(statusBar.executable(), target.folder, def, kind));
+}
+
+/**
+ * CodeLens entry: run an explicit set of `-t` targets. A single name lets the
+ * CLI resolve the rule's upstream closure; a list pins every rule up to a
+ * point in file order ("run to here").
+ */
+async function executeRunTargets(statusBar: StatusBar, rawTargets: unknown): Promise<void> {
+  const targets = Array.isArray(rawTargets) ? rawTargets.filter((t): t is string => typeof t === "string") : [];
+  if (targets.length === 0) return;
+  const target = await pipelineTarget();
+  if (!target) return;
+  const cfg = vscode.workspace.getConfiguration("oxo-flow", target.file);
+  const runOpts = {
+    file: relativeWorkflow(target.folder, target.file),
+    targets,
+    extraArgs: cfg.get<string[]>("runArgs", []),
+  };
+  await vscode.tasks.executeTask(
+    createTask(
+      statusBar.executable(),
+      target.folder,
+      { type: "oxo-flow", workflow: runOpts.file, kind: "run" },
+      "run",
+      runArgs(runOpts)
+    )
+  );
 }
 
 // ─── validate / lint ──────────────────────────────────────────────────────

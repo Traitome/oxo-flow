@@ -123,6 +123,11 @@
         "icon": "$(play)"
       },
       {
+        "command": "oxo-flow.runTargets",
+        "title": "Run Rule Targets…",
+        "category": "oxo-flow"
+      },
+      {
         "command": "oxo-flow.dryRun",
         "title": "Dry Run (plan only)",
         "category": "oxo-flow",
