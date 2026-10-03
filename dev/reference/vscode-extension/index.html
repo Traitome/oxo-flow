@@ -3959,9 +3959,9 @@ the same version as a VSIX (with a <code>.sha256</code> checksum) to the GitHub 
 and publishes it to <a href="https://open-vsx.org/">Open VSX</a>.</p>
 <div class="admonition note">
 <p class="admonition-title">About the VS Code Marketplace</p>
-<p>Publishing to the VS Code Marketplace is <strong>not currently supported</strong> —
-it requires a publisher account tied to Azure DevOps that the project
-does not maintain yet. Two good alternatives cover every VS Code fork:</p>
+<p>CI publishes the extension to the VS Code Marketplace (<code>VSCE_PAT</code>) and
+the listing goes live at the next tagged release; until then, two
+channels already cover every VS Code fork:</p>
 <ol>
 <li><strong>Open VSX</strong> — VSCodium, Cursor, Windsurf and most forks search it by
    default; the same <code>traitome.oxo-flow</code> id is there.</li>
