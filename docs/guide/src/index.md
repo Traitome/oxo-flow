@@ -47,6 +47,7 @@ oxo-flow is a high-performance workflow engine built from the ground up in Rust 
 | **Environment management** | First-class support for 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules — per rule |
 | **Reporting** | Generate structured HTML, JSON, Markdown, and PDF reports from checkpoint data — execution truth, failure diagnosis, and file checksums |
 | **Web API** | Built-in REST API (axum-based) for building, validating, and monitoring workflows remotely |
+| **VS Code extension** | First-party `traitome.oxo-flow` IDE for `.oxoflow` — schema-driven completion, background diagnostics, canonical formatting, one-click run / dry-run / graph / status / clean / resume / AI-generate (published to Open VSX; also attached as a VSIX to every release) |
 | **Container packaging** | Package entire workflows into Docker or Singularity images for portable, reproducible execution |
 | **Cluster backends** | Submit jobs to SLURM, PBS, SGE, and LSF clusters with resource-aware scheduling |
 | **Wildcard expansion** | `{sample}`, `{chr}` patterns that expand automatically from inputs or config |
@@ -112,7 +113,7 @@ Jump to the **How-to Guides**:
 
 ### If you need exact syntax and options
 
-See the **Command Reference** for all 30 CLI subcommands with usage, options, and examples.
+See the **Command Reference** for all 30 CLI subcommands with usage, options, and examples, or the [VS Code Extension](./reference/vscode-extension.md) reference for the first-party editor integration.
 
 ### If you want the full technical details
 

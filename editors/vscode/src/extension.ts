@@ -1,5 +1,13 @@
 import * as vscode from "vscode";
-import { aiStatusArgs, schemaArgs, templateArgs, validateArgs, lintArgs } from "./core/cliArgs";
+import {
+  aiStatusArgs,
+  cleanArgs,
+  schemaArgs,
+  statusArgs,
+  templateArgs,
+  validateArgs,
+  lintArgs,
+} from "./core/cliArgs";
 import { runCli } from "./core/exec";
 import { parseReport } from "./core/jsonReport";
 import { OxoflowCompletionProvider } from "./providers/completion";
@@ -49,6 +57,8 @@ export function activate(context: vscode.ExtensionContext): void {
   register("oxo-flow.generate", () => generateWithAI(statusBar));
   register("oxo-flow.aiStatus", () => showAiStatus(output, statusBar));
   register("oxo-flow.exportSchema", () => exportSchema(statusBar));
+  register("oxo-flow.clean", () => cleanOutputs(output, statusBar));
+  register("oxo-flow.status", () => showRunStatus(output, statusBar));
   register("oxo-flow.openDocs", () => vscode.env.openExternal(vscode.Uri.parse(DOCS_URL)));
   register("oxo-flow.openSettings", () =>
     vscode.commands.executeCommand("workbench.action.openSettings", "oxo-flow.executablePath")
@@ -286,6 +296,98 @@ async function exportSchema(statusBar: StatusBar): Promise<void> {
   }
 }
 
+// ─── clean / status ───────────────────────────────────────────────────────
+
+/**
+ * Clean declared outputs: always previews with `-n` first (the CLI also
+ * defaults to a dry-run), shows the preview, then asks for confirmation
+ * before running with `--force`. Destructive work never happens silently.
+ */
+async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar): Promise<void> {
+  const target = await pipelineTarget();
+  if (!target) return;
+  const executable = statusBar.executable();
+  const rel = relativeWorkflow(target.folder, target.file);
+
+  const preview = await runCli(executable, cleanArgs(target.file.fsPath, { dryRun: true }), {
+    cwd: target.folder.uri.fsPath,
+  });
+  if (preview.spawnError) {
+    void vscode.window.showErrorMessage(
+      `Cannot run \`${executable}\` (${preview.spawnError}). Set oxo-flow.executablePath in settings.`
+    );
+    return;
+  }
+  output.appendLine(`$ oxo-flow clean ${JSON.stringify(rel)} -n\n${preview.stderr.trimEnd()}`);
+  output.show(true);
+
+  if (preview.exitCode !== 0) {
+    void vscode.window.showErrorMessage("Clean preview failed — see the oxo-flow output panel.");
+    return;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    `Delete outputs of ${rel}? Check the preview in the oxo-flow output panel.`,
+    { modal: true },
+    "Delete outputs",
+    "Orphan chunks only"
+  );
+  if (confirm === "Orphan chunks only") {
+    await vscode.tasks.executeTask(
+      createTask(
+        executable,
+        target.folder,
+        { type: "oxo-flow", workflow: rel, kind: "run" },
+        "run",
+        cleanArgs(target.file.fsPath, { force: true, orphans: true })
+      )
+    );
+    return;
+  }
+  if (confirm !== "Delete outputs") return;
+  await vscode.tasks.executeTask(
+    createTask(
+      executable,
+      target.folder,
+      { type: "oxo-flow", workflow: rel, kind: "run" },
+      "run",
+      cleanArgs(target.file.fsPath, { force: true })
+    )
+  );
+}
+
+/**
+ * Show run status: quick pick over checkpoint files (.oxo-flow/checkpoint.json;
+ * the CLI's status takes a CHECKPOINT, not a workflow) and dump `status
+ * --timing` into the output panel.
+ */
+async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar): Promise<void> {
+  const checkpoints = await vscode.workspace.findFiles("**/.oxo-flow/checkpoint.json", "**/node_modules/**", 20);
+  if (checkpoints.length === 0) {
+    void vscode.window.showInformationMessage("No .oxo-flow/checkpoint.json found in this workspace.");
+    return;
+  }
+  const picks = checkpoints.map((c) => ({ label: vscode.workspace.asRelativePath(c), file: c }));
+  const pick =
+    picks.length === 1
+      ? picks[0]
+      : await vscode.window.showQuickPick(picks, { placeHolder: "Select a checkpoint" });
+  if (!pick) return;
+  const folder = folderFor(pick.file);
+  if (!folder) return;
+  const executable = statusBar.executable();
+  const args = statusArgs(vscode.workspace.asRelativePath(pick.file), { timing: true });
+  const res = await runCli(executable, args, { cwd: folder.uri.fsPath });
+  if (res.spawnError) {
+    void vscode.window.showErrorMessage("Cannot run oxo-flow — see the oxo-flow output panel.");
+    output.appendLine(`Cannot run \`${executable}\` (${res.spawnError}).`);
+    output.show(true);
+    return;
+  }
+  output.appendLine(`$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}${res.stderr.trimEnd()}`);
+  output.show(true);
+}
+
 // ─── command quick pick (status bar) ──────────────────────────────────────
 
 const COMMAND_PICKS: { label: string; command: string }[] = [
@@ -296,8 +398,11 @@ const COMMAND_PICKS: { label: string; command: string }[] = [
   { label: "$(alignment-align) Format Document", command: "oxo-flow.format" },
   { label: "$(graph) Show DAG Graph", command: "oxo-flow.graph" },
   { label: "$(debug-restart) Resume from Checkpoint", command: "oxo-flow.resume" },
+  { label: "$(info) Show Run Status", command: "oxo-flow.status" },
+  { label: "$(trash) Clean Outputs…", command: "oxo-flow.clean" },
   { label: "$(sparkle) Generate Pipeline with AI…", command: "oxo-flow.generate" },
   { label: "$(hubot) Show AI Provider Status", command: "oxo-flow.aiStatus" },
+  { label: "$(json) Export JSON Schema", command: "oxo-flow.exportSchema" },
   { label: "$(book) Open Documentation", command: "oxo-flow.openDocs" },
   { label: "$(gear) Open Settings", command: "oxo-flow.openSettings" },
 ];

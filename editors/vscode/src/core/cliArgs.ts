@@ -60,17 +60,23 @@ export function resumeArgs(checkpoint: string, extraArgs?: string[]): string[] {
   return ["resume", checkpoint, ...(extraArgs ?? [])];
 }
 
-/** `oxo-flow clean <workflow> [--dry-run|--force]` */
-export function cleanArgs(file: string, opts?: { dryRun?: boolean; force?: boolean }): string[] {
+/** `oxo-flow clean <workflow> [-n|--force] [--orphans] [-d workdir]` */
+export function cleanArgs(
+  file: string,
+  opts?: { dryRun?: boolean; force?: boolean; orphans?: boolean }
+): string[] {
   const args = ["clean", file];
   if (opts?.dryRun) args.push("-n");
   if (opts?.force) args.push("--force");
+  if (opts?.orphans) args.push("--orphans");
   return args;
 }
 
-/** `oxo-flow status [checkpoint]` */
-export function statusArgs(checkpoint?: string): string[] {
-  return checkpoint ? ["status", checkpoint] : ["status"];
+/** `oxo-flow status [checkpoint] [--timing]` */
+export function statusArgs(checkpoint?: string, opts?: { timing?: boolean }): string[] {
+  const args = checkpoint ? ["status", checkpoint] : ["status"];
+  if (opts?.timing) args.push("--timing");
+  return args;
 }
 
 export function templateArgs(description: string, output?: string): string[] {

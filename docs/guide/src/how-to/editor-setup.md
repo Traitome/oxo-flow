@@ -14,13 +14,16 @@ In VS Code, skip the manual association entirely — install the
 code --install-extension traitome.oxo-flow
 ```
 
-or search *oxo-flow* in the Extensions view (also available on
-[Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) for VSCodium,
-Cursor, and other forks). It provides TOML+ syntax highlighting,
-schema-driven completion with hover docs, background `validate`/`lint`
-diagnostics, canonical formatting, one-click run/dry-run/resume, and AI
-pipeline generation — see the [VS Code Extension](../reference/vscode-extension.md)
-reference. The rest of this page covers manual setups and other editors.
+or search *oxo-flow* in the Extensions view (published on
+[Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) — VSCodium,
+Cursor, and other forks search it by default; stock VS Code users can
+[install the release VSIX offline](../reference/vscode-extension.md#install) —
+the VS Code Marketplace is not currently supported). It provides TOML+
+syntax highlighting, schema-driven completion with hover docs, background
+`validate`/`lint` diagnostics, canonical formatting, one-click
+run/dry-run/status/clean/resume, and AI pipeline generation — see the
+[VS Code Extension](../reference/vscode-extension.md) reference. The rest of
+this page covers manual setups and other editors.
 
 ## VS Code (without the extension)
 

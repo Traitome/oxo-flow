@@ -155,11 +155,14 @@ arbitrator), attaches the VSIX + `.sha256` to the GitHub release, and
 publishes the **same artifact** to:
 
 - **Open VSX** (`open-vsx.org/extension/traitome/oxo-flow`) — requires the
-  repository secret `OVSX_PAT`
+  repository secret `OVSX_PAT` (**currently configured**)
 - **VS Code Marketplace**
   (`marketplace.visualstudio.com/items?itemName=traitome.oxo-flow`) —
-  requires the repository secret `VSCE_PAT` (PAT from the `traitome`
-  publisher with *Marketplace → Manage* scope); the step passes
+  requires the repository secret `VSCE_PAT` (**NOT currently set —
+  Marketplace publishing is therefore NOT supported**; the CI step warns and
+  skips it, which is the honest status reflected in the user-facing docs).
+  To enable it later, mint a PAT from the `traitome` publisher with
+  *Marketplace → Manage* scope (recipe below); the step passes
   `--skip-duplicate`, so re-running the job is idempotent for the
   Marketplace but NOT for Open VSX (re-publishing an existing Open VSX
   version fails — if Open VSX succeeded and only the Marketplace step
@@ -210,9 +213,9 @@ marketplaces.
 - Update documentation site if applicable
 - Verify the published crates on [crates.io](https://crates.io/)
 - Verify the extension on the
-  [Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow)
-  and [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) listings
-  (and the VSIX on the release assets)
+  [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) listing and
+  the VSIX on the release assets (Marketplace is not supported while
+  `VSCE_PAT` is unset — do not expect a listing there)
 
 No development-version bump is needed afterwards: `main` stays at the
 released version until the next dispatch, and `sync-version` syncs it then.

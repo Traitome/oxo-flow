@@ -7,25 +7,34 @@ extension id `traitome.oxo-flow`) that turns VS Code into a full editor for
 diagnostics, canonical formatting, and one-click access to the CLI lifecycle.
 
 The extension lives in [`editors/vscode/`](https://github.com/Traitome/oxo-flow/tree/main/editors/vscode)
-and is released in lockstep with the engine: every oxo-flow release publishes
-the same version as a VSIX to the GitHub release, [Open VSX](https://open-vsx.org/)
-and the VS Code Marketplace.
+and is released in lockstep with the engine: every oxo-flow release attaches
+the same version as a VSIX (with a `.sha256` checksum) to the GitHub release
+and publishes it to [Open VSX](https://open-vsx.org/).
+
+!!! note "About the VS Code Marketplace"
+
+    Publishing to the VS Code Marketplace is **not currently supported** —
+    it requires a publisher account tied to Azure DevOps that the project
+    does not maintain yet. Two good alternatives cover every VS Code fork:
+
+    1. **Open VSX** — VSCodium, Cursor, Windsurf and most forks search it by
+       default; the same `traitome.oxo-flow` id is there.
+    2. **Offline VSIX** — download the release artifact and install it with
+       one command (below); this works in stock VS Code and any fork.
 
 ## Install
 
-=== "Marketplace / Open VSX"
+=== "Open VSX (recommended for forks)"
 
-    Search for **oxo-flow Pipeline** in the VS Code Extensions view, or:
+    VSCodium / Cursor / Windsurf and most VS Code forks search
+    [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) by default —
+    install the extension from the Extensions view like any other, or:
 
     ```bash
-    code --install-extension traitome.oxo-flow
+    codium --install-extension traitome.oxo-flow
     ```
 
-    On VSCodium / Cursor / Windsurf, install from
-    [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) — most
-    VS Code forks search it by default.
-
-=== "Offline VSIX"
+=== "Offline VSIX (works in any VS Code)"
 
     Download `oxo-flow-vscode-v<version>.vsix` (with a `.sha256` checksum)
     from the release page and install it directly:
@@ -87,6 +96,8 @@ buffer — unsaved changes included.
 
 All commands are prefixed `oxo-flow:` in the command palette; the status bar
 item shows the detected CLI version and opens a quick pick of all of them.
+`.oxoflow` editors also get **Run** and **Validate** buttons in the editor
+title bar.
 
 | Command | CLI equivalent |
 | --- | --- |
@@ -97,6 +108,8 @@ item shows the detected CLI version and opens a quick pick of all of them.
 | Format Document | `oxo-flow format <file>` |
 | Show DAG Graph | `oxo-flow graph <file>` |
 | Resume from Checkpoint | `oxo-flow resume <checkpoint>` (quick pick over `**/.oxo-flow/checkpoint.json`) |
+| Show Run Status | `oxo-flow status <checkpoint> --timing` (quick pick over checkpoint files) |
+| Clean Outputs… | `oxo-flow clean <file> -n` preview → confirmation → `--force` (optionally `--orphans`) |
 | Generate Pipeline with AI… | `oxo-flow template "<description>" --ai -o <file>` |
 | Show AI Provider Status | `oxo-flow ai` |
 | Export JSON Schema | `oxo-flow schema > oxo-flow-schema.json` |
