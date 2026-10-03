@@ -85,7 +85,9 @@ export function createTask(
   folder: vscode.WorkspaceFolder,
   def: OxoflowTaskDefinition,
   kind: TaskKind,
-  overrideArgs?: string[]
+  overrideArgs?: string[],
+  /** Display name override (e.g. "clean …" for tasks that ride on `run`). */
+  nameOverride?: string
 ): vscode.Task {
   const runOpts = {
     file: def.workflow,
@@ -109,7 +111,7 @@ export function createTask(
   const execution = new vscode.ShellExecution(strong(executable), args.map(strong), {
     cwd: folder.uri.fsPath,
   });
-  const name = `${kind} ${def.workflow}`;
+  const name = nameOverride ?? `${kind} ${def.workflow}`;
   const task = new vscode.Task(def, folder, name, TASK_TYPE, execution, []);
   task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
   return task;

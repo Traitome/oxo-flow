@@ -10,20 +10,21 @@ TOML support: syntax highlighting, bracket matching, folding, and formatting.
 In VS Code, skip the manual association entirely — install the
 **oxo-flow Pipeline** extension (`traitome.oxo-flow`):
 
+| Editor | Install from |
+| --- | --- |
+| VSCodium / Cursor / Windsurf and most forks | the Extensions view — search *oxo-flow* (published on [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow)) |
+| Stock VS Code | the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow), or the [release VSIX offline](../reference/vscode-extension.md#install) |
+
 ```bash
-code --install-extension traitome.oxo-flow
+code --install-extension traitome.oxo-flow    # stock VS Code (Marketplace)
+codium --install-extension traitome.oxo-flow  # VSCodium & forks (Open VSX)
 ```
 
-or search *oxo-flow* in the Extensions view (published on
-[Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) — VSCodium,
-Cursor, and other forks search it by default; stock VS Code users can
-[install the release VSIX offline](../reference/vscode-extension.md#install) —
-the VS Code Marketplace is not currently supported). It provides TOML+
-syntax highlighting, schema-driven completion with hover docs, background
-`validate`/`lint` diagnostics, canonical formatting, one-click
-run/dry-run/status/clean/resume, and AI pipeline generation — see the
-[VS Code Extension](../reference/vscode-extension.md) reference. The rest of
-this page covers manual setups and other editors.
+The extension provides TOML+ syntax highlighting, schema-driven completion
+with hover docs, background `validate`/`lint` diagnostics, canonical
+formatting, one-click run/dry-run/status/clean/resume, and AI pipeline
+generation — see the [VS Code Extension](../reference/vscode-extension.md)
+reference. The rest of this page covers manual setups and other editors.
 
 ## VS Code (without the extension)
 

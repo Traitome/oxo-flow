@@ -12,5 +12,6 @@ esbuild.mjs
 tsconfig.json
 .vscode-test.mjs
 package-lock.json
+.gitignore
 **/*.map
 **/*.ts
