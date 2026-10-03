@@ -7,6 +7,10 @@
   "license": "Apache-2.0",
   "pricing": "Free",
   "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#0e4d64",
+    "theme": "dark"
+  },
   "main": "./dist/extension.js",
   "extensionKind": [
     "workspace"
@@ -201,21 +205,71 @@
         "command": "oxo-flow.openSettings",
         "title": "Open Settings",
         "category": "oxo-flow"
+      },
+      {
+        "command": "oxo-flow.reportIssue",
+        "title": "Report Issue / Suggest Improvement",
+        "category": "oxo-flow",
+        "icon": "$(feedback)"
       }
     ],
     "keybindings": [
       {
         "command": "oxo-flow.run",
         "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
         "when": "editorTextFocus && editorLangId == oxoflow"
       },
       {
         "command": "oxo-flow.validate",
         "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v",
+        "when": "editorTextFocus && editorLangId == oxoflow"
+      },
+      {
+        "command": "oxo-flow.lint",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorTextFocus && editorLangId == oxoflow"
+      },
+      {
+        "command": "oxo-flow.graph",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g",
         "when": "editorTextFocus && editorLangId == oxoflow"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "oxo-flow.run",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.runTargets",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.dryRun",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.validate",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.lint",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.format",
+          "when": "editorLangId == oxoflow"
+        },
+        {
+          "command": "oxo-flow.graph",
+          "when": "editorLangId == oxoflow"
+        }
+      ],
       "editor/title": [
         {
           "command": "oxo-flow.run",
@@ -290,7 +344,8 @@
               "markdown": "walkthroughs/open-pipeline.md"
             },
             "completionEvents": [
-              "onCommand:oxo-flow.generate"
+              "onCommand:oxo-flow.generate",
+              "onLanguage:oxoflow"
             ]
           },
           {

@@ -1182,8 +1182,8 @@ jobs:
   # ─── VS Code extension publishing (Open VSX + Marketplace) ─────────────────
   # Runs after the release job created the GitHub release, then attaches the
   # packaged VSIX (+ sha256) to it and publishes the SAME artifact to:
-  #   * Open VSX (Eclipse)      — needs the OVSX_PAT secret (repository secret)
-  #   * VS Code Marketplace     — needs the VSCE_PAT secret (publisher: traitome)
+  #   * Open VSX (Eclipse)      — needs the OVSX_PAT secret (org-level)
+  #   * VS Code Marketplace     — needs the VSCE_PAT secret (publisher: traitome, org-level)
   # A missing secret is a loud warning, not a release failure: the marketplaces
   # are third-party accounts that must be provisioned once per publisher (see
   # RELEASING.md, "VS Code extension publishing").
@@ -1217,6 +1217,24 @@ jobs:
       - name: Install extension dependencies
         working-directory: editors/vscode
         run: npm ci
+
+      # Fail loudly BEFORE packaging when a token is stale/under-scoped —
+      # a broken VSCE_PAT would otherwise only surface at publish time,
+      # and Open VSX has no --skip-duplicate to soften that.
+      - name: Preflight marketplace tokens
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          if [ -n "${VSCE_PAT:-}" ]; then
+            npx vsce verify-pat traitome -p "$VSCE_PAT"
+          else
+            echo "::warning::VSCE_PAT is unset — Marketplace publishing will be skipped"
+          fi
+          if [ -n "${OVSX_PAT:-}" ]; then
+            npx ovsx verify-pat -p "$OVSX_PAT"
+          else
+            echo "::warning::OVSX_PAT is unset — Open VSX publishing will be skipped"
+          fi
 
       - name: Verify version lockstep (tag == manifest == canonical)
         shell: bash
@@ -1256,26 +1274,75 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # `ovsx publish` is NOT idempotent: a re-run after a partial failure
+      # would die on "already exists" and never reach the Marketplace step.
+      # Query the registry first and skip when this tag is already listed.
+      - name: Check Open VSX version state
+        id: ovsx_state
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          CODE="$(curl -sS -o /dev/null -w '%{http_code}' "https://open-vsx.org/api/traitome/oxo-flow/${VERSION}" || echo 000)"
+          if [ "$CODE" = "200" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to Open VSX
-        if: env.OVSX_PAT != ''
+        if: env.OVSX_PAT != '' && steps.ovsx_state.outputs.published != 'true'
         working-directory: editors/vscode
-        run: npx ovsx publish --pat "$OVSX_PAT" "oxo-flow-vscode-${RELEASE_TAG}.vsix"
+        run: |
+          npx ovsx publish --pat "$OVSX_PAT" "oxo-flow-vscode-${RELEASE_TAG}.vsix"
+          echo "OVSX_RESULT=published" >> "$GITHUB_ENV"
+
+      - name: Open VSX already published (partial-failure retry)
+        if: env.OVSX_PAT != '' && steps.ovsx_state.outputs.published == 'true'
+        run: |
+          echo "::warning::Open VSX already has ${RELEASE_TAG} — skipping the upload"
+          echo "OVSX_RESULT=already-published (skipped)" >> "$GITHUB_ENV"
 
       - name: Open VSX skipped (no OVSX_PAT)
         if: env.OVSX_PAT == ''
-        run: echo "::warning::OVSX_PAT is not set — skipped Open VSX publishing (set it up per RELEASING.md)"
+        run: |
+          echo "::warning::OVSX_PAT is not set — skipped Open VSX publishing (set it up per RELEASING.md)"
+          echo "OVSX_RESULT=skipped (no OVSX_PAT)" >> "$GITHUB_ENV"
 
       - name: Publish to VS Code Marketplace
         if: env.VSCE_PAT != ''
         working-directory: editors/vscode
         # --skip-duplicate makes re-runs idempotent when the version is
         # already listed; --packagePath publishes the exact VSIX that was
-        # attached to the release and pushed to Open VSX.
-        run: npx vsce publish --packagePath "oxo-flow-vscode-${RELEASE_TAG}.vsix" --skip-duplicate
+        # attached to the release and pushed to Open VSX. pipefail keeps a
+        # vsce failure visible through the tee.
+        run: |
+          set -o pipefail
+          npx vsce publish --packagePath "oxo-flow-vscode-${RELEASE_TAG}.vsix" --skip-duplicate 2>&1 | tee /tmp/vsce-publish.log
+          if grep -qi "skipping" /tmp/vsce-publish.log; then
+            echo "::warning::Marketplace already had this version — vsce skipped the upload"
+            echo "VSCE_RESULT=already-published (skipped)" >> "$GITHUB_ENV"
+          else
+            echo "VSCE_RESULT=published" >> "$GITHUB_ENV"
+          fi
 
       - name: Marketplace skipped (no VSCE_PAT)
         if: env.VSCE_PAT == ''
-        run: echo "::warning::VSCE_PAT is not set — skipped VS Code Marketplace publishing (set it up per RELEASING.md)"
+        run: |
+          echo "::warning::VSCE_PAT is not set — skipped VS Code Marketplace publishing (set it up per RELEASING.md)"
+          echo "VSCE_RESULT=skipped (no VSCE_PAT)" >> "$GITHUB_ENV"
+
+      - name: Publishing summary
+        if: always()
+        run: |
+          {
+            echo "### publish-vsix (${RELEASE_TAG})"
+            echo ""
+            echo "| Channel | Result |"
+            echo "| --- | --- |"
+            echo "| Open VSX | ${OVSX_RESULT:-skipped} |"
+            echo "| VS Code Marketplace | ${VSCE_RESULT:-skipped} |"
+            echo ""
+            echo "The VSIX (+ sha256) is attached to the GitHub release either way."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── Docker: the shipped Dockerfile must actually build ───────────────────
   # Issue #276: rust:1.92-slim < MSRV 1.98 broke `docker build .` for every

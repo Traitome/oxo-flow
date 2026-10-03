@@ -7,10 +7,18 @@ import {
   templateArgs,
   validateArgs,
   lintArgs,
+  versionArgs,
 } from "./core/cliArgs";
 import { runCli } from "./core/exec";
 import { runArgs, type GraphFormat } from "./core/cliArgs";
 import { parseReport } from "./core/jsonReport";
+import {
+  buildIssueBody,
+  buildIssueUrl,
+  ISSUE_NEW_URL,
+  type ReportContext,
+  type ReportEnvironment,
+} from "./core/reportIssue";
 import { OxoflowCodeLensProvider } from "./providers/codelens";
 import { OxoflowCompletionProvider } from "./providers/completion";
 import { OxoflowDiagnostics } from "./providers/diagnostics";
@@ -27,7 +35,33 @@ import {
 
 const DOCS_URL = "https://traitome.github.io/oxo-flow/";
 
+// Rolling tail of everything written to the output channel — Report Issue
+// attaches the last lines so bug reports carry the failing CLI output.
+const LOG_TAIL_LINES = 60;
+const logTail: string[] = [];
+let extensionVersion = "unknown";
+
+function appendLog(channel: vscode.OutputChannel, text: string): void {
+  channel.appendLine(text);
+  logTail.push(...text.split("\n"));
+  while (logTail.length > LOG_TAIL_LINES) logTail.shift();
+}
+
+/** Error toast that always offers a one-click, context-aware issue report. */
+async function showErrorWithReport(message: string): Promise<void> {
+  const pick = await vscode.window.showErrorMessage(message, "Report Issue");
+  if (pick === "Report Issue") {
+    void vscode.commands.executeCommand("oxo-flow.reportIssue", { lastError: message } satisfies ReportContext);
+  }
+}
+
+async function withOxoProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
+  return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, task);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  extensionVersion = String(context.extension.packageJSON.version ?? "unknown");
+
   const output = vscode.window.createOutputChannel("oxo-flow");
   context.subscriptions.push(output);
 
@@ -36,6 +70,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const diagnostics = new OxoflowDiagnostics(output);
   diagnostics.activate(context);
+
+  // External .oxoflow changes (git checkout, teammates, generators) do not
+  // fire editor events: refresh the CLI probe and re-diagnose any open copy.
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.oxoflow");
+  const reDiagnose = (uri: vscode.Uri): void => {
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+    if (doc) void diagnostics.diagnose(doc);
+  };
+  watcher.onDidChange((uri) => {
+    void statusBar.refresh();
+    reDiagnose(uri);
+  });
+  watcher.onDidCreate((uri) => {
+    void statusBar.refresh();
+    reDiagnose(uri);
+  });
+  context.subscriptions.push(watcher);
 
   const taskProvider = new OxoflowTaskProvider(() => statusBar.executable());
   context.subscriptions.push(
@@ -110,6 +161,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.executeCommand("workbench.action.openSettings", "oxo-flow.executablePath")
   );
   register("oxo-flow.pickCommand", () => pickCommand());
+  register("oxo-flow.reportIssue", (...args: unknown[]) => {
+    const ctx = (args[0] ?? {}) as ReportContext;
+    return reportIssue(statusBar, ctx);
+  });
 }
 
 export function deactivate(): void {
@@ -237,10 +292,12 @@ async function runQualityCommand(
   const dirty = doc?.uri.toString() === target.file.toString() && doc.isDirty;
   const executable = statusBar.executable();
   const args = kind === "validate" ? validateArgs(target.file.fsPath) : lintArgs(target.file.fsPath);
-  const res = await runCli(executable, args, { cwd: target.folder.uri.fsPath });
+  const res = await withOxoProgress(`oxo-flow: ${kind}…`, () =>
+    runCli(executable, args, { cwd: target.folder.uri.fsPath })
+  );
 
   if (res.spawnError) {
-    void vscode.window.showErrorMessage(
+    void showErrorWithReport(
       `Cannot run \`${executable}\` (${res.spawnError}). Set oxo-flow.executablePath in settings.`
     );
     return;
@@ -255,7 +312,7 @@ async function runQualityCommand(
   } catch {
     if (res.stdout.trim()) lines.push(res.stdout.trimEnd());
   }
-  output.appendLine(lines.join("\n"));
+  appendLog(output, lines.join("\n"));
   output.show(true);
 
   if (kind === "validate") {
@@ -357,12 +414,14 @@ async function generateWithAI(statusBar: StatusBar): Promise<void> {
 
 async function showAiStatus(output: vscode.OutputChannel, statusBar: StatusBar): Promise<void> {
   const executable = statusBar.executable();
-  const res = await runCli(executable, aiStatusArgs(), { timeoutMs: 30_000 });
+  const res = await withOxoProgress("oxo-flow: reading AI status…", () =>
+    runCli(executable, aiStatusArgs(), { timeoutMs: 30_000 })
+  );
   if (res.spawnError) {
-    void vscode.window.showErrorMessage(`Cannot run \`${executable}\` (${res.spawnError}).`);
+    void showErrorWithReport(`Cannot run \`${executable}\` (${res.spawnError}).`);
     return;
   }
-  output.appendLine(`$ oxo-flow ${aiStatusArgs().join(" ")}\n${res.stdout.trimEnd()}\n${res.stderr.trimEnd()}`);
+  appendLog(output, `$ oxo-flow ${aiStatusArgs().join(" ")}\n${res.stdout.trimEnd()}\n${res.stderr.trimEnd()}`);
   output.show(true);
   let summary = "AI status — see the oxo-flow output panel.";
   try {
@@ -381,9 +440,11 @@ async function exportSchema(statusBar: StatusBar): Promise<void> {
     return;
   }
   const executable = statusBar.executable();
-  const res = await runCli(executable, schemaArgs(), { cwd: folder.uri.fsPath });
+  const res = await withOxoProgress("oxo-flow: exporting schema…", () =>
+    runCli(executable, schemaArgs(), { cwd: folder.uri.fsPath })
+  );
   if (res.spawnError || res.exitCode !== 0) {
-    void vscode.window.showErrorMessage(`oxo-flow schema failed: ${res.spawnError ?? res.stderr}`);
+    void showErrorWithReport(`oxo-flow schema failed: ${res.spawnError ?? res.stderr}`);
     return;
   }
   const dest = vscode.Uri.joinPath(folder.uri, "oxo-flow-schema.json");
@@ -410,16 +471,18 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
   const executable = statusBar.executable();
   const rel = relativeWorkflow(target.folder, target.file);
 
-  const preview = await runCli(executable, cleanArgs(target.file.fsPath, { dryRun: true }), {
-    cwd: target.folder.uri.fsPath,
-  });
+  const preview = await withOxoProgress("oxo-flow: previewing clean…", () =>
+    runCli(executable, cleanArgs(target.file.fsPath, { dryRun: true }), {
+      cwd: target.folder.uri.fsPath,
+    })
+  );
   if (preview.spawnError) {
-    void vscode.window.showErrorMessage(
+    void showErrorWithReport(
       `Cannot run \`${executable}\` (${preview.spawnError}). Set oxo-flow.executablePath in settings.`
     );
     return;
   }
-  output.appendLine(`$ oxo-flow clean ${JSON.stringify(rel)} -n\n${preview.stderr.trimEnd()}`);
+  appendLog(output, `$ oxo-flow clean ${JSON.stringify(rel)} -n\n${preview.stderr.trimEnd()}`);
   output.show(true);
 
   if (preview.exitCode !== 0) {
@@ -440,7 +503,8 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
         target.folder,
         { type: "oxo-flow", workflow: rel, kind: "run" },
         "run",
-        cleanArgs(target.file.fsPath, { force: true, orphans: true })
+        cleanArgs(target.file.fsPath, { force: true, orphans: true }),
+        `clean (orphans) ${rel}`
       )
     );
     return;
@@ -452,7 +516,8 @@ async function cleanOutputs(output: vscode.OutputChannel, statusBar: StatusBar):
       target.folder,
       { type: "oxo-flow", workflow: rel, kind: "run" },
       "run",
-      cleanArgs(target.file.fsPath, { force: true })
+      cleanArgs(target.file.fsPath, { force: true }),
+      `clean ${rel}`
     )
   );
 }
@@ -478,14 +543,16 @@ async function showRunStatus(output: vscode.OutputChannel, statusBar: StatusBar)
   if (!folder) return;
   const executable = statusBar.executable();
   const args = statusArgs(vscode.workspace.asRelativePath(pick.file), { timing: true });
-  const res = await runCli(executable, args, { cwd: folder.uri.fsPath });
+  const res = await withOxoProgress("oxo-flow: reading run status…", () =>
+    runCli(executable, args, { cwd: folder.uri.fsPath })
+  );
   if (res.spawnError) {
-    void vscode.window.showErrorMessage("Cannot run oxo-flow — see the oxo-flow output panel.");
-    output.appendLine(`Cannot run \`${executable}\` (${res.spawnError}).`);
+    void showErrorWithReport(`Cannot run \`${executable}\` (${res.spawnError}).`);
+    appendLog(output, `Cannot run \`${executable}\` (${res.spawnError}).`);
     output.show(true);
     return;
   }
-  output.appendLine(`$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}${res.stderr.trimEnd()}`);
+  appendLog(output, `$ oxo-flow ${args.join(" ")}\n${res.stdout.trimEnd()}${res.stderr.trimEnd()}`);
   output.show(true);
 }
 
@@ -506,7 +573,54 @@ const COMMAND_PICKS: { label: string; command: string }[] = [
   { label: "$(json) Export JSON Schema", command: "oxo-flow.exportSchema" },
   { label: "$(book) Open Documentation", command: "oxo-flow.openDocs" },
   { label: "$(gear) Open Settings", command: "oxo-flow.openSettings" },
+  { label: "$(feedback) Report Issue…", command: "oxo-flow.reportIssue" },
 ];
+
+/**
+ * Collect a sanitized, pre-filled GitHub issue and open it in the browser.
+ * Pipeline content is never attached — only environment facts, the
+ * extension's own settings, and the output-channel tail (home paths masked).
+ */
+async function reportIssue(statusBar: StatusBar, context: ReportContext): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration("oxo-flow");
+  const executable = statusBar.executable();
+  let cliVersion: string | undefined;
+  await withOxoProgress("oxo-flow: preparing the issue report…", async () => {
+    const probe = await runCli(executable, versionArgs(), { timeoutMs: 3000 });
+    if (!probe.spawnError) cliVersion = probe.stdout.trim().split(/\s+/).pop();
+  });
+  const env: ReportEnvironment = {
+    extensionVersion,
+    vscodeVersion: vscode.version,
+    appName: vscode.env.appName,
+    appHost: vscode.env.appHost ?? "desktop",
+    remoteName: vscode.env.remoteName,
+    platform: process.platform,
+    arch: process.arch,
+    cliExecutable: executable,
+    cliVersion,
+    settings: {
+      "oxo-flow.executablePath": cfg.get("executablePath", "oxo-flow"),
+      "oxo-flow.diagnosticMode": cfg.get("diagnosticMode", "save"),
+      "oxo-flow.enableLintDiagnostics": cfg.get("enableLintDiagnostics", true),
+      "oxo-flow.formatOnSave": cfg.get("formatOnSave", false),
+      "oxo-flow.autoOpenGraph": cfg.get("autoOpenGraph", false),
+      "oxo-flow.runArgs": cfg.get("runArgs", []),
+    },
+  };
+  const body = buildIssueBody(env, { lastError: context.lastError, outputTail: logTail.join("\n") });
+  const url = buildIssueUrl(body);
+  if (url) {
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+    return;
+  }
+  // Oversized report: GitHub would drop the query string — clipboard fallback.
+  await vscode.env.clipboard.writeText(body);
+  void vscode.window.showInformationMessage(
+    "The report exceeded the URL limit — it was copied to your clipboard. Paste it into the new issue."
+  );
+  await vscode.env.openExternal(vscode.Uri.parse(ISSUE_NEW_URL));
+}
 
 async function pickCommand(): Promise<void> {
   const pick = await vscode.window.showQuickPick(COMMAND_PICKS, { placeHolder: "oxo-flow command" });

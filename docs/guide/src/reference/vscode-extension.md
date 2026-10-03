@@ -138,19 +138,26 @@ title bar.
 
 | Command | CLI equivalent |
 | --- | --- |
-| Run Pipeline (<kbd>Ctrl+Alt+R</kbd>) | `oxo-flow run <file>` + `oxo-flow.runArgs` |
+| Run Pipeline (<kbd>Cmd/Ctrl+Alt+R</kbd>) | `oxo-flow run <file>` + `oxo-flow.runArgs` |
 | Run Rule Targets… (CodeLens) | `oxo-flow run <file> -t <name>…` (▶ Run this rule / ▶ Run to here above each `[[rules]]`) |
 | Dry Run (plan only) | `oxo-flow dry-run <file>` |
-| Validate Pipeline (<kbd>Ctrl+Alt+V</kbd>) | `oxo-flow validate <file> --json` |
-| Lint Pipeline | `oxo-flow lint <file> --json` |
+| Validate Pipeline (<kbd>Cmd/Ctrl+Alt+V</kbd>) | `oxo-flow validate <file> --json` |
+| Lint Pipeline (<kbd>Cmd/Ctrl+Alt+L</kbd>) | `oxo-flow lint <file> --json` |
 | Format Document | `oxo-flow format <file>` |
-| Show DAG Graph | `oxo-flow graph <file> [-f <format>]` — quick pick over `ascii`, `mermaid`, `dot`, `dot-clustered`, `tree`, `metro` (last choice remembered) |
+| Show DAG Graph (<kbd>Cmd/Ctrl+Alt+G</kbd>) | `oxo-flow graph <file> [-f <format>]` — quick pick over `ascii`, `mermaid`, `dot`, `dot-clustered`, `tree`, `metro` (last choice remembered) |
 | Resume from Checkpoint | `oxo-flow resume <checkpoint>` (quick pick over `**/.oxo-flow/checkpoint.json`) |
 | Show Run Status | `oxo-flow status <checkpoint> --timing` (quick pick over checkpoint files) |
 | Clean Outputs… | `oxo-flow clean <file> -n` preview → confirmation → `--force` (optionally `--orphans`) |
 | Generate Pipeline with AI… | `oxo-flow template "<description>" --ai -o <file>` |
 | Show AI Provider Status | `oxo-flow ai` |
 | Export JSON Schema | `oxo-flow schema > oxo-flow-schema.json` |
+| Report Issue / Suggest Improvement | opens a pre-filled GitHub issue with sanitized diagnostics (versions, platform, remote, settings, output tail — home paths masked; pipeline content is never attached) |
+
+Pipeline commands surface in the command palette only while an `.oxoflow`
+editor is active, so the palette stays quiet in other files. Long-running
+operations (validate, lint, clean preview, status, AI status) show a progress
+notification. Error toasts carry a **Report Issue** button that opens the
+report with the error pre-attached.
 
 Run / Dry Run / Graph execute as **tasks** (`type: "oxo-flow"`), so they get
 a dedicated terminal panel, re-run support, and `tasks.json` customization:
