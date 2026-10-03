@@ -11,10 +11,21 @@ RUN npm run build
 # ===== Backend builder =====
 FROM rust:1.98-slim AS backend-builder
 WORKDIR /app
+# Dependency layer: build with STUBBED member sources first so every
+# third-party crate compiles into its own cacheable layer. Source edits then
+# only invalidate the layers below (buildx gha cache in CI, local builds).
+# The stub build fails on the members' empty bins — tolerated: by the time it
+# aborts, the dependencies are already compiled and cached.
 COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+RUN mkdir -p src && echo "//! stub" > src/lib.rs \
+    && find crates -type f -name "*.rs" -exec sh -c 'echo "//! stub" > "{}"' \; \
+    && (cargo build --release -p oxo-flow-web -p oxo-flow-cli --quiet || true)
 # The root manifest is both workspace and package: without its src/lib.rs
 # cargo rejects the manifest ("no targets specified") inside the container.
 COPY src/lib.rs src/
+# Restore the REAL member sources (the dependency layer above ran with
+# stubbed files; this copy invalidates only the workspace crates themselves).
 COPY crates/ ./crates/
 # -p is required: the workspace root's default package (oxo-flow) has no bin
 # targets, so `--bin oxo-flow-web` aborts with "no bin target named".
