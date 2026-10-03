@@ -13,6 +13,7 @@ CHANGE MANAGEMENT: any structural change (new crate, new subcommand, renamed fla
 - `crates/oxo-flow-cli`: CLI binary (`oxo-flow`) — 30 subcommands via clap derive
 - `crates/oxo-flow-web`: Axum web server + React 19 SPA, 100+ OpenAPI-documented endpoints across 9 domains
 - `crates/oxo-flow-desktop`: Native desktop shell (wry + tao) around the embedded web server. EXCLUDED from the workspace (`exclude` in the root Cargo.toml) because tao/wry need GUI toolchains headless CI must not pull in — build it with a separate `cargo build` invocation; its version is kept in lockstep by `scripts/bump-version.sh`
+- `editors/vscode`: First-party VS Code extension (`traitome.oxo-flow`) — `.oxoflow` language (TextMate grammar), schema-generated completion/hover data, CLI-backed diagnostics/formatting, and run/dry-run/graph/resume/AI commands. Self-contained npm project (TypeScript, esbuild, **zero runtime dependencies**); its version is kept in lockstep by `scripts/bump-version.sh`. Released as a VSIX attached to every GitHub release and published to Open VSX (`OVSX_PAT`) and the VS Code Marketplace (`VSCE_PAT`) by the `publish-vsix` CI job. Fast gate: `make extension-test`; headless integration tests: `make extension-integration`. Completion/hover data is GENERATED from `docs/schema/oxoflow-v1.schema.json` by `editors/vscode/scripts/generate-completions.mjs` — after schema changes run `npm run generate` in that directory (CI drift-checks the committed output)
 - `examples/`: Reference `.oxoflow` (TOML-based) pipeline files
 - `tests/`: Integration tests covering CLI and core functionality
 
@@ -30,7 +31,7 @@ Before concluding any task, the following suite **must** pass:
 ```bash
 make ci
 ```
-*Included in `make ci`: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo build`, and `cargo test`.*
+*Included in `make ci`: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo build`, `cargo test`, plus the extension fast gate `extension-test` (npm ci + compile + unit tests + `vsce package` for `editors/vscode`). Headless VS Code integration tests are a separate target: `make extension-integration`.*
 
 ## Key Design Principles
 1. **DAG-First Execution:** Everything is a graph. Validate dependencies before execution.
@@ -63,7 +64,8 @@ General rules against the classic failure mode "new feature works, but breaks so
 - `docs/guide/src/reference/architecture.md` — Overall system architecture
 - `docs/guide/src/reference/ai-cli.md` — Complete AI CLI reference
 - `GET /api/openapi.json` — OpenAPI 3.1 schema generated at runtime
-- `docs/schema/oxoflow-v1.schema.json` — Workflow format JSON Schema
+- `docs/schema/oxoflow-v1.schema.json` — Workflow format JSON Schema (canonical source for the VS Code extension's generated completion data)
+- `docs/guide/src/reference/vscode-extension.md` — VS Code extension reference (features, settings, publishing)
 
 ## Web System (AI-Native API)
 The web crate (`oxo-flow-web`) is designed as an AI-native API surface:

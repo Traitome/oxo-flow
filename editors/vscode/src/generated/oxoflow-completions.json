@@ -1,0 +1,911 @@
+{
+  "version": 1,
+  "source": "docs/schema/oxoflow-v1.schema.json",
+  "schemaSha256": "d51e5131c190dba9922d23265bbef9153b1d8f1acca5148e3f83a9fac6662470",
+  "contexts": {
+    "root": {
+      "keys": [
+        {
+          "key": "ai",
+          "description": "AI companion activation and tuning (issue #634); credentials stay in env/config files, never here",
+          "type": "object"
+        },
+        {
+          "key": "citation",
+          "description": "Citation metadata for reproducibility",
+          "type": "object"
+        },
+        {
+          "key": "cluster",
+          "description": "HPC cluster execution profile",
+          "type": "object"
+        },
+        {
+          "key": "config",
+          "description": "Configuration variables for wildcard expansion. Plain values (key = \"value\") act as defaults; declarative inline tables (key = { default, required, help, sensitive, type, choices, range, must_exist }) declare CLI-overridable parameters",
+          "type": "object"
+        },
+        {
+          "key": "defaults",
+          "description": "Default settings applied to all rules",
+          "type": "object"
+        },
+        {
+          "key": "env_groups",
+          "description": "Named reusable environment specifications",
+          "type": "object"
+        },
+        {
+          "key": "include",
+          "description": "Include external workflow files",
+          "type": "array"
+        },
+        {
+          "key": "metadata",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "pairs",
+          "description": "Experiment-control sample pairs",
+          "type": "array"
+        },
+        {
+          "key": "plugins",
+          "description": "Plugin configuration",
+          "type": "object"
+        },
+        {
+          "key": "reference_db",
+          "description": "Tracked reference database versions",
+          "type": "array"
+        },
+        {
+          "key": "reference_dir",
+          "description": "Root directory holding reference genome/annotation files; entries under it are auto-exposed through [references]",
+          "type": "string"
+        },
+        {
+          "key": "references",
+          "description": "Auto-built reference artifacts (indexes, data files). Auto-derived from reference_dir if empty.",
+          "type": "array"
+        },
+        {
+          "key": "report",
+          "description": "Report configuration",
+          "type": "object"
+        },
+        {
+          "key": "resource_budget",
+          "description": "Global resource limits",
+          "type": "object"
+        },
+        {
+          "key": "resource_groups",
+          "description": "Shared resource pools (API rate limits, DB connections)",
+          "type": "object"
+        },
+        {
+          "key": "rules",
+          "description": "Workflow execution rules",
+          "type": "array"
+        },
+        {
+          "key": "sample_groups",
+          "description": "Named sample groups for cohort-level analysis",
+          "type": "array"
+        },
+        {
+          "key": "values",
+          "description": "Named value groups bind key/value lists that rules can iterate over (e.g. [[values]] name = \"assembler\", values = [\"spades\", \"megahit\"]), usable as {assembler} wildcards",
+          "type": "array"
+        },
+        {
+          "key": "webhook",
+          "description": "Workflow-level webhook notifications (issue #227)",
+          "type": "object"
+        },
+        {
+          "key": "wildcard_constraints",
+          "description": "Regex patterns constraining wildcard values",
+          "type": "object"
+        },
+        {
+          "key": "workflow",
+          "description": "",
+          "type": "object"
+        }
+      ]
+    },
+    "workflow": {
+      "keys": [
+        {
+          "key": "author",
+          "description": "Author name or email",
+          "type": "string"
+        },
+        {
+          "key": "description",
+          "description": "Description of the workflow",
+          "type": "string"
+        },
+        {
+          "key": "format_version",
+          "description": "Format specification version",
+          "type": "string"
+        },
+        {
+          "key": "genome_build",
+          "description": "Genome build identifier (e.g., GRCh38, hg38)",
+          "type": "string"
+        },
+        {
+          "key": "interpreter_map",
+          "description": "Custom script-extension interpreter mapping",
+          "type": "object"
+        },
+        {
+          "key": "metadata_file",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "min_version",
+          "description": "Minimum oxo-flow version required",
+          "type": "string"
+        },
+        {
+          "key": "name",
+          "description": "Name of the workflow",
+          "type": "string"
+        },
+        {
+          "key": "on_complete",
+          "description": "Workflow-level terminal hook after a fully successful run"
+        },
+        {
+          "key": "on_error",
+          "description": "Workflow-level terminal hook after any failure"
+        },
+        {
+          "key": "pairs_file",
+          "description": "External TSV/CSV/JSON file with experiment-control pairs",
+          "type": "string"
+        },
+        {
+          "key": "pairs_pattern",
+          "description": "File glob for auto-discovering pairs",
+          "type": "string"
+        },
+        {
+          "key": "profile_mode",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "sample_groups_file",
+          "description": "External TSV/CSV/JSON file with sample groups; extra columns become group metadata (e.g. reads_layout)",
+          "type": "string"
+        },
+        {
+          "key": "sample_pattern",
+          "description": "File glob for auto-discovering samples",
+          "type": "string"
+        },
+        {
+          "key": "version",
+          "description": "Version of the workflow (e.g., 1.0.0)",
+          "type": "string"
+        }
+      ]
+    },
+    "defaults": {
+      "keys": [
+        {
+          "key": "environment",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/environmentSpec"
+        },
+        {
+          "key": "memory",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "shell_prelude",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "threads",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "time_limit",
+          "description": "Default wall-time limit (e.g. 48h) applied to every rule whose resources.time_limit is unset",
+          "type": "string"
+        }
+      ]
+    },
+    "report": {
+      "keys": [
+        {
+          "key": "format",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "sections",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "template",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "resource_budget": {
+      "keys": [
+        {
+          "key": "max_jobs",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "max_memory",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "max_threads",
+          "description": "",
+          "type": "integer"
+        }
+      ]
+    },
+    "cluster": {
+      "keys": [
+        {
+          "key": "account",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "backend",
+          "description": "",
+          "type": "string",
+          "enums": [
+            "lsf",
+            "pbs",
+            "sge",
+            "slurm"
+          ]
+        },
+        {
+          "key": "extra_args",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "max_array_size",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "max_submitted",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "partition",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "poll_interval",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "walltime",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
+      ]
+    },
+    "citation": {
+      "keys": [
+        {
+          "key": "authors",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "doi",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "title",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "url",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "plugins": {
+      "keys": [
+        {
+          "key": "executor",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "reports",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "rules",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "trusted_keys_file",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "webhook": {
+      "keys": [
+        {
+          "key": "events",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "headers",
+          "description": "",
+          "type": "object"
+        },
+        {
+          "key": "max_retries",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "method",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "secret",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "signature_scheme",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "timeout_secs",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "url",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "ai": {
+      "keys": [
+        {
+          "key": "auto_fix",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "enabled",
+          "description": "",
+          "type": "boolean"
+        },
+        {
+          "key": "max_retries",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "model",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "provider",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "skills",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "team_profile",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "temperature",
+          "description": "",
+          "type": "number"
+        }
+      ]
+    },
+    "rules": {
+      "keys": [
+        {
+          "key": "ancient",
+          "description": "Inputs that never trigger re-execution",
+          "type": "array"
+        },
+        {
+          "key": "benchmark",
+          "description": "Benchmark output path for performance data",
+          "type": "string"
+        },
+        {
+          "key": "cache_key",
+          "description": "Content-based cache key: enables content-addressed output reuse across runs (issue #194)",
+          "type": "string"
+        },
+        {
+          "key": "checkpoint",
+          "description": "Allow DAG rebuild after this rule",
+          "type": "boolean"
+        },
+        {
+          "key": "checkpoint_manifest",
+          "description": "TOML manifest a checkpoint rule writes at runtime to declare new re-entry values"
+        },
+        {
+          "key": "checksum",
+          "description": "Output integrity verification algorithm",
+          "type": "string",
+          "enums": [
+            "md5",
+            "sha256"
+          ]
+        },
+        {
+          "key": "depends_on",
+          "description": "Explicit rule-level dependencies",
+          "type": "array"
+        },
+        {
+          "key": "description",
+          "description": "Human-readable description of this rule",
+          "type": "string"
+        },
+        {
+          "key": "env_group",
+          "description": "Reference to a named environment in [env_groups]",
+          "type": "string"
+        },
+        {
+          "key": "environment",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/environmentSpec"
+        },
+        {
+          "key": "envvars",
+          "description": "",
+          "type": "object"
+        },
+        {
+          "key": "expand_inputs",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "extends",
+          "description": "Inherit settings from a base rule",
+          "type": "string"
+        },
+        {
+          "key": "format_hint",
+          "description": "File format hints (e.g., 'bam', 'vcf')",
+          "type": "array"
+        },
+        {
+          "key": "group",
+          "description": "Job group label for cluster submission",
+          "type": "string"
+        },
+        {
+          "key": "input",
+          "description": "Input file patterns (list or named map)"
+        },
+        {
+          "key": "input_function",
+          "description": "Dynamic input resolver function name",
+          "type": "string"
+        },
+        {
+          "key": "input_groups",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "interpreter",
+          "description": "Explicit interpreter for script execution",
+          "type": "string"
+        },
+        {
+          "key": "localrule",
+          "description": "Always run locally",
+          "type": "boolean"
+        },
+        {
+          "key": "log",
+          "description": "Log file path for execution output",
+          "type": "string"
+        },
+        {
+          "key": "memory",
+          "description": "(Deprecated) Use resources.memory instead",
+          "type": "string"
+        },
+        {
+          "key": "name",
+          "description": "Unique rule identifier",
+          "type": "string"
+        },
+        {
+          "key": "on_failure",
+          "description": "Command to run after rule fails",
+          "type": "string"
+        },
+        {
+          "key": "on_success",
+          "description": "Command to run after rule succeeds",
+          "type": "string"
+        },
+        {
+          "key": "optional",
+          "description": "Skip rule if inputs don't exist",
+          "type": "boolean"
+        },
+        {
+          "key": "output",
+          "description": "Output file patterns (list or named map)"
+        },
+        {
+          "key": "output_pattern",
+          "description": "Rule-level output pattern override"
+        },
+        {
+          "key": "params",
+          "description": "User-defined parameters for shell templates",
+          "type": "object"
+        },
+        {
+          "key": "pipe",
+          "description": "Enable FIFO streaming mode",
+          "type": "boolean"
+        },
+        {
+          "key": "pre_exec",
+          "description": "Command to run before the main shell command",
+          "type": "string"
+        },
+        {
+          "key": "priority",
+          "description": "Execution priority (higher = runs first)",
+          "type": "integer"
+        },
+        {
+          "key": "protected_output",
+          "description": "Outputs that must never be overwritten",
+          "type": "array"
+        },
+        {
+          "key": "report",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "required",
+          "description": "Pipeline fails if this rule fails",
+          "type": "boolean"
+        },
+        {
+          "key": "resource_hint",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/resourceHint"
+        },
+        {
+          "key": "resources",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/resources"
+        },
+        {
+          "key": "retries",
+          "description": "Number of retry attempts on failure",
+          "type": "integer"
+        },
+        {
+          "key": "retry_delay",
+          "description": "Delay between retries (e.g., '5s', '30s')",
+          "type": "string"
+        },
+        {
+          "key": "rule_metadata",
+          "description": "Arbitrary domain-specific metadata",
+          "type": "object"
+        },
+        {
+          "key": "scatter",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/scatterConfig"
+        },
+        {
+          "key": "scratch",
+          "description": "Run the rule in a private scratch directory",
+          "type": "boolean"
+        },
+        {
+          "key": "script",
+          "description": "Path to a script file to execute",
+          "type": "string"
+        },
+        {
+          "key": "shell",
+          "description": "Shell command template to execute",
+          "type": "string"
+        },
+        {
+          "key": "tags",
+          "description": "Categorization tags",
+          "type": "array"
+        },
+        {
+          "key": "target",
+          "description": "Mark as default target",
+          "type": "boolean"
+        },
+        {
+          "key": "temp_output",
+          "description": "Temporary outputs cleaned up after downstream rules complete",
+          "type": "array"
+        },
+        {
+          "key": "temporary",
+          "description": "Declare outputs temporary (deleted after the workflow completes)",
+          "type": "boolean"
+        },
+        {
+          "key": "threads",
+          "description": "(Deprecated) Use resources.threads instead",
+          "type": "integer"
+        },
+        {
+          "key": "transform",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/transformConfig"
+        },
+        {
+          "key": "when",
+          "description": "Conditional expression — skip rule when false",
+          "type": "string"
+        }
+      ]
+    },
+    "rules.resources": {
+      "keys": [
+        {
+          "key": "disk",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "gpu",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "gpu_spec",
+          "description": "",
+          "type": "object",
+          "ref": "#/$defs/gpuSpec"
+        },
+        {
+          "key": "groups",
+          "description": "",
+          "type": "object"
+        },
+        {
+          "key": "memory",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "partition",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "threads",
+          "description": "",
+          "type": "integer"
+        },
+        {
+          "key": "time_limit",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "rules.environment": {
+      "keys": [
+        {
+          "key": "conda",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "conda_prefix",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "docker",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "gpus",
+          "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        {
+          "key": "mamba",
+          "description": "Mamba/micromamba environment YAML file (same format as conda)",
+          "type": "string"
+        },
+        {
+          "key": "mamba_prefix",
+          "description": "Optional project-local prefix for mamba environment",
+          "type": "string"
+        },
+        {
+          "key": "modules",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "pixi",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "singularity",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "venv",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "venv_requirements",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "rules.scatter": {
+      "keys": [
+        {
+          "key": "gather",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "values",
+          "description": "",
+          "type": "array"
+        },
+        {
+          "key": "values_from",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "variable",
+          "description": "",
+          "type": "string"
+        }
+      ]
+    },
+    "rules.transform": {
+      "keys": [
+        {
+          "key": "cleanup",
+          "description": "",
+          "type": "boolean"
+        },
+        {
+          "key": "combine",
+          "description": "",
+          "type": "object"
+        },
+        {
+          "key": "map",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "split",
+          "description": "",
+          "type": "object"
+        }
+      ]
+    },
+    "rules.expand_inputs": {
+      "keys": [
+        {
+          "key": "pattern",
+          "description": "",
+          "type": "string"
+        },
+        {
+          "key": "variables",
+          "description": "",
+          "type": "object"
+        }
+      ]
+    },
+    "rules.resource_hint": {
+      "keys": [
+        {
+          "key": "input_size",
+          "description": "",
+          "type": "string",
+          "enums": [
+            "large",
+            "medium",
+            "small"
+          ]
+        },
+        {
+          "key": "io_bound",
+          "description": "",
+          "type": "boolean"
+        },
+        {
+          "key": "memory_scale",
+          "description": "",
+          "type": "number"
+        },
+        {
+          "key": "runtime",
+          "description": "",
+          "type": "string",
+          "enums": [
+            "fast",
+            "medium",
+            "slow"
+          ]
+        }
+      ]
+    }
+  }
+}

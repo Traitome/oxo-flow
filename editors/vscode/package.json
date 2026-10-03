@@ -1,0 +1,290 @@
+{
+  "name": "oxo-flow",
+  "displayName": "oxo-flow Pipeline",
+  "description": "Language support, smart syntax, and one-click CLI lifecycle (run, dry-run, validate, lint, format, resume) for oxo-flow .oxoflow pipeline files.",
+  "version": "0.21.2",
+  "publisher": "traitome",
+  "license": "Apache-2.0",
+  "pricing": "Free",
+  "icon": "icon.png",
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Traitome/oxo-flow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Traitome/oxo-flow/issues"
+  },
+  "homepage": "https://traitome.github.io/oxo-flow/",
+  "qna": "https://github.com/Traitome/oxo-flow/discussions",
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters",
+    "Snippets"
+  ],
+  "keywords": [
+    "bioinformatics",
+    "pipeline",
+    "workflow",
+    "toml",
+    "oxo-flow",
+    "genomics",
+    "dag"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The extension shells out to the local oxo-flow binary; it must not run inside an untrusted workspace."
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "oxoflow",
+        "aliases": [
+          "oxo-flow Pipeline",
+          "oxoflow"
+        ],
+        "extensions": [
+          ".oxoflow"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "oxoflow",
+        "scopeName": "source.oxoflow",
+        "path": "./syntaxes/oxoflow.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "oxoflow",
+        "path": "./snippets/oxoflow.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "oxo-flow",
+        "required": [
+          "workflow"
+        ],
+        "properties": {
+          "workflow": {
+            "type": "string",
+            "description": "Path to the .oxoflow pipeline file (relative to the workspace folder)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Optional rule target to run (`-t`)."
+          },
+          "jobs": {
+            "type": "number",
+            "description": "Maximum concurrent jobs (`-j`)."
+          },
+          "keepGoing": {
+            "type": "boolean",
+            "description": "Keep going after a rule fails (`-k`)."
+          },
+          "extraArgs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional raw CLI arguments appended to the invocation."
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "oxo-flow.run",
+        "title": "Run Pipeline",
+        "category": "oxo-flow",
+        "icon": "$(play)"
+      },
+      {
+        "command": "oxo-flow.dryRun",
+        "title": "Dry Run (plan only)",
+        "category": "oxo-flow",
+        "icon": "$(debug-step-over)"
+      },
+      {
+        "command": "oxo-flow.validate",
+        "title": "Validate Pipeline",
+        "category": "oxo-flow",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "oxo-flow.lint",
+        "title": "Lint Pipeline",
+        "category": "oxo-flow",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "oxo-flow.format",
+        "title": "Format Document",
+        "category": "oxo-flow",
+        "icon": "$(alignment-align)"
+      },
+      {
+        "command": "oxo-flow.graph",
+        "title": "Show DAG Graph",
+        "category": "oxo-flow",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "oxo-flow.resume",
+        "title": "Resume from Checkpoint",
+        "category": "oxo-flow",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "oxo-flow.generate",
+        "title": "Generate Pipeline with AI…",
+        "category": "oxo-flow",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "oxo-flow.aiStatus",
+        "title": "Show AI Provider Status",
+        "category": "oxo-flow",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "oxo-flow.exportSchema",
+        "title": "Export JSON Schema (for Even Better TOML)",
+        "category": "oxo-flow"
+      },
+      {
+        "command": "oxo-flow.openDocs",
+        "title": "Open Documentation",
+        "category": "oxo-flow"
+      },
+      {
+        "command": "oxo-flow.openSettings",
+        "title": "Open Settings",
+        "category": "oxo-flow"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "oxo-flow.run",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus && editorLangId == oxoflow"
+      },
+      {
+        "command": "oxo-flow.validate",
+        "key": "ctrl+alt+v",
+        "when": "editorTextFocus && editorLangId == oxoflow"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "oxo-flow.run",
+          "when": "resourceLangId == oxoflow",
+          "group": "oxo-flow@1"
+        },
+        {
+          "command": "oxo-flow.dryRun",
+          "when": "resourceLangId == oxoflow",
+          "group": "oxo-flow@2"
+        },
+        {
+          "command": "oxo-flow.validate",
+          "when": "resourceLangId == oxoflow",
+          "group": "oxo-flow@3"
+        },
+        {
+          "command": "oxo-flow.lint",
+          "when": "resourceLangId == oxoflow",
+          "group": "oxo-flow@4"
+        },
+        {
+          "command": "oxo-flow.format",
+          "when": "resourceLangId == oxoflow",
+          "group": "oxo-flow@5"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "oxo-flow",
+      "properties": {
+        "oxo-flow.executablePath": {
+          "type": "string",
+          "default": "oxo-flow",
+          "markdownDescription": "Path to the `oxo-flow` CLI binary. Either a name resolved via `PATH` or an absolute path to the executable.",
+          "scope": "machine-overridable"
+        },
+        "oxo-flow.diagnosticMode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "save",
+            "type"
+          ],
+          "enumDescriptions": [
+            "Disable background diagnostics.",
+            "Run `oxo-flow validate`/`lint` when a document is saved.",
+            "Run diagnostics while typing (debounced)."
+          ],
+          "default": "save",
+          "markdownDescription": "When to run background diagnostics with the oxo-flow CLI."
+        },
+        "oxo-flow.enableLintDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "In addition to `validate`, also surface `oxo-flow lint` findings (best practices, secrets scan, schema hints) as diagnostics."
+        },
+        "oxo-flow.runArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments passed to `oxo-flow run` (for example `[\"--profile\", \"slurm\"]`)."
+        },
+        "oxo-flow.trace": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Log every CLI invocation to the `oxo-flow` output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "generate": "node scripts/generate-completions.mjs",
+    "generate:check": "node scripts/generate-completions.mjs --check",
+    "compile": "npm run generate && tsc -p ./",
+    "typecheck": "tsc -p ./ --noEmit",
+    "bundle": "node esbuild.mjs",
+    "bundle:watch": "node esbuild.mjs --watch",
+    "unit-test": "node --test --test-reporter=spec \"out/test/unit/**/*.test.js\"",
+    "integration-test": "npm run compile && npm run bundle && vscode-test",
+    "test": "npm run compile && npm run unit-test && npm run integration-test",
+    "package": "npm run compile && npm run bundle && vsce package",
+    "vscode:prepublish": "npm run bundle -- --production"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "@types/vscode": "1.85.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0",
+    "ovsx": "^0.10.0",
+    "typescript": "^5.7.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}

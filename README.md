@@ -236,6 +236,16 @@ docker = "biocontainers/bwa-mem2:2.2.1"
 
 Wildcards like `{sample}` expand automatically via input file discovery. Features include reference directory conventions, environment groups, optional rules, and directory inputs. See the full [Workflow Format Specification](https://traitome.github.io/oxo-flow/latest/reference/workflow-format/) for details.
 
+## Editor Support (VS Code)
+
+The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX attached to every GitHub release, published to the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) and [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow)):
+
+```bash
+code --install-extension traitome.oxo-flow
+```
+
+It provides `[[rules]]`-aware syntax highlighting (wildcards and `{input[0]}` placeholders), completion and hover docs generated from the canonical workflow JSON Schema, background `validate`/`lint` diagnostics anchored to the failing rule, canonical formatting, and one-click run / dry-run / graph / resume / AI-generate commands. See the [VS Code Extension](https://traitome.github.io/oxo-flow/latest/reference/vscode-extension/) reference, or [Editor Setup](https://traitome.github.io/oxo-flow/latest/how-to/editor-setup/) for other editors (Zed, Helix, Neovim, JetBrains, …).
+
 ## CLI Commands
 
 The `oxo-flow` binary provides **30 subcommands** covering the complete workflow lifecycle. See the full [CLI Reference](https://traitome.github.io/oxo-flow/latest/commands/run/) for details.

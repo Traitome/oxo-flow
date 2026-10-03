@@ -1,0 +1,241 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "oxo-flow Pipeline",
+  "scopeName": "source.oxoflow",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#table-header" },
+    { "include": "#key-value" }
+  ],
+  "repository": {
+    "comment": {
+      "comment": "TOML line comment",
+      "name": "comment.line.number-sign.oxoflow",
+      "match": "#.*$"
+    },
+    "table-header": {
+      "patterns": [
+        {
+          "comment": "the [[rules]] array-of-tables header — the backbone of every pipeline",
+          "match": "^\\s*(\\[\\[)\\s*(rules)\\s*(\\]\\])",
+          "captures": {
+            "1": { "name": "punctuation.definition.table.array.oxoflow" },
+            "2": { "name": "entity.name.section.rules.oxoflow" },
+            "3": { "name": "punctuation.definition.table.array.oxoflow" }
+          }
+        },
+        {
+          "comment": "generic [[array-of-tables]] header (dotted names allowed)",
+          "match": "^\\s*(\\[\\[)\\s*((?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*)\\s*(\\]\\])",
+          "captures": {
+            "1": { "name": "punctuation.definition.table.array.oxoflow" },
+            "2": { "name": "entity.name.section.array.oxoflow" },
+            "3": { "name": "punctuation.definition.table.array.oxoflow" }
+          }
+        },
+        {
+          "comment": "generic [table] header (dotted names allowed)",
+          "match": "^\\s*(\\[)\\s*((?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*)\\s*(\\])",
+          "captures": {
+            "1": { "name": "punctuation.definition.table.oxoflow" },
+            "2": { "name": "entity.name.section.oxoflow" },
+            "3": { "name": "punctuation.definition.table.oxoflow" }
+          }
+        }
+      ]
+    },
+    "key": {
+      "match": "(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*",
+      "captures": {
+        "0": { "name": "meta.key.oxoflow string.unquoted.key.oxoflow" }
+      }
+    },
+    "assignment": {
+      "name": "keyword.operator.assignment.oxoflow",
+      "match": "="
+    },
+    "key-value": {
+      "comment": "a key = value line; the value part reuses the shared value context. The context ends at end of line — multi-line values (arrays, block strings) keep it alive through their own begin/end sub-patterns.",
+      "begin": "^\\s*((?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*)\\s*(=)\\s*",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "patterns": [
+            {
+              "comment": "rule identity key gets its own emphasis",
+              "match": "^name$",
+              "name": "keyword.other.name.oxoflow"
+            },
+            { "include": "#key" }
+          ]
+        },
+        "2": { "name": "keyword.operator.assignment.oxoflow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#value" }
+      ]
+    },
+    "value": {
+      "patterns": [
+        { "include": "#string-multiline-literal" },
+        { "include": "#string-multiline-basic" },
+        { "include": "#string-literal" },
+        { "include": "#string-basic" },
+        { "include": "#array" },
+        { "include": "#inline-table" },
+        { "include": "#boolean" },
+        { "include": "#datetime" },
+        { "include": "#number" }
+      ]
+    },
+    "array": {
+      "comment": "TOML array (values may span lines)",
+      "name": "meta.structure.array.oxoflow",
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.array.begin.oxoflow" }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.array.end.oxoflow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#value" }
+      ]
+    },
+    "inline-table": {
+      "comment": "TOML inline table, e.g. environment = { conda = \"env.yaml\" }",
+      "name": "meta.structure.inline-table.oxoflow",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.inline-table.begin.oxoflow" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.inline-table.end.oxoflow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "comment": "environment backend keys inside inline tables",
+          "match": "\\b(conda|mamba|pixi|docker|singularity|venv|modules|conda_prefix|mamba_prefix|venv_requirements|gpus)\\b(?!\\s*=\\s*\\[)(?=\\s*=)",
+          "captures": {
+            "1": { "name": "support.type.environment-backend.oxoflow" }
+          }
+        },
+        {
+          "match": "((?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*')(?:\\s*\\.\\s*(?:[A-Za-z0-9_-]+|\"[^\"]*\"|'[^']*'))*)\\s*(=)",
+          "captures": {
+            "1": { "name": "string.unquoted.key.oxoflow" },
+            "2": { "name": "keyword.operator.assignment.oxoflow" }
+          }
+        },
+        { "include": "#value" }
+      ]
+    },
+    "boolean": {
+      "comment": "TOML booleans",
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.oxoflow"
+    },
+    "number": {
+      "patterns": [
+        {
+          "comment": "hex / octal / binary integers",
+          "match": "[-+]?0[xX][0-9A-Fa-f_]+|[-+]?0[oO][0-7_]+|[-+]?0[bB][01_]+",
+          "name": "constant.numeric.integer.other.oxoflow"
+        },
+        {
+          "comment": "inf / nan",
+          "match": "[-+]?(inf|nan)\\b",
+          "name": "constant.numeric.infinity.oxoflow"
+        },
+        {
+          "comment": "floating-point numbers",
+          "match": "[-+]?(?:0|[1-9](?:_?[0-9])*)(?:\\.[0-9](?:_?[0-9])*)?(?:[eE][-+]?[0-9](?:_?[0-9])*)?\\b",
+          "name": "constant.numeric.float.oxoflow"
+        }
+      ]
+    },
+    "datetime": {
+      "comment": "RFC 3339 date-times, local dates and times",
+      "match": "(?<!\\w)\\d{4}-\\d{2}-\\d{2}(?:[Tt ]\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:[Zz]|[+-]\\d{2}:\\d{2})?)?|(?<!\\w)\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?!\\w)",
+      "name": "constant.other.datetime.oxoflow"
+    },
+    "string-basic": {
+      "comment": "single-line basic (double-quoted) string with oxo-flow placeholders",
+      "name": "string.quoted.double.basic.oxoflow",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "include": "#string-escapes" },
+        { "include": "#oxoflow-placeholder" },
+        { "include": "#oxoflow-wildcard" },
+        { "include": "#string-escape-invalid" }
+      ]
+    },
+    "string-multiline-basic": {
+      "comment": "multi-line basic string (\"\"\") with oxo-flow placeholders",
+      "name": "string.quoted.double.multiline.oxoflow",
+      "begin": "\"\"\"",
+      "end": "\"\"\"",
+      "patterns": [
+        { "include": "#string-escapes" },
+        { "include": "#oxoflow-placeholder" },
+        { "include": "#oxoflow-wildcard" },
+        { "include": "#line-continuation" },
+        { "include": "#string-escape-invalid" }
+      ]
+    },
+    "string-literal": {
+      "comment": "single-line literal (single-quoted) string with oxo-flow placeholders",
+      "name": "string.quoted.single.literal.oxoflow",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "include": "#oxoflow-placeholder" },
+        { "include": "#oxoflow-wildcard" }
+      ]
+    },
+    "string-multiline-literal": {
+      "comment": "multi-line literal string (''') with oxo-flow placeholders",
+      "name": "string.quoted.other.multiline.oxoflow",
+      "begin": "'''",
+      "end": "'''",
+      "patterns": [
+        { "include": "#oxoflow-placeholder" },
+        { "include": "#oxoflow-wildcard" }
+      ]
+    },
+    "string-escapes": {
+      "comment": "valid TOML escape sequences",
+      "match": "\\\\[btnfr\"\\\\]|\\\\u[0-9A-Fa-f]{4}|\\\\U[0-9A-Fa-f]{8}",
+      "name": "constant.character.escape.oxoflow"
+    },
+    "string-escape-invalid": {
+      "comment": "an unrecognized backslash escape is flagged by the grammar and rejected by oxo-flow validate",
+      "match": "\\\\.",
+      "name": "invalid.illegal.unrecognized-string-escape.oxoflow"
+    },
+    "line-continuation": {
+      "comment": "line-ending backslash inside multi-line basic strings",
+      "match": "\\\\$",
+      "name": "constant.character.escape.line-continuation.oxoflow"
+    },
+    "oxoflow-placeholder": {
+      "comment": "template placeholders like {input[0]}, {output}, {wildcards.sample}, {params.x}",
+      "match": "\\{\\s*(input|output|params|wildcards|resources|rule|log|benchmark|threads|memory|env|metadata)\\b[^{}]*\\}",
+      "captures": {
+        "0": { "name": "variable.other.oxoflow.placeholder" },
+        "1": { "name": "variable.other.oxoflow.placeholder.keyword" }
+      }
+    },
+    "oxoflow-wildcard": {
+      "comment": "wildcard references like {sample}, {chr}, {unit} (constrained by [wildcard_constraints])",
+      "match": "\\{\\s*[A-Za-z_][A-Za-z0-9_-]*\\s*\\}",
+      "name": "variable.other.oxoflow.wildcard"
+    }
+  }
+}

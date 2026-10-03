@@ -1,0 +1,9 @@
+[workflow]
+name = "extension-fixture-invalid-dep"
+description = "Fixture with a depends_on reference to a non-existent rule (validate E007, rule-anchored)"
+
+[[rules]]
+name = "r1"
+depends_on = ["ghost_rule"]
+output = ["o.txt"]
+shell = "true"
