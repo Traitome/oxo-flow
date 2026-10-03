@@ -27,6 +27,7 @@ per task; follow the links for details on demand.
 | Workflow JSON Schema | https://raw.githubusercontent.com/Traitome/oxo-flow/main/docs/schema/oxoflow-v1.schema.json |
 | Community template library | https://oxo-flow-community.github.io/ |
 | Reference workflows | https://github.com/Traitome/oxo-flow/tree/main/examples/gallery |
+| VS Code extension | https://traitome.github.io/oxo-flow/latest/reference/vscode-extension/ (`.oxoflow` editing: completion, diagnostics, one-click run/validate/graph; `codium --install-extension traitome.oxo-flow` via Open VSX — VS Code Marketplace is not supported) |
 
 **GitHub unreachable?** Prefix any GitHub URL with a mirror proxy
 (`https://ghfast.top/<url>` or `https://gh-proxy.com/<url>`), or web-search for
