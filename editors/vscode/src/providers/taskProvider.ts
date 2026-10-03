@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { dryRunArgs, graphArgs, resumeArgs, runArgs } from "../core/cliArgs";
+import { dryRunArgs, graphArgs, resumeArgs, runArgs, type GraphFormat } from "../core/cliArgs";
 
 export const TASK_TYPE = "oxo-flow";
 
@@ -9,6 +9,8 @@ export interface OxoflowTaskDefinition extends vscode.TaskDefinition {
   target?: string;
   jobs?: number;
   keepGoing?: boolean;
+  /** `graph` tasks only: output format (`-f`, ascii is the CLI default). */
+  format?: GraphFormat;
   extraArgs?: string[];
 }
 
@@ -100,7 +102,7 @@ export function createTask(
         ? dryRunArgs(runOpts)
         : kind === "resume"
           ? resumeArgs(def.workflow, def.extraArgs)
-          : graphArgs(def.workflow));
+          : graphArgs(def.workflow, def.format));
   // ShellQuotedString is a plain object interface, not a constructor: pass
   // {value, quoting} literals so no shell metacharacter in paths/args breaks.
   const strong = (value: string) => ({ value, quoting: vscode.ShellQuoting.Strong });
