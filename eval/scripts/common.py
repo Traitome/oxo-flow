@@ -409,8 +409,35 @@ def norm(text):
 
 
 def name_present(name, text):
-    """The normalized tool name occurs in the text."""
-    return norm(name) in norm(text)
+    """The normalized tool name occurs in the text.
+
+    Names shorter than 5 characters must match whole tokens: `tw` must not
+    hit "between"/"network" (#172 audit). Longer names keep the normalized
+    substring behaviour that tolerates separator variants (bwa_mem2 vs
+    bwa-mem2).
+    """
+    n = norm(name)
+    if not n:
+        return False
+    if len(n) >= 5:
+        return n in norm(text)
+    return n in re.findall(r"[a-z0-9]+", text.lower())
+
+
+FAKE_TOOL_NAME_RE = re.compile(
+    r"^\s*what\s+(?:is|does)\s+(.+?)(?:\s+do)?\s*\??\s*$", re.IGNORECASE
+)
+
+
+def fake_tool_name(query):
+    """The fabricated tool name a negative-sample query asks about.
+
+    Negative queries follow `what is <name>` / `what does <name> do`; the
+    judge uses the extracted name to drop the answer's own echo of it before
+    scanning for real tool mentions. Returns "" when the shape is unknown.
+    """
+    match = FAKE_TOOL_NAME_RE.match(query or "")
+    return match.group(1).strip() if match else ""
 
 
 def step_tokens(text):
@@ -435,6 +462,26 @@ def loose_step_match(gold_step, candidate_name):
         return False
     short, long = (g_tokens, c_tokens) if len(g_tokens) <= len(c_tokens) else (c_tokens, g_tokens)
     return len(short) >= 2 and all(token in long for token in short)
+
+
+def map_expected_steps(expected_steps, names):
+    """Expected step name -> workflow rule name.
+
+    Exact (normalized) name equality wins over loose matching: with both
+    `vqsr_indels` and `apply_vqsr_indels` present, loose matching alone binds
+    the wrong rule and silently mis-scores DAG edges.
+    """
+    exact = {norm(name): name for name in names}
+    mapping = {}
+    for step in expected_steps:
+        if norm(step) in exact:
+            mapping[step] = exact[norm(step)]
+            continue
+        for name in names:
+            if loose_step_match(step, name):
+                mapping[step] = name
+                break
+    return mapping
 
 
 def path_parts(path):

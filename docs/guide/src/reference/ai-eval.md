@@ -47,7 +47,20 @@ CSV path); `rule.csv` and `workflow.csv` are drafted from the gallery and the
 [oxo-flow-community](https://github.com/oxo-flow-community) workflows.
 Every row carries a `provenance_url` pointing at its primary source.
 
-Rows start at `review_status = draft` and are **skipped** by capture and runner until a human reviewer approves them — the benchmark only runs on human-verified gold. If no approved rows exist, the harness now fails fast instead of silently emitting an empty report. See `eval/schema.md` for the full column contracts and the publication-track review workflow.
+Rows start at `review_status = draft` and are **skipped** by capture and
+runner until a reviewer accepts them (`approved` / `corrected`); if no
+reviewable rows exist the harness fails fast instead of silently emitting an
+empty report.
+
+> **Status note:** the current gold rows were annotated by a **machine sweep**
+> (`reviewer = wangshx-automated`, 2026-09-07) — structure, knowledge-base
+> consistency and URL liveness were checked, but **no human has verified
+> scientific correctness yet**; the human verification pass is tracked in
+> [#172](https://github.com/Traitome/oxo-flow/issues/172). Until it closes,
+> treat reported benchmark numbers as *machine-swept*, not human-verified.
+> `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the
+> machine-checkable consistency rules between review passes. See
+> `eval/schema.md` for the column contracts and the review workflow.
 
 The deterministic grounding half of the tool layer is additionally
 guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —

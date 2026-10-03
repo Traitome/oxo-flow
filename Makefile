@@ -1,10 +1,10 @@
-.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
+.PHONY: ci fmt clippy build test coverage bench bench-macro bench-compare audit deny aws-legacy-tripwire secrets docs frontend-lint frontend-test schema-drift version-check eval-tests eval-lint contributors frontend-build frontend-dev dev bundle-static bundle-desktop bundle-macos bundle-deb bundle-rpm bundle-appimage
 
 ## Run all local CI quality-gate checks. Same gates as the "Test" job in
 ## ci.yml, but the invocations are not identical: `test` runs single-threaded
 ## (--test-threads=1, deterministic locally; CI runs the default parallelism)
 ## and `frontend-lint` uses `npm install` where CI uses `npm ci`.
-ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests
+ci: fmt clippy build test schema-drift version-check audit deny aws-legacy-tripwire secrets docs frontend-lint eval-tests eval-lint
 
 fmt:
 	cargo fmt -- --check
@@ -69,6 +69,14 @@ frontend-lint:
 ## silent rot would produce garbage numbers (audit #673).
 eval-tests:
 	python3 -m unittest discover -s eval/scripts
+
+## Eval gold consistency over eval/gold/*.csv (issue #172): fabricated
+## negative names colliding with the knowledge base, gold-vs-KB version
+## drift after a knowledge refresh, missing provenance evidence, and
+## declared DAG edges absent from the reference's engine graph. Needs a
+## built engine binary for the DAG check (cargo build --workspace).
+eval-lint:
+	python3 eval/scripts/check_gold.py
 
 ## Run frontend Playwright e2e tests (needs the Rust server; see ci.yml).
 frontend-test:
