@@ -4103,7 +4103,7 @@ title bar.</p>
 </tr>
 <tr>
 <td>Show DAG Graph</td>
-<td><code>oxo-flow graph &lt;file&gt;</code></td>
+<td><code>oxo-flow graph &lt;file&gt; [-f &lt;format&gt;]</code> — quick pick over <code>ascii</code>, <code>mermaid</code>, <code>dot</code>, <code>dot-clustered</code>, <code>tree</code>, <code>metro</code> (last choice remembered)</td>
 </tr>
 <tr>
 <td>Resume from Checkpoint</td>
@@ -4182,6 +4182,11 @@ the description.</p>
 <td><code>oxo-flow.formatOnSave</code></td>
 <td><code>false</code></td>
 <td>Format the document with <code>oxo-flow format</code> on every save</td>
+</tr>
+<tr>
+<td><code>oxo-flow.autoOpenGraph</code></td>
+<td><code>false</code></td>
+<td>Open the DAG graph after a successful run (last picked format, default ASCII)</td>
 </tr>
 <tr>
 <td><code>oxo-flow.trace</code></td>
