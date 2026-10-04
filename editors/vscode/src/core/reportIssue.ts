@@ -87,6 +87,11 @@ export function buildIssueBody(
 /**
  * Issue title + body as a ready-to-open GitHub URL. Returns null when the
  * body is too long for a query string (callers fall back to the clipboard).
+ *
+ * The result must be handed to `env.openExternal` as a plain string — it is
+ * already fully encoded, and `Uri.parse` would re-decode the query before the
+ * open pipeline re-encodes it (corrupting `###` to `%23%23%23` and cutting
+ * the value at the first `&`).
  */
 export function buildIssueUrl(body: string, title = "[vscode] "): string | null {
   const url = `${ISSUE_NEW_URL}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
