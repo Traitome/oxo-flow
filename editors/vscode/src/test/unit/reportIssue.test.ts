@@ -68,3 +68,25 @@ test("buildIssueUrl encodes newlines and signals oversize with null", () => {
   assert.ok(url!.includes("line1%0Aline2"));
   assert.equal(buildIssueUrl("x".repeat(9000)), null);
 });
+
+test("buildIssueUrl survives one server-side decode byte-for-byte", () => {
+  // Regression guard for the Report Issue mangling (%23%23%23 instead of ###):
+  // GitHub decodes each query param exactly once, so one decode of the body
+  // param must reproduce the markdown body exactly — headings, ampersands,
+  // equals signs and all. openExternal must receive this string VERBATIM
+  // (never round-tripped through vscode.Uri.parse, which re-decodes the query
+  // and re-encodes it — %23 double-encodes and the value truncates at &).
+  const body = "### Environment\n\n- `path` — em-dash & ampersand = equals\n\n### Error\n```x```";
+  const url = buildIssueUrl(body, "[vscode] t")!;
+  const query = url.slice(url.indexOf("?") + 1);
+  const params = new Map(query.split("&").map((pair) => {
+    const eq = pair.indexOf("=");
+    return [pair.slice(0, eq), decodeURIComponent(pair.slice(eq + 1))];
+  }));
+  assert.equal(params.get("title"), "[vscode] t");
+  assert.equal(params.get("body"), body);
+  // The wire format must carry escapes, never raw structure characters.
+  assert.ok(url.includes("%23%23%23"), "headings must be percent-encoded on the wire");
+  assert.ok(url.includes("%26"), "ampersands inside the body must be percent-encoded");
+  assert.ok(!/\s/.test(url), "the URL must not contain raw whitespace");
+});

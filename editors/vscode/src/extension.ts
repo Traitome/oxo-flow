@@ -752,7 +752,13 @@ async function reportIssue(statusBar: StatusBar, context: ReportContext): Promis
   const body = buildIssueBody(env, { lastError: context.lastError, outputTail: logTail.join("\n") });
   const url = buildIssueUrl(body);
   if (url) {
-    await vscode.env.openExternal(vscode.Uri.parse(url));
+    // Pass the URL as a plain string: openExternal keeps strings verbatim,
+    // while Uri.parse re-decodes the query and the open pipeline re-encodes
+    // it — `###` reached GitHub as literal `%23%23%23` and the body was
+    // truncated at the first `&` (verified in VS Code 1.99.3 on macOS).
+    // String targets are supported by the runtime since VS Code 1.90; the
+    // @types signature has not caught up.
+    await vscode.env.openExternal(url as unknown as vscode.Uri);
     return;
   }
   // Oversized report: GitHub would drop the query string — clipboard fallback.
