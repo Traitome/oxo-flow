@@ -8630,7 +8630,7 @@ plan-time warning naming the offending key.</p>
 </span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3" href="#__codelineno-62-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"pair_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">,</span><span class="w"> </span><span class="nt">"experiment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"EXP_02"</span><span class="p">,</span><span class="w"> </span><span class="nt">"control"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CTRL_02"</span><span class="p">}</span>
 </span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4" href="#__codelineno-62-4"></a><span class="p">]</span>
 </span></code></pre></div>
-<p>Inline <code>[[pairs]]</code> and <code>pairs_file</code> can be used together; entries from both sources are merged.</p>
+<p>Inline <code>[[pairs]]</code> and <code>pairs_file</code> can be used together; entries from both sources are merged. Each <code>pair_id</code> must still come from exactly one source: a <code>pair_id</code> declared in both with identical content is deduplicated with a warning, while the same <code>pair_id</code> with different experiment/control content is a config error naming both declarations (both copies would fan out rules under the same <code>{rule}_{pair_id}</code> name). The same rule applies to duplicate sample-group names across <code>[[sample_groups]]</code> and <code>sample_groups_file</code>.</p>
 <h3 id="auto-discovery-from-file-pattern">Auto-discovery from file pattern<a class="headerlink" href="#auto-discovery-from-file-pattern" title="Permanent link">#</a></h3>
 <p>For workflows with existing paired files, use <code>pairs_pattern</code> in <code>[workflow]</code> to auto-discover pairs by scanning the filesystem:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a><span class="k">[workflow]</span>
@@ -8735,6 +8735,10 @@ directions — including <code>!=</code>).</p>
 </span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a><span class="w">  </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"case"</span><span class="p">,</span><span class="w"> </span><span class="nt">"samples"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"CASE_001"</span><span class="p">,</span><span class="w"> </span><span class="s2">"CASE_002"</span><span class="p">]}</span>
 </span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a><span class="p">]</span>
 </span></code></pre></div>
+<p>Like pairs, a group name declared in both <code>[[sample_groups]]</code> and
+<code>sample_groups_file</code> is deduplicated when identical (with a warning) and
+rejected as a config error when the samples differ — see the merge rule in
+<a href="#loading-pairs-from-external-file">Loading pairs from external file</a>.</p>
 <h3 id="sheet-columns-as-group-metadata">Sheet columns as group metadata<a class="headerlink" href="#sheet-columns-as-group-metadata" title="Permanent link">#</a></h3>
 <p>In TSV/CSV sheets, <strong>every column other than <code>name</code> and <code>samples</code> becomes
 group metadata</strong>: it fans out per <code>(group, sample)</code> pair as a bare
