@@ -194,6 +194,16 @@ impl WorkflowConfig {
             tracing::info!("Loaded {} sample groups from {}", count, groups_file);
         }
 
+        // ── Duplicate fan-out identifiers across sources (issue #823) ─────
+        // Inline `[[pairs]]` + `pairs_file` (+ `pairs_pattern`) merge above
+        // without checking the ids, so a pair declared in both sources fans
+        // out twice as `{rule}_{pair_id}`: identical entries crash expansion
+        // with an opaque `duplicate rule name` error pointing at the rule,
+        // and entries sharing an id but differing in samples silently
+        // collide on the same instance/output paths. Mirror for groups.
+        Self::dedup_or_error_duplicate_pairs(&mut config.pairs)?;
+        Self::dedup_or_error_duplicate_sample_groups(&mut config.sample_groups)?;
+
         // Load the per-sample metadata table from external file if
         // specified (issue #227 item 2): the `{meta.<column>}` lookup
         // vocabulary, keyed by sample id.
@@ -1117,5 +1127,106 @@ fn deep_merge_value(dst: &mut toml::Value, src: toml::Value) {
             }
         }
         (dst_value, src_value) => *dst_value = src_value,
+    }
+}
+
+/// Consolidate `entries` after all sources merged (issue #823).
+///
+/// A repeated identifier (`pair_id` / group `name`) is only safe when every
+/// copy is fully identical — that is the migration typo of leaving the old
+/// declaration behind after copying it into a file, and it is deduplicated
+/// (first occurrence kept) with a warning. Copies that share the identifier
+/// but differ anywhere else would fan out two instances under the same
+/// `{rule}_{id}` name: identical names crash expansion with an opaque
+/// `duplicate rule name` error, differing samples collide on the same
+/// output paths. That is a hard config error naming both declarations.
+fn dedup_or_error_duplicate<T, K, F>(
+    entries: &mut Vec<T>,
+    kind: &str,
+    section: &str,
+    key_of: F,
+    describe: impl Fn(&T) -> String,
+) -> Result<()>
+where
+    T: PartialEq,
+    K: std::fmt::Display + PartialEq,
+    F: Fn(&T) -> K,
+{
+    let mut first_by_key: Vec<(K, usize)> = Vec::new();
+    let mut kept: Vec<T> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for entry in entries.drain(..) {
+        let key = key_of(&entry);
+        match first_by_key.iter().find(|(k, _)| *k == key) {
+            Some((_, first_idx)) => {
+                let first = &kept[*first_idx];
+                if *first == entry {
+                    tracing::warn!(
+                        "duplicate {kind} '{key}' declared twice with identical content — \
+                         keeping the first declaration; keep exactly one source for it \
+                         (drop the duplicate [{section}] block or file entry)"
+                    );
+                } else {
+                    errors.push(format!(
+                        "duplicate {kind} '{key}' declared twice with different content:\n  \
+                         1st: {}\n  2nd: {}",
+                        describe(first),
+                        describe(&entry),
+                    ));
+                }
+            }
+            None => {
+                first_by_key.push((key, kept.len()));
+                kept.push(entry);
+            }
+        }
+    }
+    *entries = kept;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(OxoFlowError::Config {
+            message: format!(
+                "conflicting duplicate {kind} declarations across sources — keep exactly one \
+                 source per {kind} (drop the duplicate [{section}] block, the file entry, or \
+                 the pattern discovery):\n{}",
+                errors.join("\n")
+            ),
+        })
+    }
+}
+
+impl WorkflowConfig {
+    /// Pairs consolidated after inline + `pairs_file` + `pairs_pattern`
+    /// merge (issue #823): identical duplicates collapse to the first with
+    /// a warning; a shared `pair_id` with different content is a config
+    /// error, because the copies fan out under the same instance name.
+    fn dedup_or_error_duplicate_pairs(pairs: &mut Vec<ExperimentControlPair>) -> Result<()> {
+        dedup_or_error_duplicate(
+            pairs,
+            "pair",
+            "[[pairs]]",
+            |p| p.pair_id.clone(),
+            |p| {
+                format!(
+                    "experiment = '{}', control = '{}', experiment_type = '{}'",
+                    p.experiment,
+                    p.control.as_deref().unwrap_or(""),
+                    p.experiment_type.as_deref().unwrap_or("")
+                )
+            },
+        )
+    }
+
+    /// Sample groups consolidated after inline + `sample_groups_file` merge
+    /// (issue #823), mirroring [`Self::dedup_or_error_duplicate_pairs`].
+    fn dedup_or_error_duplicate_sample_groups(groups: &mut Vec<SampleGroup>) -> Result<()> {
+        dedup_or_error_duplicate(
+            groups,
+            "sample group",
+            "[[sample_groups]]",
+            |g| g.name.clone(),
+            |g| format!("samples = [{}]", g.samples.join(", ")),
+        )
     }
 }

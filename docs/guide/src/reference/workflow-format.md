@@ -1790,7 +1790,7 @@ CASE_002,EXP_02,CTRL_02,colorectal
 ]
 ```
 
-Inline `[[pairs]]` and `pairs_file` can be used together; entries from both sources are merged.
+Inline `[[pairs]]` and `pairs_file` can be used together; entries from both sources are merged. Each `pair_id` must still come from exactly one source: a `pair_id` declared in both with identical content is deduplicated with a warning, while the same `pair_id` with different experiment/control content is a config error naming both declarations (both copies would fan out rules under the same `{rule}_{pair_id}` name). The same rule applies to duplicate sample-group names across `[[sample_groups]]` and `sample_groups_file`.
 
 ### Auto-discovery from file pattern
 
@@ -1903,6 +1903,11 @@ directions — including `!=`).
   {"name": "case", "samples": ["CASE_001", "CASE_002"]}
 ]
 ```
+
+Like pairs, a group name declared in both `[[sample_groups]]` and
+`sample_groups_file` is deduplicated when identical (with a warning) and
+rejected as a config error when the samples differ — see the merge rule in
+[Loading pairs from external file](#loading-pairs-from-external-file).
 
 ### Sheet columns as group metadata
 

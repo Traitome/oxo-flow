@@ -8480,6 +8480,182 @@ fn duplicate_sample_owners_reports_cross_owner_ids() {
 }
 
 #[test]
+fn duplicate_pairs_across_sources_dedup_identical_error_conflicting() {
+    // Issue #823: a pair declared in both `pairs_file` and inline `[[pairs]]`
+    // used to fan out twice under the same instance name — identical copies
+    // crashed expansion with an opaque `duplicate rule name: 'use_P1'`, and
+    // copies sharing the id but differing in samples silently collided on
+    // the same output paths.
+
+    // Identical duplicate (the migration typo: copied the pair into a file,
+    // forgot to delete the inline block) collapses to one with a warning.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pairs.tsv"),
+        "pair_id\texperiment\tcontrol\nP1\tS1\tS2\n",
+    )
+    .unwrap();
+    let wf = dir.path().join("dup.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dup"
+        version = "1.0.0"
+        pairs_file = "pairs.tsv"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    assert_eq!(config.pairs.len(), 1, "identical copies dedup");
+    assert_eq!(config.pairs[0].pair_id, "P1");
+
+    // A distinct pair from the file survives beside the dedup.
+    std::fs::write(
+        dir.path().join("pairs2.tsv"),
+        "pair_id\texperiment\tcontrol\nP1\tS1\tS2\nP2\tS3\tS4\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dup"
+        version = "1.0.0"
+        pairs_file = "pairs2.tsv"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    assert_eq!(config.pairs.len(), 2);
+    assert_eq!(config.pairs[0].pair_id, "P1");
+    assert_eq!(config.pairs[1].pair_id, "P2");
+
+    // Same id, different samples: the copies would share instance and
+    // output paths — a hard error, not a silent collision.
+    std::fs::write(
+        dir.path().join("pairs4.tsv"),
+        "pair_id\texperiment\tcontrol\nP1\tS9\tS8\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dup"
+        version = "1.0.0"
+        pairs_file = "pairs4.tsv"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    let conflict = WorkflowConfig::from_file(&wf).unwrap_err().to_string();
+    assert!(
+        conflict.contains("duplicate pair 'P1'"),
+        "error names the duplicated pair: {conflict}"
+    );
+    assert!(
+        conflict.contains("keep exactly one"),
+        "error tells the user how to fix it: {conflict}"
+    );
+
+    // Same id, same samples but a different control: still conflicting —
+    // any content difference under one id is ambiguous.
+    std::fs::write(
+        dir.path().join("pairs3.tsv"),
+        "pair_id\texperiment\tcontrol\nP1\tS1\t\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dup"
+        version = "1.0.0"
+        pairs_file = "pairs3.tsv"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    assert!(WorkflowConfig::from_file(&wf).is_err());
+}
+
+#[test]
+fn duplicate_sample_groups_across_sources_dedup_identical_error_conflicting() {
+    // Issue #823 mirror for groups: `sample_groups_file` + inline
+    // `[[sample_groups]]` with the same group name used to fan out every
+    // rule twice per sample (`duplicate rule name: 'mk_all_S1'`).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("groups.tsv"),
+        "name\tsamples\nall\t\"S1,S2,S3\"\n",
+    )
+    .unwrap();
+    let wf = dir.path().join("dupg.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dupg"
+        version = "1.0.0"
+        sample_groups_file = "groups.tsv"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2", "S3"]
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    assert_eq!(config.sample_groups.len(), 1, "identical copies dedup");
+    assert_eq!(config.sample_groups[0].name, "all");
+
+    // Same group name, different members: hard error.
+    std::fs::write(
+        dir.path().join("groups2.tsv"),
+        "name\tsamples\nall\t\"S1,S2\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "dupg"
+        version = "1.0.0"
+        sample_groups_file = "groups2.tsv"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2", "S3"]
+        "#,
+    )
+    .unwrap();
+    let conflict = WorkflowConfig::from_file(&wf).unwrap_err().to_string();
+    assert!(
+        conflict.contains("duplicate sample group 'all'"),
+        "error names the duplicated group: {conflict}"
+    );
+}
+
+#[test]
 fn transform_n_chunking_substitutes_the_split_variable_everywhere() {
     // The documented `n` chunking form (`by = "chunk"`, `n = "3"`) left the
     // split variable literal in the map rule's INPUT, so a command
