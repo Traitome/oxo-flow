@@ -1,7 +1,3 @@
-# oxo-flow — Cover Letter Highlights
-
-## Opening frame (first paragraph of the letter)
-
 Modern biology runs on computational pipelines, and increasingly those pipelines are drafted by AI. Yet whether a computational result can be trusted still depends on the discipline of whoever wrote and ran the code. oxo-flow turns trust, reproducibility, and safety from personal practice into properties of the infrastructure itself.
 
 ## Scientific advances
