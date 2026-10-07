@@ -103,6 +103,21 @@ counterpart `results/{sample}.vcf` when `out_dir = "results"` — and does
 not collide with `{config.alt_dir}/{sample}.vcf` when the values differ.
 See
 [Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
+W034 flags an `{input[N]}` / `{output[N]}` placeholder whose index is out
+of range, or a named `{input.key}` / `{output.key}` whose key the rule
+does not declare. The substitution loop only renders indices `0..len`
+(list-form: declaration order; map-form: keys in sorted order; dir-form:
+the single entry), and only renders named references for declared keys —
+anything else survives rendering as literal brace text, so the tool is
+invoked with a path like `{input[5]}` and fails with an unrelated
+"No such file" error that hides the real mistake. The repair depends on
+the input shape: use an in-range index (map-form indices follow the
+rule's sorted keys, not the text order), switch to the bare `{input}` /
+`{output}` form to interpolate all entries, or — preferred for
+role-bearing IO — declare a map and use named access (`tumor = "..."` +
+`{input.tumor}`), which also survives reordering. Lines that are comments
+in the rendered script are exempt, and `script` paths are checked the
+same way as inline `shell`.
 W032 flags a `[config]` key whose *name* looks like a secret
 (`token`, `secret`, `passwd`, `password`, `credential`, `api_key`,
 `access_key`, `private_key`, `ssh_key`, `key` — matched at word/segment

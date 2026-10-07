@@ -20,6 +20,19 @@ use std::sync::LazyLock;
 static WHEN_WILDCARD_REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"wildcard\.(\w+)").expect("valid when-wildcard regex"));
 
+/// Matches indexed `{input[N]}` / `{output[N]}` references in shell or
+/// script text (issue #830: out-of-range indices are never substituted).
+static IO_INDEXED_PLACEHOLDER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{(input|output)\[(\d+)\]\}").expect("valid io-index regex"));
+
+/// Matches named `{input.key}` / `{output.key}` references in shell or
+/// script text (issue #830: keys the rule does not declare are never
+/// substituted). Key charset excludes braces and whitespace — braces
+/// would be a nested placeholder, whitespace means it is shell text
+/// (e.g. awk `'{...}'`) rather than a reference.
+static IO_NAMED_PLACEHOLDER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{(input|output)\.([^{}\s]+)\}").expect("valid io-named regex"));
+
 /// Current .oxoflow format specification version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -1172,6 +1185,135 @@ pub fn shell_blocking_pattern(shell: &str) -> Option<(&'static str, &'static str
         })
 }
 
+/// W034 (issue #830): `{input[N]}` / `{output[N]}` and named
+/// `{input.key}` / `{output.key}` references the rule's declared
+/// patterns cannot satisfy.
+///
+/// `render_shell_command_inner` substitutes the indexed form only for
+/// `i < len()` — map inputs iterate their keys in sorted order, `Dir`
+/// exposes exactly one entry — and the named form only for keys the map
+/// actually declares. An out-of-range index or unknown key survives
+/// rendering as literal brace text, so the tool is invoked with a
+/// argument like `{input[9]}` and fails with an unrelated "No such file
+/// or directory" even though the intended file visibly exists in the
+/// pattern list. Comments are prose, not executed code, so they are
+/// stripped before scanning (same rule as the runtime residual guard).
+/// Script *paths* go through the same renderer as shell commands, so
+/// both texts are scanned; one diagnostic is emitted per distinct
+/// offending placeholder.
+fn lint_io_placeholder_range(rule: &Rule) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut flagged_indexed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut flagged_named: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let cmd_texts = rule
+        .shell
+        .iter()
+        .chain(rule.script.iter())
+        .map(|text| crate::wildcard::strip_shell_comments(text));
+    for text in cmd_texts {
+        for cap in IO_INDEXED_PLACEHOLDER_RE.captures_iter(&text) {
+            let token = cap[0].to_string();
+            if !flagged_indexed.insert(token.clone()) {
+                continue;
+            }
+            let index: usize = cap[2].parse().unwrap_or(usize::MAX);
+            let (patterns, noun) = split_io_family(rule, &cap[1]);
+            if index >= patterns.len() {
+                let keys = sorted_io_keys(patterns);
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "`{token}` is out of range: the rule declares only {} {noun}(s), so the \
+                         placeholder is never substituted and the tool receives literal brace text",
+                        patterns.len()
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W034".to_string(),
+                    suggestion: Some(if let Some(keys) = keys {
+                        format!(
+                            "map-form {noun}s index their keys in sorted order ({keys}) — valid \
+                             indices are 0..{}, and `{noun}.<key>` named access is preferred",
+                            patterns.len()
+                        )
+                    } else {
+                        format!(
+                            "use an index in 0..{}, or `{{{noun}}}` to interpolate all {noun}s; \
+                             for role-bearing {noun}s prefer map-form named access \
+                             (`{noun}.<key> = \"...\"` + `{{{noun}}}.<key>`) so references \
+                             survive reordering",
+                            patterns.len()
+                        )
+                    }),
+                });
+            }
+        }
+        for cap in IO_NAMED_PLACEHOLDER_RE.captures_iter(&text) {
+            let token = cap[0].to_string();
+            if !flagged_named.insert(token.clone()) {
+                continue;
+            }
+            let (patterns, noun) = split_io_family(rule, &cap[1]);
+            let declared = match patterns {
+                crate::rule::FilePatterns::Map(map) => map.contains_key(&cap[2]),
+                _ => false,
+            };
+            if !declared {
+                let keys = sorted_io_keys(patterns);
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "`{token}` does not match any declared {noun}: the placeholder is never \
+                         substituted and the tool receives literal brace text"
+                    ),
+                    rule: Some(rule.name.clone()),
+                    code: "W034".to_string(),
+                    suggestion: Some(if let Some(keys) = keys {
+                        format!("this rule's {noun} keys are: {keys}")
+                    } else {
+                        format!(
+                            "named access requires a map-form {noun} (`{noun}.<key> = \"...\"`); \
+                             this rule declares a list — use `{{{noun}}}` or an in-range \
+                             `{{{noun}[N]}}`"
+                        )
+                    }),
+                });
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Resolve a captured `input`/`output` family name to that side's
+/// declared patterns.
+fn split_io_family<'a>(
+    rule: &'a Rule,
+    family: &str,
+) -> (&'a crate::rule::FilePatterns, &'static str) {
+    if family == "input" {
+        (&rule.input, "input")
+    } else {
+        (&rule.output, "output")
+    }
+}
+
+/// Sorted key list for map-form patterns (`None` for list/dir forms) —
+/// the same order `FilePatterns::get_index` iterates.
+fn sorted_io_keys(patterns: &crate::rule::FilePatterns) -> Option<String> {
+    match patterns {
+        crate::rule::FilePatterns::Map(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            Some(
+                keys.into_iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        }
+        _ => None,
+    }
+}
+
 /// Perform best-practice linting on a workflow configuration.
 ///
 /// Checks for:
@@ -1321,6 +1463,12 @@ pub fn lint_format(
                 ),
             });
         }
+
+        // W034 (issue #830): input/output placeholders referencing an
+        // index or named key the rule does not declare — statically
+        // decidable, always a bug (the placeholder renders as literal
+        // brace text and the tool fails on a path that looks valid).
+        diagnostics.extend(lint_io_placeholder_range(rule));
 
         // W006: Naming convention (should use snake_case)
         if rule.name.contains('-') {
@@ -5812,6 +5960,145 @@ shell = "samtools faidx {{config.reference}}"
     // vs paired-only metrics, eager hostremoval vs mapper-gated outputs).
     fn w031_count(diagnostics: &[Diagnostic]) -> usize {
         diagnostics.iter().filter(|d| d.code == "W031").count()
+    }
+
+    fn w034_count(diagnostics: &[Diagnostic]) -> usize {
+        diagnostics.iter().filter(|d| d.code == "W034").count()
+    }
+
+    #[test]
+    fn lint_w034_flags_out_of_range_indices_but_not_in_range() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            input = ["a.tsv", "b.tsv"]
+            output = ["out.vcf"]
+            shell = "call {input[5]} {input[5]} {output[3]} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w034_count(&diagnostics),
+            2,
+            "{{input[5]}} twice must dedup to one diagnostic and {{output[3]}} add a second: \
+             {diagnostics:?}"
+        );
+        let hit = diagnostics.iter().find(|d| d.code == "W034").unwrap();
+        assert_eq!(hit.rule.as_deref(), Some("caller"));
+        assert!(
+            hit.message.contains("{input[5]}") && hit.message.contains("only 2 input(s)"),
+            "message must name the token and the declared count: {}",
+            hit.message
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .filter(|d| d.code == "W034")
+                .any(|d| d.message.contains("{output[3]}")),
+            "the output family must be checked too: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w034_allows_in_range_and_bare_placeholders() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            input = ["a.tsv", "b.tsv"]
+            output = ["out.vcf"]
+            shell = "call {input} {input[0]} {input[1]} {output} {output[0]} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w034_count(&diagnostics),
+            0,
+            "in-range indices and the bare forms are all substitutable: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w034_flags_named_key_on_list_input() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            input = ["tumor.bam", "normal.bam"]
+            output = ["out.vcf"]
+            shell = "call --tumor {input.tumor} {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w034_count(&diagnostics),
+            1,
+            "named access needs a map-form declaration; list inputs have no keys: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w034_flags_unknown_map_key_but_allows_known() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            input = { normal = "data/{sample}_N.bam", tumor = "data/{sample}_T.bam" }
+            output = ["out.vcf"]
+            shell = "call --tumor {input.tumer} --normal {input.normal} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w034_count(&diagnostics),
+            1,
+            "a typo'd map key must warn while declared keys pass: {diagnostics:?}"
+        );
+        let hit = diagnostics.iter().find(|d| d.code == "W034").unwrap();
+        assert!(
+            hit.message.contains("{input.tumer}"),
+            "message must name the unknown token: {}",
+            hit.message
+        );
+        let suggestion = hit.suggestion.as_deref().unwrap_or("");
+        assert!(
+            suggestion.contains("normal, tumor"),
+            "suggestion must list the sorted declared keys: {suggestion}"
+        );
+    }
+
+    #[test]
+    fn lint_w034_ignores_comment_lines() {
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "caller"
+            input = ["a.tsv"]
+            output = ["out.vcf"]
+            shell = """
+                # {input[9]} would interpolate the glob-annotated pattern
+                call {input} > {output}
+            """
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        assert_eq!(
+            w034_count(&diagnostics),
+            0,
+            "comments are prose, not executed code — same rule as the runtime guard: \
+             {diagnostics:?}"
+        );
     }
 
     #[test]

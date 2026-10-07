@@ -1625,6 +1625,8 @@ as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
 - **Multiple inputs/outputs**: use `{input[0]}`, `{input[1]}` … to select specific files, or `{input}` to pass all of them at once
 - The indexed form communicates *intent* ("this rule expects exactly this file"), so it remains useful even for single-element arrays in multi-step pipelines
 
+An index at or beyond the declared count is never substituted: rendering leaves the literal `{input[N]}` text in the command and the tool fails with an unrelated "No such file" error. `oxo-flow lint` catches this statically as **W034** (which also flags map-form rules whose sorted-key indexing has shifted under a declaration edit — the index positions are the sorted keys, not the text order).
+
 ### Named Input & Output
 
 For complex rules with many files, give the `input`/`output` fields an
@@ -1642,6 +1644,11 @@ shell = "bwa mem {input.reads1} {input.reads2} > {output.bam}"
 There is no `[rules.named_input]` / `[rules.named_output]` TOML table —
 the map is the value of `input`/`output` itself (a sub-table named
 `named_input` fails validation with E017).
+
+A named reference to a key the rule does not declare is likewise never
+substituted (literal brace text at render time) and is flagged by **W034**
+along with the rule's actual keys, so a typo like `{input.tumer}` is
+reported at lint time instead of surfacing as a tool failure.
 
 ### Custom Wildcards
 
