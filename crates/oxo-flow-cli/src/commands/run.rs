@@ -3540,6 +3540,64 @@ pub async fn run_command(
                                     );
                                 }
                             }
+                            // Issue #832: a succeeded rule whose declared
+                            // `log` path stayed empty (0-byte file or empty
+                            // dir) while BOTH captured tails are empty too
+                            // almost certainly self-logs somewhere the
+                            // workflow did not declare (dnbc4tools writes
+                            // `scrna/count/Pt01/logs/<date>.txt`). One Info
+                            // hint, and only when all three are empty — a
+                            // quiet-but-correct tool with content in any of
+                            // them stays silent. The hint never gates the
+                            // rule; captured tails are persisted in the
+                            // checkpoint job records regardless (issue #692).
+                            if let Some(log_pattern) = &rule.log {
+                                let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                                    log_pattern,
+                                    &wildcard_values,
+                                );
+                                if !expanded.contains('{') {
+                                    let log_path = workdir_actual.as_ref().join(&expanded);
+                                    let log_empty = if log_path.is_dir() {
+                                        std::fs::read_dir(&log_path)
+                                            .map(|mut entries| entries.next().is_none())
+                                            .unwrap_or(false)
+                                    } else if log_path.is_file() {
+                                        std::fs::metadata(&log_path)
+                                            .map(|m| m.len() == 0)
+                                            .unwrap_or(false)
+                                    } else {
+                                        // Never created: the rule's `2> {log}`
+                                        // redirect never ran — a different
+                                        // signal than "declared log stayed
+                                        // empty", so stay silent here.
+                                        false
+                                    };
+                                    let tails_empty = record
+                                        .stdout
+                                        .as_deref()
+                                        .map(str::trim)
+                                        .unwrap_or("")
+                                        .is_empty()
+                                        && record
+                                            .stderr
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .unwrap_or("")
+                                            .is_empty();
+                                    if log_empty && tails_empty {
+                                        diagnostic_narrate(
+                                            format_args!(
+                                                "  {} rule '{}' succeeded but its declared log '{}' is empty — the tool likely writes its own log elsewhere (declare that path in `log`, or check the tool's default log location); captured stdout/stderr tails are persisted in the checkpoint job records regardless",
+                                                "ℹ".dimmed(),
+                                                rule_name,
+                                                log_path.display()
+                                            ),
+                                            Some(&task_run_log),
+                                        );
+                                    }
+                                }
+                            }
                             let benchmark =
                                 oxo_flow_core::executor::checkpoint::BenchmarkRecord {
                                     rule: rule_name.clone(),

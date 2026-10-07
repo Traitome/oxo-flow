@@ -725,6 +725,20 @@ boundary (rounding down); older checkpoints that only carry the legacy
 2048-character tails remain readable (the new size applies from the next
 recorded run onward).
 
+#### Declared `log` files vs captured tails
+
+A rule's declared `log` path is separate from this capture: the engine
+creates the log's parent directory, but the file only gains content when
+the rule's shell redirects into it (`2> {log}`) and the tool writes to
+stderr. Many bioinformatics tools self-log to their own location instead
+(e.g. a `logs/<date>.txt` file they manage themselves), leaving the
+declared log empty — **an empty declared log never means no diagnostics
+were captured**; the tails above are persisted in `rule_runs` regardless.
+When a rule succeeds, its declared log is empty (0-byte file or empty
+directory), *and* both captured tails are empty too, the run emits one
+Info-level hint that the tool likely self-logs elsewhere — quiet tools
+with output in any of the three stay silent (issue #832).
+
 ### Workflow version in the checkpoint
 
 When the workflow file lives inside a git repository, oxo-flow records the
