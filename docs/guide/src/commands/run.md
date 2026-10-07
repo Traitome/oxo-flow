@@ -797,7 +797,16 @@ compares them against the current workflow:
     detection can retire a now-skipped producer or cascade a newly-activated
     one to its consumers.
 - **Edited rule definitions** (shell, inputs, outputs, environment, …) are
-  caught by the per-rule fingerprint and invalidate the same way.
+  caught by the per-rule fingerprint and invalidate the same way. A
+  file-backed environment spec (pixi manifest, conda/mamba YAML, venv
+  requirements) is fingerprinted by **content**, not just by the path the
+  rule names — pixi specs also cover the sibling `pixi.lock`, since a lock
+  re-pin changes exactly which packages the environment materializes.
+  Editing any of these files in place invalidates the rules that reference
+  them. Checkpoints written before the content tagging lack these digests,
+  so the first run after that upgrade re-runs rules with file-backed
+  environments once (the same safe-but-costly bootstrap as the
+  config-tracking baseline below).
 - `samples_list` / `samples_<group>` are engine-injected and never trigger
   invalidation, so toggling `--samples` between runs stays cheap. This
   covers rules whose input list is baked from an injected key
