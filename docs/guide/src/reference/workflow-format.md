@@ -649,7 +649,7 @@ memory = "32G"
 | `required` | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
 | `optional` | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
 | `benchmark` | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
-| `log` | String | No | Log file path for rule execution output |
+| `log` | String | No | Log file path for rule execution output. The engine creates its parent directory and expands `{config.x}`/wildcards in the path, but **populating the file is the rule's job** — typically via `2> {log}` in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's `rule_runs` regardless, and a succeeded rule whose declared log *and* both captured tails are all empty earns one Info hint that the tool likely self-logs (issue #832) |
 | `group` | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | `cache_key` | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 | `input_function` | String | No | Parsed but **not yet called** — no dynamic input resolution is performed today |
