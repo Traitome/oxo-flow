@@ -66,17 +66,23 @@ its advice is evidence-driven: determine strandedness with RSeQC
 setting `-s 1`/`-s 2`.
 
 The `SCI-AGG-RACE` check flags an aggregation rule whose inputs/shell/when
-(or `expand_inputs` patterns) reference a fan-out wildcard — `{sample}` /
+(or `expand_inputs` patterns) activate a fan-out dimension — `{sample}` /
 `{group}`, a pair wildcard, a `[[values]]` table name, or an
-`output_pattern` producer's fresh wildcard — while its declared outputs
-contain **no** wildcard (issue #443). Expansion then creates one instance
-per fan-out element with every instance writing the same output path:
+`output_pattern` producer's fresh wildcard — while the declared outputs
+are **not keyed by that dimension** (issue #443; per-dimension keying
+since #829). Expansion creates one instance per fan-out element; every
+instance of an unkeyed dimension bakes the SAME concrete output path:
 concurrently they race, sequentially they duplicate work N−1 times. The
-remedy is the documented aggregation idiom: reference the per-sample files
-via `expand_inputs` (or key the outputs by the wildcard). The detector
-mirrors the engine's fan-out semantics, so rules whose outputs do carry
-the wildcard, `input_groups` rules, `output_pattern` producers, consumers
-keyed by the producer's fresh wildcard, and `when`-gated-off rules stay
+check is per-dimension, so a rule whose outputs carry one dimension's
+wildcard (say `{pair_id}`) while another active dimension (say a
+`[[values]]` table referenced from `expand_inputs`) is unkeyed still
+fires — the warning names each unkeyed dimension. The remedy is either
+the documented aggregation idiom (bind the dimension through
+`variables`/`expand_inputs` so the rule becomes a single instance) or
+keying the outputs by the dimension's wildcard for a genuine per-element
+rule. The detector mirrors the engine's fan-out semantics, so fully keyed
+rules, `input_groups` rules, `output_pattern` producers, consumers keyed
+by the producer's fresh wildcard, and `when`-gated-off rules stay
 silent.
 
 ```bash

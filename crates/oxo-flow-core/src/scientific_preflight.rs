@@ -194,7 +194,12 @@ fn bypasses_group_pair_fanout(rule: &Rule) -> bool {
 /// - `{sample}` confined to an `expand_inputs` pattern is NOT a trigger —
 ///   the pattern materializes into one instance (the aggregation idiom);
 /// - input_groups rules and output_pattern producers are excluded, and
-///   `when`-gated-off rules never run (issue #263).
+///   `when`-gated-off rules never run (issue #263);
+/// - every active fan-out dimension must be *represented* in the declared
+///   outputs (issue #829): outputs carrying one dimension's wildcard (say
+///   `{pair_id}`) while another active dimension (say a `[[values]]` table
+///   referenced from `expand_inputs`) is unkeyed still race — the unkeyed
+///   dimension's instances all bake the same concrete path.
 fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
     // Pair metadata keys are part of the fan-out vocabulary.
     let mut pair_wildcards: Vec<&str> = PAIR_WILDCARDS.to_vec();
@@ -282,11 +287,73 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             continue;
         }
 
-        // Wildcard-free declared outputs → every expanded instance writes
-        // the same paths. `{config.x}` refs resolve to the same constant
-        // on every instance — only fan-out wildcards key outputs.
-        let outputs_have_wildcards = rule.output.iter().any(|o| output_has_fanout_wildcard(o));
-        if outputs_have_wildcards {
+        // Every ACTIVE fan-out dimension must be represented in the
+        // declared outputs — a dimension's wildcard is what makes instance
+        // outputs differ. Issue #829: the old check was all-or-nothing (any
+        // non-config wildcard exempted the rule), so a rule whose outputs
+        // carry the pair wildcard but not the [[values]] wildcard escaped —
+        // venus's merge rules fan per {chr} via expand_inputs while all 24
+        // instances per pair baked the same `vcf.raw/{pair_id}.vcf.gz` and
+        // raced. `{config.x}` refs resolve to the same constant on every
+        // instance and never key outputs; `{meta.col}` substitutes per
+        // instance from pair/group metadata, so it counts as represented
+        // for those domains (values entries carry no metadata — only the
+        // table's own wildcard keys a values instance's outputs).
+        let output_tokens: Vec<String> = rule
+            .output
+            .iter()
+            .flat_map(|o| PLACEHOLDER_RE.captures_iter(o).map(|c| c[1].to_string()))
+            .collect();
+        let mut unrepresented: Vec<String> = Vec::new();
+        if triggers_pair
+            && !output_tokens
+                .iter()
+                .any(|t| t.starts_with("meta.") || pair_wildcards.contains(&t.as_str()))
+        {
+            unrepresented.push(
+                "the pair domain — no pair wildcard ({pair_id}, …) keys the \
+                               outputs"
+                    .into(),
+            );
+        }
+        if triggers_group
+            && !output_tokens
+                .iter()
+                .any(|t| t.starts_with("meta.") || GROUP_WILDCARDS.contains(&t.as_str()))
+        {
+            unrepresented.push(
+                "the sample domain — no {sample}/{group} wildcard keys the \
+                               outputs"
+                    .into(),
+            );
+        }
+        for v in config.values.iter().filter(|v| {
+            expand_texts.iter().any(|t| {
+                t.contains(&format!("{{{}}}", v.name))
+                    || t.contains(&format!("{{values.{}}}", v.name))
+            })
+        }) {
+            let keyed = output_tokens
+                .iter()
+                .any(|t| t == &v.name || *t == format!("values.{}", v.name));
+            if !keyed {
+                unrepresented.push(format!(
+                    "[[values]] table '{}' — none of its entries keys the outputs",
+                    v.name
+                ));
+            }
+        }
+        for w in fresh_wildcards
+            .iter()
+            .filter(|w| expand_texts.iter().any(|t| t.contains(&format!("{{{w}}}"))))
+        {
+            if !output_tokens.iter().any(|t| t == w.as_str()) {
+                unrepresented.push(format!(
+                    "output_pattern producer wildcard '{w}' — it does not key the outputs"
+                ));
+            }
+        }
+        if unrepresented.is_empty() {
             continue;
         }
 
@@ -306,24 +373,26 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             continue;
         }
 
+        let dims = unrepresented.join("; ");
         warnings.push(ScientificWarning {
             code: "SCI-AGG-RACE".into(),
             rule: rule.name.clone(),
-            message: "rule fans out per instance (a fan-out wildcard — {sample}/{group}, a pair \
-                      wildcard, a [[values]] table, or an output_pattern producer's fresh \
-                      wildcard — appears in its inputs/shell/when/expand_inputs) but its \
-                      declared outputs contain no wildcard — expansion creates one instance \
-                      per fan-out element, all writing the same output path(s): run \
-                      concurrently they race (FileExistsError/missing-file crashes), \
-                      sequentially they duplicate work N−1 times and the surviving result \
-                      depends on scheduling order."
-                .into(),
-            suggestion: "remove the fan-out wildcard from this aggregation rule's inputs and \
-                         reference the per-instance files via expand_inputs (e.g. \
-                         expand_inputs = [{pattern = \"qc/{sample}/fastqc.html\"}]) or a \
-                         glob/grouped input — the rule then runs once over all elements, or \
-                         key its outputs by the wildcard so every instance writes a distinct \
-                         path"
+            message: format!(
+                "rule fans out per {dims}, but its declared outputs are not keyed by that \
+                 dimension: expansion creates one instance per element and every instance bakes \
+                 the SAME concrete output path(s) — run concurrently they race \
+                 (FileExistsError/missing-file crashes), sequentially they duplicate work N−1 \
+                 times and the surviving result depends on scheduling order."
+            ),
+            suggestion: "if the fan-out is unintentional — an expand_inputs variable that merely \
+                         reuses a [[values]] table name is the classic case (e.g. {chr} meaning \
+                         'all chromosomes') — rename the variable (e.g. {chrom}) so the rule \
+                         becomes a single aggregation instance; for a genuine per-element rule, \
+                         key the outputs by that dimension's wildcard (e.g. \
+                         out/{chr}/{pair_id}.vcf.gz) so every instance writes a distinct path, \
+                         or drop the wildcard from a sample/pair aggregation and reference the \
+                         per-instance files via expand_inputs (e.g. expand_inputs = [{pattern = \
+                         \"qc/{sample}/fastqc.html\"}]) instead"
                 .into(),
         });
     }
@@ -1215,6 +1284,84 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+    }
+
+    #[test]
+    fn agg_race_values_dimension_unkeyed_by_outputs_warns() {
+        // Issue #829 (venus gather_chr_vcfs): expand_inputs fans the rule
+        // per {chr}, but the outputs are keyed only by {pair_id}. The old
+        // all-or-nothing output check saw the pair wildcard and exempted
+        // the rule — yet all 24 values instances per pair bake the SAME
+        // concrete path and race. The per-dimension check must catch it
+        // and name the table.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[pairs]]
+            pair_id = "P2"
+            experiment = "T2"
+            control = "N2"
+
+            [[values]]
+            name = "chr"
+            values = ["chr1", "chr2", "chr3"]
+
+            [[rules]]
+            name = "merge_chr_vcfs"
+            input = ["done.marker"]
+            expand_inputs = [{ pattern = "vcf.call/{chr}/{pair_id}.vcf.gz" }]
+            output = ["vcf.raw/{pair_id}.vcf.gz"]
+            shell = "cat {input} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+        assert_eq!(warnings[0].rule, "merge_chr_vcfs");
+        assert!(
+            warnings[0].message.contains("'chr'"),
+            "message must name the unrepresented values table: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn agg_race_silent_when_every_active_dimension_keyed() {
+        // The intentional per-chromosome scatter (venus Mutect2): the
+        // values wildcard keys the outputs alongside the pair wildcard, so
+        // every instance writes a distinct path — must stay silent.
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [[pairs]]
+            pair_id = "P1"
+            experiment = "T1"
+            control = "N1"
+
+            [[values]]
+            name = "chr"
+            values = ["chr1", "chr2"]
+
+            [[rules]]
+            name = "mutect2_chr"
+            input = ["bam/{pair_id}.bam"]
+            output = ["vcf.call/{chr}/{pair_id}.vcf.gz"]
+            shell = "gatk Mutect2 -R ref.fa -I {input} -O {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        assert!(
+            warnings.iter().all(|w| w.code != "SCI-AGG-RACE"),
+            "fully keyed fan-out must not fire: {warnings:?}"
+        );
     }
 
     #[test]
