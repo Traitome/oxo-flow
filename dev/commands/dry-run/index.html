@@ -4177,17 +4177,23 @@ its advice is evidence-driven: determine strandedness with RSeQC
 <code>infer_experiment.py</code> or the samplesheet's strandedness column before
 setting <code>-s 1</code>/<code>-s 2</code>.</p>
 <p>The <code>SCI-AGG-RACE</code> check flags an aggregation rule whose inputs/shell/when
-(or <code>expand_inputs</code> patterns) reference a fan-out wildcard — <code>{sample}</code> /
+(or <code>expand_inputs</code> patterns) activate a fan-out dimension — <code>{sample}</code> /
 <code>{group}</code>, a pair wildcard, a <code>[[values]]</code> table name, or an
-<code>output_pattern</code> producer's fresh wildcard — while its declared outputs
-contain <strong>no</strong> wildcard (issue #443). Expansion then creates one instance
-per fan-out element with every instance writing the same output path:
+<code>output_pattern</code> producer's fresh wildcard — while the declared outputs
+are <strong>not keyed by that dimension</strong> (issue #443; per-dimension keying
+since #829). Expansion creates one instance per fan-out element; every
+instance of an unkeyed dimension bakes the SAME concrete output path:
 concurrently they race, sequentially they duplicate work N−1 times. The
-remedy is the documented aggregation idiom: reference the per-sample files
-via <code>expand_inputs</code> (or key the outputs by the wildcard). The detector
-mirrors the engine's fan-out semantics, so rules whose outputs do carry
-the wildcard, <code>input_groups</code> rules, <code>output_pattern</code> producers, consumers
-keyed by the producer's fresh wildcard, and <code>when</code>-gated-off rules stay
+check is per-dimension, so a rule whose outputs carry one dimension's
+wildcard (say <code>{pair_id}</code>) while another active dimension (say a
+<code>[[values]]</code> table referenced from <code>expand_inputs</code>) is unkeyed still
+fires — the warning names each unkeyed dimension. The remedy is either
+the documented aggregation idiom (bind the dimension through
+<code>variables</code>/<code>expand_inputs</code> so the rule becomes a single instance) or
+keying the outputs by the dimension's wildcard for a genuine per-element
+rule. The detector mirrors the engine's fan-out semantics, so fully keyed
+rules, <code>input_groups</code> rules, <code>output_pattern</code> producers, consumers keyed
+by the producer's fresh wildcard, and <code>when</code>-gated-off rules stay
 silent.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># A 2-sample pilot of a VQSR workflow fails for scientific reasons —</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># the preflight says so before any compute is spent</span>
