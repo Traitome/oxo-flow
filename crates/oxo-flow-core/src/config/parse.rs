@@ -379,14 +379,11 @@ impl WorkflowConfig {
         // up-to-date" while the checkpoint records both as completed, so one
         // sample's data can silently be consumed as the other's. Warn (never
         // error): orthogonal grouping with `{group}` in the paths is
-        // legitimate.
-        for (sample, first_owner, second_owner) in config.duplicate_sample_owners() {
-            tracing::warn!(
-                "sample '{sample}' is declared by both {first_owner} and {second_owner} — \
-                 unless every rule path distinguishes them (e.g. a {{group}} component), the \
-                 two instances share an output path and one is skipped as up-to-date while \
-                 consuming the other's data"
-            );
+        // legitimate. Rendered once per parse, naming every duplicate — a
+        // cohort that pairs every group sample otherwise prints 20
+        // near-identical warnings on each validate/dry-run/run.
+        if let Some(warning) = config.duplicate_owner_warning() {
+            tracing::warn!("{warning}");
         }
 
         // ── Consolidate all sample sources into samples_list ──────────────
