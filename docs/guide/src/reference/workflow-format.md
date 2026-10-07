@@ -1530,6 +1530,57 @@ form is genuinely unavailable. Chunk-level aggregation is the transform
 operator's `combine` stage instead (see
 [Transform Operator](../gallery/transform-operator.md)).
 
+**Namespace collision with `[[values]]` tables** — a bare `{name}` in an
+expand_inputs pattern that matches a `[[values]]` table name is treated as
+that table: the rule fans out once per table entry, and the pattern is
+expanded entry-by-entry (`{chr}` with `values = ["chr1", …, "chrM"]` means
+24 separate instances, not "all chromosomes at once"). Writing an
+aggregation rule that reuses a table name for its *literal* meaning
+("collect every chr's calls") therefore silently produces a per-entry
+scatter whose instances usually share one output path and race — the
+repair is a distinct variable name for the aggregation reading, or keying
+the outputs by the table's wildcard for a genuine per-entry rule:
+
+```toml
+[[values]]
+name = "chr"
+values = ["chr1", "chr2", "chr3"]
+
+[config]
+chrom_list = ["chr1", "chr2", "chr3"]   # the aggregation binding's source
+
+# WRONG: 'chr' is the [[values]] table — the rule fans into 3 instances
+# per pair, every one writing the SAME vcf.raw/{pair_id}.vcf.gz and racing
+[[rules]]
+name = "merge_chr_vcfs_bad"
+expand_inputs = [{ pattern = "vcf.call/{chr}/{pair_id}.vcf.gz" }]
+output = ["vcf.raw/{pair_id}.vcf.gz"]
+
+# RIGHT (aggregation): bind the dimension through `variables` instead —
+# the pattern expands to ALL entries inside ONE instance ({input} is the
+# space-joined list), so the merge happens once
+[[rules]]
+name = "merge_chr_vcfs"
+expand_inputs = [
+  { pattern = "vcf.call/{chrom}/{pair_id}.vcf.gz",
+    variables = { chrom = "config.chrom_list" } }
+]
+output = ["vcf.raw/{pair_id}.vcf.gz"]
+
+# RIGHT (scatter): keep the bare table wildcard, but key the outputs by it
+[[rules]]
+name = "call_chr"
+output = ["vcf.call/{chr}/{pair_id}.vcf.gz"]
+```
+
+The two "RIGHT" forms differ in cardinality: the `variables`-bound
+aggregation yields one instance whose `{input}` lists every chromosome;
+the bare-wildcard scatter yields one instance per chromosome (and
+typically a downstream aggregation rule over the keyed outputs).
+The preflight reports the racing shape as `SCI-AGG-RACE`, naming the
+unkeyed fan-out dimension (see
+[`oxo-flow dry-run` → Scientific Preflight](../commands/dry-run.md#scientific-preflight)).
+
 ---
 
 ## Wildcards
