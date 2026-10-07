@@ -10,6 +10,12 @@ Simulate execution without running any commands. Shows the execution plan, rule 
 oxo-flow dry-run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 ```
 
+`plan` is an alias for `dry-run` — `oxo-flow plan [OPTIONS] [WORKFLOW]
+[KEY=VALUE]...` is byte-identical, flag for flag. The documentation speaks
+of the execution **plan** (this page's "Plan:" headline, the checkpoint
+preview's `plan` array in `--json`); the subcommand now matches that
+vocabulary (issue #831).
+
 `dry-run` accepts the same configuration inputs as `run` — `--arg`,
 trailing `KEY=VALUE` overrides, `--profile`, `--rerun`, and
 `--resume-failed` — and predicts the execution set with the exact same
