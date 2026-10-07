@@ -367,6 +367,7 @@ below cover the codes referenced across this documentation.
 | `W031` | Producer is when-gated but its consumer expands the output unconditionally |
 | `W032` | A config key looks like a secret but is not declared `sensitive` |
 | `W033` | Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first |
+| `W034` | An `{input[N]}`/`{output[N]}` index is out of range, or a named `{input.key}`/`{output.key}` is not declared — renders as literal brace text and the tool fails on a path that looks valid |
 
 Schema-check codes (`S001`–`S007`) come from the raw-file schema pass,
 reachable through `oxo-flow lint` (not `validate`, which reports only
