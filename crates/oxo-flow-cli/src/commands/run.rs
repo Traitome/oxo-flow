@@ -8401,7 +8401,11 @@ shell = "cp stage1.txt stage2.txt"
             ("trim_S2".to_string(), pixi_env("envs/absent/pixi.toml")),
         ];
         let failures = super::backend_preflight_failures(&pending, &resolver);
-        assert_eq!(failures.len(), 1, "identical specs must group: {failures:?}");
+        assert_eq!(
+            failures.len(),
+            1,
+            "identical specs must group: {failures:?}"
+        );
         let f = &failures[0];
         assert_eq!(f.kind, "pixi");
         assert_eq!(f.count, 2);
