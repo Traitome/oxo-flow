@@ -7255,7 +7255,7 @@ context-aware diagnostics run.
 | <code>required</code> | Boolean | No | Pipeline fails if this rule fails, even without downstream deps |
 | <code>optional</code> | Boolean | No | Rule is skipped (no error) when its inputs don't exist — literal globs count as missing only when they match nothing |
 | <code>benchmark</code> | String | No | Per-instance benchmark file: after the rule completes, the engine writes its sampled metrics (wall time, peak RSS, memory limit, CPU seconds, retries) as JSON to this path — engine wildcards in the path resolve per instance, and a failed write never fails the rule |
-| <code>log</code> | String | No | Log file path for rule execution output |
+| <code>log</code> | String | No | Log file path for rule execution output. The engine creates its parent directory and expands <code>{config.x}</code>/wildcards in the path, but <strong>populating the file is the rule's job</strong> — typically via <code>2&gt; {log}</code> in the shell, so it carries content only when the tool writes to stderr. A tool that self-logs to its own location leaves the declared log empty; that never means diagnostics were lost — the captured stdout/stderr tails are stored in the checkpoint's <code>rule_runs</code> regardless, and a succeeded rule whose declared log <em>and</em> both captured tails are all empty earns one Info hint that the tool likely self-logs (issue #832) |
 | <code>group</code> | String | No | Reserved metadata: cluster array grouping keys on the rule's template name by design; this label is round-tripped for external tooling |
 | <code>cache_key</code> | String | No | Content-addressed output reuse: cached outputs are restored when the key, inputs, outputs, and rendered command hash identically to a previous run (issue #194 §2.3) |
 | <code>input_function</code> | String | No | Parsed but <strong>not yet called</strong> — no dynamic input resolution is performed today |
@@ -8509,6 +8509,7 @@ as a space-joined list in the shell (<code>["a", "b"]</code> → <code>a b</code
 <li><strong>Multiple inputs/outputs</strong>: use <code>{input[0]}</code>, <code>{input[1]}</code> … to select specific files, or <code>{input}</code> to pass all of them at once</li>
 <li>The indexed form communicates <em>intent</em> ("this rule expects exactly this file"), so it remains useful even for single-element arrays in multi-step pipelines</li>
 </ul>
+<p>An index at or beyond the declared count is never substituted: rendering leaves the literal <code>{input[N]}</code> text in the command and the tool fails with an unrelated "No such file" error. <code>oxo-flow lint</code> catches this statically as <strong>W034</strong> (which also flags map-form rules whose sorted-key indexing has shifted under a declaration edit — the index positions are the sorted keys, not the text order).</p>
 <h3 id="named-input-output">Named Input &amp; Output<a class="headerlink" href="#named-input-output" title="Permanent link">#</a></h3>
 <p>For complex rules with many files, give the <code>input</code>/<code>output</code> fields an
 inline map (<code>FilePatterns::Map</code>) and reference the entries with
@@ -8522,6 +8523,10 @@ inline map (<code>FilePatterns::Map</code>) and reference the entries with
 <p>There is no <code>[rules.named_input]</code> / <code>[rules.named_output]</code> TOML table —
 the map is the value of <code>input</code>/<code>output</code> itself (a sub-table named
 <code>named_input</code> fails validation with E017).</p>
+<p>A named reference to a key the rule does not declare is likewise never
+substituted (literal brace text at render time) and is flagged by <strong>W034</strong>
+along with the rule's actual keys, so a typo like <code>{input.tumer}</code> is
+reported at lint time instead of surfacing as a tool failure.</p>
 <h3 id="custom-wildcards">Custom Wildcards<a class="headerlink" href="#custom-wildcards" title="Permanent link">#</a></h3>
 <p>Any <code>{name}</code> pattern not matching a built-in placeholder is treated as a wildcard. oxo-flow expands these based on:</p>
 <ol>

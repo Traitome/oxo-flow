@@ -5360,6 +5360,18 @@ bytes-bounded, so a multi-byte UTF-8 cut lands on the nearest character
 boundary (rounding down); older checkpoints that only carry the legacy
 2048-character tails remain readable (the new size applies from the next
 recorded run onward).</p>
+<h4 id="declared-log-files-vs-captured-tails">Declared <code>log</code> files vs captured tails<a class="headerlink" href="#declared-log-files-vs-captured-tails" title="Permanent link">#</a></h4>
+<p>A rule's declared <code>log</code> path is separate from this capture: the engine
+creates the log's parent directory, but the file only gains content when
+the rule's shell redirects into it (<code>2&gt; {log}</code>) and the tool writes to
+stderr. Many bioinformatics tools self-log to their own location instead
+(e.g. a <code>logs/&lt;date&gt;.txt</code> file they manage themselves), leaving the
+declared log empty — <strong>an empty declared log never means no diagnostics
+were captured</strong>; the tails above are persisted in <code>rule_runs</code> regardless.
+When a rule succeeds, its declared log is empty (0-byte file or empty
+directory), <em>and</em> both captured tails are empty too, the run emits one
+Info-level hint that the tool likely self-logs elsewhere — quiet tools
+with output in any of the three stay silent (issue #832).</p>
 <h3 id="workflow-version-in-the-checkpoint">Workflow version in the checkpoint<a class="headerlink" href="#workflow-version-in-the-checkpoint" title="Permanent link">#</a></h3>
 <p>When the workflow file lives inside a git repository, oxo-flow records the
 repository's <strong>HEAD commit SHA</strong> in the checkpoint (<code>workflow_git_sha</code>) at

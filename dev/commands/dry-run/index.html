@@ -4053,6 +4053,11 @@
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow dry-run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 </span></code></pre></div>
+<p><code>plan</code> is an alias for <code>dry-run</code> — <code>oxo-flow plan [OPTIONS] [WORKFLOW]
+[KEY=VALUE]...</code> is byte-identical, flag for flag. The documentation speaks
+of the execution <strong>plan</strong> (this page's "Plan:" headline, the checkpoint
+preview's <code>plan</code> array in <code>--json</code>); the subcommand now matches that
+vocabulary (issue #831).</p>
 <p><code>dry-run</code> accepts the same configuration inputs as <code>run</code> — <code>--arg</code>,
 trailing <code>KEY=VALUE</code> overrides, <code>--profile</code>, <code>--rerun</code>, and
 <code>--resume-failed</code> — and predicts the execution set with the exact same

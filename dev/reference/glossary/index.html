@@ -5149,6 +5149,10 @@ below cover the codes referenced across this documentation.</p>
 <td><code>W033</code></td>
 <td>Two rules write the same output path (differently-named wildcards over one template count too) — second writer silently overwrites the first</td>
 </tr>
+<tr>
+<td><code>W034</code></td>
+<td>An <code>{input[N]}</code>/<code>{output[N]}</code> index is out of range, or a named <code>{input.key}</code>/<code>{output.key}</code> is not declared — renders as literal brace text and the tool fails on a path that looks valid</td>
+</tr>
 </tbody>
 </table>
 <p>Schema-check codes (<code>S001</code>–<code>S007</code>) come from the raw-file schema pass,

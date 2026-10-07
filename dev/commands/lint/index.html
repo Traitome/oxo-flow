@@ -4025,6 +4025,21 @@ counterpart <code>results/{sample}.vcf</code> when <code>out_dir = "results"</co
 not collide with <code>{config.alt_dir}/{sample}.vcf</code> when the values differ.
 See
 <a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.
+W034 flags an <code>{input[N]}</code> / <code>{output[N]}</code> placeholder whose index is out
+of range, or a named <code>{input.key}</code> / <code>{output.key}</code> whose key the rule
+does not declare. The substitution loop only renders indices <code>0..len</code>
+(list-form: declaration order; map-form: keys in sorted order; dir-form:
+the single entry), and only renders named references for declared keys —
+anything else survives rendering as literal brace text, so the tool is
+invoked with a path like <code>{input[5]}</code> and fails with an unrelated
+"No such file" error that hides the real mistake. The repair depends on
+the input shape: use an in-range index (map-form indices follow the
+rule's sorted keys, not the text order), switch to the bare <code>{input}</code> /
+<code>{output}</code> form to interpolate all entries, or — preferred for
+role-bearing IO — declare a map and use named access (<code>tumor = "..."</code> +
+<code>{input.tumor}</code>), which also survives reordering. Lines that are comments
+in the rendered script are exempt, and <code>script</code> paths are checked the
+same way as inline <code>shell</code>.
 W032 flags a <code>[config]</code> key whose <em>name</em> looks like a secret
 (<code>token</code>, <code>secret</code>, <code>passwd</code>, <code>password</code>, <code>credential</code>, <code>api_key</code>,
 <code>access_key</code>, <code>private_key</code>, <code>ssh_key</code>, <code>key</code> — matched at word/segment
