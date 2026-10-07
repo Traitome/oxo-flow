@@ -266,7 +266,10 @@ pub enum Commands {
         #[arg(long)]
         background: bool,
     },
-    /// Preview execution without running any commands.
+    /// Preview execution without running any commands (alias: plan — the
+    /// documentation's vocabulary; `oxo-flow plan` ≡ `oxo-flow dry-run`,
+    /// issue #831).
+    #[command(alias = "plan")]
     DryRun {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
         workflow: Option<PathBuf>,
