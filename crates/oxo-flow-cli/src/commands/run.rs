@@ -2457,6 +2457,62 @@ pub async fn run_command(
         eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
 
+    // Backend availability pre-flight: a pending rule declaring an
+    // environment whose backend binary is missing used to surface only
+    // mid-run as the backend's own "command not found" buried in that
+    // rule's stderr log (live: a missing pixi discovered hours into a
+    // cohort run). Reuse the exact validator `env check` uses and fail
+    // before executing anything when a pending rule's backend is unusable
+    // — mirroring the budget pre-flight above. Skipped/cached rules do not
+    // block: this run never invokes their backend.
+    let pending_envs: Vec<(String, oxo_flow_core::rule::EnvironmentSpec)> = {
+        let ck = checkpoint.lock().await;
+        let preview = crate::commands::run_preview::preview_run_plan(
+            &ck,
+            &config,
+            &dag,
+            &order,
+            workdir_actual.as_ref(),
+            &wildcard_values,
+            &sensitive_keys,
+            &config.workflow.interpreter_map,
+            &checkpoint_path,
+            rerun,
+            resume_failed,
+        );
+        preview
+            .plan
+            .iter()
+            .filter(|entry| !entry.status.is_skip())
+            .filter_map(|entry| {
+                config
+                    .get_rule(&entry.name)
+                    .map(|rule| (entry.name.clone(), rule.environment.clone()))
+            })
+            .filter(|(_, env)| !env.is_empty())
+            .collect()
+    };
+    let env_failures = backend_preflight_failures(
+        &pending_envs,
+        &oxo_flow_core::environment::EnvironmentResolver::new(),
+    );
+    if !env_failures.is_empty() {
+        progress.finish_and_clear();
+        let detail = env_failures
+            .iter()
+            .map(|f| format!("  - {f}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Pre-execution abort: nothing ran — the summary still reports
+        // the failed run for --json consumers (issue #142 H6).
+        json_summary.emit("failed", &RunCounts::default(), vec![]);
+        return Err(anyhow::anyhow!(
+            "{} environment backend(s) required by pending rules are unavailable; no rules were run:\n{}",
+            env_failures.len(),
+            detail
+        ));
+    }
+
     // Same cache dir the executor's EnvironmentResolver uses — reference
     // builds that declare an environment share the env cache with rules.
     let env_cache_dir = exec_config
@@ -7196,6 +7252,118 @@ pub async fn resume_command(
     .await
 }
 
+/// One consolidated backend-availability failure from the run pre-flight:
+/// identical (backend, message) pairs across a cohort's instances collapse
+/// into a single entry whose `count` says how many pending rules share it.
+#[derive(Debug, PartialEq)]
+struct BackendPreflightFailure {
+    kind: String,
+    message: String,
+    example_rule: String,
+    spec: String,
+    count: usize,
+}
+
+impl std::fmt::Display for BackendPreflightFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{kind}: {message} — required by {count} pending rule(s), e.g. `{example_rule}` (environment: {spec}); {hint}",
+            kind = self.kind,
+            message = self.message,
+            count = self.count,
+            example_rule = self.example_rule,
+            spec = self.spec,
+            hint = backend_install_hint(&self.kind),
+        )
+    }
+}
+
+fn backend_install_hint(kind: &str) -> &'static str {
+    match kind {
+        "pixi" => "install pixi (https://pixi.sh) and ensure it is on PATH",
+        "mamba" => "install mamba or micromamba and ensure it is on PATH",
+        "conda" => "install conda and ensure it is on PATH",
+        "docker" => "install/start Docker and ensure `docker` is on PATH",
+        "singularity" => "install Singularity/Apptainer and ensure it is on PATH",
+        "modules" => "ensure environment modules (modulecmd) is on PATH",
+        _ => "make the environment backend available on PATH",
+    }
+}
+
+/// Primary spec string for an environment, for the failure message.
+fn primary_env_spec(env: &oxo_flow_core::rule::EnvironmentSpec) -> String {
+    env.mamba
+        .as_deref()
+        .or(env.conda.as_deref())
+        .or(env.pixi.as_deref())
+        .or(env.docker.as_deref())
+        .or(env.singularity.as_deref())
+        .or(env.venv.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| env.modules.join(","))
+}
+
+/// Validate each unique environment spec among the pending rules once
+/// (instances fan out one rule template × N samples, so the spec set is
+/// tiny even for large cohorts) and collapse the failures: rules sharing
+/// one broken spec merge into a single entry, and distinct specs failing
+/// with the identical message (the backend-missing case) merge too, so
+/// the operator fixes one root cause per line. First-failure order is
+/// preserved for stable output.
+fn backend_preflight_failures(
+    pending: &[(String, oxo_flow_core::rule::EnvironmentSpec)],
+    resolver: &oxo_flow_core::environment::EnvironmentResolver,
+) -> Vec<BackendPreflightFailure> {
+    // spec cache_key → failure slot (None = spec validated OK)
+    let mut spec_slot: std::collections::HashMap<String, Option<usize>> =
+        std::collections::HashMap::new();
+    // (backend kind, message) → failure slot, for merging identical root causes
+    let mut msg_slot: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<BackendPreflightFailure> = Vec::new();
+    for (rule_name, env) in pending {
+        let key = resolver.cache_key(env);
+        match spec_slot.get(&key) {
+            Some(Some(slot)) => {
+                out[*slot].count += 1;
+                continue;
+            }
+            Some(None) => continue, // identical spec, already validated OK
+            None => {}
+        }
+        if let Err(err) = resolver.validate_spec(env) {
+            let (kind, message) = match &err {
+                oxo_flow_core::OxoFlowError::Environment { kind, message } => {
+                    (kind.clone(), message.clone())
+                }
+                other => ("environment".to_string(), other.to_string()),
+            };
+            let slot = match msg_slot.get(&(kind.clone(), message.clone())) {
+                Some(&slot) => {
+                    out[slot].count += 1;
+                    slot
+                }
+                None => {
+                    out.push(BackendPreflightFailure {
+                        kind: kind.clone(),
+                        message: message.clone(),
+                        example_rule: rule_name.clone(),
+                        spec: primary_env_spec(env),
+                        count: 1,
+                    });
+                    msg_slot.insert((kind, message), out.len() - 1);
+                    out.len() - 1
+                }
+            };
+            spec_slot.insert(key, Some(slot));
+        } else {
+            spec_slot.insert(key, None);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -8202,6 +8370,51 @@ shell = "cp stage1.txt stage2.txt"
         assert_eq!(
             parse_spawn_watchdog_threshold(Some("120")),
             std::time::Duration::from_secs(120)
+        );
+    }
+
+    fn pixi_env(manifest: &str) -> oxo_flow_core::rule::EnvironmentSpec {
+        oxo_flow_core::rule::EnvironmentSpec {
+            pixi: Some(manifest.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn backend_preflight_passes_empty_and_empty_specs() {
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        // Nothing pending → nothing to validate.
+        assert!(super::backend_preflight_failures(&[], &resolver).is_empty());
+        // A rule with no environment declaration never invokes a backend.
+        let no_env = vec![("qc".to_string(), Default::default())];
+        assert!(super::backend_preflight_failures(&no_env, &resolver).is_empty());
+    }
+
+    #[test]
+    fn backend_preflight_reports_missing_pixi_manifest_once_per_unique_spec() {
+        // Two pending instances of one rule template share the same spec:
+        // validate it once and collapse the failures, keeping the FIRST
+        // pending rule in execution order as the example (deterministic).
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        let pending = vec![
+            ("trim_S1".to_string(), pixi_env("envs/absent/pixi.toml")),
+            ("trim_S2".to_string(), pixi_env("envs/absent/pixi.toml")),
+        ];
+        let failures = super::backend_preflight_failures(&pending, &resolver);
+        assert_eq!(
+            failures.len(),
+            1,
+            "identical specs must group: {failures:?}"
+        );
+        let f = &failures[0];
+        assert_eq!(f.kind, "pixi");
+        assert_eq!(f.count, 2);
+        assert_eq!(f.example_rule, "trim_S1");
+        assert_eq!(f.spec, "envs/absent/pixi.toml");
+        let rendered = f.to_string();
+        assert!(
+            rendered.contains("required by 2 pending rule(s)") && rendered.contains("install pixi"),
+            "the message must carry the cohort size and the install hint: {rendered}"
         );
     }
 }
