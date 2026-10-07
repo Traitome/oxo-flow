@@ -27,7 +27,7 @@ use crate::executor::process::evaluate_condition_with_workdir_and_base_dir;
 use crate::rule::{FilePatterns, Rule};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// `{config.<key>}` — execution-time interpolation channels
@@ -316,7 +316,8 @@ pub fn rule_fingerprint(
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
 ) -> String {
-    rule_fingerprint_impl(rule, interpreter_map, shell_prelude, true)
+    let mut cache = EnvTagCache::new();
+    rule_fingerprint_impl(rule, interpreter_map, shell_prelude, None, &mut cache, true)
 }
 
 /// Same fingerprint with the `input` field EXCLUDED (issue #142 M1): for an
@@ -329,13 +330,80 @@ pub fn rule_fingerprint_without_input(
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
 ) -> String {
-    rule_fingerprint_impl(rule, interpreter_map, shell_prelude, false)
+    let mut cache = EnvTagCache::new();
+    rule_fingerprint_impl(
+        rule,
+        interpreter_map,
+        shell_prelude,
+        None,
+        &mut cache,
+        false,
+    )
+}
+
+/// Environment file tags, memoized across the rules of one analysis pass.
+///
+/// A cohort's rule instances share a handful of environment specs, so the
+/// per-call cache avoids re-reading and re-hashing the same manifest/lock
+/// hundreds of times at run start.
+type EnvTagCache = HashMap<PathBuf, String>;
+
+/// Readable file-backed environment specs of `env`, as (hash label, path).
+///
+/// File identity rides in the label so the digest is bound to which spec
+/// file it belongs to. The pixi entry also carries the sibling `pixi.lock`:
+/// pixi resolves exact versions from the lockfile, so an in-place lock edit
+/// changes the environment just as much as a manifest edit.
+fn environment_spec_files(
+    env: &crate::rule::EnvironmentSpec,
+    base: &Path,
+) -> Vec<(String, PathBuf)> {
+    let mut files = Vec::new();
+    for (kind, spec) in [
+        ("conda", env.conda.as_deref()),
+        ("mamba", env.mamba.as_deref()),
+        ("pixi", env.pixi.as_deref()),
+        ("venv", env.venv.as_deref()),
+        ("venv_requirements", env.venv_requirements.as_deref()),
+    ] {
+        let Some(spec) = spec else { continue };
+        let path = base.join(spec);
+        if kind == "pixi" {
+            let lock = path.parent().unwrap_or(base).join("pixi.lock");
+            files.push((format!("environment_file:pixi.lock:{spec}"), lock));
+        }
+        files.push((format!("environment_file:{kind}:{spec}"), path));
+    }
+    files
+}
+
+fn environment_file_tags(
+    env: &crate::rule::EnvironmentSpec,
+    base_dir: Option<&Path>,
+    cache: &mut EnvTagCache,
+) -> Vec<(String, String)> {
+    let Some(base) = base_dir else {
+        return Vec::new();
+    };
+    environment_spec_files(env, base)
+        .into_iter()
+        .map(|(label, path)| {
+            let tag = cache
+                .entry(path.clone())
+                .or_insert_with(|| crate::environment::spec_content_tag(&path.to_string_lossy()))
+                .clone();
+            (label, tag)
+        })
+        .filter(|(_, tag)| !tag.is_empty())
+        .collect()
 }
 
 fn rule_fingerprint_impl(
     rule: &Rule,
     interpreter_map: &HashMap<String, String>,
     shell_prelude: Option<&str>,
+    base_dir: Option<&Path>,
+    env_tag_cache: &mut EnvTagCache,
     include_input: bool,
 ) -> String {
     let mut hasher = Sha256::new();
@@ -397,6 +465,18 @@ fn rule_fingerprint_impl(
     // is deterministic. Environment changes alter tool versions and results.
     let env = toml::to_string(&rule.environment).unwrap_or_default();
     add("environment", &env);
+    // The serialized spec holds only the PATH of a file-backed environment
+    // (pixi manifest, conda/mamba YAML, venv requirements). Editing such a
+    // file in place — e.g. committing a reproducibility-pinned `pixi.lock` —
+    // leaves the spec string untouched, so completed rules silently kept
+    // running under the old environment. When the workflow directory is
+    // known, fold every readable spec file's content digest (plus the pixi
+    // sibling lockfile) into the fingerprint. Unreadable or non-file specs
+    // contribute nothing, matching the reference_fingerprint degradation
+    // policy (issue #97) and spec_content_tag's named-env policy (#532).
+    for (label, tag) in environment_file_tags(&rule.environment, base_dir, env_tag_cache) {
+        add(&label, &tag);
+    }
 
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
@@ -621,8 +701,18 @@ pub fn detect_config_changes_with_replay(
     let mut current_no_input_fingerprints: HashMap<String, String> = HashMap::new();
     let mut fingerprint_mismatches: Vec<String> = Vec::new();
     let mut sample_selection_exempt: Vec<String> = Vec::new();
+    // Env-file digests are shared across instances of the same template;
+    // read and hash each distinct file once for the whole pass.
+    let mut env_tag_cache = EnvTagCache::new();
     for rule in rules {
-        let fingerprint = rule_fingerprint(rule, interpreter_map, shell_prelude);
+        let fingerprint = rule_fingerprint_impl(
+            rule,
+            interpreter_map,
+            shell_prelude,
+            base_dir,
+            &mut env_tag_cache,
+            true,
+        );
         if let Some(stored) = checkpoint.rule_fingerprints.get(&rule.name)
             && *stored != fingerprint
             && checkpoint.is_completed(&rule.name)
@@ -637,10 +727,13 @@ pub fn detect_config_changes_with_replay(
             // input-excluded fingerprints — those keep invalidating.
             let selection_only = expand_inputs_refs_engine_injected(rule, config)
                 && checkpoint.rule_fingerprints_no_input.get(&rule.name)
-                    == Some(&rule_fingerprint_without_input(
+                    == Some(&rule_fingerprint_impl(
                         rule,
                         interpreter_map,
                         shell_prelude,
+                        base_dir,
+                        &mut env_tag_cache,
+                        false,
                     ));
             if selection_only {
                 sample_selection_exempt.push(rule.name.clone());
@@ -651,7 +744,14 @@ pub fn detect_config_changes_with_replay(
         current_fingerprints.insert(rule.name.clone(), fingerprint);
         current_no_input_fingerprints.insert(
             rule.name.clone(),
-            rule_fingerprint_without_input(rule, interpreter_map, shell_prelude),
+            rule_fingerprint_impl(
+                rule,
+                interpreter_map,
+                shell_prelude,
+                base_dir,
+                &mut env_tag_cache,
+                false,
+            ),
         );
     }
     fingerprint_mismatches.sort();
@@ -2471,8 +2571,12 @@ mod issue533_tests {
             output_pattern: Some(pattern.into()),
             ..Default::default()
         };
-        let a = rule_fingerprint_impl(&mk("calls/37/{sample}/*.vcf"), &HashMap::new(), None, true);
-        let b = rule_fingerprint_impl(&mk("calls/38/{sample}/*.vcf"), &HashMap::new(), None, true);
+        let mk_fp = |pattern: &str| {
+            let mut cache = EnvTagCache::new();
+            rule_fingerprint_impl(&mk(pattern), &HashMap::new(), None, None, &mut cache, true)
+        };
+        let a = mk_fp("calls/37/{sample}/*.vcf");
+        let b = mk_fp("calls/38/{sample}/*.vcf");
         assert_ne!(
             a, b,
             "a changed output_pattern key must change the fingerprint"
@@ -2491,5 +2595,199 @@ mod issue533_tests {
         // Per-group list keys are injected only for DECLARED groups.
         assert!(is_engine_injected_key_with("samples_cohort", &["cohort"]));
         assert!(!is_engine_injected_key_with("samples_dir", &["cohort"]));
+    }
+}
+
+// ── Environment file content in the rule fingerprint ────────────────────
+
+#[cfg(test)]
+mod env_content_tests {
+    use super::*;
+
+    fn pixi_rule() -> Rule {
+        Rule {
+            name: "align".to_string(),
+            input: FilePatterns::List(vec!["r.fastq".to_string()]),
+            output: FilePatterns::List(vec!["r.bam".to_string()]),
+            shell: Some("bwa mem".to_string()),
+            environment: crate::rule::EnvironmentSpec {
+                pixi: Some("envs/pixi.toml".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn fingerprint_with(rule: &Rule, base_dir: Option<&Path>) -> String {
+        let mut cache = EnvTagCache::new();
+        rule_fingerprint_impl(rule, &HashMap::new(), None, base_dir, &mut cache, true)
+    }
+
+    fn fingerprint_without_input_with(rule: &Rule, base_dir: Option<&Path>) -> String {
+        let mut cache = EnvTagCache::new();
+        rule_fingerprint_impl(rule, &HashMap::new(), None, base_dir, &mut cache, false)
+    }
+
+    fn write_pixi_env(base: &Path, manifest: &str, lock: Option<&str>) {
+        std::fs::create_dir_all(base.join("envs")).unwrap();
+        std::fs::write(base.join("envs/pixi.toml"), manifest).unwrap();
+        if let Some(lock) = lock {
+            std::fs::write(base.join("envs/pixi.lock"), lock).unwrap();
+        }
+    }
+
+    #[test]
+    fn pixi_lock_edit_changes_fingerprint_with_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let rule = pixi_rule();
+        write_pixi_env(
+            base,
+            "[dependencies]\nbwa = \"0.7.17\"\n",
+            Some("version 1\n"),
+        );
+        let before = fingerprint_with(&rule, Some(base));
+
+        // In-place lock edit — the manifest path string is untouched; only
+        // the lockfile content changed.
+        std::fs::write(base.join("envs/pixi.lock"), "version 2\n").unwrap();
+        let after = fingerprint_with(&rule, Some(base));
+        assert_ne!(
+            before, after,
+            "an in-place pixi.lock edit must invalidate the fingerprint"
+        );
+    }
+
+    #[test]
+    fn pixi_manifest_edit_changes_fingerprint_with_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let rule = pixi_rule();
+        write_pixi_env(base, "[dependencies]\nbwa = \"0.7.17\"\n", Some("v1\n"));
+        let before = fingerprint_with(&rule, Some(base));
+
+        std::fs::write(
+            base.join("envs/pixi.toml"),
+            "[dependencies]\nbwa = \"0.7.18\"\n",
+        )
+        .unwrap();
+        let after = fingerprint_with(&rule, Some(base));
+        assert_ne!(
+            before, after,
+            "an in-place manifest edit must invalidate the fingerprint"
+        );
+    }
+
+    #[test]
+    fn without_base_dir_fingerprint_stays_spec_string_only() {
+        // Callers without a workflow directory (the 3-arg wrappers) keep the
+        // exact prior semantics: env file CONTENT is invisible, only the
+        // serialized spec differs when the spec string itself changes.
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let rule = pixi_rule();
+        write_pixi_env(base, "[dependencies]\nbwa = \"0.7.17\"\n", Some("v1\n"));
+        let before = fingerprint_with(&rule, None);
+        std::fs::write(base.join("envs/pixi.lock"), "v2\n").unwrap();
+        assert_eq!(
+            before,
+            fingerprint_with(&rule, None),
+            "without a base dir the fingerprint must not depend on file contents"
+        );
+
+        let edited = Rule {
+            environment: crate::rule::EnvironmentSpec {
+                pixi: Some("envs/other.toml".to_string()),
+                ..Default::default()
+            },
+            ..pixi_rule()
+        };
+        assert_ne!(
+            fingerprint_with(&rule, None),
+            fingerprint_with(&edited, None),
+            "the spec string itself must still count"
+        );
+    }
+
+    #[test]
+    fn missing_lock_matches_lockless_baseline() {
+        // Absence of the sibling lockfile degrades silently: fingerprinting
+        // a manifest-only environment equals fingerprinting the same
+        // environment whose lock went missing — a first run in a pre-lock
+        // state must not error out.
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let rule = pixi_rule();
+        write_pixi_env(base, "[dependencies]\nbwa = \"0.7.17\"\n", None);
+        let lockless = fingerprint_with(&rule, Some(base));
+        std::fs::write(base.join("envs/pixi.lock"), "late lock\n").unwrap();
+        let with_late_lock = fingerprint_with(&rule, Some(base));
+        assert_ne!(
+            lockless, with_late_lock,
+            "a lockfile that appears IS an environment change"
+        );
+    }
+
+    #[test]
+    fn named_conda_env_contributes_no_file_digest() {
+        // A bare conda NAME (not a file) has no path to hash — the
+        // fingerprint with a base dir must equal the fingerprint without
+        // one: identity rides in the serialized spec (issue #532 policy).
+        let rule = Rule {
+            name: "qc".to_string(),
+            shell: Some("multiqc .".to_string()),
+            environment: crate::rule::EnvironmentSpec {
+                conda: Some("rnaseq".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            fingerprint_with(&rule, Some(dir.path())),
+            fingerprint_with(&rule, None),
+        );
+    }
+
+    #[test]
+    fn without_input_fingerprint_is_env_content_sensitive() {
+        // Issue #142 M1 selection exemption compares the input-EXCLUDED
+        // fingerprint — it must still see env-file edits, or a pixi.lock
+        // change would be waved through as "just a sample selection".
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let rule = pixi_rule();
+        write_pixi_env(base, "[dependencies]\nbwa = \"0.7.17\"\n", Some("v1\n"));
+        let before = fingerprint_without_input_with(&rule, Some(base));
+        std::fs::write(base.join("envs/pixi.lock"), "v2\n").unwrap();
+        assert_ne!(
+            before,
+            fingerprint_without_input_with(&rule, Some(base)),
+            "the selection-only exemption must not mask an env-file edit"
+        );
+    }
+
+    #[test]
+    fn env_tag_cache_memoizes_across_rules() {
+        // Two rules sharing one spec file hash the file once: after the
+        // first rule populates the cache, the second gets the same tag
+        // without a second read (observable via equal tags in the cache).
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        write_pixi_env(base, "[dependencies]\nbwa = \"0.7.17\"\n", Some("v1\n"));
+        let rule = pixi_rule();
+        let other = Rule {
+            name: "trim".to_string(),
+            ..pixi_rule()
+        };
+        let mut cache = EnvTagCache::new();
+        rule_fingerprint_impl(&rule, &HashMap::new(), None, Some(base), &mut cache, true);
+        let size_after_first = cache.len();
+        rule_fingerprint_impl(&other, &HashMap::new(), None, Some(base), &mut cache, true);
+        assert_eq!(
+            size_after_first,
+            cache.len(),
+            "the shared spec files must not be re-hashed for the second rule"
+        );
     }
 }
