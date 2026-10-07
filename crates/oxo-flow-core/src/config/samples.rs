@@ -216,6 +216,41 @@ impl WorkflowConfig {
         duplicates
     }
 
+    /// The engine's dup-ownership warning, rendered once per parse.
+    ///
+    /// `None` when every sample has a single owner. One duplicate renders a
+    /// per-sample message; several render a single aggregate line naming all
+    /// of them — a cohort that pairs every group sample (10 pairs × 2
+    /// members) otherwise prints 20 near-identical warnings on every
+    /// validate/dry-run/run, burying the one line that matters.
+    #[must_use]
+    pub fn duplicate_owner_warning(&self) -> Option<String> {
+        let duplicates = self.duplicate_sample_owners();
+        let note = "unless every rule path distinguishes them (e.g. a {group} component), \
+                    the instances share an output path and one is skipped as up-to-date \
+                    while consuming the other's data";
+        match duplicates.len() {
+            0 => None,
+            1 => {
+                let (sample, first_owner, second_owner) = &duplicates[0];
+                Some(format!(
+                    "sample '{sample}' is declared by both {first_owner} and {second_owner} \
+                     — {note}"
+                ))
+            }
+            n => {
+                let list = duplicates
+                    .iter()
+                    .map(|(sample, first, second)| format!("{sample} ({first} / {second})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(format!(
+                    "{n} samples are declared by more than one owner: {list} — {note}"
+                ))
+            }
+        }
+    }
+
     /// Replace the workflow's sample groups outright and keep the injected
     /// config lists (`samples_list` / `samples_<group>` / `pairs_list`) and
     /// `[[pairs]]` in sync with the new set.

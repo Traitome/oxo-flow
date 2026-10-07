@@ -8480,6 +8480,80 @@ fn duplicate_sample_owners_reports_cross_owner_ids() {
 }
 
 #[test]
+fn duplicate_owner_warning_collapses_to_one_message_per_parse() {
+    // The warning is rendered once per parse, not once per duplicate sample:
+    // a cohort that pairs every group sample (10 pairs × 2 members) would
+    // otherwise print 20 near-identical lines on every validate/dry-run/run.
+    // Clean workflows render nothing.
+    let clean = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "clean"
+        version = "1.0.0"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+        control = "N1"
+        "#,
+    )
+    .unwrap();
+    assert!(clean.duplicate_owner_warning().is_none());
+
+    // A single duplicate names the sample and both owners.
+    let single = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "single"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "cohort"
+        samples = ["S1"]
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    let warning = single.duplicate_owner_warning().unwrap();
+    assert!(
+        warning.contains("sample 'S1' is declared by both group 'cohort' and pair 'P1'"),
+        "per-sample message: {warning}"
+    );
+    assert_eq!(warning.matches("declared by").count(), 1);
+
+    // Several duplicates collapse into one line that still names all of them.
+    let many = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "many"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "case"
+        samples = ["S1", "S2"]
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+        "#,
+    )
+    .unwrap();
+    let warning = many.duplicate_owner_warning().unwrap();
+    assert!(
+        warning.starts_with("2 samples are declared by more than one owner: ")
+            && warning.contains("S1 (group 'case' / pair 'P1')")
+            && warning.contains("S2 (group 'case' / pair 'P1')"),
+        "aggregate message names every duplicate: {warning}"
+    );
+    assert_eq!(warning.matches("declared by").count(), 1);
+}
+
+#[test]
 fn duplicate_pairs_across_sources_dedup_identical_error_conflicting() {
     // Issue #823: a pair declared in both `pairs_file` and inline `[[pairs]]`
     // used to fan out twice under the same instance name — identical copies
