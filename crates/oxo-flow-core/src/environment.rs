@@ -484,13 +484,14 @@ impl CondaBackend {
     }
 }
 
-/// Short content tag for a file-backed spec, for cache keys (#532).
+/// Short content tag for a file-backed spec, for cache keys (#532) and
+/// rule fingerprints (environment content).
 ///
 /// Empty when the spec is not a readable file (inline package specifiers,
 /// named envs — their identity already rides elsewhere). The named-env
 /// conda path is the precedent: its content hash lives in the derived
 /// env name, so its cache-hit verify catches edits.
-fn spec_content_tag(spec: &str) -> String {
+pub(crate) fn spec_content_tag(spec: &str) -> String {
     // Stat-first regular-file gate (issue #714): read() on a writer-less
     // FIFO blocks forever; non-regular specs keep the empty tag.
     let Ok(meta) = std::fs::metadata(spec) else {
@@ -1480,8 +1481,19 @@ impl EnvironmentBackend for PixiBackend {
 
     fn cache_key(&self, spec: &str) -> String {
         // #532: same content-hash discipline as venv — the pixi manifest
-        // must invalidate the cache when edited.
-        format!("pixi:{spec}{}", spec_content_tag(spec))
+        // must invalidate the cache when edited. The sibling `pixi.lock`
+        // rides in the key too: pixi resolves exact versions from the
+        // lockfile (`pixi install` materializes what the lock says), so an
+        // in-place lock edit — e.g. a reproducibility pin committed to the
+        // repo — is an environment change just like a manifest edit.
+        let lock_tag = spec_content_tag(
+            &std::path::Path::new(spec)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("pixi.lock")
+                .to_string_lossy(),
+        );
+        format!("pixi:{spec}{}{lock_tag}", spec_content_tag(spec))
     }
 }
 
@@ -3131,6 +3143,40 @@ mod tests {
     fn pixi_cache_key() {
         let backend = PixiBackend;
         assert_eq!(backend.cache_key("default"), "pixi:default");
+    }
+
+    #[test]
+    fn pixi_cache_key_tracks_manifest_and_sibling_lock_content() {
+        // Same #532 discipline as venv: the key must move when the manifest
+        // is edited in place, and the sibling `pixi.lock` rides in the key
+        // too — a lock re-pin changes what "the environment" means, so a
+        // cached ready-env must not be reused across it.
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("pixi.toml");
+        std::fs::write(&manifest, "[dependencies]\npython = \"3.12\"\n").unwrap();
+        let spec = manifest.to_str().unwrap();
+        let key = PixiBackend.cache_key(spec);
+
+        std::fs::write(&manifest, "[dependencies]\npython = \"3.13\"\n").unwrap();
+        assert_ne!(
+            PixiBackend.cache_key(spec),
+            key,
+            "a manifest edit must change the cache key"
+        );
+
+        let lock = dir.path().join("pixi.lock");
+        std::fs::write(&lock, "version: 1\n").unwrap();
+        let key_with_lock = PixiBackend.cache_key(spec);
+        assert_ne!(
+            key_with_lock, key,
+            "a lockfile that appears IS an environment change"
+        );
+        std::fs::write(&lock, "version: 6\n").unwrap();
+        assert_ne!(
+            PixiBackend.cache_key(spec),
+            key_with_lock,
+            "an in-place lock re-pin must change the cache key"
+        );
     }
 
     // ── EnvironmentCache ───────────────────────────────────────────
