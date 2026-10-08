@@ -102,7 +102,7 @@ oxo-flow dry-run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.23.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
 Plan: would run: 2 | skip: 0 | completed: 0 (DAG size: 2)
   1. create_data
      threads=2
@@ -120,7 +120,7 @@ To execute:  oxo-flow run my-pipeline.oxoflow -j 1
 ```
 
 !!! note "The banner is TTY-gated"
-    The `oxo-flow v0.23.0 — …` line at the top only prints when stderr is an
+    The `oxo-flow v0.23.1 — …` line at the top only prints when stderr is an
     interactive terminal. In nohup/CI/log-capture runs it is suppressed (the
     run log header and `--version` still carry version provenance), so
     transcripts copied from redirected output will not show it.
@@ -134,7 +134,7 @@ oxo-flow run my-pipeline.oxoflow
 ```
 
 ```
-oxo-flow v0.23.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
 DAG: 2 rules in execution order
   1. create_data
   2. transform
@@ -193,7 +193,7 @@ oxo-flow graph my-pipeline.oxoflow
 ```
 
 ```text
-oxo-flow v0.23.0 — Rust-native bioinformatics pipeline engine
+oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
 ┌──────────────────────────────────────────────┐
 │  Workflow DAG: 2 rules, 1 dependencies       │
 │  Depth: 2, Width: 1, Critical path: 2 steps  │

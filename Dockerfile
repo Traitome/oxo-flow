@@ -45,7 +45,7 @@ WORKDIR /app
 # published label can never drift from the tag. This default is only the
 # local-dev fallback: bump it together with the workspace version when the
 # version is bumped (`make version-check` fails on drift).
-ARG VERSION=0.23.0
+ARG VERSION=0.23.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
