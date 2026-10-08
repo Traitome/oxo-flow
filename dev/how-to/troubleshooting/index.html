@@ -4845,6 +4845,13 @@ executes instead of "succeeding" from stale checkpoint outputs.</p>
 <li>If the input is genuinely optional, mark the rule <code>optional = true</code></li>
 <li>Re-run <code>oxo-flow validate workflow.oxoflow</code> to confirm the fix</li>
 </ol>
+<blockquote>
+<p><strong>Note</strong>: when <code>--workdir</code> points somewhere other than the workflow
+directory, source files that live <strong>in the workflow repo</strong> (declared rule
+inputs with no producer, and interpreter scripts) are linked into the
+workdir automatically as symlinks at run start — you never hand-copy
+them, and the gate only fires for data that is genuinely absent.</p>
+</blockquote>
 <h3 id="rule-not-found">Rule not found<a class="headerlink" href="#rule-not-found" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>rule not found: 'algn'</code> with a list of available rule names</p>
 <p><strong>Solution</strong>: The target name passed to <code>-t</code> or referenced in <code>depends_on</code> doesn't match any rule. oxo-flow supports <strong>prefix matching</strong> — try a shorter prefix:</p>
