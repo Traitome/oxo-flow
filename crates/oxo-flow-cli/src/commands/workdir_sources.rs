@@ -28,6 +28,17 @@
 //! check. Any OTHER repo path a shell command mentions is reported as an
 //! undeclared-reference note telling the operator to declare it as an input
 //! — declaring is what makes it linked and tracked.
+//!
+//! A third class is invisible to shell-text analysis entirely: companion
+//! index files that tools auto-derive from a declared file's path by
+//! convention (`samtools faidx`/picard read `ref.fa.fai`/`ref.fa.dict`,
+//! `bwa mem ref.fa` reads `ref.fa.amb/.ann/.bwt/.pac/.sa`, bgzip/tabix
+//! read `.gzi`/`.tbi`, …). Those paths never appear in the shell text, so
+//! after collecting the classes above the pass also links every such
+//! SIDECAR that exists beside a linked repo file — unless the DAG itself
+//! produces the sidecar (e.g. a dedicated `samtools faidx` indexing rule),
+//! in which case it is a generated intermediate and the run builds it in
+//! the workdir as usual.
 
 use crate::commands::{compute_sha256, run_preview};
 use oxo_flow_core::config::WorkflowConfig;
@@ -43,6 +54,9 @@ use std::path::Path;
 pub(crate) struct SourceLinkReport {
     /// Repo files newly materialized in the workdir as symlinks.
     pub linked: Vec<String>,
+    /// Subset of `linked` that are tool-convention index sidecars
+    /// (`ref.fa.fai`, `ref.fa.bwt`, …) rather than declared repo files.
+    pub sidecars: Vec<String>,
     /// Workdir copies that were byte-identical duplicates and became symlinks.
     pub converted: Vec<String>,
     /// Workdir copies that differ from the repo file — left in place, warned.
@@ -66,10 +80,24 @@ impl SourceLinkReport {
     }
 }
 
+/// Companion index suffixes that bioinformatics tools auto-derive from a
+/// file's own path by convention — never spelled out in the shell text:
+/// htslib/samtools/picard/GATK (`.fai`, `.dict`, bgzip/tabix/htsfile index
+/// forms), bwa index (`ref.fa` → `.amb/.ann/.bwt/.pac/.sa`), minimap2
+/// (`.mmi`). Only ever linked when the sidecar actually exists in the repo
+/// beside a file that is being linked anyway, so there are no false
+/// positives; tools with a bare-index-prefix convention (bowtie2 `-x
+/// index`) declare their index files as inputs instead.
+const SIDECAR_SUFFIXES: &[&str] = &[
+    ".fai", ".dict", ".gzi", ".csi", ".crai", ".tbi", ".bai", ".amb", ".ann", ".bwt", ".pac",
+    ".sa", ".mmi",
+];
+
 /// Link every workflow-repo file that rules in `order` reference (declared
-/// inputs without a producer + interpreter script paths) into `workdir` as
-/// symlinks. Returns an empty report for the single-directory mode
-/// (`workdir == workflow_dir`), where paths already resolve to the repo.
+/// inputs without a producer + interpreter script paths + tool-convention
+/// index sidecars) into `workdir` as symlinks. Returns an empty report for
+/// the single-directory mode (`workdir == workflow_dir`), where paths
+/// already resolve to the repo.
 pub(crate) fn link_workflow_sources(
     config: &WorkflowConfig,
     dag: &WorkflowDag,
@@ -104,7 +132,7 @@ pub(crate) fn link_workflow_sources(
         })
         .collect();
 
-    let (linkable, undeclared) = source_link_candidates(
+    let (linkable, sidecars, undeclared) = source_link_candidates(
         config,
         dag,
         order,
@@ -116,8 +144,16 @@ pub(crate) fn link_workflow_sources(
 
     for rel in &linkable {
         match link_one(rel, workflow_dir, workdir) {
-            Ok(LinkOutcome::Created) => report.linked.push(rel.clone()),
-            Ok(LinkOutcome::Converted) => report.converted.push(rel.clone()),
+            Ok(outcome @ (LinkOutcome::Created | LinkOutcome::Converted)) => {
+                if sidecars.contains(rel) {
+                    report.sidecars.push(rel.clone());
+                }
+                if outcome == LinkOutcome::Created {
+                    report.linked.push(rel.clone());
+                } else {
+                    report.converted.push(rel.clone());
+                }
+            }
             Ok(LinkOutcome::Idempotent | LinkOutcome::LeftAlone) => {}
             Ok(LinkOutcome::Conflict) => report.conflicts.push(rel.clone()),
             Err(e) => report.errors.push(format!("{}: {e}", rel)),
@@ -126,8 +162,9 @@ pub(crate) fn link_workflow_sources(
     report
 }
 
-/// Collect the paths to link: `Ok` = sorted repo-relative files, `Err`
-/// part = undeclared shell references ("`path` (rule 'x')").
+/// Collect the paths to link: the linked-file set (repo-relative, sorted),
+/// the tool-convention index sidecars among them, and the undeclared shell
+/// references ("`path` (rule 'x')").
 #[allow(clippy::type_complexity)]
 fn source_link_candidates(
     config: &WorkflowConfig,
@@ -136,7 +173,7 @@ fn source_link_candidates(
     workflow_dir: &Path,
     wildcard_values: &HashMap<String, String>,
     reference_outputs: &HashSet<String>,
-) -> (BTreeSet<String>, Vec<String>) {
+) -> (BTreeSet<String>, BTreeSet<String>, Vec<String>) {
     let mut linkable = BTreeSet::new();
     // Same rule stances as the missing-source gate: rules that cannot run
     // in this configuration contribute no requirements (issues #493/#616).
@@ -193,6 +230,31 @@ fn source_link_candidates(
         }
     }
 
+    // Tools that auto-derive companion indexes from a declared file's path
+    // (`bwa mem ref.fa` reads `ref.fa.bwt`; `samtools faidx`-style `.fai`;
+    // picard's `.dict`) never mention those paths in the shell text, so no
+    // token analysis can see them. Link every sidecar that exists in the
+    // repo beside a linked file — unless the DAG produces the sidecar
+    // itself (e.g. a dedicated `samtools faidx` indexing rule), in which
+    // case it is a generated intermediate like any other.
+    let mut sidecars = BTreeSet::new();
+    for rel in &linkable {
+        for suffix in SIDECAR_SUFFIXES {
+            let candidate = format!("{rel}{suffix}");
+            if linkable.contains(&candidate)
+                || sidecars.contains(&candidate)
+                || dag.producer_of(&candidate).is_some()
+                || reference_outputs.contains(&candidate)
+            {
+                continue;
+            }
+            if workflow_dir.join(&candidate).is_file() {
+                sidecars.insert(candidate);
+            }
+        }
+    }
+    linkable.extend(sidecars.iter().cloned());
+
     // Everything else a shell command mentions as a repo path is reported,
     // not linked: with no input declaration there is no read contract, and
     // linking a path the command later writes would write through into the
@@ -219,7 +281,7 @@ fn source_link_candidates(
             }
         }
     }
-    (linkable, undeclared.into_iter().collect())
+    (linkable, sidecars, undeclared.into_iter().collect())
 }
 
 /// Path-like shell token worth checking against the repo: has a directory
@@ -241,6 +303,7 @@ fn rel_under(file: &Path, workflow_dir: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
 }
 
+#[derive(Clone, Copy, PartialEq)]
 enum LinkOutcome {
     Created,
     Converted,
@@ -346,7 +409,7 @@ shell = "python {config.tools}/tool.py --in notes/source.txt > out.txt"
         let config = setup_repo(tmp.path());
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let (linkable, undeclared) = source_link_candidates(
+        let (linkable, sidecars, undeclared) = source_link_candidates(
             &config,
             &dag,
             &order,
@@ -358,6 +421,7 @@ shell = "python {config.tools}/tool.py --in notes/source.txt > out.txt"
             linkable.into_iter().collect::<Vec<_>>(),
             vec!["notes/source.txt", "scripts/tool.py"]
         );
+        assert!(sidecars.is_empty());
         // `--in notes/source.txt` is declared, so it is not an undeclared ref.
         assert!(undeclared.is_empty());
     }
@@ -376,7 +440,7 @@ shell = "python {config.tools}/tool.py --in notes/source.txt > out.txt"
         let config = parse(&wf);
         let dag = WorkflowDag::from_rules(&config.rules).unwrap();
         let order = dag.execution_order().unwrap();
-        let (linkable, undeclared) = source_link_candidates(
+        let (linkable, sidecars, undeclared) = source_link_candidates(
             &config,
             &dag,
             &order,
@@ -385,7 +449,99 @@ shell = "python {config.tools}/tool.py --in notes/source.txt > out.txt"
             &HashSet::new(),
         );
         assert!(!linkable.contains("extra/pairs.tsv"));
+        assert!(sidecars.is_empty());
         assert_eq!(undeclared, vec!["extra/pairs.tsv (rule 'report')"]);
+    }
+
+    #[test]
+    fn tool_convention_index_sidecars_are_linked_without_declaration() {
+        let repo = tempfile::tempdir().unwrap();
+        let wd = tempfile::tempdir().unwrap();
+        // `reference/ref.fa` is the only declared input; the bwa/picard/
+        // samtools companion indexes exist beside it but appear in no shell.
+        write(&repo.path().join("reference/ref.fa"), "ACGT\n");
+        write(&repo.path().join("reference/ref.fa.amb"), "amb\n");
+        write(&repo.path().join("reference/ref.fa.bwt"), "bwt\n");
+        write(&repo.path().join("reference/ref.fa.fai"), "fai\n");
+        write(&repo.path().join("reference/ref.fa.dict"), "dict\n");
+        write(&repo.path().join("scripts/tool.py"), "print('hi')\n");
+        let wf = r#"
+[workflow]
+name = "t"
+version = "1"
+
+[[rules]]
+name = "align"
+input = ["reference/ref.fa"]
+output = ["out.txt"]
+shell = "python3 scripts/tool.py --ref reference/ref.fa > out.txt"
+"#;
+        let config = parse(wf);
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        let report = link_workflow_sources(
+            &config,
+            &dag,
+            &order,
+            repo.path(),
+            wd.path(),
+            &HashMap::new(),
+        );
+        // ref.fa itself + 4 sidecars + the interpreter script.
+        assert_eq!(report.linked.len(), 6, "{report:?}");
+        assert_eq!(
+            report.sidecars,
+            vec![
+                "reference/ref.fa.amb",
+                "reference/ref.fa.bwt",
+                "reference/ref.fa.dict",
+                "reference/ref.fa.fai",
+            ],
+            "{report:?}"
+        );
+        for rel in &report.sidecars {
+            assert!(wd.path().join(rel).is_symlink(), "{rel} not linked");
+        }
+    }
+
+    #[test]
+    fn dag_produced_sidecar_stays_a_generated_intermediate() {
+        let repo = tempfile::tempdir().unwrap();
+        let wd = tempfile::tempdir().unwrap();
+        write(&repo.path().join("notes/source.txt"), "source\n");
+        // The DAG builds `notes/source.txt.fai` itself — the linker must
+        // not displace it with a repo-side link.
+        write(&repo.path().join("notes/source.txt.fai"), "stale\n");
+        let wf = r#"
+[workflow]
+name = "t"
+version = "1"
+
+[[rules]]
+name = "report"
+input = ["notes/source.txt"]
+output = ["out.txt"]
+shell = "cat notes/source.txt > out.txt"
+
+[[rules]]
+name = "index"
+input = ["notes/source.txt"]
+output = ["notes/source.txt.fai"]
+shell = "printf idx > notes/source.txt.fai"
+"#;
+        let config = parse(wf);
+        let dag = WorkflowDag::from_rules(&config.rules).unwrap();
+        let order = dag.execution_order().unwrap();
+        let report = link_workflow_sources(
+            &config,
+            &dag,
+            &order,
+            repo.path(),
+            wd.path(),
+            &HashMap::new(),
+        );
+        assert_eq!(report.linked, vec!["notes/source.txt"], "{report:?}");
+        assert!(report.sidecars.is_empty(), "{report:?}");
     }
 
     #[test]

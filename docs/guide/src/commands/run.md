@@ -146,6 +146,17 @@ files so they stay valid from the execution cwd:
   about (it may be a deliberate override). Repo paths a shell command
   mentions but no rule declares are reported as a note — declaring such a
   path as a rule input links it automatically.
+- **Tool index sidecars** (zero duplication): companion index files that
+  tools auto-derive from a linked file's path by convention —
+  `samtools faidx`/picard/GATK (`ref.fa.fai`, `ref.fa.dict`), bwa
+  (`ref.fa.amb/.ann/.bwt/.pac/.sa`), minimap2 (`.mmi`), and the
+  bgzip/tabix/htsfile index forms (`.gzi`, `.tbi`, `.csi`, `.crai`,
+  `.bai`) — are linked alongside the file itself. Those paths never appear
+  in a shell command, so static analysis alone cannot see them; the engine
+  links every such sidecar that exists next to a linked workflow file,
+  unless a rule produces the sidecar itself (a dedicated indexing rule
+  keeps ownership). Tools driven through a bare index prefix (bowtie2
+  `-x index`) should declare their index files as rule inputs directly.
 - **`{input}` and `{log}`**: stay workdir-relative. Inputs are addressed
   from the run cwd (freshness/optional-input gates probe workdir-relative
   paths), and the engine creates log parent dirs under the workdir. Place

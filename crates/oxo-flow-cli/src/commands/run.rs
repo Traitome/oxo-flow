@@ -207,6 +207,16 @@ fn narrate_source_link_report(
             run_log,
         );
     }
+    if !report.sidecars.is_empty() {
+        diagnostic_narrate(
+            format_args!(
+                "workdir source linking: linked {} tool-convention index sidecar(s) next to linked file(s) (bwa/samtools/picard auto-discovery — not spelled out in any shell command): {}",
+                report.sidecars.len(),
+                report.sidecars.join(", ")
+            ),
+            run_log,
+        );
+    }
     if !report.converted.is_empty() {
         diagnostic_narrate(
             format_args!(
