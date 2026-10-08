@@ -2036,6 +2036,29 @@ Produces `align_treatment_S001` and `align_treatment_S002`.
 
 See [`examples/gallery/12_cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow) for a complete cohort study pipeline.
 
+### Combining Groups and Pairs — duplicate sample ownership
+
+A sample may appear in both a user-declared `[[sample_groups]]` entry and an
+`[[pairs]]` entry (e.g. every group sample is also paired against a
+control). This is **legal** — group-wildcard rules and pair-wildcard rules
+expand independently — but the engine warns at parse time, because unless
+every rule path distinguishes the instances (e.g. a `{group}` component),
+the instances share an output path and one is skipped as up-to-date while
+consuming the other's data. The warning prints **once per parse** naming
+all duplicates, not once per duplicate sample:
+
+```text
+WARN oxo_flow_core::config::parse: 3 samples are declared by more than one owner: S1 (group 'case' / pair 'P1'), S2 (group 'case' / pair 'P2'), S3 (group 'case' / pair 'P3') — unless every rule path distinguishes them (e.g. a {group} component), the instances share an output path and one is skipped as up-to-date while consuming the other's data
+```
+
+A single duplicate renders a per-sample message instead:
+`sample 'S1' is declared by both group 'case' and pair 'P1' — {same note}`.
+Auto-discovered
+samples (`sample_pattern`) feeding `[[pairs]]` are the documented pairing
+workflow, not a competing owner — only user-declared groups are compared
+against pair membership. Fix by adding a `{group}`/`{pair_id}` component to
+the affected rules' output paths, or by keeping the domains disjoint.
+
 ### Auto-Discovery with `sample_pattern`
 
 The `[workflow]` `sample_pattern` auto-discovers samples from the filesystem:

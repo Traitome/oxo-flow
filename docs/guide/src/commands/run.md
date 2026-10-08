@@ -254,6 +254,30 @@ cache_max_age_days = 30   # prune after 30 days instead of the 90-day default
 oxo-flow run pipeline.oxoflow --skip-env-setup
 ```
 
+### Backend preflight: fail fast on a missing environment backend
+
+After DAG construction and before any rule executes, `run` validates every
+unique environment spec among the pending rules — once per spec (rule
+templates fan out one spec across N samples, so the spec set is tiny even
+for large cohorts). When a required backend binary is missing
+(`conda`/`mamba`/`pixi`/`docker`/`singularity`/`modules`), the run aborts
+before anything executes:
+
+```
+2 environment backend(s) required by pending rules are unavailable; no rules were run:
+  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+  - pixi: pixi is not installed or not in PATH — required by 1 pending rule(s), e.g. `report` (environment: pixi.toml); install pixi (https://pixi.sh) and ensure it is on PATH
+```
+
+Rules sharing one broken spec, and distinct specs failing with the
+identical backend-missing message, collapse into a single entry — one root
+cause per line, with the pending-rule count, an example rule, the primary
+spec, and a per-backend install hint. Nothing ran, so the `--json` summary
+still reports the run as `failed` with zero counts (issue #142 H6). Install
+the missing backend or switch the affected rules' environments; see
+[Troubleshooting — Environment Issues](../how-to/troubleshooting.md#environment-issues)
+for per-backend checks.
+
 ### Pass config values
 
 Every key in the `[config]` section of the workflow (including declarative
@@ -1104,6 +1128,7 @@ A progress bar shows execution progress with:
 - A timeout of `0` means no timeout
 - Resource constraints (`threads`, `memory`) in rules are checked against available resources before execution
 - **Pre-flight budget check:** When `--max-threads` or `--max-memory` is explicitly set, the engine checks all rules *before* execution starts. Any rule whose requirements exceed the budget is reported immediately (fast-fail), preventing mid-pipeline failures. An explicit budget is a hard limit.
+- **Backend preflight:** before any rule executes, every unique environment spec of the pending rules is validated once — a missing backend (`conda`, `mamba`, `pixi`, `docker`, `singularity`, `modules`) aborts the run with one collapsed entry per root cause and "no rules were run" (see [Backend preflight](#backend-preflight-fail-fast-on-a-missing-environment-backend)).
 - **Auto-detected capacity is soft:** Rules whose declared requests exceed the machine's detected threads/memory are not rejected — the declared request is the tool's upper bound (often an upstream HPC label), not a scheduling requirement. The engine warns and clamps the pool reservation, so an over-capacity rule runs alone (serialized) instead of blocking the workflow.
 - **Deadlock detection:** If pending rules remain while nothing is running and none can become ready (typically an upstream failure), the engine reports `Deadlock detected: N rules stuck` with the stuck rule names. Resource waits cannot deadlock: over-capacity requests are clamped, and explicit budget violations fail fast before any rule runs.
 - **Target-aware execution:** The `-t` flag supports prefix matching — `-t al` matches all rules whose names start with "al". Use this to run a subset of the workflow, similar to `make <target>`. Only the named targets and their transitive upstream dependencies are executed; downstream rules are excluded.
