@@ -4157,6 +4157,16 @@
 </span></code></pre></div>
 <h2 id="combining-groups-and-pairs">Combining Groups and Pairs<a class="headerlink" href="#combining-groups-and-pairs" title="Permanent link">#</a></h2>
 <p>You can use both <code>[[sample_groups]]</code> and <code>[[pairs]]</code> in the same workflow.  They expand independently: group-wildcard rules are expanded over samples, and pair-wildcard rules are expanded over pairs.</p>
+<div class="admonition warning">
+<p class="admonition-title">Duplicate sample ownership</p>
+<p>A sample in both a user-declared group and a pair is <strong>legal</strong> but the
+engine warns at parse time: unless every rule path distinguishes the
+instances (e.g. a <code>{group}</code> component), they share an output path and
+one is skipped as up-to-date while consuming the other's data. The
+warning prints once per parse naming all duplicates. See
+<a href="../../reference/workflow-format/#combining-groups-and-pairs-duplicate-sample-ownership">Duplicate sample ownership</a>
+for the fix.</p>
+</div>
 <h2 id="full-example">Full Example<a class="headerlink" href="#full-example" title="Permanent link">#</a></h2>
 <p>See <a href="https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow"><code>examples/gallery/12_cohort_analysis.oxoflow</code></a> for a complete population genomics pipeline including QC, alignment, deduplication, per-sample GVCF calling, cohort joint genotyping, and multi-QC aggregation.</p>
 <hr />

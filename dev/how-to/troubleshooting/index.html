@@ -1818,6 +1818,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#run-aborts-before-any-rule-environment-backend-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run aborts before any rule: environment backend unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#conda-environment-creation-fails" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4354,6 +4365,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#run-aborts-before-any-rule-environment-backend-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run aborts before any rule: environment backend unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#conda-environment-creation-fails" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4792,6 +4814,25 @@ must be resolved from:</p>
 your workflow. Check that your input filenames follow the expected naming
 convention.</p>
 <h2 id="environment-issues">Environment Issues<a class="headerlink" href="#environment-issues" title="Permanent link">#</a></h2>
+<h3 id="run-aborts-before-any-rule-environment-backend-unavailable">Run aborts before any rule: environment backend unavailable<a class="headerlink" href="#run-aborts-before-any-rule-environment-backend-unavailable" title="Permanent link">#</a></h3>
+<p><strong>Symptom</strong>: <code>N environment backend(s) required by pending rules are unavailable; no rules were run:</code> followed by one entry per root cause, e.g.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+</span></code></pre></div>
+<p><strong>Cause</strong>: a fail-fast preflight runs after DAG construction and before any
+rule executes — every unique environment spec of the pending rules is
+validated once, and the run aborts when a required backend binary is
+missing. Nothing runs, so no rule can fail halfway on a missing tool.
+Rules sharing one broken spec, and distinct specs failing with the same
+backend-missing message, are collapsed into a single line so the operator
+fixes one root cause per entry.</p>
+<p><strong>Solution</strong>:</p>
+<ol>
+<li>Install the missing backend (or fix its PATH) — see the per-backend
+   sections below for each tool's check command</li>
+<li>Re-run; the preflight re-validates only the specs still pending</li>
+<li>If the backend is genuinely absent on this machine, switch the rule's
+   environment to one the machine supports</li>
+</ol>
 <h3 id="conda-environment-creation-fails">Conda environment creation fails<a class="headerlink" href="#conda-environment-creation-fails" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>environment error (conda): ...</code></p>
 <p><strong>Solution</strong>:</p>
@@ -4813,8 +4854,8 @@ convention.</p>
 <p><strong>Symptom</strong>: Module load errors when using <code>modules</code> in environment spec</p>
 <p><strong>Solution</strong>: Verify that the module system is available on your HPC node
 and that the specified module names and versions are correct:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>module<span class="w"> </span>avail<span class="w"> </span>gcc
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>module<span class="w"> </span>avail<span class="w"> </span>cuda
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>module<span class="w"> </span>avail<span class="w"> </span>gcc
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>module<span class="w"> </span>avail<span class="w"> </span>cuda
 </span></code></pre></div>
 <h2 id="dag-issues">DAG Issues<a class="headerlink" href="#dag-issues" title="Permanent link">#</a></h2>
 <h3 id="cycle-detected">Cycle detected<a class="headerlink" href="#cycle-detected" title="Permanent link">#</a></h3>
@@ -4858,8 +4899,8 @@ Companion index files that tools auto-derive from a linked file's path
 <h3 id="rule-not-found">Rule not found<a class="headerlink" href="#rule-not-found" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>rule not found: 'algn'</code> with a list of available rule names</p>
 <p><strong>Solution</strong>: The target name passed to <code>-t</code> or referenced in <code>depends_on</code> doesn't match any rule. oxo-flow supports <strong>prefix matching</strong> — try a shorter prefix:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Instead of guessing the exact name</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align<span class="w">  </span><span class="c1"># matches "align_reads", "align_bwa", etc.</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Instead of guessing the exact name</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-t<span class="w"> </span>align<span class="w">  </span><span class="c1"># matches "align_reads", "align_bwa", etc.</span>
 </span></code></pre></div>
 <p>Use <code>oxo-flow graph workflow.oxoflow</code> to see all rule names.</p>
 <h3 id="rules-not-running-in-parallel">Rules not running in parallel<a class="headerlink" href="#rules-not-running-in-parallel" title="Permanent link">#</a></h3>
@@ -4877,28 +4918,28 @@ Companion index files that tools auto-derive from a linked file's path
 <h3 id="output-collisions-silent-overwrite">Output collisions (silent overwrite)<a class="headerlink" href="#output-collisions-silent-overwrite" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: Two rules declare outputs that resolve to the same file — e.g. both write <code>variants/sample.vcf</code> (possibly via differently-named wildcards like <code>{smp}</code> and <code>{sample}</code> over the same directory). <code>validate</code>, <code>graph</code>, and <code>run</code> all pass — the run reports success, but <strong>the second rule to finish overwrote the first rule's output</strong>, and downstream rules consumed the wrong file.</p>
 <p><strong>Detection</strong>: The engine treats multi-producer outputs as legitimate (shared staging directories, multi-tool fan-ins), so it does not refuse to run. <code>oxo-flow lint</code> flags every colliding pair instead:</p>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="gp">$ </span>oxo-flow<span class="w"> </span>lint<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="go">  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="go">    hint: if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="gp">$ </span>oxo-flow<span class="w"> </span>lint<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="go">  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="go">    hint: if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory</span>
 </span></code></pre></div>
 <p><strong>Solution</strong>: Give each rule distinct output directories — or, when the two rules are alternative writers that must never both run (e.g. WGS vs WES mode), gate them with mutually exclusive <code>when</code> conditions:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Before (collision — lint reports W033)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_a"</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_b"</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ❌ Same path!</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="c1"># After (fixed — unique directories)</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_a"</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/caller_a/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ✅ Unique path</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="k">[[rules]]</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_b"</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/caller_b/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ✅ Unique path</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Before (collision — lint reports W033)</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_a"</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_b"</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ❌ Same path!</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># After (fixed — unique directories)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_a"</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/caller_a/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ✅ Unique path</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="k">[[rules]]</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"caller_b"</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"variants/caller_b/{sample}.vcf"</span><span class="p">]</span><span class="w">  </span><span class="c1"># ✅ Unique path</span>
 </span></code></pre></div>
 <p>Alternative writers that must never both run can share a path safely when
 gated with mutually exclusive <code>when</code> conditions (see the
@@ -4919,24 +4960,24 @@ violations fail fast before any rule runs). Check:</p>
 <h3 id="resource-budget-exceeded">Resource budget exceeded<a class="headerlink" href="#resource-budget-exceeded" title="Permanent link">#</a></h3>
 <p><strong>Symptom</strong>: <code>rule 'bwa_align' requires 64 threads but --max-threads caps the run at 32</code></p>
 <p><strong>Solution</strong>: The pre-flight budget check caught a rule whose requirements exceed the explicit limits. Either:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Increase the budget</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--max-threads<span class="w"> </span><span class="m">64</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Or reduce the rule's requirement in the .oxoflow file</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="o">[</span>rules.resources<span class="o">]</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nv">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">32</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Increase the budget</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--max-threads<span class="w"> </span><span class="m">64</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Or reduce the rule's requirement in the .oxoflow file</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="o">[</span>rules.resources<span class="o">]</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="nv">threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">32</span>
 </span></code></pre></div>
 <p>Note: This check only fires when <code>--max-threads</code>/<code>--max-memory</code> are explicitly set on the CLI. Auto-detected system resources don't trigger budget failures (only warnings).</p>
 <h2 id="checkpoint-and-resume">Checkpoint and Resume<a class="headerlink" href="#checkpoint-and-resume" title="Permanent link">#</a></h2>
 <h3 id="resuming-a-failed-workflow">Resuming a failed workflow<a class="headerlink" href="#resuming-a-failed-workflow" title="Permanent link">#</a></h3>
 <p>After fixing the cause of a failure, re-run the same workflow. oxo-flow will
 check checkpoints and skip already-completed rules:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow
 </span></code></pre></div>
 <h3 id="clearing-checkpoint-state">Clearing checkpoint state<a class="headerlink" href="#clearing-checkpoint-state" title="Permanent link">#</a></h3>
 <p>To force a full re-run, delete the checkpoint file:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>rm<span class="w"> </span>-rf<span class="w"> </span>.oxo-flow/checkpoint.json
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>rm<span class="w"> </span>-rf<span class="w"> </span>.oxo-flow/checkpoint.json
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow
 </span></code></pre></div>
 <h3 id="changed-inputs-rebuild-automatically">Changed inputs rebuild automatically<a class="headerlink" href="#changed-inputs-rebuild-automatically" title="Permanent link">#</a></h3>
 <p>Re-running does not blindly reuse completed rules: the checkpoint records the
@@ -4956,7 +4997,7 @@ much completed work stays protected.</p>
 <ol>
 <li>
 <p><strong>Increase parallelism</strong>: Use <code>-j</code> to run more jobs concurrently:
-   <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>workflow.oxoflow<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div></p>
 </li>
 <li>
@@ -4992,8 +5033,8 @@ much completed work stays protected.</p>
 <p>We particularly value feedback from real-world deployments. If you encounter
 issues in your actual bioinformatics workflows (as opposed to test examples),
 please use the <code>[Real-World Testing]</code> prefix in your issue title:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>[Real-World Testing] Conda environment detection issue with custom channels
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>[Real-World Testing] SLURM GPU job scheduling fails on cluster with multiple partitions
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>[Real-World Testing] Conda environment detection issue with custom channels
 </span></code></pre></div>
 <p>Include details about your cluster type, oxo-flow version, and a description
 of what happened versus what you expected. See our
