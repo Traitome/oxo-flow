@@ -236,6 +236,9 @@ executes instead of "succeeding" from stale checkpoint outputs.
 > inputs with no producer, and interpreter scripts) are linked into the
 > workdir automatically as symlinks at run start — you never hand-copy
 > them, and the gate only fires for data that is genuinely absent.
+> Companion index files that tools auto-derive from a linked file's path
+> (`ref.fa.fai`/`ref.fa.dict`, bwa's `.bwt`/`.amb`/`.ann`/`.pac`/`.sa`,
+> `.tbi`/`.csi`/`.gzi`/`.crai`/`.bai`, `.mmi`) are linked alongside it.
 
 ### Rule not found
 
