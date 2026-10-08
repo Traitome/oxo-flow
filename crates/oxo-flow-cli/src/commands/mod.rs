@@ -290,6 +290,7 @@ pub mod run_cluster;
 pub mod run_preview;
 pub mod samples;
 pub mod web;
+pub mod workdir_sources;
 
 #[cfg(test)]
 mod tests {

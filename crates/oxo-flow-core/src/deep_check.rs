@@ -28,6 +28,7 @@
 
 use crate::config::WorkflowConfig;
 use crate::format::Severity;
+use crate::rule::Rule;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -455,10 +456,22 @@ fn looks_like_path_value(value: &str) -> bool {
         && !value.contains('*')
 }
 
+/// `{config.*}`-expanded `shell` text of `rule` (or empty when the rule
+/// uses `script =` — those paths are already anchored at the workflow root
+/// by the executor and need no path scanning). Shared by the D001 deep
+/// check and issue #837 workdir source linking.
+#[must_use]
+pub fn rendered_shell_text(rule: &Rule, config: &WorkflowConfig) -> String {
+    rule.shell
+        .as_deref()
+        .map(|shell| expand_config(shell, &config_vars(config)))
+        .unwrap_or_default()
+}
+
 /// Scan a command for plain interpreter invocations (`Rscript scripts/x.R`)
 /// and return the script-path candidates. Inline-code arguments (`-e "...")`
 /// and flags are skipped.
-fn interpreter_script_candidates(cmd: &str) -> Vec<String> {
+pub fn interpreter_script_candidates(cmd: &str) -> Vec<String> {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
     let mut candidates = Vec::new();
     let mut i = 0;

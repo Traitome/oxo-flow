@@ -137,6 +137,15 @@ files so they stay valid from the execution cwd:
 - **Rule scripts**: workflow-relative script files render absolute
   (workflow-rooted) so rule shells — which run with cwd = the workdir —
   can execute them.
+- **Workflow source files** (zero duplication): declared rule inputs that
+  no rule produces, plus interpreter script paths (`python scripts/x.py`),
+  are materialized in the workdir as **symlinks** into the workflow
+  directory at run start — the repo keeps the single copy of every source
+  file. A pre-existing byte-identical workdir copy is replaced by a symlink
+  (with a notice); a copy that *differs* is kept for the run and warned
+  about (it may be a deliberate override). Repo paths a shell command
+  mentions but no rule declares are reported as a note — declaring such a
+  path as a rule input links it automatically.
 - **`{input}` and `{log}`**: stay workdir-relative. Inputs are addressed
   from the run cwd (freshness/optional-input gates probe workdir-relative
   paths), and the engine creates log parent dirs under the workdir. Place
