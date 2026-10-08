@@ -10664,3 +10664,112 @@ fn graph_file_output_is_plain_text() {
     );
     assert!(text.contains("Workflow DAG"), "got: {text}");
 }
+
+/// Shared fixture for the #837 source-linking tests: a workflow repo with a
+/// declared source input and an interpreter script, to be run against a
+/// SEPARATE workdir (the two-directory mode).
+fn write_source_link_repo(dir: &std::path::Path) -> (PathBuf, std::path::PathBuf) {
+    let repo = dir.join("repo");
+    fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::create_dir_all(repo.join("config")).unwrap();
+    fs::write(repo.join("config/pairs.tsv"), "tumor\tnormal\n").unwrap();
+    // The script reads its input relative to CWD (= the run workdir), so a
+    // successful run proves the read resolved through the linked path.
+    fs::write(
+        repo.join("scripts/annotate.py"),
+        "rows = open('config/pairs.tsv').read().splitlines()\n\
+         open('annotated.tsv', 'w').write(f'pairs={len(rows)}\\n')\n",
+    )
+    .unwrap();
+    let wf = repo.join("wf.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"link837\"\nversion = \"0.1\"\n\n\
+         [[rules]]\nname = \"annotate\"\ninput = [\"config/pairs.tsv\"]\n\
+         output = [\"annotated.tsv\"]\nshell = \"python3 scripts/annotate.py\"\n",
+    )
+    .unwrap();
+    let workdir = dir.join("work");
+    fs::create_dir(&workdir).unwrap();
+    (wf, workdir)
+}
+
+/// Issue #837: in the two-directory mode a FRESH workdir must get the repo
+/// files rules reference materialized as symlinks — the run succeeds with
+/// zero hand-synced copies (before the fix the missing-source gate failed
+/// here), the repo stays the single source of truth, and nothing in the
+/// repo is touched.
+#[test]
+fn cli_run_links_repo_sources_into_fresh_workdir_as_symlinks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wf, workdir) = write_source_link_repo(dir.path());
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-d", workdir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("workdir source linking: created 2 symlink"),
+        "linking narration missing: {stderr}"
+    );
+    for linked in ["config/pairs.tsv", "scripts/annotate.py"] {
+        let meta = fs::symlink_metadata(workdir.join(linked))
+            .unwrap_or_else(|e| panic!("{linked} not materialized: {e}"));
+        assert!(
+            meta.file_type().is_symlink(),
+            "{linked} must be a symlink, not a copy"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(workdir.join("annotated.tsv")).unwrap(),
+        "pairs=1\n",
+        "rule output wrong — the read did not resolve through the link"
+    );
+    // The repo keeps exactly one copy of each source file, unconverted.
+    for kept in ["config/pairs.tsv", "scripts/annotate.py"] {
+        let meta = fs::symlink_metadata(wf.parent().unwrap().join(kept)).unwrap();
+        assert!(
+            meta.file_type().is_file(),
+            "repo file {kept} must stay a regular file"
+        );
+    }
+}
+
+/// Issue #837: a pre-existing byte-identical workdir copy is a redundant
+/// duplicate — the linking pass REPLACES it with a symlink to the repo file
+/// and says so, instead of leaving silent drift-prone copies around.
+#[test]
+fn cli_run_converts_identical_workdir_copies_to_symlinks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wf, workdir) = write_source_link_repo(dir.path());
+    // Hand-synced copy, byte-identical to the repo file.
+    fs::create_dir_all(workdir.join("config")).unwrap();
+    fs::write(workdir.join("config/pairs.tsv"), "tumor\tnormal\n").unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-d", workdir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("replaced 1 byte-identical workdir duplicate"),
+        "conversion narration missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("created 1 symlink"),
+        "script must still be linked: {stderr}"
+    );
+    assert!(
+        fs::symlink_metadata(workdir.join("config/pairs.tsv"))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "identical copy must become a symlink"
+    );
+    assert_eq!(
+        fs::read_to_string(workdir.join("annotated.tsv")).unwrap(),
+        "pairs=1\n"
+    );
+}

@@ -231,6 +231,12 @@ executes instead of "succeeding" from stale checkpoint outputs.
 3. If the input is genuinely optional, mark the rule `optional = true`
 4. Re-run `oxo-flow validate workflow.oxoflow` to confirm the fix
 
+> **Note**: when `--workdir` points somewhere other than the workflow
+> directory, source files that live **in the workflow repo** (declared rule
+> inputs with no producer, and interpreter scripts) are linked into the
+> workdir automatically as symlinks at run start — you never hand-copy
+> them, and the gate only fires for data that is genuinely absent.
+
 ### Rule not found
 
 **Symptom**: `rule not found: 'algn'` with a list of available rule names

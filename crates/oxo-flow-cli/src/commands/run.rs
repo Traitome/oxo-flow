@@ -183,6 +183,68 @@ fn diagnostic_narrate(msg: std::fmt::Arguments<'_>, run_log: Option<&SharedRunLo
     }
 }
 
+/// Narrate the #837 workdir source-linking pass: what was linked, what was
+/// converted from a duplicate copy, and which references need operator
+/// attention (conflicts, undeclared shell paths, filesystem failures).
+fn narrate_source_link_report(
+    report: &crate::commands::workdir_sources::SourceLinkReport,
+    run_log: Option<&SharedRunLog>,
+) {
+    if let Some(note) = &report.skipped_note {
+        diagnostic_narrate(format_args!("workdir source linking: {}", note), run_log);
+        return;
+    }
+    if report.is_empty() {
+        return;
+    }
+    if !report.linked.is_empty() {
+        diagnostic_narrate(
+            format_args!(
+                "workdir source linking: created {} symlink(s) into the workdir (repo stays the single source of truth): {}",
+                report.linked.len(),
+                report.linked.join(", ")
+            ),
+            run_log,
+        );
+    }
+    if !report.converted.is_empty() {
+        diagnostic_narrate(
+            format_args!(
+                "workdir source linking: replaced {} byte-identical workdir duplicate(s) with symlink(s) into the repo: {}",
+                report.converted.len(),
+                report.converted.join(", ")
+            ),
+            run_log,
+        );
+    }
+    for path in &report.conflicts {
+        diagnostic_narrate(
+            format_args!(
+                "{} workdir source linking: '{}' differs from the workflow-repo file — keeping the workdir copy for this run (remove the copy or update the repo to link it)",
+                "Warning:".yellow(),
+                path
+            ),
+            run_log,
+        );
+    }
+    if !report.undeclared.is_empty() {
+        diagnostic_narrate(
+            format_args!(
+                "{} workdir source linking: shell command(s) reference workflow-repo file(s) that no rule declares as inputs — they were NOT linked (declaring the path as a rule input links it automatically):\n  {}",
+                "Note:".yellow(),
+                report.undeclared.join("\n  ")
+            ),
+            run_log,
+        );
+    }
+    for err in &report.errors {
+        diagnostic_narrate(
+            format_args!("{} workdir source linking: {}", "Warning:".yellow(), err),
+            run_log,
+        );
+    }
+}
+
 // ── Spawn watchdog (issue #685) ─────────────────────────────────────────────
 // A rule can end up marked Running in the scheduler while its task never
 // reaches a child spawn (lost wakeup in the wait/dispatch path). The engine
@@ -1746,6 +1808,24 @@ pub async fn run_command(
         }
         filtered_order
     };
+    // ── Workdir source linking (issue #837) ────────────────────────────
+    // In the two-directory mode (shared workflow repo + separate workdir)
+    // rules run with CWD = workdir, so relative paths resolve against the
+    // WORKDIR copy of a repo file — which operators used to hand-sync with
+    // nothing verifying the copies. The engine now materializes referenced
+    // repo files in the workdir as SYMLINKS: zero duplicated content, the
+    // repo stays the single source of truth. This runs BEFORE the
+    // missing-source gate so a fresh workdir is satisfied by the freshly
+    // created links instead of hard-failing on absent source inputs.
+    let link_report = crate::commands::workdir_sources::link_workflow_sources(
+        &config,
+        &dag,
+        &order,
+        &workflow_dir,
+        workdir.as_ref().unwrap_or(&workdir_default),
+        &config_placeholder_values(&config.config),
+    );
+    narrate_source_link_report(&link_report, Some(&run_log));
     // ── Missing external source gate ───────────────────────────────────
     // A required input with no producer in the DAG is a source file — if it
     // is absent NOW the run can never succeed, so fail before scheduling

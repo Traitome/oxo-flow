@@ -1226,6 +1226,32 @@ pub fn missing_input_patterns(
         _ => None,
     };
     let mut missing = Vec::new();
+    for expanded in rendered_input_patterns(rule, wildcard_values) {
+        let mut entries = std::collections::BTreeMap::new();
+        if collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries).is_err()
+        {
+            missing.push(expanded);
+        }
+    }
+    missing
+}
+
+/// Config-expanded input patterns of `rule` that this run must resolve
+/// locally, in declaration order — the SAME walk (and skip rules) as
+/// [`missing_input_patterns`] but WITHOUT any existence requirement:
+/// empty/`{`-residual/`.oxo-flow/chunks` state, `ancient` inputs, remote
+/// objects, and `expand_inputs_baked` literals are all skipped. Issue #837
+/// workdir source linking consumes these to decide which workflow-repo
+/// files must be reachable from the run workdir.
+#[must_use]
+pub fn rendered_input_patterns(
+    rule: &Rule,
+    wildcard_values: &HashMap<String, String>,
+) -> Vec<String> {
+    if rule.input.is_empty() || rule.cleanup_chunks {
+        return Vec::new();
+    }
+    let mut rendered = Vec::new();
     for pattern in rule.input.to_vec() {
         let expanded = expand_config_in_path(&pattern, wildcard_values);
         if expanded.is_empty() || expanded.contains('{') || expanded.starts_with(".oxo-flow/chunks")
@@ -1251,13 +1277,31 @@ pub fn missing_input_patterns(
         if rule.expand_inputs_baked.contains(&expanded) {
             continue;
         }
-        let mut entries = std::collections::BTreeMap::new();
-        if collect_pattern_entries(&expanded, dir_filter.as_deref(), workdir, &mut entries).is_err()
-        {
-            missing.push(expanded);
-        }
+        rendered.push(expanded);
     }
-    missing
+    rendered
+}
+
+/// Concrete regular files matched by an input `pattern` under `base_dir`:
+/// globs resolve (no match → empty), plain paths are taken literally and
+/// must exist as files. Used by workdir source linking (#837) to expand
+/// repo-side globs into linkable files; a missing path yields `Ok(vec![])`
+/// — absence is the CALLER's signal, not an error.
+pub fn resolve_pattern_files(pattern: &str, base_dir: &Path) -> Vec<PathBuf> {
+    let full = base_dir.join(pattern);
+    let mut files = Vec::new();
+    if is_glob_pattern(pattern) {
+        if let Ok(paths) = glob::glob(&full.to_string_lossy()) {
+            for matched in paths.flatten() {
+                if matched.is_file() {
+                    files.push(matched);
+                }
+            }
+        }
+    } else if full.is_file() {
+        files.push(full);
+    }
+    files
 }
 
 /// Literal glob characters — distinct from `{engine}` wildcards
