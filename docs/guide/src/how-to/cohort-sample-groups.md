@@ -103,6 +103,16 @@ depends_on = ["align"]
 
 You can use both `[[sample_groups]]` and `[[pairs]]` in the same workflow.  They expand independently: group-wildcard rules are expanded over samples, and pair-wildcard rules are expanded over pairs.
 
+!!! warning "Duplicate sample ownership"
+
+    A sample in both a user-declared group and a pair is **legal** but the
+    engine warns at parse time: unless every rule path distinguishes the
+    instances (e.g. a `{group}` component), they share an output path and
+    one is skipped as up-to-date while consuming the other's data. The
+    warning prints once per parse naming all duplicates. See
+    [Duplicate sample ownership](../reference/workflow-format.md#combining-groups-and-pairs-duplicate-sample-ownership)
+    for the fix.
+
 ## Full Example
 
 See [`examples/gallery/12_cohort_analysis.oxoflow`](https://github.com/Traitome/oxo-flow/blob/main/examples/gallery/12_cohort_analysis.oxoflow) for a complete population genomics pipeline including QC, alignment, deduplication, per-sample GVCF calling, cohort joint genotyping, and multi-QC aggregation.

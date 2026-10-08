@@ -160,6 +160,30 @@ convention.
 
 ## Environment Issues
 
+### Run aborts before any rule: environment backend unavailable
+
+**Symptom**: `N environment backend(s) required by pending rules are unavailable; no rules were run:` followed by one entry per root cause, e.g.
+
+```
+  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+```
+
+**Cause**: a fail-fast preflight runs after DAG construction and before any
+rule executes — every unique environment spec of the pending rules is
+validated once, and the run aborts when a required backend binary is
+missing. Nothing runs, so no rule can fail halfway on a missing tool.
+Rules sharing one broken spec, and distinct specs failing with the same
+backend-missing message, are collapsed into a single line so the operator
+fixes one root cause per entry.
+
+**Solution**:
+
+1. Install the missing backend (or fix its PATH) — see the per-backend
+   sections below for each tool's check command
+2. Re-run; the preflight re-validates only the specs still pending
+3. If the backend is genuinely absent on this machine, switch the rule's
+   environment to one the machine supports
+
 ### Conda environment creation fails
 
 **Symptom**: `environment error (conda): ...`
