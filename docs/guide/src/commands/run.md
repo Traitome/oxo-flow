@@ -1096,6 +1096,29 @@ Protected outputs (`protected_output`) are never reclaimed, and the final
 [`[engine]` in the workflow format reference](../reference/workflow-format.md#engine-runtime-disk-pressure-guard-issue-843)
 for the full field table and edge cases.
 
+Tuning knobs (both fall back to their defaults when unset, invalid, or
+`0`, so a typo can never disable the abort):
+
+- `OXO_FLOW_DISK_TICK_SECS` — seconds between measurements while parked
+  (default 60).
+- `OXO_FLOW_DISK_HOLD_ROUNDS` — grace park rounds under Hold before the
+  run aborts (default 2).
+
+Known boundaries:
+
+- *Mid-run* reclaim of fan-out producers (`output_pattern` rules with
+  per-instance values) does not fire — the event loop tracks reclaim
+  candidates by rule name and holds no instance bindings, so those
+  intermediates are only cleaned by the post-run sweep (instance-level,
+  issue #844) or the next run. Fail-safe: no reclaim rather than a wrong
+  one.
+- Free space is measured at the working directory's filesystem, which is
+  volume-level (statvfs): thresholds apply to the whole volume, not to a
+  quota.
+- Keep scratch-heavy tools off the measured volume only if they are not
+  cleaned by their rules; outputs declared by rules are always accounted
+  for by the ladder.
+
 ### Forcing Execution
 
 To bypass checkpoints and re-execute rules that have already completed, use

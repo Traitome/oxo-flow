@@ -931,7 +931,7 @@ oxo-flow automatically cleans up temporary outputs:
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors; issue #756) |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |
+| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. |
 
 `temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
@@ -2975,6 +2975,26 @@ Notes:
 - A run that starts already below `min_free_disk` prints a warning before
   executing (it does not refuse to start; the Hold/Abort ladder governs
   from there).
+- The park/abort window is tunable via environment:
+  `OXO_FLOW_DISK_TICK_SECS` (seconds between measurements while parked,
+  default 60) and `OXO_FLOW_DISK_HOLD_ROUNDS` (grace park rounds before
+  the abort, default 2). Unset, invalid, or `0` values fall back to the
+  defaults, so a typo can never disable the abort.
+- Free space is measured at the working directory's filesystem (statvfs),
+  which is volume-level: thresholds apply to the whole volume, not to a
+  per-directory quota. Tools that spill large scratch outside the
+  workdir (honor `TMPDIR` deliberately if needed) are invisible to the
+  monitor.
+- *Mid-run* reclaim of fan-out producers (`output_pattern` with
+  per-instance values) does not fire: the event loop tracks reclaim
+  candidates by rule name and holds no instance bindings. Fail-safe — no
+  reclaim rather than a wrong one. The post-run sweep covers them (see
+  below).
+- Only paths declared by the rule (its `output` entries / matching
+  `output_pattern` instances) are reclaimed; sidecar files a command
+  writes without declaring are never touched. Declare index sidecars
+  explicitly (e.g. a `genome.fa` rule also declaring `genome.fa.fai`) so
+  reclaim + cleanup can track them.
 
 ## See Also
 
