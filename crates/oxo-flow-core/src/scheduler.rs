@@ -545,6 +545,31 @@ mod disk_pressure_tests {
         monitor.observe(tmp.path(), &mut narrate);
         assert!(lines.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn monitor_fail_open_resets_stale_hold_level() {
+        // Thresholds beyond any real filesystem force a genuine Hold
+        // measurement, then a measurement failure must reset the
+        // remembered level to Normal (F2: without the reset the dispatch
+        // cap would keep enforcing Hold across failing ticks and wedge
+        // the run).
+        let mut monitor = DiskPressureMonitor::new(u64::MAX / 2, u64::MAX);
+        let mut narrate = |args: std::fmt::Arguments<'_>| {
+            let _ = args;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let level = monitor.observe(tmp.path(), &mut narrate);
+        assert_eq!(level, DiskPressureLevel::Hold);
+        assert_eq!(monitor.last_level(), DiskPressureLevel::Hold);
+
+        let level = monitor.observe(std::path::Path::new("/nonexistent-843"), &mut narrate);
+        assert_eq!(level, DiskPressureLevel::Normal);
+        assert_eq!(
+            monitor.last_level(),
+            DiskPressureLevel::Normal,
+            "fail-open must reset the remembered level"
+        );
+    }
 }
 
 /// Pre-flight check: report rules whose declared request can never fit an
@@ -704,7 +729,9 @@ pub fn disk_pressure_level(available_mb: u64, min_mb: u64, reclaim_mb: u64) -> D
 /// level is announced only when it differs from the previously observed
 /// one, so a long stretch in `Reclaim` logs once, not every tick. Recovery
 /// back to `Normal` is narrated too ("cleared"). Measurement failure (None,
-/// e.g. non-Unix) fails open to `Normal` without narrating.
+/// e.g. non-Unix) fails open to `Normal` and resets the remembered level as
+/// well, so the dispatch cap can never enforce a stale Hold level across a
+/// failing measurement.
 pub struct DiskPressureMonitor {
     thresholds: (u64, u64), // (min_free_disk, reclaim_free_disk), both MB
     last: DiskPressureLevel,
@@ -734,7 +761,12 @@ impl DiskPressureMonitor {
         narrate: &mut dyn FnMut(std::fmt::Arguments<'_>),
     ) -> DiskPressureLevel {
         let Some(available_mb) = check_available_disk_mb(workdir) else {
-            // Fail open: can't measure → don't hold or warn.
+            // Fail open: can't measure → don't hold or warn. Reset `last` so
+            // a persistent measurement failure doesn't leave a stale Hold
+            // level enforcing the dispatch cap after the grace counter has
+            // already been cleared — that would wedge the run: neither
+            // progressing (cap = 0) nor aborting.
+            self.last = DiskPressureLevel::Normal;
             return DiskPressureLevel::Normal;
         };
         let (min_mb, reclaim_mb) = self.thresholds;
@@ -818,7 +850,12 @@ pub fn reclaim_candidates(
                 return false;
             };
             checkpoint.is_completed(d)
-                && crate::executor::checkpoint::rule_outputs_exist(dep, workdir, wildcard_values)
+                && crate::executor::checkpoint::rule_outputs_exist_with_patterns(
+                    dep,
+                    workdir,
+                    wildcard_values,
+                    &checkpoint.output_pattern_domains,
+                )
         });
         if !all_dependents_done {
             continue;

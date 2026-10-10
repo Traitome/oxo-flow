@@ -1718,6 +1718,46 @@ pub fn rule_outputs_exist(
     })
 }
 
+/// Whether every declared output of the rule exists, treating an
+/// `output_pattern` as present when at least one concrete instance path
+/// exists on disk (issue #843: fan-out producers keep `output` empty, so
+/// `rule_outputs_exist` would report them as missing forever). The
+/// recorded domains supply the concrete instance paths; a rule with a
+/// pattern but no recorded domains is assumed present (conservative for
+/// the reclaim gate — never deletes on a maybe).
+pub fn rule_outputs_exist_with_patterns(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    output_pattern_domains: &BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+) -> bool {
+    if rule.output.iter().all(|output| {
+        let expanded = expand_config_in_path(output, wildcard_values);
+        expanded.contains('{') || workdir.join(&expanded).exists()
+    }) && rule.output_pattern.is_none()
+    {
+        return true;
+    }
+    if let Some(pattern) = &rule.output_pattern {
+        let expanded = expand_config_in_path(pattern, wildcard_values);
+        if expanded.contains('{') {
+            // Pattern-level: present if any recorded combo names an
+            // existing path, or when no domains were recorded (assume
+            // present — deleting producer inputs on a guess is unsafe).
+            let Some(combos) = output_pattern_domains.get(expanded.as_str()) else {
+                return true;
+            };
+            return combos.iter().any(|combo| {
+                let instance = crate::wildcard::expand_pattern(&expanded, combo)
+                    .unwrap_or_else(|_| expanded.clone());
+                !instance.contains('{') && workdir.join(&instance).exists()
+            });
+        }
+        return workdir.join(&expanded).exists();
+    }
+    false
+}
+
 /// Validate that declared output files exist after execution.
 /// Returns a list of missing output file paths (after expanding config variables).
 pub fn validate_outputs(
