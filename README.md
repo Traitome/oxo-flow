@@ -57,7 +57,7 @@ oxo-flow is a high-performance bioinformatics pipeline engine built in Rust. It 
 | **Cluster backends** | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF | SLURM, PBS, SGE, LSF, k8s |
 | **Security** | Shell sanitization, path traversal prevention, rate limiting | Limited | Limited |
 | **AI Companion** | Built-in — generate, refine, diagnose, interpret | Not built-in | Not built-in |
-| **Testing** | 2,800+ tests (unit, integration, doc) | pytest-based | Varied |
+| **Testing** | 3,200+ tests (unit, integration, doc) | pytest-based | Varied |
 
 ## Design Principles
 
@@ -256,9 +256,9 @@ The `oxo-flow` binary provides **30 subcommands** covering the complete workflow
 
 | Category | Commands |
 |----------|----------|
-| **Execution** | `run`, `resume`, `dry-run`, `test`, `batch` |
+| **Execution** | `run`, `resume`, `dry-run` (alias `plan`), `test`, `batch` |
 | **Development** | `init`, `validate`, `format`, `lint`, `debug`, `template` |
-| **Inspection** | `graph`, `info`, `report`, `status`, `config`, `diff`, `provenance`, `schema` |
+| **Inspection** | `graph`, `info`, `report`, `status`, `config` (alias `check`), `diff`, `provenance`, `schema` |
 | **Environment** | `env`, `export`, `clean`, `touch` |
 | **Deployment** | `serve`, `cluster`, `publish`, `pull` |
 | **AI & System** | `ai`, `completions`, `license` |
