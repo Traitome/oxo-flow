@@ -1062,6 +1062,40 @@ Dry-run predicts exactly when a tombstoned rule will regenerate
 (`[rerun: upstream of X]`) — see
 [Checkpoint-aware rerun preview](./dry-run.md#checkpoint-aware-rerun-preview).
 
+### Disk-pressure monitoring (`[engine]`)
+
+Large pipelines can fill a disk mid-run. Declaring an `[engine]` section in
+the workflow makes the engine measure the working directory's free space at
+startup, at every scheduling round, and every 60 s while work is parked:
+
+```toml
+[engine]
+min_free_disk = "50G"        # floor — entering Hold below it
+reclaim_free_disk = "100G"   # optional reclaim trigger; defaults to min_free_disk
+```
+
+The response ladder:
+
+- **Reclaim** (`min ≤ free < reclaim`): completed rules' temporary outputs
+  are tombstoned and unlinked mid-run — the same checkpoint-aware reclaim
+  as `temporary = true` cleanup, but *while the run is still going*. Only
+  when every dependent is completed *and* its own outputs still exist (a
+  dependent whose outputs are missing will re-run and needs its inputs).
+  The narration line is `⊘ reclaimed temporary outputs of '<rule>' …`.
+- **Hold** (`free < min`): new rule dispatches are withheld; in-flight
+  rules continue. If nothing is in flight and nothing is reclaimable, the
+  run parks and re-measures every 60 s.
+- **Abort** (Hold persists ~2 parked rounds ≈ 2 min): the run checkpoints
+  and fails. Free space manually (delete intermediates or
+  [`oxo-flow clean`](./clean.md)), then
+  [`oxo-flow resume`](#checkpointing-and-resuming) — or lower
+  `min_free_disk`.
+
+Protected outputs (`protected_output`) are never reclaimed, and the final
+(leaf) rule's outputs always survive. See
+[`[engine]` in the workflow format reference](../reference/workflow-format.md#engine-runtime-disk-pressure-guard-issue-843)
+for the full field table and edge cases.
+
 ### Forcing Execution
 
 To bypass checkpoints and re-execute rules that have already completed, use

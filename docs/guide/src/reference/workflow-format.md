@@ -57,6 +57,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications (issue #227)
+[engine]            # Optional: runtime disk-pressure guard (issue #843)
 ```
 
 `reference_dir` is a bare top-level key, so it must appear before the first
@@ -2913,6 +2914,67 @@ where `data` carries the run counters (`succeeded`, `failed`, `skipped`)
 and, on failure, an `error` summary. Notifications are **best-effort** —
 an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.
+
+## `[engine]` — Runtime Disk-Pressure Guard (issue #843)
+
+Optional run-time disk monitoring. Without this section the engine never
+measures free space mid-run and behavior is unchanged.
+
+```toml
+[engine]
+min_free_disk = "50G"        # required to enable: abort/park floor
+# reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `min_free_disk` | String or Integer | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
+| `reclaim_free_disk` | String or Integer | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
+
+### Response ladder
+
+Each measurement (run start, loop head, and every 60 s while the run is
+parked or between dispatch batches) classifies the working directory's free
+space and reacts:
+
+| Level | Condition | Response |
+|---|---|---|
+| Normal | `free ≥ reclaim` | Run proceeds normally |
+| Reclaim | `min ≤ free < reclaim` | Completed rules' **temporary** outputs are reclaimed (tombstoned in the checkpoint + unlinked) to make room; the run continues |
+| Hold | `free < min` | New rule dispatches are withheld (in-flight rules continue); if nothing is in flight and nothing is reclaimable, the run parks and re-measures every 60 s |
+| Abort | Hold persists for ~2 consecutive parked rounds (~2 min) | The run checkpoints its state and fails with the disk-pressure message |
+
+Under Hold with rules in flight, in-flight rules run to completion (their
+outputs may themselves trigger Reclaim), but no new rule starts until free
+space recovers above the floor.
+
+The abort message explains recovery: free space manually (delete
+intermediates or run `oxo-flow clean`), then `oxo-flow resume` from the
+checkpoint — or lower `min_free_disk`.
+
+### What gets reclaimed
+
+Reclamation targets a completed rule's outputs only when **all** of the
+following hold: the rule is marked `temporary = true`, it is not a leaf (it
+has dependents), every dependent has completed **and each dependent's own
+declared outputs still exist on disk** — a completed rule whose outputs went
+missing will re-execute and needs its inputs in place, so reclaiming them
+underneath it would break the re-run (the reclaim-vs-resume race, fixed
+under issue #843), the paths are not `protected_output`, and the files
+exist on disk. Reclaimed rules get a tombstone in `checkpoint.json` — the
+same mechanism the success-path `temporary` cleanup uses — so a later run
+that needs the outputs regenerates them first (lazy cascade-up). See
+[Cleanup Behavior](#cleanup-behavior).
+
+Notes:
+
+- Measurements are fail-open: if the working directory cannot be stat'ed,
+  the engine logs a warning and continues rather than aborting.
+- On non-Unix platforms the monitor is inactive (a warning is printed at
+  startup when `[engine]` thresholds are set).
+- A run that starts already below `min_free_disk` prints a warning before
+  executing (it does not refuse to start; the Hold/Abort ladder governs
+  from there).
 
 ## See Also
 

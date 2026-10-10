@@ -780,6 +780,53 @@ pub struct ResourceBudget {
     pub max_jobs: Option<usize>,
 }
 
+/// Runtime disk-pressure monitoring thresholds (issue #843).
+///
+/// The engine watches free space on the working directory's filesystem at
+/// rule-completion boundaries and periodically while jobs run. Crossing
+/// `min_free_disk` emits a WARN diagnostic; crossing `reclaim_free_disk`
+/// additionally pauses new submissions and reclaims tombstone-eligible
+/// outputs of completed temporary rules (regenerable on resume), aborting
+/// only when even reclamation cannot free enough space.
+///
+/// Both values use the shared memory-size syntax — `"5G"`, `"500M"`,
+/// `"1T"` — where a bare number means MiB. Omitting the section (or both
+/// keys) keeps today's behavior: one pre-run advisory check, no monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EngineConfig {
+    /// Free-space floor. Dropping below it logs a WARN diagnostic
+    /// (state-transition deduplicated — one warning per crossing, not per
+    /// check). Accepts `T`/`G`/`M`/`K` suffixes; a bare number means MiB.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_free_disk: Option<String>,
+    /// Reclaim threshold (must be >= `min_free_disk` when both are set).
+    /// Below it, new rule submissions hold while completed temporary-rule
+    /// outputs that all dependents no longer need are tombstoned and
+    /// unlinked; the run aborts if space stays below `min_free_disk` after
+    /// reclamation. Same syntax as `min_free_disk`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reclaim_free_disk: Option<String>,
+}
+
+impl EngineConfig {
+    /// Resolved `(min_mb, reclaim_mb)` thresholds in MiB, or `None` when
+    /// the section is absent or both keys are unset (zero behavior change).
+    /// Invalid values are surfaced by [`WorkflowConfig::validate`], so this
+    /// is only called on an already-validated config.
+    pub fn disk_thresholds(&self) -> Option<(u64, u64)> {
+        crate::scheduler::parse_memory_mb(self.min_free_disk.as_deref().unwrap_or("")).map(|min| {
+            let reclaim = self
+                .reclaim_free_disk
+                .as_deref()
+                .and_then(crate::scheduler::parse_memory_mb)
+                .unwrap_or(min);
+            (min, reclaim.max(min))
+        })
+    }
+}
+
 /// Reference database configuration for tracking versions and provenance.
 ///
 /// Bioinformatics workflows often depend on reference databases (genome builds,
@@ -1813,6 +1860,12 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_budget: Option<ResourceBudget>,
+
+    /// Runtime engine policies (issue #843): currently disk-pressure
+    /// monitoring thresholds. Absent section = zero behavior change.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<EngineConfig>,
 
     /// Shared resource groups for limiting concurrent access to APIs or databases.
     #[serde(default, rename = "resource_groups")]

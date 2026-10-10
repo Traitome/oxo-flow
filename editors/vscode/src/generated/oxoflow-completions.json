@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "d51e5131c190dba9922d23265bbef9153b1d8f1acca5148e3f83a9fac6662470",
+  "schemaSha256": "52d64b48ccae9732c010789666dbda9b197003c51585d6f4e9c34dc3c47bb2ff",
   "contexts": {
     "root": {
       "keys": [
@@ -28,6 +28,11 @@
         {
           "key": "defaults",
           "description": "Default settings applied to all rules",
+          "type": "object"
+        },
+        {
+          "key": "engine",
+          "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843). Values use T/G/M/K suffixes; a bare number means MiB.",
           "type": "object"
         },
         {
@@ -260,6 +265,20 @@
           "key": "max_threads",
           "description": "",
           "type": "integer"
+        }
+      ]
+    },
+    "engine": {
+      "keys": [
+        {
+          "key": "min_free_disk",
+          "description": "Free-space floor on the working directory's filesystem (e.g. \"5G\"). Dropping below logs a WARN diagnostic, deduplicated per crossing.",
+          "type": "string"
+        },
+        {
+          "key": "reclaim_free_disk",
+          "description": "Reclaim threshold (>= min_free_disk). Below it new submissions hold while regenerable outputs of completed temporary rules are tombstoned and deleted; the run aborts if space stays below min_free_disk afterward.",
+          "type": "string"
         }
       ]
     },
