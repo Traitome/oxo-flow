@@ -318,14 +318,16 @@ tools (and you) can branch on them programmatically:
 Codes are three characters: the letter, then a zero-padded number. The
 authoritative, machine-readable source is the `--json` output of each
 command (`validate --json`, `dry-run --json`, `lint --json`); the tables
-below cover the codes referenced across this documentation.
+below list every code the engine currently emits.
 
 ### Validation errors (`validate` / `dry-run`)
 
 | Code | Meaning |
 |---|---|
 | `E001` | Workflow name is empty |
+| `E002` | A rule definition failed engine validation — e.g. `gpus` declared without a `docker` image, or `output_pattern` combined with `output`/`transform` (mutually exclusive) |
 | `E003` | A wildcard appears in a rule's output but not in its input — the engine cannot key instances |
+| `E004` | Invalid `memory` / `resources.memory` specification. Parse rejects unparseable values before the diagnostic layer runs, so this code is defense-in-depth for programmatically constructed configs |
 | `E005` | A `{config.key}` reference points at a key absent from `[config]` |
 | `E006` | DAG construction error (e.g. a cycle) |
 | `E007` | `depends_on` names a rule that does not exist |
@@ -348,10 +350,15 @@ below cover the codes referenced across this documentation.
 | `W003` | Rule missing a description |
 | `W004` | *(info)* Rule has a shell command but no `log` file specified — stdout/stderr are still captured into job records |
 | `W005` | Rule uses >8 threads with no `memory` |
+| `W006` | *(info)* Rule name uses hyphens — suggests snake_case (underscores) |
 | `W007` | *(info)* Leaf rule (no dependents) that could be marked `target = true` |
 | `W008` | *(info)* Rule declares no environment — runs in the bare system shell |
+| `W009` | Rule uses >32 threads but has no `memory` — high-thread jobs typically need significant memory |
+| `W010` | Rule has `checkpoint = true` but no output files |
 | `W012` | Rule has `retries` but no `retry_delay` (retries execute immediately) |
+| `W013` | *(info)* Rule has an `on_failure` hook but no `retries` — the hook runs on first failure |
 | `W014` | `depends_on` references an unknown rule |
+| `W015` | Rule `extends` an unknown base rule — `validate` reports the same condition as `E008` |
 | `W016` | Conda/pixi spec is not a lockfile — builds may not be reproducible |
 | `W017` | Input path is absolute |
 | `W018` | Input path references a home directory |
