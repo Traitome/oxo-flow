@@ -4976,7 +4976,7 @@ tools (and you) can branch on them programmatically:</p>
 <p>Codes are three characters: the letter, then a zero-padded number. The
 authoritative, machine-readable source is the <code>--json</code> output of each
 command (<code>validate --json</code>, <code>dry-run --json</code>, <code>lint --json</code>); the tables
-below cover the codes referenced across this documentation.</p>
+below list every code the engine currently emits.</p>
 <h3 id="validation-errors-validate-dry-run">Validation errors (<code>validate</code> / <code>dry-run</code>)<a class="headerlink" href="#validation-errors-validate-dry-run" title="Permanent link">#</a></h3>
 <table>
 <thead>
@@ -4991,8 +4991,16 @@ below cover the codes referenced across this documentation.</p>
 <td>Workflow name is empty</td>
 </tr>
 <tr>
+<td><code>E002</code></td>
+<td>A rule definition failed engine validation — e.g. <code>gpus</code> declared without a <code>docker</code> image, or <code>output_pattern</code> combined with <code>output</code>/<code>transform</code> (mutually exclusive)</td>
+</tr>
+<tr>
 <td><code>E003</code></td>
 <td>A wildcard appears in a rule's output but not in its input — the engine cannot key instances</td>
+</tr>
+<tr>
+<td><code>E004</code></td>
+<td>Invalid <code>memory</code> / <code>resources.memory</code> specification. Parse rejects unparseable values before the diagnostic layer runs, so this code is defense-in-depth for programmatically constructed configs</td>
 </tr>
 <tr>
 <td><code>E005</code></td>
@@ -5074,6 +5082,10 @@ below cover the codes referenced across this documentation.</p>
 <td>Rule uses &gt;8 threads with no <code>memory</code></td>
 </tr>
 <tr>
+<td><code>W006</code></td>
+<td><em>(info)</em> Rule name uses hyphens — suggests snake_case (underscores)</td>
+</tr>
+<tr>
 <td><code>W007</code></td>
 <td><em>(info)</em> Leaf rule (no dependents) that could be marked <code>target = true</code></td>
 </tr>
@@ -5082,12 +5094,28 @@ below cover the codes referenced across this documentation.</p>
 <td><em>(info)</em> Rule declares no environment — runs in the bare system shell</td>
 </tr>
 <tr>
+<td><code>W009</code></td>
+<td>Rule uses &gt;32 threads but has no <code>memory</code> — high-thread jobs typically need significant memory</td>
+</tr>
+<tr>
+<td><code>W010</code></td>
+<td>Rule has <code>checkpoint = true</code> but no output files</td>
+</tr>
+<tr>
 <td><code>W012</code></td>
 <td>Rule has <code>retries</code> but no <code>retry_delay</code> (retries execute immediately)</td>
 </tr>
 <tr>
+<td><code>W013</code></td>
+<td><em>(info)</em> Rule has an <code>on_failure</code> hook but no <code>retries</code> — the hook runs on first failure</td>
+</tr>
+<tr>
 <td><code>W014</code></td>
 <td><code>depends_on</code> references an unknown rule</td>
+</tr>
+<tr>
+<td><code>W015</code></td>
+<td>Rule <code>extends</code> an unknown base rule — <code>validate</code> reports the same condition as <code>E008</code></td>
 </tr>
 <tr>
 <td><code>W016</code></td>
