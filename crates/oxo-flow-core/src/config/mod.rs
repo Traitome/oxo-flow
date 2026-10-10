@@ -149,6 +149,51 @@ impl WorkflowConfig {
 
         self.validate_sample_group_metadata()?;
 
+        // [engine] disk-pressure thresholds (issue #843): fail at plan time
+        // on a typo'd size or an inverted threshold pair instead of
+        // discovering it mid-run when the monitor first fires.
+        if let Some(engine) = &self.engine {
+            let parse_err = |key: &str, value: &str| OxoFlowError::Config {
+                message: format!(
+                    "[engine] {key} = '{value}' is not a valid size — use T/G/M/K suffixes \
+                     (e.g. \"5G\", \"512M\"); a bare number means MiB"
+                ),
+            };
+            let min = engine
+                .min_free_disk
+                .as_deref()
+                .map(|v| {
+                    crate::scheduler::parse_memory_mb(v)
+                        .ok_or_else(|| parse_err("min_free_disk", v))
+                })
+                .transpose()?;
+            let reclaim = engine
+                .reclaim_free_disk
+                .as_deref()
+                .map(|v| {
+                    crate::scheduler::parse_memory_mb(v)
+                        .ok_or_else(|| parse_err("reclaim_free_disk", v))
+                })
+                .transpose()?;
+            if let (Some(min), Some(reclaim)) = (min, reclaim)
+                && reclaim < min
+            {
+                return Err(OxoFlowError::Config {
+                    message: format!(
+                        "[engine] reclaim_free_disk ({reclaim}M) must be >= min_free_disk ({min}M) — \
+                         reclamation activates before the warn floor is crossed, not after"
+                    ),
+                });
+            }
+            if min.is_none() && reclaim.is_some() {
+                return Err(OxoFlowError::Config {
+                    message: "[engine] reclaim_free_disk requires min_free_disk to be set — \
+                              the reclaim ladder aborts against the min_free_disk floor"
+                        .to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 

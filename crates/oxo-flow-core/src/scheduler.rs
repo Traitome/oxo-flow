@@ -355,6 +355,198 @@ mod parse_memory_overflow_tests {
     }
 }
 
+#[cfg(test)]
+mod disk_pressure_tests {
+    use super::*;
+    use crate::executor::CheckpointState;
+    use crate::rule::{EnvironmentSpec, Resources};
+
+    #[test]
+    fn disk_pressure_level_boundaries() {
+        // Normal: at or above the reclaim floor.
+        assert_eq!(
+            disk_pressure_level(1000, 100, 200),
+            DiskPressureLevel::Normal
+        );
+        // Reclaim: below reclaim, at or above min.
+        assert_eq!(
+            disk_pressure_level(199, 100, 200),
+            DiskPressureLevel::Reclaim
+        );
+        assert_eq!(
+            disk_pressure_level(100, 100, 200),
+            DiskPressureLevel::Reclaim
+        );
+        // Hold: below min.
+        assert_eq!(disk_pressure_level(99, 100, 200), DiskPressureLevel::Hold);
+        // reclaim == min (only min configured): no Reclaim band exists —
+        // at-min stays Normal, below-min is Hold.
+        assert_eq!(
+            disk_pressure_level(100, 100, 100),
+            DiskPressureLevel::Normal
+        );
+        assert_eq!(disk_pressure_level(99, 100, 100), DiskPressureLevel::Hold);
+    }
+
+    /// Rule builder mirroring `make_rules`' explicit-init style; the extra
+    /// knobs (temporary/protected/inputs) are what the reclaim gates read.
+    fn reclaim_rule(name: &str, outputs: &[&str], temporary: bool) -> Rule {
+        Rule {
+            name: name.to_string(),
+            input: vec![].into(),
+            output: outputs
+                .iter()
+                .map(|o| o.to_string())
+                .collect::<Vec<_>>()
+                .into(),
+            shell: Some(format!("echo {name}")),
+            script: None,
+            threads: None,
+            memory: None,
+            resources: Resources::default(),
+            environment: EnvironmentSpec::default(),
+            log: None,
+            benchmark: None,
+            params: HashMap::new(),
+            priority: 0,
+            target: false,
+            group: None,
+            description: None,
+            temporary,
+            ..Default::default()
+        }
+    }
+
+    fn completed_checkpoint(rules: &[&str]) -> CheckpointState {
+        let mut ck = CheckpointState::new();
+        for r in rules {
+            ck.mark_completed_quiet(r);
+        }
+        ck
+    }
+
+    #[test]
+    fn reclaim_candidates_gates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        // Real files on disk — reclaim only proposes paths that exist.
+        for f in ["a.txt", "b.txt", "prot.txt", "w.txt"] {
+            std::fs::write(workdir.join(f), "x").unwrap();
+        }
+
+        let mut rules = vec![
+            reclaim_rule("gen", &["a.txt"], true),     // happy path
+            reclaim_rule("keep", &["b.txt"], false),   // not temporary → skip
+            reclaim_rule("prot", &["prot.txt"], true), // protected → skip
+            reclaim_rule("wild", &["{s}.txt"], true),  // unexpanded wildcard → skip
+            reclaim_rule("w", &["w.txt"], true),       // marked later per-case
+        ];
+        // prot: protected_output matches its own output.
+        rules[2].protected_output = vec!["prot.txt".to_string()];
+
+        // Missing rule "w"'s checkpoint completion → skipped as incomplete.
+        let mut ck = completed_checkpoint(&["gen", "prot", "wild"]);
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        // Baseline: gen is a leaf in this DAG… leaves are skipped, so make
+        // "gen" have a dependent by pointing w at a.txt — rebuild with deps.
+        drop(dag);
+        rules.push(reclaim_rule("down", &["d.txt"], false));
+        rules[3].input = vec!["a.txt".to_string()].into();
+        rules[4].input = vec!["b.txt".to_string()].into();
+        rules[5].input = vec!["a.txt".to_string()].into();
+        std::fs::write(workdir.join("d.txt"), "x").unwrap();
+        ck.mark_completed_quiet("down");
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        // gen: temporary, completed, dependents wild + down (both done) →
+        // candidate. w: not completed → skip. keep: not temporary → skip.
+        // prot: protected → skip. wild: '{' → skip. down: not temporary.
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert_eq!(cands.len(), 1, "only gen passes: {cands:?}");
+        assert_eq!(cands[0].rule, "gen");
+        assert_eq!(cands[0].paths, vec!["a.txt".to_string()]);
+
+        // Already tombstoned → skipped.
+        ck.tombstones
+            .insert("gen".to_string(), vec!["a.txt".into()]);
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert!(cands.is_empty());
+
+        // Incomplete producer (mark gen not completed) → skipped.
+        ck.tombstones.clear();
+        ck.completed_rules.remove("gen");
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert!(cands.is_empty());
+
+        // Pending dependent (wild not completed) → skipped.
+        ck.mark_completed_quiet("gen");
+        ck.completed_rules.remove("wild");
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "pending dependent must block reclaim: {cands:?}"
+        );
+
+        // Stale-completed dependent (down completed but d.txt deleted) →
+        // skipped: down will re-execute and needs its input a.txt on disk.
+        // w is completed too, but its only missing output is w.txt — also a
+        // stale dependent on gen's other path (gen→w? no: w consumes b.txt).
+        // Use wild (completed, '{' output counts as existing) as the other
+        // dependent; "down" blocks via its missing output.
+        ck.mark_completed_quiet("wild");
+        std::fs::remove_file(workdir.join("d.txt")).unwrap();
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "stale-completed dependent must block reclaim: {cands:?}"
+        );
+
+        // Restoring the dependent's output re-arms reclaim.
+        std::fs::write(workdir.join("d.txt"), "x").unwrap();
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        assert_eq!(cands.len(), 1, "gen must be a candidate again: {cands:?}");
+        assert_eq!(cands[0].rule, "gen");
+
+        // Unknown dependent (not in `rules`) → treated as not-done: no proof
+        // it finished, so reclaim is blocked. Drop "down" from the rules the
+        // caller passes while the DAG still knows it as gen's dependent.
+        let without_down: Vec<Rule> = rules.iter().filter(|r| r.name != "down").cloned().collect();
+        let cands = reclaim_candidates(&without_down, &dag, &ck, workdir, &HashMap::new());
+        // gen's dependents are wild (known) and down (unknown) — blocked.
+        // "down" itself is no longer in the candidate set either (not passed).
+        assert!(
+            cands.is_empty(),
+            "unknown dependent must block reclaim: {cands:?}"
+        );
+    }
+
+    #[test]
+    fn monitor_narrates_only_on_crossing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lines: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let mut narrate = |args: std::fmt::Arguments<'_>| {
+            lines.lock().unwrap().push(args.to_string());
+        };
+        let mut monitor = DiskPressureMonitor::new(100, 200);
+
+        // Non-measurable directory fails open to Normal, no narration.
+        let level = monitor.observe(std::path::Path::new("/nonexistent-843"), &mut narrate);
+        assert_eq!(level, DiskPressureLevel::Normal);
+        assert!(lines.lock().unwrap().is_empty());
+
+        // Same level repeatedly → narrated once.
+        let level = monitor.observe(tmp.path(), &mut narrate);
+        assert_eq!(level, DiskPressureLevel::Normal);
+        assert!(
+            lines.lock().unwrap().is_empty(),
+            "start at Normal narrates nothing"
+        );
+        monitor.observe(tmp.path(), &mut narrate);
+        assert!(lines.lock().unwrap().is_empty());
+    }
+}
+
 /// Pre-flight check: report rules whose declared request can never fit an
 /// *explicitly configured* budget (`--max-threads` / `--max-memory`), so the
 /// run can fail fast instead of dying mid-pipeline on an impossible rule.
@@ -476,6 +668,191 @@ pub fn check_available_disk_mb(path: &std::path::Path) -> Option<u64> {
 #[cfg(not(unix))]
 pub fn check_available_disk_mb(_path: &std::path::Path) -> Option<u64> {
     None
+}
+
+/// Disk-pressure severity for the #843 runtime monitor, ordered
+/// `Normal < Reclaim < Hold` so levels compare (used for crossing dedup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DiskPressureLevel {
+    /// Plenty of free space — nothing to do.
+    Normal,
+    /// Free space dropped below `reclaim_free_disk` but not yet below
+    /// `min_free_disk`: reclaim regenerable outputs of completed temporary
+    /// rules (reclamation fires BEFORE the warn floor as space drops).
+    Reclaim,
+    /// Free space below `min_free_disk`: hold new dispatches (in-flight
+    /// rules keep running) until space is freed — externally or by
+    /// reclamation — or the run aborts when no progress is possible.
+    Hold,
+}
+
+/// Classify available disk space (MB) against the `[engine]` thresholds.
+/// Pure so the boundaries are unit-testable on any CI disk. `reclaim_mb` is
+/// pre-clamped to `>= min_mb` by `EngineConfig::disk_thresholds()`.
+pub fn disk_pressure_level(available_mb: u64, min_mb: u64, reclaim_mb: u64) -> DiskPressureLevel {
+    if available_mb < min_mb {
+        DiskPressureLevel::Hold
+    } else if available_mb < reclaim_mb {
+        DiskPressureLevel::Reclaim
+    } else {
+        DiskPressureLevel::Normal
+    }
+}
+
+/// Stateful wrapper that turns raw measurements into narrated level
+/// transitions: pressure warnings are deduplicated by STATE CROSSING — a
+/// level is announced only when it differs from the previously observed
+/// one, so a long stretch in `Reclaim` logs once, not every tick. Recovery
+/// back to `Normal` is narrated too ("cleared"). Measurement failure (None,
+/// e.g. non-Unix) fails open to `Normal` without narrating.
+pub struct DiskPressureMonitor {
+    thresholds: (u64, u64), // (min_free_disk, reclaim_free_disk), both MB
+    last: DiskPressureLevel,
+}
+
+impl DiskPressureMonitor {
+    /// The most recently measured level, without re-measuring. Lets the
+    /// dispatch cap read the enforced policy between observation points.
+    pub fn last_level(&self) -> DiskPressureLevel {
+        self.last
+    }
+
+    pub fn new(min_mb: u64, reclaim_mb: u64) -> Self {
+        Self {
+            thresholds: (min_mb, reclaim_mb),
+            last: DiskPressureLevel::Normal,
+        }
+    }
+
+    /// Measure, classify, and narrate any level crossing. Returns the new
+    /// level. `workdir` anchors the `fs2` measurement; `narrate` receives
+    /// the formatted warning line (pass `|args| diagnostic_narrate(args, …)`
+    /// in the CLI layer).
+    pub fn observe(
+        &mut self,
+        workdir: &std::path::Path,
+        narrate: &mut dyn FnMut(std::fmt::Arguments<'_>),
+    ) -> DiskPressureLevel {
+        let Some(available_mb) = check_available_disk_mb(workdir) else {
+            // Fail open: can't measure → don't hold or warn.
+            return DiskPressureLevel::Normal;
+        };
+        let (min_mb, reclaim_mb) = self.thresholds;
+        let level = disk_pressure_level(available_mb, min_mb, reclaim_mb);
+        if level != self.last {
+            let message = match level {
+                DiskPressureLevel::Normal => format!(
+                    "disk pressure cleared: {}MB free (threshold: {}MB)",
+                    available_mb, min_mb
+                ),
+                DiskPressureLevel::Reclaim => format!(
+                    "disk pressure WARN: only {}MB free (min {}MB) — reclaiming regenerable outputs of completed temporary rules",
+                    available_mb, min_mb
+                ),
+                DiskPressureLevel::Hold => format!(
+                    "disk pressure CRITICAL: only {}MB free (min {}MB) — holding new rule dispatches; \
+                     in-flight rules continue. Free space (delete intermediates, `oxo-flow clean`) \
+                     or the run will abort when nothing is in flight.",
+                    available_mb, min_mb
+                ),
+            };
+            narrate(format_args!("{message}"));
+            self.last = level;
+        }
+        level
+    }
+}
+
+/// One reclaimable rule: the completed temporary rule and its
+/// workdir-relative output paths (expanded, no wildcards left).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReclaimCandidate {
+    pub rule: String,
+    pub paths: Vec<String>,
+}
+
+/// Collect outputs of completed temporary rules that are safe to delete to
+/// free disk space (issue #843). A candidate must pass ALL gates:
+///
+/// - declared `temporary` (regenerable by definition);
+/// - completed in the checkpoint (never touch a rule that hasn't finished);
+/// - not already tombstoned (post-run cleanup already deleted its outputs);
+/// - non-leaf with every dependent completed (deleting outputs of a rule
+///   whose consumer still needs them — or hasn't run — breaks the DAG);
+/// - no `protected_output` declaration matches (shared matcher with the
+///   failure-invalidation destroy path);
+/// - no unexpanded wildcard remnants (`{` in the path).
+///
+/// Order-independent: rules are visited in `rules` order and paths in
+/// declaration order; nothing here depends on hash iteration.
+pub fn reclaim_candidates(
+    rules: &[Rule],
+    dag: &WorkflowDag,
+    checkpoint: &crate::executor::CheckpointState,
+    workdir: &std::path::Path,
+    wildcard_values: &HashMap<String, String>,
+) -> Vec<ReclaimCandidate> {
+    let mut candidates = Vec::new();
+    for rule in rules {
+        if !rule.temporary || !checkpoint.is_completed(&rule.name) {
+            continue;
+        }
+        // Already tombstoned: the post-run cleanup path owns this rule's
+        // deletion (and its outputs are gone) — nothing to reclaim.
+        if checkpoint.tombstones.contains_key(&rule.name) {
+            continue;
+        }
+        let dependents = dag.dependents(&rule.name).unwrap_or_default();
+        if dependents.is_empty() {
+            continue;
+        }
+        // A dependent only counts as done if it is checkpoint-completed AND
+        // its declared outputs still exist. A completed rule whose outputs
+        // were deleted (e.g. a mid-run reclaim before #843, or manual
+        // cleanup) re-executes and needs its inputs on disk — deleting them
+        // underneath it is the reclaim race this gate prevents (#843).
+        // Unknown dependents (not in `rules`) are treated as not-done:
+        // reclaiming without proof they are finished is unsafe.
+        let all_dependents_done = dependents.iter().all(|d| {
+            let Some(dep) = rules.iter().find(|r| &r.name == d) else {
+                return false;
+            };
+            checkpoint.is_completed(d)
+                && crate::executor::checkpoint::rule_outputs_exist(dep, workdir, wildcard_values)
+        });
+        if !all_dependents_done {
+            continue;
+        }
+        let paths: Vec<String> = rule
+            .output
+            .iter()
+            .filter_map(|output| {
+                let expanded =
+                    crate::executor::checkpoint::expand_config_in_path(output, wildcard_values);
+                if expanded.contains('{')
+                    || crate::executor::output_invalidation::is_protected_path(
+                        rule,
+                        wildcard_values,
+                        &expanded,
+                    )
+                {
+                    return None;
+                }
+                // Only paths that actually exist can free space.
+                if !workdir.join(&expanded).exists() {
+                    return None;
+                }
+                Some(expanded)
+            })
+            .collect();
+        if !paths.is_empty() {
+            candidates.push(ReclaimCandidate {
+                rule: rule.name.clone(),
+                paths,
+            });
+        }
+    }
+    candidates
 }
 
 /// Estimate memory requirement from ResourceHint when explicit memory not set.

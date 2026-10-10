@@ -38,6 +38,7 @@ make ci
 2. **Environment Agnostic:** Support 8 backends: conda, mamba, pixi, docker, singularity, venv, system, HPC modules.
 3. **Wildcard Expansion:** Native support for `{sample}`, `{chr}` patterns with regex constraints.
 4. **Reproducibility First:** Every execution must be reproducible and auditable via provenance.
+5. **Disk-Pressure Guard:** Optional `[engine]` section (`min_free_disk` / `reclaim_free_disk`, issue #843) drives a Normal → Reclaim → Hold → abort ladder at run time; reclamation reuses the `temporary = true` tombstone + cascade-up machinery. Documented in `docs/guide/src/reference/workflow-format.md` (`[engine]` section) and `docs/guide/src/commands/run.md`.
 
 ## Coding Standards
 - **Type Safety:** No `unsafe` unless strictly justified.

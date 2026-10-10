@@ -31,6 +31,7 @@ pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
     "cluster",
     "config",
     "defaults",
+    "engine",
     "env_groups",
     "include",
     "metadata",
@@ -58,6 +59,7 @@ const TOP_LEVEL_SUGGESTIONS: &[&str] = &[
     "cluster",
     "config",
     "defaults",
+    "engine",
     "env_groups",
     "include",
     "metadata",
@@ -206,6 +208,9 @@ const REFERENCE_KEYS: &[&str] = &[
 
 /// Keys of the `[resource_budget]` table.
 const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"];
+
+/// Keys of the `[engine]` table (issue #843 disk-pressure monitoring).
+const ENGINE_KEYS: &[&str] = &["min_free_disk", "reclaim_free_disk"];
 
 /// Keys of one `[resource_groups]` entry.
 const RESOURCE_GROUP_KEYS: &[&str] = &["max", "wait"];
@@ -426,6 +431,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "cluster" => Some(CLUSTER_KEYS),
         "combine" => Some(COMBINE_KEYS),
         "defaults" => Some(DEFAULTS_KEYS),
+        "engine" => Some(ENGINE_KEYS),
         "environment" => Some(ENVIRONMENT_KEYS),
         "gpu_spec" => Some(GPU_SPEC_KEYS),
         "plugins" => Some(PLUGINS_KEYS),
@@ -1161,6 +1167,7 @@ mod tests {
             (REPORT_KEYS, "/properties/report"),
             (CLUSTER_KEYS, "/properties/cluster"),
             (CITATION_KEYS, "/properties/citation"),
+            (ENGINE_KEYS, "/properties/engine"),
             (RESOURCE_BUDGET_KEYS, "/properties/resource_budget"),
             (PLUGINS_KEYS, "/properties/plugins"),
             (RESOURCES_KEYS, "/$defs/resources"),

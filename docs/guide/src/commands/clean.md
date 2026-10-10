@@ -108,3 +108,8 @@ Done: 2 deleted, 0 failed, 1 not found, 1 wildcard skipped, 0 rejected, 0 protec
 - With `--force`, files are deleted after an interactive confirmation prompt (skipped when stdin is not a terminal)
 - Use `--dry-run` to preview the list of files that would be affected before committing to a clean
 - Only files declared as rule `output` are targeted — input files, scripts, and environment specs are never deleted
+- `clean` is also the manual escape hatch for the
+  [`[engine]` disk-pressure guard](./run.md#disk-pressure-monitoring-engine):
+  when a run aborts because free space stayed below `min_free_disk`, clean
+  the intermediates (or delete them by hand), then `oxo-flow resume` from
+  the checkpoint

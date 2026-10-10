@@ -1702,6 +1702,22 @@ pub fn expand_config_in_path(path: &str, wildcard_values: &HashMap<String, Strin
     super::expand_to_fixed_point(path, wildcard_values, |value| value.to_owned())
 }
 
+/// Whether every declared output of the rule exists (the same check `run`
+/// performs before re-submitting a completed rule). Paths that still carry
+/// `{` after config expansion are assumed present — they resolve per
+/// wildcard instance. Shared by the CLI preview/replay gates and the #843
+/// reclaim gate so "will this rule re-execute?" cannot drift between them.
+pub fn rule_outputs_exist(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    rule.output.iter().all(|output| {
+        let expanded = expand_config_in_path(output, wildcard_values);
+        expanded.contains('{') || workdir.join(&expanded).exists()
+    })
+}
+
 /// Validate that declared output files exist after execution.
 /// Returns a list of missing output file paths (after expanding config variables).
 pub fn validate_outputs(
