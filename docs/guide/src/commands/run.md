@@ -757,6 +757,21 @@ fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 `failed_rules`).
 
+Timestamp semantics (issue #850): the engine stamps
+**`enqueued_at`** when an execution attempt is submitted and stamps
+**`started_at`** only after the rule has acquired its resources — the
+moment actual execution begins. Their difference is the time the rule
+spends waiting in the resource pool (same split as the cluster driver's
+`queue_wait_secs`), and all wall-time reporting (`duration_ms`, the
+report's Benchmarks `Wall Time` column, `benchmarks.wall_time_secs`) is
+measured from `started_at`, so a rule parked behind busy resources never
+inflates its reported runtime. These two timestamps live on the engine's
+in-memory job records and are not part of `rule_runs` entries; the
+checkpoint persists the resulting wall time via `benchmarks.wall_time_secs`,
+and cluster runs additionally persist the split per job as
+`queue_wait_secs` in `jobs/<rule>/status.json` (see
+[What a finished job records](#what-a-finished-job-records)).
+
 The tails are truncated to the **last 64 KiB per stream by default** and
 prefixed with a `…` marker when cut. Set `OXO_FLOW_OUTPUT_TAIL_BYTES` to
 change the size (bytes; an invalid or zero value falls back to the default

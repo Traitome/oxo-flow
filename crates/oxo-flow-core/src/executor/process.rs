@@ -233,6 +233,14 @@ impl ExecutionEvent {
 pub struct JobRecord {
     pub rule: String,
     pub status: JobStatus,
+    /// When the execution attempt was enqueued — stamped on entry to
+    /// `execute_rule_inner`, before resource acquisition can park the
+    /// rule in a `ResourcePool` FIFO (issue #850). `started_at` is the
+    /// post-acquisition execution start, so `finished_at - started_at`
+    /// measures execution wall time while this preserves the queue wait
+    /// for diagnostics (mirrors the cluster driver's queue/run split).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enqueued_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
@@ -1380,7 +1388,11 @@ impl LocalExecutor {
             signal: None,
             rule: rule.name.clone(),
             status: JobStatus::Running,
-            started_at: Some(Utc::now()),
+            // Execution start is stamped only after resource acquisition
+            // (below); until then the attempt is merely enqueued, so
+            // `duration_ms` never counts queue wait (issue #850).
+            enqueued_at: Some(Utc::now()),
+            started_at: None,
             finished_at: None,
             exit_code: None,
             stdout: None,
@@ -1925,6 +1937,11 @@ impl LocalExecutor {
         self.ensure_environment_ready(&rule).await?;
         // check_resources waits for availability AND reserves atomically.
         self.check_resources(&rule).await?;
+        // Resource pool (and any env setup) no longer parks us: this is
+        // the execution start `started_at` refers to, so `duration_ms`
+        // measures execution wall time rather than enqueue→completion
+        // (issue #850). Queue wait remains observable via `enqueued_at`.
+        record.started_at = Some(Utc::now());
 
         let _permit = self
             .semaphore
@@ -2580,6 +2597,7 @@ impl LocalExecutor {
                     signal: None,
                     rule: rule.name.clone(),
                     status: JobStatus::Skipped,
+                    enqueued_at: None,
                     started_at: None,
                     finished_at: None,
                     exit_code: None,
@@ -5600,6 +5618,78 @@ mod tests {
             task.await
                 .expect("waiter task joins")
                 .expect("waiter must acquire from the single notification");
+        });
+    }
+
+    #[test]
+    fn started_at_stamped_after_resource_acquisition() {
+        // Issue #850: `started_at` must be the post-acquisition execution
+        // start, not the enqueue time. A rule parked on a fully held pool
+        // carries `started_at = None` while queued (with `enqueued_at`
+        // set); once it acquires, `started_at` is stamped — and the
+        // resulting duration excludes the queue wait, which preceded it.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let ex = executor_with(1, 1024);
+            let ex = Arc::new(ex);
+            let holder = rule_with_resources("holder", 1, 1024);
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.reserve(&holder, 1, 1024);
+            }
+            // The rule needs a shell — the no-shell early return precedes
+            // resource acquisition, so a shell-less rule would skip instead
+            // of parking on the pool.
+            let mut waiter = rule_with_resources("waiter", 1, 1024);
+            waiter.shell = Some("true".to_string());
+            let ex_task = Arc::clone(&ex);
+            let values = HashMap::new();
+            let task = tokio::spawn(async move { ex_task.execute_rule(&waiter, &values).await });
+            // While the rule is parked on the pool, the record cannot be
+            // observed directly — assert via the waiter queue instead:
+            // still queued, and the queue IS the pre-acquisition window.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                ex.resource_waiters().await,
+                vec!["waiter".to_string()],
+                "rule must be parked pre-acquisition before release"
+            );
+            // Measure how long the rule sat queued before we released.
+            let release_after = std::time::Instant::now();
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.release(&holder, 1, 1024, &HashMap::new());
+            }
+            ex.resource_notify.notify_waiters();
+            let record = task
+                .await
+                .expect("task joins")
+                .expect("waiter rule succeeds");
+            let queue_wait = release_after.elapsed();
+            let duration = record
+                .finished_at
+                .zip(record.started_at)
+                .map(|(f, s)| f.signed_duration_since(s))
+                .unwrap_or_default();
+            assert!(
+                record.started_at >= record.enqueued_at,
+                "execution start must follow enqueue: {:?} vs {:?}",
+                record.started_at,
+                record.enqueued_at
+            );
+            // The execution duration must be shorter than the queue wait
+            // the rule endured before release — if `started_at` were still
+            // stamped at enqueue, the duration would swallow the park time
+            // (milliseconds of queue vs sub-millisecond echo).
+            assert!(
+                duration.num_milliseconds() as f64 / 1000.0 < queue_wait.as_secs_f64(),
+                "duration ({:?}) must exclude the queue wait (>= {:?})",
+                duration,
+                queue_wait
+            );
         });
     }
 
