@@ -94,9 +94,36 @@ pub async fn validate_command(
             // Relative paths resolve against the workflow file's directory —
             // the same base the executor uses at run time (issue #68).
             let workflow_dir = oxo_flow_core::parent_dir(&workflow);
-            let mut missing_inputs = Vec::new();
-            if !as_include {
-                missing_inputs = collect_missing_inputs(&cfg, workflow_dir);
+            let missing_inputs = if !as_include {
+                collect_missing_inputs(&cfg, workflow_dir)
+            } else {
+                Vec::new()
+            };
+            // Pixi manifests are env inputs the executor needs before the
+            // first rule runs (issue #848) — fail here with the same
+            // severity as missing static inputs.
+            let missing_manifests = if !as_include {
+                collect_missing_pixi_manifests(&cfg, workflow_dir)
+            } else {
+                Vec::new()
+            };
+            for (rule, spec) in &missing_manifests {
+                error_count += 1;
+                let suggestion = "create the manifest at the resolved path or correct the \
+                                  rule's `pixi` path (resolved relative to the workflow \
+                                  directory)";
+                if json {
+                    errors_json.push(serde_json::json!({
+                        "code": "E019",
+                        "message": format!("pixi manifest '{spec}' declared by rule not found"),
+                        "rule": rule,
+                        "suggestion": suggestion,
+                    }));
+                } else {
+                    eprintln!("  {} [E019]: {}", "error".red().bold(), suggestion);
+                    eprintln!("    rule: {rule}");
+                    eprintln!("    pixi manifest: {spec}");
+                }
             }
 
             // Validate DAG construction (skip for --as-include)
@@ -841,6 +868,53 @@ fn collect_missing_inputs(cfg: &WorkflowConfig, workflow_dir: &std::path::Path) 
     missing
 }
 
+/// Preflight each rule's declared pixi manifest against the workflow
+/// directory (issue #848): a missing manifest previously surfaced only at
+/// run time, after validate had already reported success. Returns
+/// (rule name, resolved spec) pairs for every declared-but-absent manifest.
+/// Mirrors `collect_missing_inputs`' skip closures — a when-gated-off rule
+/// and a zero-fan-out scatter rule can never run, so their manifests are
+/// not required. Env specs are resolved (not config-expanded) exactly as
+/// the executor does at dispatch (issue #427).
+fn collect_missing_pixi_manifests(
+    cfg: &WorkflowConfig,
+    workflow_dir: &std::path::Path,
+) -> Vec<(String, String)> {
+    let mut missing = Vec::new();
+    for rule in &cfg.rules {
+        if rule.when.as_deref().is_some_and(|when| {
+            !oxo_flow_core::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                when,
+                &cfg.config,
+                &std::collections::HashMap::new(),
+                Some(workflow_dir),
+            )
+        }) {
+            continue;
+        }
+        if rule.scatter.as_ref().is_some_and(|scatter| {
+            if !scatter.values.is_empty() {
+                return false;
+            }
+            match scatter.values_from.as_deref() {
+                Option::None => true,
+                Some(v_from) => cfg
+                    .resolve_config_list(v_from)
+                    .is_some_and(|values| values.is_empty()),
+            }
+        }) {
+            continue;
+        }
+        let resolved = rule.environment.resolve_relative_paths(Some(workflow_dir));
+        if let Some(spec) = resolved.pixi
+            && oxo_flow_core::environment::validate_pixi_manifest(&spec).is_err()
+        {
+            missing.push((rule.name.clone(), spec));
+        }
+    }
+    missing
+}
+
 #[cfg(test)]
 mod tests {
     use assert_cmd::Command;
@@ -947,6 +1021,121 @@ values_from = "config.items"
             missing,
             vec!["missing/ref.fa".to_string()],
             "a non-empty scatter must keep its inputs existence-checked: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn missing_pixi_manifests_resolve_against_the_workflow_dir() {
+        use super::collect_missing_pixi_manifests;
+        // Issue #848: a declared pixi manifest must be resolved against the
+        // workflow directory — a manifest that exists only relative to the
+        // process CWD must NOT satisfy the check, and an absolute spec
+        // passes through unchanged.
+        let dir = tempfile::tempdir().unwrap();
+        let wf_dir = dir.path().join("wf");
+        std::fs::create_dir_all(wf_dir.join("envs")).unwrap();
+        std::fs::write(wf_dir.join("envs/pixi.toml"), "[project]\nname = \"x\"\n").unwrap();
+        let toml = |pixi_spec: &str| {
+            format!(
+                r#"
+[workflow]
+name = "t"
+
+[[rules]]
+name = "r"
+output = ["o.txt"]
+shell = "echo x"
+
+[rules.environment]
+pixi = "{pixi_spec}"
+"#
+            )
+        };
+        // Resolved-and-present → silent.
+        let cfg = oxo_flow_core::config::WorkflowConfig::parse(&toml("envs/pixi.toml")).unwrap();
+        assert!(collect_missing_pixi_manifests(&cfg, &wf_dir).is_empty());
+        // Absolute spec that exists → silent (spec passes through untouched).
+        let absolute = wf_dir.join("envs/pixi.toml");
+        let cfg =
+            oxo_flow_core::config::WorkflowConfig::parse(&toml(&absolute.display().to_string()))
+                .unwrap();
+        assert!(collect_missing_pixi_manifests(&cfg, &wf_dir).is_empty());
+        // Missing relative to the workflow dir → flagged with the RESOLVED
+        // spec (not the raw declaration).
+        let cfg = oxo_flow_core::config::WorkflowConfig::parse(&toml("envs/absent.toml")).unwrap();
+        let missing = collect_missing_pixi_manifests(&cfg, &wf_dir);
+        assert_eq!(
+            missing,
+            vec![(
+                "r".to_string(),
+                wf_dir.join("envs/absent.toml").display().to_string()
+            )],
+            "a missing manifest must be reported with its workflow-dir-resolved path: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn missing_pixi_manifests_silence_gated_off_and_zero_scatter_rules() {
+        use super::collect_missing_pixi_manifests;
+        // Same stance as collect_missing_inputs (issues #493/#616): a rule
+        // that can never run in this configuration does not require its
+        // manifest to exist.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = |when: &str, items: &str| {
+            format!(
+                r#"
+[workflow]
+name = "t"
+
+[config]
+prepare = false
+items = {items}
+
+[[rules]]
+name = "gated"
+output = ["a.txt"]
+when = "{when}"
+shell = "true"
+
+[rules.environment]
+pixi = "envs/absent.toml"
+
+[[rules]]
+name = "scattered"
+output = ["b.txt"]
+shell = "true"
+
+[rules.scatter]
+variable = "item"
+values_from = "config.items"
+
+[rules.environment]
+pixi = "envs/absent.toml"
+"#
+            )
+        };
+        // when-gated-off + empty scatter list → both silent.
+        let cfg =
+            oxo_flow_core::config::WorkflowConfig::parse(&toml("config.prepare", "[]")).unwrap();
+        assert!(collect_missing_pixi_manifests(&cfg, dir.path()).is_empty());
+        // Non-empty scatter → the rule can run → its manifest is required.
+        let cfg =
+            oxo_flow_core::config::WorkflowConfig::parse(&toml("config.prepare", r#"["item-a"]"#))
+                .unwrap();
+        let missing = collect_missing_pixi_manifests(&cfg, dir.path());
+        assert_eq!(
+            missing.len(),
+            1,
+            "a non-empty scatter must keep its manifest existence-checked: {missing:?}"
+        );
+        assert_eq!(missing[0].0, "scattered");
+        // when-gated-on → the gated rule's manifest is required too.
+        let toml_on = toml("true", "[]");
+        let cfg = oxo_flow_core::config::WorkflowConfig::parse(&toml_on).unwrap();
+        let missing = collect_missing_pixi_manifests(&cfg, dir.path());
+        assert!(
+            missing.iter().any(|(rule, _)| rule == "gated"),
+            "a when-gated-on rule's manifest must be checked: {missing:?}"
         );
     }
 

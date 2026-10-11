@@ -794,6 +794,84 @@ fn cli_validate_functional() {
         .failure();
 }
 
+/// Issue #848: `validate` and `dry-run` preflight each rule's declared pixi
+/// manifest against the workflow directory (error E019) instead of letting
+/// the run discover the absence later. `--as-include` skips the preflight.
+#[cfg(unix)]
+#[test]
+fn cli_validate_and_dry_run_preflight_pixi_manifest_against_workflow_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join("wf");
+    fs::create_dir_all(wf_dir.join("envs")).unwrap();
+    let wf = wf_dir.join("pixi.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"pixi-validate\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"r\"\noutput = [\"o.txt\"]\nshell = \"echo x\"\n\n[rules.environment]\npixi = \"envs/pixi.toml\"\n",
+    )
+    .unwrap();
+
+    // Stub `pixi` so the run-side backend gate is not what fails — this
+    // test exercises the manifest preflight, not backend availability.
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pixi = bin_dir.join("pixi");
+    fs::write(&pixi, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pixi, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // CWD is the PARENT of the workflow dir: the manifest resolves against
+    // the workflow, not the invoking directory.
+    oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("E019"))
+        .stderr(predicate::str::contains("envs/pixi.toml"));
+
+    // --as-include skips the preflight: the fragment validates clean.
+    oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap(), "--as-include"])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .success();
+
+    // dry-run fails too, with the human block on stderr.
+    oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "pixi manifest(s) declared by pending rule(s) do not exist",
+        ));
+
+    // Once the manifest exists, all three surfaces succeed.
+    fs::write(wf_dir.join("envs/pixi.toml"), "[project]\nname = \"x\"\n").unwrap();
+    oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .success();
+    oxo_flow_cmd()
+        .args(["dry-run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .assert()
+        .success();
+}
+
 // ─── info (catalog metadata) ────────────────────────────────────────────────
 
 /// `info` derives the machine-checkable catalog metadata (metadata.json

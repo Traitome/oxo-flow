@@ -177,7 +177,9 @@ fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
 /// path — a hardcoded CWD `pixi.toml` reports "ok" for a workflow whose
 /// manifest is missing and fails for one that keeps it anywhere else.
 /// Pure (no pixi probe) so a test can cover both branches without pixi.
-fn validate_pixi_manifest(spec: &str) -> Result<()> {
+/// Also exported for the CLI's validate/dry-run preflight (issue #848) so
+/// both surfaces share this exact check instead of retyping it.
+pub fn validate_pixi_manifest(spec: &str) -> Result<()> {
     if std::path::Path::new(spec).exists() {
         return Ok(());
     }

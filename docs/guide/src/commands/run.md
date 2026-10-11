@@ -272,11 +272,26 @@ before anything executes:
 Rules sharing one broken spec, and distinct specs failing with the
 identical backend-missing message, collapse into a single entry — one root
 cause per line, with the pending-rule count, an example rule, the primary
-spec, and a per-backend install hint. Nothing ran, so the `--json` summary
-still reports the run as `failed` with zero counts (issue #142 H6). Install
-the missing backend or switch the affected rules' environments; see
-[Troubleshooting — Environment Issues](../how-to/troubleshooting.md#environment-issues)
+spec, and a mode-aware remediation hint. Nothing ran, so the `--json`
+summary still reports the run as `failed` with zero counts (issue #142 H6).
+See [Troubleshooting — Environment Issues](../how-to/troubleshooting.md#environment-issues)
 for per-backend checks.
+
+The remediation depends on **why** the spec failed (issue #848):
+
+- **Manifest file not found** (pixi/conda/mamba declared by relative path):
+  the spec is resolved against the workflow directory (the same base the
+  executor uses, issue #427), and the hint says to create the manifest at
+  the resolved path or correct the rule's `pixi`/`conda` path — installing
+  the backend would not help when the file itself is absent.
+- **Backend binary missing** (the manifest exists, or the backend cannot be
+  located for another reason): the hint is the per-backend install advice
+  (`install pixi (https://pixi.sh) and ensure it is on PATH`, and so on).
+
+This is the run-time safety net. `validate` and `plan`/dry-run preflight
+pixi manifests up front (error `E019`) so the failure surfaces before you
+commit to a run; `run` keeps the check because manifests can also be
+created between validate and run.
 
 ### Pass config values
 
