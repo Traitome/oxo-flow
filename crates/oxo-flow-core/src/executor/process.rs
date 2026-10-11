@@ -659,21 +659,30 @@ impl LocalExecutor {
         // unused on small boxes (live: 3.7G RAM + 6G swap runs better
         // sized to ~9.7G). Override with --max-memory when the swap
         // should not count (e.g. latency-sensitive lanes).
-        let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
-            let detected = detect_total_memory_mb() + detect_swap_mb();
-            if detected > 0 {
-                detected
-            } else {
-                tracing::warn!("Could not detect system memory; defaulting to 8192MB. Set --max-memory to override.");
-                8192
-            }
-        });
-
+        //
         // Issue #855: a cgroup memory.max (container, systemd user slice)
         // sits below the host total — scheduling against the host figure
         // OOM-killed a 1007G box whose slice capped the session at 512G.
-        // Swap stays additive: it is backable inside the same cgroup.
-        let max_memory_mb = clamp_to_cgroup_limit(max_memory_mb, false);
+        // The clamp applies to the auto-detect branch only: an explicit
+        // --max-memory is the operator's escape hatch (run.md advises
+        // raising it when the clamp misreads a deliberately generous
+        // slice) and must win, as it does on the tool-facing
+        // (scheduler.rs) and container-ceiling paths. Swap stays additive
+        // for the detected branch: the kernel OOMs on a memory.max breach
+        // even when memory.swap.max would back the excess, so clamping
+        // the whole sum to memory.max is the conservative choice.
+        let max_memory_mb = config.max_memory_mb.unwrap_or_else(|| {
+            let detected = detect_total_memory_mb() + detect_swap_mb();
+            let detected = if detected > 0 {
+                detected
+            } else {
+                tracing::warn!(
+                    "Could not detect system memory; defaulting to 8192MB. Set --max-memory to override."
+                );
+                8192
+            };
+            clamp_to_cgroup_limit(detected, false)
+        });
 
         (max_threads, max_memory_mb)
     }
