@@ -360,12 +360,13 @@ fn strip_ansi(text: &str) -> String {
 /// line in the tracing
 /// stream (issue #194 B3): the event schema stops being dead code and the
 /// run log gains a machine-readable execution timeline alongside the prose.
-/// Background runs skip it for the same reason as [`progress_narrate`] —
-/// the redirected stderr already carries the line exactly once.
+/// Background runs go through the same tracing call: ANSI is already off
+/// under the stderr redirect (`main.rs` folds
+/// `OXO_FLOW_STDERR_ALREADY_REDIRECTED` into its color-disabled set) and the
+/// run-log tee stays unarmed there, so the line reaches the redirected
+/// stderr exactly once and lands in the run log via the redirect.
 fn emit_execution_event(event: oxo_flow_core::executor::ExecutionEvent) {
-    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
-        tracing::info!(target: "execution_event", "{}", event.to_json_log());
-    }
+    tracing::info!(target: "execution_event", "{}", event.to_json_log());
 }
 
 /// A termination signal `run` handles (audit C14), with the shell exit
@@ -4211,6 +4212,19 @@ pub async fn run_command(
                             format_args!("  {} {}", "✗".red(), err_msg),
                             &task_run_log,
                         );
+                            // Issue #856: rule failures must be greppable as
+                            // machine events too — the pretty ✗ line alone
+                            // made `grep rule_failed run.launch.log` return
+                            // 0 while 19 rules had died.
+                            emit_execution_event(
+                                oxo_flow_core::executor::ExecutionEvent::RuleFailed {
+                                    rule: rule_name.clone(),
+                                    exit_code: record.exit_code,
+                                    signal: record.signal,
+                                    retries: record.retries,
+                                    duration_ms: (duration * 1000.0) as u64,
+                                },
+                            );
                             // Always record: keep_going needs the final
                             // listing, non-required failures are listed in
                             // either mode, and the AI recovery path must be
