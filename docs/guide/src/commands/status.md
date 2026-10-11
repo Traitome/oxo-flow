@@ -62,6 +62,7 @@ oxo-flow status --timing --json
 ```
 oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
 Status: Status for checkpoint: .oxo-flow/checkpoint.json
+  State as of 118s ago (checkpoint written 14:32:07 local)
   Completed: 3
   Failed:    1
   Skipped (when-gated off): 2
@@ -78,6 +79,28 @@ Skipped (when condition false):
   ⊘ filter_cohort_S2
   ⊘ filter_cohort_S1
 ```
+
+### Snapshot freshness
+
+`status` reads a flushed snapshot of the run, not live state — the engine
+writes the checkpoint periodically, so on a busy run the file can lag
+real execution by a minute or more (issue #849). One line under the banner
+reports how old the snapshot is:
+
+```
+  State as of 118s ago (checkpoint written 14:32:07 local)
+```
+
+When the age exceeds 5 minutes the line switches to a warning — on a
+healthy run this is flush lag, not necessarily stalled progress:
+
+```
+  Warning: Snapshot is 412s old (checkpoint written 14:32:07 local) — flush lag, not necessarily stalled progress
+```
+
+The age is computed from the checkpoint file's modification time, so it
+also reflects out-of-band writes (e.g. a monitoring wrapper copying the
+file). When the mtime is unavailable the line is omitted entirely.
 
 ### When-gated-off rules
 
@@ -163,6 +186,8 @@ With `--json`, output goes to stdout:
   "command": "status",
   "checkpoint": ".oxo-flow/checkpoint.json",
   "workflow": "/abs/path/pipeline.oxoflow",
+  "checkpoint_mtime": "2026-10-11T14:32:07Z",
+  "snapshot_age_secs": 118,
   "completed": ["align", "sort_bam", "trim_reads"],
   "failed": [],
   "skipped_by_when": ["qc_report"],
@@ -187,12 +212,15 @@ With `--json`, output goes to stdout:
 
 `timings`, `total_time_secs`, and `memory` are only present with
 `--timing`; `memory` only lists rules with a sampled peak-RSS
-measurement. `staleness` appears whenever the workflow file can be
-loaded for classification **and** at least one completed rule would
-re-run (see [Staleness reasons](#staleness-reasons)). `skipped_by_when`
-appears only when at least one `failed_rules` entry is actually
-when-gated-off; the verdicts themselves live in the checkpoint file's
-`when_verdicts` map and are not duplicated into the JSON.
+measurement. `checkpoint_mtime` (RFC 3339, UTC) and `snapshot_age_secs`
+appear whenever the file's modification time can be read (issue #849) —
+see [Snapshot freshness](#snapshot-freshness). `staleness` appears
+whenever the workflow file can be loaded for classification **and** at
+least one completed rule would re-run (see
+[Staleness reasons](#staleness-reasons)). `skipped_by_when` appears only
+when at least one `failed_rules` entry is actually when-gated-off; the
+verdicts themselves live in the checkpoint file's `when_verdicts` map and
+are not duplicated into the JSON.
 
 ---
 
@@ -281,7 +309,7 @@ re-entries writes a much smaller checkpoint containing only
   their checkpoint timings are equally readable via `status` from the run's
   workdir
 - Use `status` to inspect progress of long-running pipelines, especially on clusters
-- The checkpoint file is not updated after the pipeline completes — it reflects the state at the last write
+- The checkpoint file is not updated after the pipeline completes — it reflects the state at the last write; the snapshot-age line (and `snapshot_age_secs` in JSON) tells you exactly how far behind that write is
 - Exits with code `0` regardless of the pipeline's success or failure
 - Rule order in `--timing` output is by wall-clock time descending, so the
   most expensive rules surface first

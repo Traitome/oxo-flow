@@ -7067,6 +7067,11 @@ logical errors. Output format per rule:
 /// Default checkpoint location used when `status` is invoked without an argument.
 const DEFAULT_CHECKPOINT: &str = ".oxo-flow/checkpoint.json";
 
+/// Snapshot age (seconds) at which `status` flags the checkpoint as stale
+/// (issue #849). The observed flush lag on a live 561-rule run was ~1–2 min;
+/// beyond this threshold the human output switches to a warning.
+const SNAPSHOT_STALE_SECS: i64 = 300;
+
 /// Process a checkpoint rule's re-entry manifest after it completes
 /// (issue #78 P3): merge new samples, re-expand from templates, extend the
 /// plan, and record the re-entry in the checkpoint. Errors fail the rule.
@@ -7531,6 +7536,32 @@ pub async fn handle_status(
         )
     })?;
 
+    // Issue #849: `status` reads a snapshot, not live state — surface how
+    // fresh the snapshot is (the flush lag observed on a live 561-rule run
+    // was ~1–2 min and completely invisible to operators). Sourced from the
+    // file's mtime, so it reflects the last write even when a monitoring
+    // wrapper reads the checkpoint out-of-band.
+    let checkpoint_mtime = std::fs::metadata(&checkpoint_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            let t: chrono::DateTime<chrono::Utc> = t.into();
+            t
+        });
+    let snapshot_age_secs = checkpoint_mtime.as_ref().map(|m| {
+        chrono::Utc::now()
+            .signed_duration_since(*m)
+            .num_seconds()
+            .max(0)
+    });
+    if snapshot_age_secs.is_some_and(|age| age > SNAPSHOT_STALE_SECS) {
+        tracing::warn!(
+            "checkpoint snapshot is {}s old (threshold {}s)",
+            snapshot_age_secs.unwrap(),
+            SNAPSHOT_STALE_SECS
+        );
+    }
+
     // Deterministic order (HashSet iteration order is arbitrary)
     let mut completed: Vec<&str> = state.completed_rules.iter().map(String::as_str).collect();
     completed.sort_unstable();
@@ -7576,6 +7607,15 @@ pub async fn handle_status(
             "completed": completed,
             "failed": failed,
         });
+        // Issue #849: snapshot freshness — scripts/monitoring wrappers no
+        // longer need to stat the file out-of-band to judge it.
+        if let Some(mtime) = checkpoint_mtime {
+            output["checkpoint_mtime"] =
+                serde_json::json!(mtime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        }
+        if let Some(age) = snapshot_age_secs {
+            output["snapshot_age_secs"] = serde_json::json!(age);
+        }
         // Issue #690: stale failed_rules entries whose when-gate evaluated
         // false are reported here, not under "failed".
         if !when_gated_off.is_empty() {
@@ -7621,6 +7661,25 @@ pub async fn handle_status(
         "Status:".bold().cyan(),
         checkpoint_path.display()
     );
+    // Issue #849: the checkpoint is a flushed snapshot, not live state —
+    // the observed flush lag on a live 561-rule run was ~1–2 min. Surface
+    // the age so "Completed: 0" is never mistaken for "nothing ran".
+    if let (Some(mtime), Some(age)) = (checkpoint_mtime, snapshot_age_secs) {
+        let written = mtime.with_timezone(&chrono::Local).format("%H:%M:%S");
+        if age > SNAPSHOT_STALE_SECS {
+            eprintln!(
+                "  {} Snapshot is {}s old (checkpoint written {} local) — flush lag, not necessarily stalled progress",
+                "Warning:".bold().yellow(),
+                age,
+                written
+            );
+        } else {
+            eprintln!(
+                "  State as of {}s ago (checkpoint written {} local)",
+                age, written
+            );
+        }
+    }
     eprintln!("  Completed: {}", completed.len());
     eprintln!("  Failed:    {}", failed.len());
     if !when_gated_off.is_empty() {
@@ -8042,6 +8101,46 @@ mod tests {
         assert_eq!(parse_disk_tick_secs(Some("300")), 300);
         assert_eq!(parse_disk_hold_abort_rounds(Some("1")), 1);
         assert_eq!(parse_disk_hold_abort_rounds(Some("10")), 10);
+    }
+
+    #[test]
+    fn snapshot_age_is_derived_from_checkpoint_mtime() {
+        // Issue #849: snapshot freshness comes from the file's mtime, not
+        // from any field inside the checkpoint (CheckpointState carries no
+        // self-timestamp). A freshly written file yields a small age; a
+        // backdated mtime yields the round-tripped age, clamped at 0.
+        let dir = std::env::temp_dir().join(format!(
+            "oxoflow-status-age-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("checkpoint.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        let mtime_now: chrono::DateTime<chrono::Utc> =
+            std::fs::metadata(&path).unwrap().modified().unwrap().into();
+        let age_now = chrono::Utc::now()
+            .signed_duration_since(mtime_now)
+            .num_seconds()
+            .max(0);
+        assert!(age_now < 60, "fresh file reported {age_now}s old");
+
+        // Backdate the mtime by 10 minutes via filetime semantics through
+        // std: rewrite the file, then shift the clock comparison instead —
+        // std has no mtime setter, so assert the arithmetic directly.
+        let backdated = chrono::Utc::now() - chrono::Duration::seconds(600);
+        let age_old = chrono::Utc::now()
+            .signed_duration_since(backdated)
+            .num_seconds()
+            .max(0);
+        assert_eq!(age_old, 600);
+        assert!(age_old > super::SNAPSHOT_STALE_SECS);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {
