@@ -237,6 +237,23 @@ Top-level fields: `"profile"` (the `--profile` name, when given) and
 `"reference_builds"` (reference names whose build outputs are missing —
 `--skip-ref-build` empties the list).
 
+Pixi manifests declared by pending rules are preflighted exactly like
+`run` does at start-up (issue #848): every non-skip rule's `pixi = "…"`
+spec is resolved against the workflow directory and existence-checked.
+Missing manifests appear under the top-level key
+`"env_manifest_issues"` (an array of `{"rule", "spec"}` objects, `spec`
+already resolved), the human stderr output gains a matching block, and —
+like a cycle or a parse error — a non-empty list fails the command with a
+non-zero exit **after** the JSON document is printed, so machine consumers
+read the JSON from stdout and the failure reason from stderr or the exit
+code:
+
+```json
+"env_manifest_issues": [
+  {"rule": "trim_cohort_NA12891", "spec": "envs/trim/pixi.toml"}
+]
+```
+
 Status values: `run-never-completed`, `run-input-changed`,
 `run-config-changed`, `run-outputs-missing`, `run-cascaded`,
 `run-cascaded-upstream`, `run-forced`, `skip`, `skip-fresh`,

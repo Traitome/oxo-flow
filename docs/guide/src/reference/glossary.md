@@ -341,6 +341,7 @@ below list every code the engine currently emits.
 | `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry `pair_id` colliding with an existing instance name (see Checkpoint re-entry) |
 | `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`) |
 | `E018` | A `when` condition uses an unrecognized bare identifier (e.g. `params_mode == 1`) — the evaluator would treat it as true and the rule would silently run. Reference config keys as `config.key`, or use a quoted literal, a `{...}` placeholder, or a built-in function |
+| `E019` | A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). `validate` and `plan`/dry-run preflight it the same way they existence-check static inputs; `run` fails before executing anything |
 
 ### Lint warnings (`lint`)
 

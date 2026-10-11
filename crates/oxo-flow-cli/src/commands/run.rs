@@ -2728,9 +2728,15 @@ pub async fn run_command(
             .iter()
             .filter(|entry| !entry.status.is_skip())
             .filter_map(|entry| {
-                config
-                    .get_rule(&entry.name)
-                    .map(|rule| (entry.name.clone(), rule.environment.clone()))
+                config.get_rule(&entry.name).map(|rule| {
+                    // Resolve against the workflow dir — same base the
+                    // executor uses (issue #848): a manifest declared
+                    // relative to the workflow file must be found from any CWD.
+                    (
+                        entry.name.clone(),
+                        rule.environment.resolve_relative_paths(Some(&workflow_dir)),
+                    )
+                })
             })
             .filter(|(_, env)| !env.is_empty())
             .collect()
@@ -6404,6 +6410,25 @@ pub async fn dry_run_command(
             );
         }
     }
+    // Pixi-manifest preflight (issue #848): mirror run's pending_envs —
+    // every non-skip rule's env spec, resolved against the workflow dir.
+    // plan/dry-run previously passed while a declared manifest was missing
+    // and only the run failed after the plan was already committed to.
+    let env_manifest_issues: Vec<(String, String)> = {
+        let mut issues = Vec::new();
+        for entry in preview.plan.iter().filter(|entry| !entry.status.is_skip()) {
+            let Some(rule) = config.get_rule(&entry.name) else {
+                continue;
+            };
+            let resolved = rule.environment.resolve_relative_paths(Some(&workflow_dir));
+            if let Some(spec) = resolved.pixi
+                && oxo_flow_core::environment::validate_pixi_manifest(&spec).is_err()
+            {
+                issues.push((entry.name.clone(), spec));
+            }
+        }
+        issues
+    };
     {
         let p = &preview;
         let modified = p
@@ -6598,6 +6623,23 @@ pub async fn dry_run_command(
         if verbose {
             // Additional verbose info
         }
+    }
+
+    // Fail-fast pixi-manifest block (issue #848): printed after the rule
+    // listing so the plan context stays visible, before the JSON document.
+    if !env_manifest_issues.is_empty() {
+        eprintln!(
+            "\n  {} {} pixi manifest(s) declared by pending rule(s) do not exist:",
+            "✗".red().bold(),
+            env_manifest_issues.len()
+        );
+        for (rule, spec) in &env_manifest_issues {
+            eprintln!("    - {rule}: {spec} (resolved relative to the workflow directory)");
+        }
+        eprintln!(
+            "  {} create the manifest at the resolved path or correct the rule's `pixi` path",
+            "hint:".yellow().bold()
+        );
     }
 
     // Resource summary
@@ -6913,8 +6955,27 @@ pub async fn dry_run_command(
             },
             "profile": profile,
             "reference_builds": reference_builds,
+            // Issue #848: declared pixi manifests that do not exist (resolved
+            // against the workflow directory). Empty unless a pending rule's
+            // manifest is missing — the command still exits non-zero in that
+            // case after the document is printed.
+            "env_manifest_issues": env_manifest_issues
+                .iter()
+                .map(|(rule, spec)| serde_json::json!({"rule": rule, "spec": spec}))
+                .collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
+
+    // Bail AFTER the JSON document so callers still get machine-readable
+    // output on this failure path (same contract as `validate --json`).
+    if !env_manifest_issues.is_empty() {
+        anyhow::bail!(
+            "{} pixi manifest(s) declared by pending rule(s) do not exist — \
+             create the manifest at the resolved path or correct the rule's \
+             `pixi` path (resolved relative to the workflow directory)",
+            env_manifest_issues.len()
+        );
     }
 
     Ok(())
@@ -7949,13 +8010,20 @@ impl std::fmt::Display for BackendPreflightFailure {
             count = self.count,
             example_rule = self.example_rule,
             spec = self.spec,
-            hint = backend_install_hint(&self.kind),
+            hint = backend_install_hint(self),
         )
     }
 }
 
-fn backend_install_hint(kind: &str) -> &'static str {
-    match kind {
+/// Remediation hint for a preflight failure. The failure MODE decides the
+/// advice (issue #848): a missing pixi MANIFEST is a workflow defect —
+/// advise creating/correcting the declared file; a missing backend BINARY
+/// is an environment defect — advise installing the tool.
+fn backend_install_hint(failure: &BackendPreflightFailure) -> &'static str {
+    if failure.kind == "pixi" && failure.message.contains("not found") {
+        return "create the manifest or correct the rule's `pixi` path (resolved relative to the workflow directory)";
+    }
+    match failure.kind.as_str() {
         "pixi" => "install pixi (https://pixi.sh) and ensure it is on PATH",
         "mamba" => "install mamba or micromamba and ensure it is on PATH",
         "conda" => "install conda and ensure it is on PATH",
@@ -9152,8 +9220,68 @@ shell = "cp stage1.txt stage2.txt"
         assert_eq!(f.spec, "envs/absent/pixi.toml");
         let rendered = f.to_string();
         assert!(
-            rendered.contains("required by 2 pending rule(s)") && rendered.contains("install pixi"),
-            "the message must carry the cohort size and the install hint: {rendered}"
+            rendered.contains("required by 2 pending rule(s)"),
+            "the message must carry the cohort size: {rendered}"
         );
+        // Whether THIS test observes the manifest mode depends on whether
+        // the pixi binary happens to be on PATH (validate_spec checks the
+        // binary first); the hint split itself is covered without that
+        // dependency by backend_install_hint_splits_manifest_not_found…
+    }
+
+    #[test]
+    fn backend_install_hint_splits_manifest_not_found_from_missing_binary() {
+        // Issue #848: the failure MODE decides the advice. A missing pixi
+        // MANIFEST is a workflow defect — the hint must point at the file,
+        // not tell the operator to install pixi; a missing backend BINARY
+        // keeps the install advice. Constructed failures keep this test
+        // independent of the test sandbox's PATH.
+        let make = |message: &str| super::BackendPreflightFailure {
+            kind: "pixi".to_string(),
+            message: message.to_string(),
+            example_rule: "trim_S1".to_string(),
+            spec: "envs/absent/pixi.toml".to_string(),
+            count: 2,
+        };
+        let manifest = super::backend_install_hint(&make(
+            "pixi manifest 'envs/absent/pixi.toml' not found — the rule declares it via `pixi = \"envs/absent/pixi.toml\"` (resolved relative to the workflow directory)",
+        ));
+        assert_eq!(
+            manifest,
+            "create the manifest or correct the rule's `pixi` path (resolved relative to the workflow directory)"
+        );
+        let binary = super::backend_install_hint(&make("pixi is not installed or not in PATH"));
+        assert_eq!(
+            binary,
+            "install pixi (https://pixi.sh) and ensure it is on PATH"
+        );
+        // The mode discriminator keys on "not found", which only the
+        // manifest message carries — the binary message must not trip it.
+        assert!(!"pixi is not installed or not in PATH".contains("not found"));
+    }
+
+    #[test]
+    fn backend_preflight_missing_backend_binary_still_advises_install() {
+        // Issue #848: the OTHER failure mode — pixi the BINARY is absent —
+        // keeps the install advice. validate_spec checks the binary first,
+        // so an unresolvable spec with pixi absent from PATH yields the
+        // "not installed" message, distinct from the manifest check.
+        let resolver = oxo_flow_core::environment::EnvironmentResolver::new();
+        let pending = vec![("trim_S1".to_string(), pixi_env("envs/absent/pixi.toml"))];
+        let failures = super::backend_preflight_failures(&pending, &resolver);
+        // The exact mode depends on whether pixi is on PATH in the test
+        // sandbox; assert the hint MATCHES whichever mode fired.
+        let rendered = failures[0].to_string();
+        if failures[0].message.contains("not found") {
+            assert!(
+                rendered.contains("create the manifest"),
+                "manifest mode must carry the file advice: {rendered}"
+            );
+        } else {
+            assert!(
+                rendered.contains("install pixi"),
+                "binary mode must keep the install advice: {rendered}"
+            );
+        }
     }
 }
