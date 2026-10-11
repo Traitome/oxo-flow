@@ -35,7 +35,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--retry` | `-r` | `0` | Number of times to retry failed jobs |
 | `--timeout` | — | `0` (disabled) | Timeout per job in seconds, or a duration like `1h`/`30m` |
 | `--max-threads` | — | `0` (auto-detect) | Maximum CPU threads available for execution |
-| `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution |
+| `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest `memory.max` — see [Notes](#notes)); set it explicitly (e.g. `--max-memory 430000 --retry 2`) when the clamp misreads a deliberately generous slice |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
 | `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
@@ -1223,6 +1223,19 @@ A progress bar shows execution progress with:
 - **Default targets:** rules marked `target = true` are what `run`/`dry-run` build when neither `-t` nor `--module` selects anything — the marked rules and their transitive producers. With no marked rule the full DAG runs (backward compatible); an explicit `-t`/`--module` always wins.
 - **Abort cancellation semantics:** with fail-fast aborts, rules that were merely *killed* by the abort (signal death, no exit code) are recorded as **cancelled**, not failed — they are excluded from `failed_rules` and the failure counts, and narrated like skips. A sibling that failed on its own merit (exit code present) keeps its failure record. The checkpoint's per-rule `rule_runs` entries distinguish the two via their `status`/`skip_reason`/`signal` fields.
 - Setting `--max-threads 0` or `--max-memory 0` auto-detects system resources
+- **Cgroup-aware auto-detection:** on Linux the auto-detected memory ceiling
+  is clamped to the tightest cgroup v2 `memory.max` applying to the engine
+  process — a container cap, a systemd user slice (`user@.service` with
+  `MemoryMax=`), or a `systemd-run --user -p MemoryMax=…` scope. Host RAM
+  figures ignore these limits: on a 1007G box whose user slice caps sessions
+  at 512G, scheduling against 1007G commits more memory than the kernel can
+  back inside the cgroup and the OOM-killer tears the run down (exit 137
+  cascading into a fail-fast teardown of healthy rules). The engine logs a
+  `cgroup memory limit is below the detected host memory` warning with both
+  figures when the clamp bites. The same clamp applies to the
+  `{effective_memory_mb}` placeholder and to container `--memory` ceilings.
+  For long cohort runs that park at the cap for hours, pair this with
+  `--retry` so a transient OOM does not kill the whole run.
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup
 - Use `--cache-dir` to persist environment setup state across runs for faster startup
