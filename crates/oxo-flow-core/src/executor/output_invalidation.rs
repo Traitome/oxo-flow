@@ -37,15 +37,16 @@ pub struct OutputSnapshot {
     protected: bool,
 }
 
-/// Snapshot a rule's declared outputs (config placeholders expanded using
-/// `wildcard_values`, mirroring `should_skip_rule`'s expansion rules).
-/// Paths that still contain wildcard patterns after expansion are skipped —
-/// the same conservative behavior as the freshness gate.
-pub fn snapshot_outputs(
+/// Match an expanded output path against a rule's `protected_output`
+/// declarations (issue #457 exact-equality, #473 shell-glob patterns),
+/// with config placeholders expanded the same way as outputs. Shared by
+/// output invalidation and the #843 disk-reclaim gate — both are destroy
+/// paths and must apply identical protection semantics.
+pub fn is_protected_path(
     rule: &Rule,
-    workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-) -> Vec<OutputSnapshot> {
+    expanded: &str,
+) -> bool {
     // Protected declarations are expanded the same way as outputs so
     // `protected_output = ["results/{sample}.bam"]` matches the concrete
     // snapshot path of a per-sample instance. Shell-glob patterns
@@ -57,23 +58,32 @@ pub fn snapshot_outputs(
         .iter()
         .map(|p| super::checkpoint::expand_config_in_path(p, wildcard_values))
         .collect();
-    let is_protected_path = |expanded: &str| -> bool {
-        // `require_literal_separator` pins `*` to a single path component —
-        // the same semantics the filesystem-walking `glob::glob` (clean
-        // path) applies, so a pattern cannot protect more in one destroy
-        // path than in the other.
-        let opts = glob::MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        };
-        protected.iter().any(|pattern| {
-            pattern == expanded
-                || glob::Pattern::new(pattern)
-                    .map(|pat| pat.matches_with(expanded, opts))
-                    .unwrap_or(false)
-        })
+    // `require_literal_separator` pins `*` to a single path component —
+    // the same semantics the filesystem-walking `glob::glob` (clean
+    // path) applies, so a pattern cannot protect more in one destroy
+    // path than in the other.
+    let opts = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
     };
+    protected.iter().any(|pattern| {
+        pattern == expanded
+            || glob::Pattern::new(pattern)
+                .map(|pat| pat.matches_with(expanded, opts))
+                .unwrap_or(false)
+    })
+}
+
+/// Snapshot a rule's declared outputs (config placeholders expanded using
+/// `wildcard_values`, mirroring `should_skip_rule`'s expansion rules).
+/// Paths that still contain wildcard patterns after expansion are skipped —
+/// the same conservative behavior as the freshness gate.
+pub fn snapshot_outputs(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> Vec<OutputSnapshot> {
     rule.output
         .iter()
         .filter_map(|output| {
@@ -91,7 +101,7 @@ pub fn snapshot_outputs(
                 existed,
                 mtime,
                 size,
-                protected: is_protected_path(&expanded),
+                protected: is_protected_path(rule, wildcard_values, &expanded),
             })
         })
         .collect()

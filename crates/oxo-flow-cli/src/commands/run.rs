@@ -8,6 +8,7 @@ use oxo_flow_core::executor::{
     CheckpointState, ExecutorConfig, LocalExecutor, WorkdirLock, output_tail_bytes_from_env,
 };
 use oxo_flow_core::rule::{Rule, parse_duration_secs};
+use oxo_flow_core::wildcard;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -270,6 +271,39 @@ const SPAWN_WATCHDOG_TICK_SECS: u64 = 30;
 const DEFAULT_SPAWN_WATCHDOG_SECS: u64 = 600;
 const SPAWN_WATCHDOG_ENV: &str = "OXO_FLOW_SPAWN_WATCHDOG_SECS";
 
+/// How often the #843 disk-pressure monitor re-measures free space while the
+/// run is parked under Hold (nothing in flight) or between completion batches.
+const DISK_PRESSURE_TICK_SECS: u64 = 60;
+/// Consecutive parked Hold rounds (nothing in flight, nothing reclaimable)
+/// after which the run aborts: the disk is not recovering on its own.
+const DISK_HOLD_ABORT_ROUNDS: u32 = 2;
+/// Environment overrides for the two constants above (review: shared-HPC
+/// scratch may want a longer grace than 2×60s). Same convention as
+/// `OXO_FLOW_SPAWN_WATCHDOG_SECS`: unparseable or `0` falls back to the
+/// default — a typo can never disable the abort (it would hang instead).
+const DISK_TICK_ENV: &str = "OXO_FLOW_DISK_TICK_SECS";
+const DISK_HOLD_ROUNDS_ENV: &str = "OXO_FLOW_DISK_HOLD_ROUNDS";
+
+fn disk_tick_secs() -> u64 {
+    parse_disk_tick_secs(std::env::var(DISK_TICK_ENV).ok().as_deref())
+}
+
+fn parse_disk_tick_secs(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(DISK_PRESSURE_TICK_SECS)
+}
+
+fn disk_hold_abort_rounds() -> u32 {
+    parse_disk_hold_abort_rounds(std::env::var(DISK_HOLD_ROUNDS_ENV).ok().as_deref())
+}
+
+fn parse_disk_hold_abort_rounds(raw: Option<&str>) -> u32 {
+    raw.and_then(|v| v.parse::<u32>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(DISK_HOLD_ABORT_ROUNDS)
+}
+
 /// Parse the watchdog threshold from the environment. Extracted as a pure
 /// function of the env so tests exercise it without process-global mutation.
 fn spawn_watchdog_threshold() -> std::time::Duration {
@@ -467,6 +501,87 @@ async fn terminate_on_signal(
     )
     .await;
     std::process::exit(signal.exit_code());
+}
+
+/// #843: reclaim one candidate's outputs mid-run — the runtime counterpart
+/// of the post-run temporary-cleanup sweep. Same persist-before-unlink audit
+/// rule (issue #315 F2): tombstone + checksum migration are persisted first,
+/// and the unlink is skipped when persistence fails, so a crash can never
+/// leave an output gone-but-not-tombstoned. Returns the number of unlinked
+/// paths so the caller can narrate reclaimed bytes.
+async fn reclaim_rule_outputs(
+    candidate: &oxo_flow_core::scheduler::ReclaimCandidate,
+    workdir: &std::path::Path,
+    checkpoint: &Arc<Mutex<CheckpointState>>,
+    checkpoint_path: &Path,
+    run_log: &SharedRunLog,
+) -> anyhow::Result<usize> {
+    let mut paths = Vec::new();
+    {
+        let mut ck = checkpoint.lock().await;
+        for path in &candidate.paths {
+            let resolved = workdir.join(path);
+            if !resolved.exists() {
+                continue;
+            }
+            if let Some(sha) = ck.checksums.remove(path) {
+                ck.record_cleaned_checksum(path, sha);
+            }
+            paths.push(path.clone());
+        }
+        if paths.is_empty() {
+            return Ok(0);
+        }
+        ck.tombstones.insert(candidate.rule.clone(), paths.clone());
+        if let Err(e) = ck.save_to_file_async(checkpoint_path).await {
+            // Roll back the in-memory migration; the outputs stay on disk.
+            ck.tombstones.remove(&candidate.rule);
+            for path in &paths {
+                if let Some(sha) = ck.cleaned_checksums.remove(path) {
+                    ck.checksums.insert(path.clone(), sha);
+                }
+            }
+            return Err(anyhow::anyhow!(
+                "persisting tombstone failed: {e} — outputs kept"
+            ));
+        }
+    }
+    let mut unlinked = 0usize;
+    for path in &paths {
+        let resolved = workdir.join(path);
+        // Symlink-aware classification (review): `is_dir` follows links, so
+        // a symlinked output directory would hit remove_dir_all's
+        // not-a-directory failure. A symlink is always unlinked as the link
+        // itself — never the bytes it points at.
+        let ok = match std::fs::symlink_metadata(&resolved) {
+            Ok(md) if md.file_type().is_symlink() => std::fs::remove_file(&resolved).is_ok(),
+            Ok(md) if md.is_dir() => std::fs::remove_dir_all(&resolved).is_ok(),
+            Ok(_) => std::fs::remove_file(&resolved).is_ok(),
+            Err(_) => false,
+        };
+        if ok {
+            unlinked += 1;
+        } else {
+            diagnostic_narrate(
+                format_args!(
+                    "  {} reclaim unlink failed for '{}' path '{path}'",
+                    "!".yellow(),
+                    candidate.rule
+                ),
+                Some(run_log),
+            );
+        }
+    }
+    diagnostic_narrate(
+        format_args!(
+            "  {} reclaimed temporary outputs of '{}' ({} file(s)) — regenerated on demand via cascade-up",
+            "⊘".dimmed(),
+            candidate.rule,
+            unlinked
+        ),
+        Some(run_log),
+    );
+    Ok(unlinked)
 }
 
 /// Print the config-change impact summary (issue #62).
@@ -2547,6 +2662,41 @@ pub async fn run_command(
         eprintln!("  {} {}", "Warning:".bold().yellow(), warning);
     }
 
+    // #843 runtime disk-pressure monitor pre-flight: when a floor is
+    // configured and the workdir already sits below it, say so before the
+    // first rule dispatches. On non-Unix the monitor cannot measure free
+    // space (it fails open to Normal), so a configured floor would be a
+    // silent no-op — warn once instead.
+    if config
+        .engine
+        .as_ref()
+        .is_some_and(|e| e.min_free_disk.is_some())
+    {
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "  {} [engine] min_free_disk is configured but free-space monitoring is not supported on this platform — the monitor will stay inactive.",
+                "Warning:".bold().yellow()
+            );
+        }
+        #[cfg(unix)]
+        {
+            if let Some((min_mb, _reclaim_mb)) =
+                config.engine.as_ref().and_then(|e| e.disk_thresholds())
+                && let Some(start_mb) =
+                    oxo_flow_core::scheduler::check_available_disk_mb(workdir_actual.as_ref())
+                && start_mb < min_mb
+            {
+                eprintln!(
+                    "  {} workdir starts below [engine] min_free_disk: {}MB free, threshold {}MB — the run will hold dispatches until space is freed.",
+                    "Warning:".bold().yellow(),
+                    start_mb,
+                    min_mb
+                );
+            }
+        }
+    }
+
     // Backend availability pre-flight: a pending rule declaring an
     // environment whose backend binary is missing used to surface only
     // mid-run as the backend's own "command not found" buried in that
@@ -3347,6 +3497,19 @@ pub async fn run_command(
     let mut watchdog_tick =
         tokio::time::interval(std::time::Duration::from_secs(SPAWN_WATCHDOG_TICK_SECS));
 
+    // #843 disk-pressure monitor: level thresholds resolved once from the
+    // validated config (None = feature off — zero monitoring overhead).
+    let disk_thresholds = config.engine.as_ref().and_then(|e| e.disk_thresholds());
+    let mut disk_monitor = oxo_flow_core::scheduler::DiskPressureMonitor::new(
+        disk_thresholds.map_or(0, |t| t.0),
+        disk_thresholds.map_or(0, |t| t.1),
+    );
+    let mut disk_tick = tokio::time::interval(std::time::Duration::from_secs(disk_tick_secs()));
+    // Grace rounds accumulated while parked under Hold with nothing in
+    // flight; disk recovery resets it.
+    let mut disk_hold_rounds: u32 = 0;
+    let disk_hold_abort_rounds = disk_hold_abort_rounds();
+
     // ---- main event loop -------------------------------------------------
 
     // Termination signals (audit C14): SIGINT/SIGTERM/SIGHUP stop the run
@@ -3365,6 +3528,89 @@ pub async fn run_command(
     });
 
     loop {
+        // #843 disk-pressure gate — measure BEFORE any dispatch decision so
+        // a floor crossing narrates once (crossing dedup inside the monitor)
+        // and enforces its policy this round.
+        if disk_thresholds.is_some() {
+            let mut n = |args: std::fmt::Arguments<'_>| {
+                diagnostic_narrate(args, Some(&run_log));
+            };
+            let level = disk_monitor.observe(workdir_actual.as_ref(), &mut n);
+            let hold = level >= oxo_flow_core::scheduler::DiskPressureLevel::Hold;
+
+            // Reclaim BEFORE the Hold-park decision (review F1): a run that
+            // starts below the floor — or falls through to Hold within a
+            // single tick — must still get a reclaim pass before parking,
+            // or the "nothing left to reclaim" abort below is untrue and
+            // reclaimable intermediates are never released.
+            if level >= oxo_flow_core::scheduler::DiskPressureLevel::Reclaim {
+                // Completed temporary rules whose dependents are all done
+                // no longer need their outputs.
+                let wildcards = wildcard_values.clone();
+                let candidates = {
+                    let ck = checkpoint.lock().await;
+                    oxo_flow_core::scheduler::reclaim_candidates(
+                        &config.rules,
+                        &dag,
+                        &ck,
+                        workdir_actual.as_ref(),
+                        &wildcards,
+                        &config.expansion_templates,
+                    )
+                };
+                for candidate in candidates {
+                    if let Err(reclaim_err) = reclaim_rule_outputs(
+                        &candidate,
+                        workdir_actual.as_ref(),
+                        &checkpoint,
+                        &checkpoint_path,
+                        &run_log,
+                    )
+                    .await
+                    {
+                        diagnostic_narrate(
+                            format_args!(
+                                "  {} reclaim of '{}' failed: {reclaim_err}",
+                                "!".yellow(),
+                                candidate.rule
+                            ),
+                            Some(&run_log),
+                        );
+                    }
+                }
+            }
+            if hold && !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
+                // Nothing in flight and nothing dispatchable: park for a
+                // tick (external space may free up) and re-measure. After
+                // disk_hold_abort_rounds consecutive parked rounds below the
+                // floor, abort budget-abort style — reclaim has already fired
+                // above, before the park decision; if the disk is still full,
+                // no progress is possible.
+                if disk_hold_rounds >= disk_hold_abort_rounds {
+                    {
+                        let ck = checkpoint.lock().await;
+                        ck.save_to_file_async(&checkpoint_path).await.ok();
+                    }
+                    progress.finish_and_clear();
+                    json_summary.emit("failed", &RunCounts::default(), vec![]);
+                    anyhow::bail!(
+                        "disk pressure: {}MB free is below min_free_disk ({}MB) with no rules \
+                         in flight and nothing left to reclaim — the run cannot make progress. \
+                         Free space manually (delete intermediates or run `oxo-flow clean`), \
+                         then resume from the checkpoint, or lower [engine] min_free_disk.",
+                        oxo_flow_core::scheduler::check_available_disk_mb(workdir_actual.as_ref())
+                            .unwrap_or(0),
+                        disk_thresholds.map_or(0, |t| t.0),
+                    );
+                }
+                disk_hold_rounds += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(disk_tick_secs())).await;
+                continue;
+            }
+            // Any pass that is not a parked hold clears the grace counter.
+            disk_hold_rounds = 0;
+        }
+
         // Check deadlock before each scheduling round.
         if !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
             sched.check_deadlock(&dag)?;
@@ -3382,7 +3628,15 @@ pub async fn run_command(
         );
         // jobs was clamped to >= 1 at run_command entry, so a raw 0 can
         // never silently suppress all submissions (issue #136 fix 1).
-        let available = jobs.saturating_sub(sched.running_count());
+        // Under #843 Hold, new dispatches are withheld entirely — in-flight
+        // rules continue to completion.
+        let available = if disk_thresholds.is_some()
+            && disk_monitor.last_level() >= oxo_flow_core::scheduler::DiskPressureLevel::Hold
+        {
+            0
+        } else {
+            jobs.saturating_sub(sched.running_count())
+        };
         let to_submit: Vec<String> = ready.iter().take(available).cloned().collect();
         for name in ready.iter().skip(available) {
             *waited_rounds.entry(name.clone()).or_insert(0) += AGING_STEP;
@@ -3794,6 +4048,13 @@ pub async fn run_command(
                             let mut ck = checkpoint.lock().await;
                             ck.record_run(&record, output_tail_bytes_from_env());
                             ck.mark_completed(&rule_name, benchmark);
+                            // #843: a rule re-executed via cascade-up has
+                            // just regenerated its outputs — the old
+                            // tombstone (from reclaim or the post-run sweep)
+                            // is stale and would make the post-run sweep
+                            // skip re-deleting them. Clear it here; the
+                            // sweep re-tombstones below.
+                            ck.tombstones.remove(&rule_name);
                             if let Some(ref manifest) = input_manifest {
                                 ck.record_input_manifest(&rule_name, manifest.clone());
                             }
@@ -4144,6 +4405,23 @@ pub async fn run_command(
                          starts, capture the run log and file an issue.",
                         watchdog_threshold.as_secs()
                     );
+                }
+                None
+            }
+            // #843 disk-pressure tick: while rules are in flight, re-measure
+            // free space periodically so Reclaim fires even without a
+            // completion boundary (e.g. a single long-running rule writing
+            // hundreds of GB). Expression is None — the measured state is
+            // enforced at the top of the next loop iteration.
+            _ = disk_tick.tick() => {
+                // F4: skip the statfs entirely while the feature is off —
+                // otherwise a disabled config still pays one measurement
+                // per tick for nothing.
+                if disk_thresholds.is_some() {
+                    let mut n = |args: std::fmt::Arguments<'_>| {
+                        diagnostic_narrate(args, Some(&run_log));
+                    };
+                    disk_monitor.observe(workdir_actual.as_ref(), &mut n);
                 }
                 None
             }
@@ -5091,8 +5369,55 @@ pub async fn run_command(
             if !rule.temporary || !checkpoint.is_completed(&rule.name) {
                 continue;
             }
+            // #843: mid-run reclamation may already have tombstoned this
+            // rule — re-deleting would double-unlink. Skip only while the
+            // reclaimed outputs are genuinely gone; a tombstoned rule whose
+            // outputs are back on disk (restored by hand) must be
+            // re-deleted and its tombstone refreshed. Regeneration clears
+            // the tombstone at execution time (mark_completed site).
+            if checkpoint
+                .tombstones
+                .get(&rule.name)
+                .is_some_and(|paths| paths.iter().all(|p| !workdir_actual.join(p).exists()))
+            {
+                continue;
+            }
             let dependents = dag.dependents(&rule.name).unwrap_or_default();
-            if dependents.is_empty() {
+            // Issue #844: output_pattern producers register no DAG edges by
+            // design (dag.rs excludes pattern-claimed outputs from template
+            // matching), so `dependents` alone misclassifies them as leaves.
+            // Detect consumers structurally instead: compile the producer's
+            // config-expanded output_pattern and match every other rule's
+            // config-expanded input paths against it. Consumer instantiation
+            // bakes instance inputs ("chunks/1.txt"), which match
+            // `^chunks/(?P<i>\S+)\.txt$`; consumer TEMPLATES still carry a
+            // `{` placeholder and are skipped so they cannot falsely match.
+            let mut consumers: HashSet<String> = dependents.iter().cloned().collect();
+            if let Some(pattern) = &rule.output_pattern {
+                let expanded_pattern = oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                    pattern,
+                    &wildcard_values,
+                );
+                if let Ok(re) = wildcard::pattern_to_regex(&expanded_pattern) {
+                    for other in &config.rules {
+                        if other.name == rule.name {
+                            continue;
+                        }
+                        for input in other.input.iter() {
+                            let expanded =
+                                oxo_flow_core::executor::checkpoint::expand_config_in_path(
+                                    input,
+                                    &wildcard_values,
+                                );
+                            if !expanded.contains('{') && re.is_match(&expanded) {
+                                consumers.insert(other.name.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if consumers.is_empty() {
                 eprintln!(
                     "  {} temporary rule '{}' is a leaf — outputs kept",
                     "ℹ".dimmed(),
@@ -5100,19 +5425,117 @@ pub async fn run_command(
                 );
                 continue;
             }
-            if !dependents.iter().all(|d| checkpoint.is_completed(d)) {
+            if !consumers.iter().all(|d| checkpoint.is_completed(d)) {
+                let pending: Vec<&str> = consumers
+                    .iter()
+                    .filter(|d| !checkpoint.is_completed(d))
+                    .map(String::as_str)
+                    .collect();
+                diagnostic_narrate(
+                    format_args!(
+                        "  {} temporary rule '{}' kept: dependents not complete yet ({})",
+                        "!".yellow(),
+                        rule.name,
+                        pending.join(", ")
+                    ),
+                    Some(&run_log),
+                );
                 continue;
             }
             let mut deleted = Vec::new();
-            for output in &rule.output {
+            // Output patterns that still contain `{` after config
+            // expansion and resolved to no concrete instance path
+            // (issue #844 diagnostic) — collected during the loop below
+            // so a pattern that DID expand is never falsely reported.
+            let mut skipped: Vec<String> = Vec::new();
+            // Instance bindings recorded for this producer template by the
+            // output_pattern discovery pass (issue #844): template → one
+            // combo per completed instance. Empty for plain [[values]]/
+            // [[pairs]] fan-outs (their instances run under their own names
+            // and expand their outputs at plan time) and for legacy
+            // checkpoints.
+            let template = config.output_pattern_template_of(&rule.name);
+            let domains = template
+                .as_deref()
+                .and_then(|t| checkpoint.output_pattern_domains.get(t))
+                .cloned()
+                .unwrap_or_default();
+            // #844: an output_pattern producer has an EMPTY `output` list —
+            // the pattern itself is the deletion target, expanded per
+            // recorded instance combo in the loop below. Chain it in so the
+            // same expansion logic covers both declaration styles.
+            for output in rule.output.iter().chain(rule.output_pattern.iter()) {
                 let expanded = oxo_flow_core::executor::checkpoint::expand_config_in_path(
                     output,
                     &wildcard_values,
                 );
-                if expanded.contains('{') {
+                if !expanded.contains('{') {
+                    if oxo_flow_core::executor::output_invalidation::is_protected_path(
+                        rule,
+                        &wildcard_values,
+                        &expanded,
+                    ) {
+                        // #843: protected outputs are user-declared
+                        // keep-forever files — the same gate reclamation
+                        // applies, so the sweep must not delete what the
+                        // monitor wouldn't.
+                        continue;
+                    }
+                    deleted.push(expanded);
                     continue;
                 }
-                deleted.push(expanded);
+                // #844: a pattern-level path still containing `{` after
+                // config expansion is a wildcard output (e.g. per-sample
+                // BAMs). Delete only the concrete instance paths that
+                // actually ran — expand every recorded combo, never the
+                // pattern itself.
+                let mut resolved_any = false;
+                for combo in &domains {
+                    let instance = wildcard::expand_pattern(&expanded, combo)
+                        .unwrap_or_else(|_| expanded.clone());
+                    if instance.contains('{') {
+                        continue;
+                    }
+                    resolved_any = true;
+                    if oxo_flow_core::executor::output_invalidation::is_protected_path(
+                        rule,
+                        &wildcard_values,
+                        &instance,
+                    ) {
+                        continue;
+                    }
+                    if !deleted.contains(&instance) {
+                        deleted.push(instance);
+                    }
+                }
+                if !resolved_any {
+                    // Expansion failure only — instances that resolved but
+                    // matched `protected_output` are intentionally kept,
+                    // not skipped.
+                    if domains.is_empty() {
+                        skipped.push(format!(
+                            "{output} (no recorded instance bindings — legacy checkpoint or non-output_pattern fan-out; use `oxo-flow clean`)"
+                        ));
+                    } else {
+                        skipped.push(format!(
+                            "{expanded} (wildcard did not resolve against recorded combos)"
+                        ));
+                    }
+                }
+            }
+            if !skipped.is_empty() {
+                // Diagnostic (issue #844): a silent no-op is the worst
+                // outcome — name the rule and the patterns that could not
+                // be expanded to instance paths.
+                diagnostic_narrate(
+                    format_args!(
+                        "  {} temporary wildcard outputs of '{}' left in place: instance paths could not be expanded: {}",
+                        "!".yellow(),
+                        rule.name,
+                        skipped.join("; ")
+                    ),
+                    Some(&run_log),
+                );
             }
             if !deleted.is_empty() {
                 new_tombstones.push((rule.name.clone(), deleted));
@@ -5149,10 +5572,16 @@ pub async fn run_command(
                 for (rule, paths) in &new_tombstones {
                     for expanded in paths {
                         let resolved = workdir_actual.join(expanded);
-                        let _ = if resolved.is_dir() {
-                            std::fs::remove_dir_all(&resolved)
-                        } else {
-                            std::fs::remove_file(&resolved)
+                        // Symlink-aware classification (review): a symlink is
+                        // always unlinked as the link itself — never the
+                        // bytes it points at.
+                        let _ = match std::fs::symlink_metadata(&resolved) {
+                            Ok(md) if md.file_type().is_symlink() => {
+                                std::fs::remove_file(&resolved)
+                            }
+                            Ok(md) if md.is_dir() => std::fs::remove_dir_all(&resolved),
+                            Ok(_) => std::fs::remove_file(&resolved),
+                            Err(_) => Ok(()),
                         };
                     }
                     eprintln!(
@@ -7517,8 +7946,9 @@ mod tests {
     use super::{
         age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
         config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
-        missing_source_lines, parse_cli_overrides, parse_spawn_watchdog_threshold,
-        reconcile_failed_rules, substitute_source_placeholder, suggest_jobs,
+        missing_source_lines, parse_cli_overrides, parse_disk_hold_abort_rounds,
+        parse_disk_tick_secs, parse_spawn_watchdog_threshold, reconcile_failed_rules,
+        substitute_source_placeholder, suggest_jobs,
     };
     use oxo_flow_core::dag::WorkflowDag;
     use std::collections::{HashMap, HashSet};
@@ -7550,6 +7980,29 @@ mod tests {
         let (real_failed, skipped) = reconcile_failed_rules(&failed, &verdicts);
         assert_eq!(real_failed, vec!["a", "b"]);
         assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn parse_disk_env_knobs_fall_back_to_defaults() {
+        // Unset, empty, garbage, zero — a typo can never disable the
+        // abort (it would hang instead), so every invalid form falls
+        // back to the shipped default.
+        assert_eq!(parse_disk_tick_secs(None), 60);
+        assert_eq!(parse_disk_tick_secs(Some("")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("abc")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("0")), 60);
+        assert_eq!(parse_disk_tick_secs(Some("-5")), 60);
+        assert_eq!(parse_disk_hold_abort_rounds(None), 2);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("xyz")), 2);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("0")), 2);
+    }
+
+    #[test]
+    fn parse_disk_env_knobs_honor_valid_values() {
+        assert_eq!(parse_disk_tick_secs(Some("1")), 1);
+        assert_eq!(parse_disk_tick_secs(Some("300")), 300);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("1")), 1);
+        assert_eq!(parse_disk_hold_abort_rounds(Some("10")), 10);
     }
 
     fn config_with_rules(rules_toml: &str) -> oxo_flow_core::config::WorkflowConfig {

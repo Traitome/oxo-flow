@@ -1702,6 +1702,78 @@ pub fn expand_config_in_path(path: &str, wildcard_values: &HashMap<String, Strin
     super::expand_to_fixed_point(path, wildcard_values, |value| value.to_owned())
 }
 
+/// Whether every declared output of the rule exists (the same check `run`
+/// performs before re-submitting a completed rule). Paths that still carry
+/// `{` after config expansion are assumed present — they resolve per
+/// wildcard instance. Shared by the CLI preview/replay gates and the #843
+/// reclaim gate so "will this rule re-execute?" cannot drift between them.
+pub fn rule_outputs_exist(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+) -> bool {
+    rule.output.iter().all(|output| {
+        let expanded = expand_config_in_path(output, wildcard_values);
+        expanded.contains('{') || workdir.join(&expanded).exists()
+    })
+}
+
+/// Whether every declared output of the rule exists, treating an
+/// `output_pattern` as present when at least one concrete instance path
+/// exists on disk (issue #843: fan-out producers keep `output` empty, so
+/// `rule_outputs_exist` would report them as missing forever). The
+/// recorded domains supply the concrete instance paths.
+///
+/// Domains are recorded under the producer TEMPLATE name — the key
+/// `record_output_pattern_domain` receives from the run loop, matching
+/// `config.output_pattern_template_of` — so the lookup resolves the
+/// dependent's name through `expansion_templates` before consulting the
+/// map. When no domains were recorded the dependent cannot be verified:
+/// for the reclaim gate that means "not proven done" (its producer's
+/// inputs must stay) — never delete on a guess.
+pub fn rule_outputs_exist_with_patterns(
+    rule: &Rule,
+    workdir: &Path,
+    wildcard_values: &HashMap<String, String>,
+    output_pattern_domains: &BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+    expansion_templates: &HashMap<String, String>,
+) -> bool {
+    if rule.output.iter().all(|output| {
+        let expanded = expand_config_in_path(output, wildcard_values);
+        expanded.contains('{') || workdir.join(&expanded).exists()
+    }) && rule.output_pattern.is_none()
+    {
+        return true;
+    }
+    if let Some(pattern) = &rule.output_pattern {
+        // Expand config vars BEFORE deriving the domains key — the run loop
+        // records under the template of the config-expanded pattern
+        // ("expand before deriving").
+        let expanded = expand_config_in_path(pattern, wildcard_values);
+        if expanded.contains('{') {
+            // Pattern-level: present if any recorded combo names an
+            // existing path. No recorded domains → not proven done: the
+            // reclaim gate must treat the dependent as pending and keep
+            // the producer's inputs (deleting them on a guess would
+            // strand the dependent's re-execution).
+            let template = expansion_templates
+                .get(&rule.name)
+                .cloned()
+                .unwrap_or_else(|| rule.name.clone());
+            let Some(combos) = output_pattern_domains.get(&template) else {
+                return false;
+            };
+            return combos.iter().any(|combo| {
+                let instance = crate::wildcard::expand_pattern(&expanded, combo)
+                    .unwrap_or_else(|_| expanded.clone());
+                !instance.contains('{') && workdir.join(&instance).exists()
+            });
+        }
+        return workdir.join(&expanded).exists();
+    }
+    false
+}
+
 /// Validate that declared output files exist after execution.
 /// Returns a list of missing output file paths (after expanding config variables).
 pub fn validate_outputs(

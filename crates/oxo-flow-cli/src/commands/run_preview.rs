@@ -475,17 +475,15 @@ fn dag_path_exists(from: &str, to: &str, dag: &WorkflowDag) -> Option<usize> {
 }
 
 /// Whether every declared output of the rule exists (the same check `run`
-/// performs before re-submitting a completed rule).
+/// performs before re-submitting a completed rule). Delegates to the shared
+/// core helper so the reclaim gate in `oxo-flow-core` cannot drift from the
+/// replay gate here.
 pub fn rule_outputs_exist(
     rule: &Rule,
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
 ) -> bool {
-    rule.output.iter().all(|output| {
-        let expanded =
-            oxo_flow_core::executor::checkpoint::expand_config_in_path(output, wildcard_values);
-        expanded.contains('{') || workdir.join(&expanded).exists()
-    })
+    oxo_flow_core::executor::checkpoint::rule_outputs_exist(rule, workdir, wildcard_values)
 }
 
 /// Compare completed rules' input manifests against the current file set.

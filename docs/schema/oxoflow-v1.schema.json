@@ -405,6 +405,20 @@
         }
       }
     },
+    "engine": {
+      "type": "object",
+      "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843). Values use T/G/M/K suffixes; a bare number means MiB.",
+      "properties": {
+        "min_free_disk": {
+          "type": "string",
+          "description": "Free-space floor on the working directory's filesystem (e.g. \"5G\"). Dropping below logs a WARN diagnostic, deduplicated per crossing."
+        },
+        "reclaim_free_disk": {
+          "type": "string",
+          "description": "Reclaim threshold (>= min_free_disk). Below it new submissions hold while regenerable outputs of completed temporary rules are tombstoned and deleted; the run aborts if space stays below min_free_disk afterward."
+        }
+      }
+    },
     "env_groups": {
       "type": "object",
       "description": "Named reusable environment specifications",
