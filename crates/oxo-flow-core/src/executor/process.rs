@@ -160,7 +160,9 @@ pub enum ExecutionEvent {
         signal: Option<i32>,
         /// Retry attempts already spent when this failure was recorded.
         retries: u32,
-        /// Wall time of the final (failing) attempt.
+        /// Wall time across all attempts, including the retry delays
+        /// between them (same `finished_at - started_at` span the
+        /// success path reports).
         duration_ms: u64,
     },
     RuleSkipped {

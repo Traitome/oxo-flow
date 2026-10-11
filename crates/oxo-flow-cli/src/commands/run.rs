@@ -360,12 +360,13 @@ fn strip_ansi(text: &str) -> String {
 /// line in the tracing
 /// stream (issue #194 B3): the event schema stops being dead code and the
 /// run log gains a machine-readable execution timeline alongside the prose.
-/// Background runs skip it for the same reason as [`progress_narrate`] —
-/// the redirected stderr already carries the line exactly once.
+/// Background runs go through the same tracing call: ANSI is already off
+/// under the stderr redirect (`main.rs` folds
+/// `OXO_FLOW_STDERR_ALREADY_REDIRECTED` into its color-disabled set) and the
+/// run-log tee stays unarmed there, so the line reaches the redirected
+/// stderr exactly once and lands in the run log via the redirect.
 fn emit_execution_event(event: oxo_flow_core::executor::ExecutionEvent) {
-    if std::env::var_os("OXO_FLOW_STDERR_ALREADY_REDIRECTED").is_none() {
-        tracing::info!(target: "execution_event", "{}", event.to_json_log());
-    }
+    tracing::info!(target: "execution_event", "{}", event.to_json_log());
 }
 
 /// A termination signal `run` handles (audit C14), with the shell exit
