@@ -931,7 +931,7 @@ oxo-flow automatically cleans up temporary outputs:
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors; issue #756) |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. |
+| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
 
 `temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
@@ -2928,8 +2928,8 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `min_free_disk` | String or Integer | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
-| `reclaim_free_disk` | String or Integer | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
+| `min_free_disk` | String | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
+| `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
 
 ### Response ladder
 

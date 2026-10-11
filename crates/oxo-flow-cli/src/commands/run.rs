@@ -562,7 +562,14 @@ async fn reclaim_rule_outputs(
         if ok {
             unlinked += 1;
         } else {
-            tracing::warn!(rule = %candidate.rule, path = %path, "reclaim unlink failed");
+            diagnostic_narrate(
+                format_args!(
+                    "  {} reclaim unlink failed for '{}' path '{path}'",
+                    "!".yellow(),
+                    candidate.rule
+                ),
+                Some(run_log),
+            );
         }
     }
     diagnostic_narrate(
@@ -3548,6 +3555,7 @@ pub async fn run_command(
                         &ck,
                         workdir_actual.as_ref(),
                         &wildcards,
+                        &config.expansion_templates,
                     )
                 };
                 for candidate in candidates {
@@ -3560,11 +3568,17 @@ pub async fn run_command(
                     )
                     .await
                     {
-                        tracing::warn!("reclaim of '{}' failed: {reclaim_err}", candidate.rule);
+                        diagnostic_narrate(
+                            format_args!(
+                                "  {} reclaim of '{}' failed: {reclaim_err}",
+                                "!".yellow(),
+                                candidate.rule
+                            ),
+                            Some(&run_log),
+                        );
                     }
                 }
             }
-
             if hold && !sched.is_complete() && sched.running_count() == 0 && join_set.is_empty() {
                 // Nothing in flight and nothing dispatchable: park for a
                 // tick (external space may free up) and re-measure. After
@@ -5417,10 +5431,14 @@ pub async fn run_command(
                     .filter(|d| !checkpoint.is_completed(d))
                     .map(String::as_str)
                     .collect();
-                tracing::warn!(
-                    rule = %rule.name,
-                    pending_dependents = ?pending,
-                    "temporary rule kept: dependents not complete yet"
+                diagnostic_narrate(
+                    format_args!(
+                        "  {} temporary rule '{}' kept: dependents not complete yet ({})",
+                        "!".yellow(),
+                        rule.name,
+                        pending.join(", ")
+                    ),
+                    Some(&run_log),
                 );
                 continue;
             }
@@ -5509,10 +5527,14 @@ pub async fn run_command(
                 // Diagnostic (issue #844): a silent no-op is the worst
                 // outcome — name the rule and the patterns that could not
                 // be expanded to instance paths.
-                tracing::warn!(
-                    rule = %rule.name,
-                    skipped = ?skipped,
-                    "temporary wildcard outputs left in place: instance paths could not be expanded"
+                diagnostic_narrate(
+                    format_args!(
+                        "  {} temporary wildcard outputs of '{}' left in place: instance paths could not be expanded: {}",
+                        "!".yellow(),
+                        rule.name,
+                        skipped.join("; ")
+                    ),
+                    Some(&run_log),
                 );
             }
             if !deleted.is_empty() {

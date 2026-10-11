@@ -462,7 +462,8 @@ mod disk_pressure_tests {
         // gen: temporary, completed, dependents wild + down (both done) →
         // candidate. w: not completed → skip. keep: not temporary → skip.
         // prot: protected → skip. wild: '{' → skip. down: not temporary.
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert_eq!(cands.len(), 1, "only gen passes: {cands:?}");
         assert_eq!(cands[0].rule, "gen");
         assert_eq!(cands[0].paths, vec!["a.txt".to_string()]);
@@ -470,19 +471,22 @@ mod disk_pressure_tests {
         // Already tombstoned → skipped.
         ck.tombstones
             .insert("gen".to_string(), vec!["a.txt".into()]);
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert!(cands.is_empty());
 
         // Incomplete producer (mark gen not completed) → skipped.
         ck.tombstones.clear();
         ck.completed_rules.remove("gen");
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert!(cands.is_empty());
 
         // Pending dependent (wild not completed) → skipped.
         ck.mark_completed_quiet("gen");
         ck.completed_rules.remove("wild");
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert!(
             cands.is_empty(),
             "pending dependent must block reclaim: {cands:?}"
@@ -496,7 +500,8 @@ mod disk_pressure_tests {
         // dependent; "down" blocks via its missing output.
         ck.mark_completed_quiet("wild");
         std::fs::remove_file(workdir.join("d.txt")).unwrap();
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert!(
             cands.is_empty(),
             "stale-completed dependent must block reclaim: {cands:?}"
@@ -504,7 +509,8 @@ mod disk_pressure_tests {
 
         // Restoring the dependent's output re-arms reclaim.
         std::fs::write(workdir.join("d.txt"), "x").unwrap();
-        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new());
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
         assert_eq!(cands.len(), 1, "gen must be a candidate again: {cands:?}");
         assert_eq!(cands[0].rule, "gen");
 
@@ -512,7 +518,14 @@ mod disk_pressure_tests {
         // it finished, so reclaim is blocked. Drop "down" from the rules the
         // caller passes while the DAG still knows it as gen's dependent.
         let without_down: Vec<Rule> = rules.iter().filter(|r| r.name != "down").cloned().collect();
-        let cands = reclaim_candidates(&without_down, &dag, &ck, workdir, &HashMap::new());
+        let cands = reclaim_candidates(
+            &without_down,
+            &dag,
+            &ck,
+            workdir,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         // gen's dependents are wild (known) and down (unknown) — blocked.
         // "down" itself is no longer in the candidate set either (not passed).
         assert!(
@@ -569,6 +582,104 @@ mod disk_pressure_tests {
             DiskPressureLevel::Normal,
             "fail-open must reset the remembered level"
         );
+    }
+
+    #[test]
+    fn pattern_dependent_gate_keys_domains_by_template_name() {
+        // The run loop records output_pattern domains under the producer
+        // TEMPLATE name (`config.output_pattern_template_of`), not the
+        // config-expanded pattern text. The reclaim gate's dependent check
+        // must resolve the same key or the pattern branch is dead in
+        // production: before the fix the lookup went through pattern text →
+        // always miss → "assume present" → a stale-completed fan-out
+        // consumer (checkpoint-completed, instances deleted) never blocked
+        // reclaim of its producer's inputs.
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+
+        // gen: temporary plain-output producer; collect: its dependent, an
+        // output_pattern consumer. gen's inputs are reclaimable only while
+        // collect's pattern outputs still exist on disk.
+        let seed_rule = reclaim_rule("gen", &["seed.txt"], true);
+        let mut collect = reclaim_rule("collect", &[], false);
+        collect.input = vec!["seed.txt".to_string()].into();
+        collect.output_pattern = Some("out/{i}.txt".to_string());
+
+        let rules = vec![seed_rule, collect];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let mut ck = completed_checkpoint(&["gen", "collect"]);
+        // Record the domain under the TEMPLATE name "collect" (no fan-out
+        // expansion ran, so template == rule name) — NOT under the pattern
+        // text "out/{i}.txt" the pre-fix lookup used.
+        ck.record_output_pattern_domain(
+            "collect",
+            vec![{
+                let mut combo = HashMap::new();
+                combo.insert("i".to_string(), "1".to_string());
+                combo
+            }],
+        );
+
+        std::fs::write(workdir.join("seed.txt"), "x").unwrap();
+        std::fs::create_dir_all(workdir.join("out")).unwrap();
+        std::fs::write(workdir.join("out/1.txt"), "x").unwrap();
+
+        // Instance out/1.txt exists → collect proven done → gen reclaimable.
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert_eq!(
+            cands.len(),
+            1,
+            "pattern dependent with an existing instance must allow reclaim: {cands:?}"
+        );
+        assert_eq!(cands[0].rule, "gen");
+        assert_eq!(cands[0].paths, vec!["seed.txt".to_string()]);
+
+        // All recorded instances deleted (stale-completed collect) → the
+        // gate must BLOCK reclaim: collect re-executes and needs seed.txt.
+        std::fs::remove_file(workdir.join("out/1.txt")).unwrap();
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "stale-completed pattern dependent must block reclaim: {cands:?}"
+        );
+
+        // Domains recorded under a DIFFERENT template name (the fan-out
+        // case: instance "collect_1" produced from template "collect_src")
+        // → the dependent's own name finds no domains → not proven done →
+        // gate blocks (conservative: without per-instance proof, inputs
+        // stay).
+        std::fs::write(workdir.join("out/1.txt"), "x").unwrap();
+        ck.output_pattern_domains.remove("collect");
+        ck.record_output_pattern_domain(
+            "collect_src",
+            vec![{
+                let mut combo = HashMap::new();
+                combo.insert("i".to_string(), "1".to_string());
+                combo
+            }],
+        );
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "domains under an unresolved template name must keep the gate conservative: {cands:?}"
+        );
+
+        // Supplying the expansion_templates mapping resolves "collect" →
+        // "collect_src" — the same resolution the run loop used when
+        // recording — and re-arms reclaim.
+        let mut templates = HashMap::new();
+        templates.insert("collect".to_string(), "collect_src".to_string());
+        let cands = reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &templates);
+        assert_eq!(
+            cands.len(),
+            1,
+            "template-name resolution must find the recorded domain: {cands:?}"
+        );
+        assert_eq!(cands[0].rule, "gen");
     }
 }
 
@@ -823,6 +934,7 @@ pub fn reclaim_candidates(
     checkpoint: &crate::executor::CheckpointState,
     workdir: &std::path::Path,
     wildcard_values: &HashMap<String, String>,
+    expansion_templates: &HashMap<String, String>,
 ) -> Vec<ReclaimCandidate> {
     let mut candidates = Vec::new();
     for rule in rules {
@@ -855,6 +967,7 @@ pub fn reclaim_candidates(
                     workdir,
                     wildcard_values,
                     &checkpoint.output_pattern_domains,
+                    expansion_templates,
                 )
         });
         if !all_dependents_done {
