@@ -144,6 +144,25 @@ pub enum ExecutionEvent {
         status: JobStatus,
         duration_ms: u64,
     },
+    /// A rule finished on its own failure (exit code / signal present).
+    /// Issue #856: rule failures previously had no machine-greppable
+    /// event — operators auditing `run.launch.log` had to match the
+    /// human-facing `✗ rule` narration. Emitted beside that line so
+    /// `grep -c 'rule_failed'` counts exactly the failed rules. The
+    /// JSON is compact (serde_json `to_string`: no space after `:`),
+    /// so a key-value grep must use `"event":"rule_failed"`.
+    RuleFailed {
+        rule: String,
+        /// Process exit code, when the child exited by itself.
+        exit_code: Option<i32>,
+        /// Terminating signal, when the child was killed (e.g. 9 after
+        /// an OOM-kill — the #855 incident's smoking gun).
+        signal: Option<i32>,
+        /// Retry attempts already spent when this failure was recorded.
+        retries: u32,
+        /// Wall time of the final (failing) attempt.
+        duration_ms: u64,
+    },
     RuleSkipped {
         rule: String,
         reason: String,
@@ -192,6 +211,23 @@ impl ExecutionEvent {
             })
             .to_string(),
 
+            ExecutionEvent::RuleFailed {
+                rule,
+                exit_code,
+                signal,
+                retries,
+                duration_ms,
+            } => serde_json::json!({
+                "timestamp": timestamp,
+                "event": "rule_failed",
+                "rule": rule,
+                "exit_code": exit_code,
+                "signal": signal,
+                "retries": retries,
+                "duration_ms": duration_ms
+            })
+            .to_string(),
+
             ExecutionEvent::RuleSkipped { rule, reason } => serde_json::json!({
                 "timestamp": timestamp,
                 "event": "rule_skipped",
@@ -222,6 +258,7 @@ impl ExecutionEvent {
             ExecutionEvent::WorkflowStarted { .. } => "workflow_started",
             ExecutionEvent::RuleStarted { .. } => "rule_started",
             ExecutionEvent::RuleCompleted { .. } => "rule_completed",
+            ExecutionEvent::RuleFailed { .. } => "rule_failed",
             ExecutionEvent::RuleSkipped { .. } => "rule_skipped",
             ExecutionEvent::WorkflowCompleted { .. } => "workflow_completed",
         }
@@ -4878,6 +4915,54 @@ mod tests {
         // clamp; CI (macOS / uncgrouped Linux) has no applicable limit.
         let n = clamp_to_cgroup_limit(8192, true);
         assert!(n <= 8192);
+    }
+
+    /// Issue #856: the rule_failed event must serialize the fields an
+    /// operator greps for — event name, rule, exit code, signal, retries,
+    /// duration — in the one-JSON-line shape every other event uses.
+    #[test]
+    fn rule_failed_event_json_carries_failure_evidence() {
+        let event = ExecutionEvent::RuleFailed {
+            rule: "align".into(),
+            exit_code: Some(137),
+            signal: Some(9),
+            retries: 2,
+            duration_ms: 45_000,
+        };
+        let line = event.to_json_log();
+        // Full-line parse: the compact shape must survive as valid JSON,
+        // not just contain the right substrings.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("rule_failed line must be valid JSON");
+        assert_eq!(parsed["event"], "rule_failed");
+        assert_eq!(parsed["rule"], "align");
+        assert_eq!(parsed["exit_code"], 137);
+        assert_eq!(parsed["signal"], 9);
+        assert_eq!(parsed["retries"], 2);
+        assert_eq!(parsed["duration_ms"], 45_000);
+        assert!(line.contains(r#""event":"rule_failed""#), "{line}");
+        assert!(line.contains(r#""rule":"align""#), "{line}");
+        assert!(line.contains(r#""exit_code":137"#), "{line}");
+        assert!(line.contains(r#""signal":9"#), "{line}");
+        assert!(line.contains(r#""retries":2"#), "{line}");
+        assert!(line.contains(r#""duration_ms":45000"#), "{line}");
+        assert_eq!(event.event_type(), "rule_failed");
+
+        // OOM-kill shape: no exit code, only the signal.
+        let killed = ExecutionEvent::RuleFailed {
+            rule: "count".into(),
+            exit_code: None,
+            signal: Some(9),
+            retries: 0,
+            duration_ms: 100,
+        };
+        let line = killed.to_json_log();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("OOM-kill line must be valid JSON");
+        assert!(parsed["exit_code"].is_null());
+        assert_eq!(parsed["signal"], 9);
+        assert!(line.contains(r#""exit_code":null"#), "{line}");
+        assert!(line.contains(r#""signal":9"#), "{line}");
     }
 
     #[test]

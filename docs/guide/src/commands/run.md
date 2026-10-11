@@ -699,8 +699,13 @@ Mechanics:
 - The run log archives BOTH the structured tracing stream AND the
   user-facing progress narrative (`Running:` / `✓` / `Done:`) plus one
   JSON line per execution event (`workflow_started`, `rule_started`,
-  `rule_completed`, `workflow_completed`) — the whole run is replayable
-  from the single file (issue #194 B1/B3).
+  `rule_completed`, `rule_failed`, `workflow_completed`) — the whole run is
+  replayable from the single file (issue #194 B1/B3). Failed rules emit
+  `"event": "rule_failed"` carrying `rule`, `exit_code`, `signal`,
+  `retries`, and `duration_ms`, so `grep -c 'rule_failed' run.launch.log`
+  counts failures without parsing the human-facing `✗` narration (issue
+  #856); `signal: 9` after an OOM-kill is the smoking gun distinguishing a
+  memory-capped environment from a tool bug.
 - The child's pid is written to `.oxo-flow/background.pid` in the workdir
   (also shown in the summary) while the run is in flight; the file is removed
   when the child exits, so a stale pid never survives a finished run.

@@ -4211,6 +4211,19 @@ pub async fn run_command(
                             format_args!("  {} {}", "✗".red(), err_msg),
                             &task_run_log,
                         );
+                            // Issue #856: rule failures must be greppable as
+                            // machine events too — the pretty ✗ line alone
+                            // made `grep rule_failed run.launch.log` return
+                            // 0 while 19 rules had died.
+                            emit_execution_event(
+                                oxo_flow_core::executor::ExecutionEvent::RuleFailed {
+                                    rule: rule_name.clone(),
+                                    exit_code: record.exit_code,
+                                    signal: record.signal,
+                                    retries: record.retries,
+                                    duration_ms: (duration * 1000.0) as u64,
+                                },
+                            );
                             // Always record: keep_going needs the final
                             // listing, non-required failures are listed in
                             // either mode, and the AI recovery path must be
