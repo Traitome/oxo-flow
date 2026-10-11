@@ -5025,11 +5025,26 @@ before anything executes:</p>
 <p>Rules sharing one broken spec, and distinct specs failing with the
 identical backend-missing message, collapse into a single entry — one root
 cause per line, with the pending-rule count, an example rule, the primary
-spec, and a per-backend install hint. Nothing ran, so the <code>--json</code> summary
-still reports the run as <code>failed</code> with zero counts (issue #142 H6). Install
-the missing backend or switch the affected rules' environments; see
-<a href="../../how-to/troubleshooting/#environment-issues">Troubleshooting — Environment Issues</a>
+spec, and a mode-aware remediation hint. Nothing ran, so the <code>--json</code>
+summary still reports the run as <code>failed</code> with zero counts (issue #142 H6).
+See <a href="../../how-to/troubleshooting/#environment-issues">Troubleshooting — Environment Issues</a>
 for per-backend checks.</p>
+<p>The remediation depends on <strong>why</strong> the spec failed (issue #848):</p>
+<ul>
+<li><strong>Manifest file not found</strong> (pixi declared by relative path): the spec
+  is resolved against the workflow directory (the same base the executor
+  uses, issue #427), and the hint says to create the manifest at the
+  resolved path or correct the rule's <code>pixi</code> path — installing the backend
+  would not help when the file itself is absent. Other backends keep the
+  install advice (a missing conda YAML surfaces only at task execution).</li>
+<li><strong>Backend binary missing</strong> (the manifest exists, or the backend cannot be
+  located for another reason): the hint is the per-backend install advice
+  (<code>install pixi (https://pixi.sh) and ensure it is on PATH</code>, and so on).</li>
+</ul>
+<p>This is the run-time safety net. <code>validate</code> and <code>plan</code>/dry-run preflight
+pixi manifests up front (error <code>E019</code>) so the failure surfaces before you
+commit to a run; <code>run</code> keeps the check because manifests can also be
+created between validate and run.</p>
 <h3 id="pass-config-values">Pass config values<a class="headerlink" href="#pass-config-values" title="Permanent link">#</a></h3>
 <p>Every key in the <code>[config]</code> section of the workflow (including declarative
 <code>key = { default = …, required = …, … }</code> entries) can be overridden from the
