@@ -5432,6 +5432,20 @@ terminating <strong><code>signal</code></strong> when the process died to one. T
 fields are optional and absent in checkpoints written by older engines —
 consumers must infer legacy records as before (failure when the rule is in
 <code>failed_rules</code>).</p>
+<p>Timestamp semantics (issue #850): the engine stamps
+<strong><code>enqueued_at</code></strong> when an execution attempt is submitted and stamps
+<strong><code>started_at</code></strong> only after the rule has acquired its resources — the
+moment actual execution begins. Their difference is the time the rule
+spends waiting in the resource pool (same split as the cluster driver's
+<code>queue_wait_secs</code>), and all wall-time reporting (<code>duration_ms</code>, the
+report's Benchmarks <code>Wall Time</code> column, <code>benchmarks.wall_time_secs</code>) is
+measured from <code>started_at</code>, so a rule parked behind busy resources never
+inflates its reported runtime. These two timestamps live on the engine's
+in-memory job records and are not part of <code>rule_runs</code> entries; the
+checkpoint persists the resulting wall time via <code>benchmarks.wall_time_secs</code>,
+and cluster runs additionally persist the split per job as
+<code>queue_wait_secs</code> in <code>jobs/&lt;rule&gt;/status.json</code> (see
+<a href="#what-a-finished-job-records">What a finished job records</a>).</p>
 <p>The tails are truncated to the <strong>last 64 KiB per stream by default</strong> and
 prefixed with a <code>…</code> marker when cut. Set <code>OXO_FLOW_OUTPUT_TAIL_BYTES</code> to
 change the size (bytes; an invalid or zero value falls back to the default
