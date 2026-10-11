@@ -4114,6 +4114,11 @@
 <li>With <code>--force</code>, files are deleted after an interactive confirmation prompt (skipped when stdin is not a terminal)</li>
 <li>Use <code>--dry-run</code> to preview the list of files that would be affected before committing to a clean</li>
 <li>Only files declared as rule <code>output</code> are targeted — input files, scripts, and environment specs are never deleted</li>
+<li><code>clean</code> is also the manual escape hatch for the
+  <a href="../run/#disk-pressure-monitoring-engine"><code>[engine]</code> disk-pressure guard</a>:
+  when a run aborts because free space stayed below <code>min_free_disk</code>, clean
+  the intermediates (or delete them by hand), then <code>oxo-flow resume</code> from
+  the checkpoint</li>
 </ul>
 
 

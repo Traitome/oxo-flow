@@ -4047,6 +4047,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#engine-runtime-disk-pressure-guard-issue-843" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [engine] — Runtime Disk-Pressure Guard (issue #843)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard (issue #843)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-ladder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response ladder
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-reclaimed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets reclaimed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6260,6 +6299,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#engine-runtime-disk-pressure-guard-issue-843" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [engine] — Runtime Disk-Pressure Guard (issue #843)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[engine] — Runtime Disk-Pressure Guard (issue #843)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-ladder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response ladder
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-reclaimed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets reclaimed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6341,6 +6419,7 @@
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843)</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -7564,7 +7643,7 @@ proceeds; the warning exists so long jobs don't fail mid-pipeline).</p>
 | Failure + <code>temp_output</code> | Cleaned to prevent stale partial files |
 | Failure + declared <code>output</code> | Partial outputs created by the failed attempt are deleted; <strong>all</strong> pre-existing declared outputs are moved aside as <code>&lt;name&gt;.oxo-failed</code> (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with <code>File exists</code> errors; issue #756) |
 | Transform with <code>cleanup=true</code> | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. |</p>
+| Success + <code>temporary = true</code> | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. For <code>output_pattern</code> rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |</p>
 <p><code>temporary</code> is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
 so a plain re-run skips the rule and does NOT regenerate the file — it comes
@@ -9828,6 +9907,120 @@ where <code>data</code> carries the run counters (<code>succeeded</code>, <code>
 and, on failure, an <code>error</code> summary. Notifications are <strong>best-effort</strong> —
 an unreachable or erroring endpoint logs a warning and never changes the
 run status or its exit code.</p>
+<h2 id="engine-runtime-disk-pressure-guard-issue-843"><code>[engine]</code> — Runtime Disk-Pressure Guard (issue #843)<a class="headerlink" href="#engine-runtime-disk-pressure-guard-issue-843" title="Permanent link">#</a></h2>
+<p>Optional run-time disk monitoring. Without this section the engine never
+measures free space mid-run and behavior is unchanged.</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-105-1"><a id="__codelineno-105-1" name="__codelineno-105-1" href="#__codelineno-105-1"></a><span class="k">[engine]</span>
+</span><span id="__span-105-2"><a id="__codelineno-105-2" name="__codelineno-105-2" href="#__codelineno-105-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
+</span><span id="__span-105-3"><a id="__codelineno-105-3" name="__codelineno-105-3" href="#__codelineno-105-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>min_free_disk</code></td>
+<td>String</td>
+<td>—</td>
+<td>Floor for free disk space at the working directory. A bare number means MiB. Sizes accept <code>T</code>/<code>G</code>/<code>M</code>/<code>K</code> suffixes (binary units: <code>1G</code> = 1024 MiB). Note <code>"50GB"</code> is <strong>not</strong> valid — the unit is a single letter</td>
+</tr>
+<tr>
+<td><code>reclaim_free_disk</code></td>
+<td>String</td>
+<td><code>min_free_disk</code></td>
+<td>Reclaim trigger level; must be ≥ <code>min_free_disk</code> (validation error otherwise)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="response-ladder">Response ladder<a class="headerlink" href="#response-ladder" title="Permanent link">#</a></h3>
+<p>Each measurement (run start, loop head, and every 60 s while the run is
+parked or between dispatch batches) classifies the working directory's free
+space and reacts:</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Condition</th>
+<th>Response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Normal</td>
+<td><code>free ≥ reclaim</code></td>
+<td>Run proceeds normally</td>
+</tr>
+<tr>
+<td>Reclaim</td>
+<td><code>min ≤ free &lt; reclaim</code></td>
+<td>Completed rules' <strong>temporary</strong> outputs are reclaimed (tombstoned in the checkpoint + unlinked) to make room; the run continues</td>
+</tr>
+<tr>
+<td>Hold</td>
+<td><code>free &lt; min</code></td>
+<td>New rule dispatches are withheld (in-flight rules continue); if nothing is in flight and nothing is reclaimable, the run parks and re-measures every 60 s</td>
+</tr>
+<tr>
+<td>Abort</td>
+<td>Hold persists for ~2 consecutive parked rounds (~2 min)</td>
+<td>The run checkpoints its state and fails with the disk-pressure message</td>
+</tr>
+</tbody>
+</table>
+<p>Under Hold with rules in flight, in-flight rules run to completion (their
+outputs may themselves trigger Reclaim), but no new rule starts until free
+space recovers above the floor.</p>
+<p>The abort message explains recovery: free space manually (delete
+intermediates or run <code>oxo-flow clean</code>), then <code>oxo-flow resume</code> from the
+checkpoint — or lower <code>min_free_disk</code>.</p>
+<h3 id="what-gets-reclaimed">What gets reclaimed<a class="headerlink" href="#what-gets-reclaimed" title="Permanent link">#</a></h3>
+<p>Reclamation targets a completed rule's outputs only when <strong>all</strong> of the
+following hold: the rule is marked <code>temporary = true</code>, it is not a leaf (it
+has dependents), every dependent has completed <strong>and each dependent's own
+declared outputs still exist on disk</strong> — a completed rule whose outputs went
+missing will re-execute and needs its inputs in place, so reclaiming them
+underneath it would break the re-run (the reclaim-vs-resume race, fixed
+under issue #843), the paths are not <code>protected_output</code>, and the files
+exist on disk. Reclaimed rules get a tombstone in <code>checkpoint.json</code> — the
+same mechanism the success-path <code>temporary</code> cleanup uses — so a later run
+that needs the outputs regenerates them first (lazy cascade-up). See
+<a href="#cleanup-behavior">Cleanup Behavior</a>.</p>
+<p>Notes:</p>
+<ul>
+<li>Measurements are fail-open: if the working directory cannot be stat'ed,
+  the engine logs a warning and continues rather than aborting.</li>
+<li>On non-Unix platforms the monitor is inactive (a warning is printed at
+  startup when <code>[engine]</code> thresholds are set).</li>
+<li>A run that starts already below <code>min_free_disk</code> prints a warning before
+  executing (it does not refuse to start; the Hold/Abort ladder governs
+  from there).</li>
+<li>The park/abort window is tunable via environment:
+  <code>OXO_FLOW_DISK_TICK_SECS</code> (seconds between measurements while parked,
+  default 60) and <code>OXO_FLOW_DISK_HOLD_ROUNDS</code> (grace park rounds before
+  the abort, default 2). Unset, invalid, or <code>0</code> values fall back to the
+  defaults, so a typo can never disable the abort.</li>
+<li>Free space is measured at the working directory's filesystem (statvfs),
+  which is volume-level: thresholds apply to the whole volume, not to a
+  per-directory quota. Tools that spill large scratch outside the
+  workdir (honor <code>TMPDIR</code> deliberately if needed) are invisible to the
+  monitor.</li>
+<li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
+  per-instance values) does not fire: the event loop tracks reclaim
+  candidates by rule name and holds no instance bindings. Fail-safe — no
+  reclaim rather than a wrong one. The post-run sweep covers them (see
+  below).</li>
+<li>Only paths declared by the rule (its <code>output</code> entries / matching
+  <code>output_pattern</code> instances) are reclaimed; sidecar files a command
+  writes without declaring are never touched. Declare index sidecars
+  explicitly (e.g. a <code>genome.fa</code> rule also declaring <code>genome.fa.fai</code>) so
+  reclaim + cleanup can track them.</li>
+</ul>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
 <li><a href="../../how-to/create-workflow/">Create a Workflow</a> — practical authoring guide</li>

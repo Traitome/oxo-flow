@@ -2791,6 +2791,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disk-pressure monitoring ([engine])
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#forcing-execution" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4558,6 +4569,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#disk-pressure-monitoring-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disk-pressure monitoring ([engine])
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#forcing-execution" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5689,6 +5711,58 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
 <p>Dry-run predicts exactly when a tombstoned rule will regenerate
 (<code>[rerun: upstream of X]</code>) — see
 <a href="../dry-run/#checkpoint-aware-rerun-preview">Checkpoint-aware rerun preview</a>.</p>
+<h3 id="disk-pressure-monitoring-engine">Disk-pressure monitoring (<code>[engine]</code>)<a class="headerlink" href="#disk-pressure-monitoring-engine" title="Permanent link">#</a></h3>
+<p>Large pipelines can fill a disk mid-run. Declaring an <code>[engine]</code> section in
+the workflow makes the engine measure the working directory's free space at
+startup, at every scheduling round, and every 60 s while work is parked:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="k">[engine]</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># floor — entering Hold below it</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="n">reclaim_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"100G"</span><span class="w">   </span><span class="c1"># optional reclaim trigger; defaults to min_free_disk</span>
+</span></code></pre></div>
+<p>The response ladder:</p>
+<ul>
+<li><strong>Reclaim</strong> (<code>min ≤ free &lt; reclaim</code>): completed rules' temporary outputs
+  are tombstoned and unlinked mid-run — the same checkpoint-aware reclaim
+  as <code>temporary = true</code> cleanup, but <em>while the run is still going</em>. Only
+  when every dependent is completed <em>and</em> its own outputs still exist (a
+  dependent whose outputs are missing will re-run and needs its inputs).
+  The narration line is <code>⊘ reclaimed temporary outputs of '&lt;rule&gt;' …</code>.</li>
+<li><strong>Hold</strong> (<code>free &lt; min</code>): new rule dispatches are withheld; in-flight
+  rules continue. If nothing is in flight and nothing is reclaimable, the
+  run parks and re-measures every 60 s.</li>
+<li><strong>Abort</strong> (Hold persists ~2 parked rounds ≈ 2 min): the run checkpoints
+  and fails. Free space manually (delete intermediates or
+  <a href="../clean/"><code>oxo-flow clean</code></a>), then
+  <a href="#checkpointing-and-resuming"><code>oxo-flow resume</code></a> — or lower
+  <code>min_free_disk</code>.</li>
+</ul>
+<p>Protected outputs (<code>protected_output</code>) are never reclaimed, and the final
+(leaf) rule's outputs always survive. See
+<a href="../../reference/workflow-format/#engine-runtime-disk-pressure-guard-issue-843"><code>[engine]</code> in the workflow format reference</a>
+for the full field table and edge cases.</p>
+<p>Tuning knobs (both fall back to their defaults when unset, invalid, or
+<code>0</code>, so a typo can never disable the abort):</p>
+<ul>
+<li><code>OXO_FLOW_DISK_TICK_SECS</code> — seconds between measurements while parked
+  (default 60).</li>
+<li><code>OXO_FLOW_DISK_HOLD_ROUNDS</code> — grace park rounds under Hold before the
+  run aborts (default 2).</li>
+</ul>
+<p>Known boundaries:</p>
+<ul>
+<li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> rules with
+  per-instance values) does not fire — the event loop tracks reclaim
+  candidates by rule name and holds no instance bindings, so those
+  intermediates are only cleaned by the post-run sweep (instance-level,
+  issue #844) or the next run. Fail-safe: no reclaim rather than a wrong
+  one.</li>
+<li>Free space is measured at the working directory's filesystem, which is
+  volume-level (statvfs): thresholds apply to the whole volume, not to a
+  quota.</li>
+<li>Keep scratch-heavy tools off the measured volume only if they are not
+  cleaned by their rules; outputs declared by rules are always accounted
+  for by the ladder.</li>
+</ul>
 <h3 id="forcing-execution">Forcing Execution<a class="headerlink" href="#forcing-execution" title="Permanent link">#</a></h3>
 <p>To bypass checkpoints and re-execute rules that have already completed, use
 <a href="../clean/"><code>oxo-flow clean</code></a> to remove outputs and the checkpoint file
@@ -5705,22 +5779,22 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>DAG: 5 rules in execution order
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a>  1. fastqc
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>  2. trim_reads
-</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a>  3. bwa_align
-</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a>  4. sort_bam
-</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7" href="#__codelineno-39-7"></a>  5. call_variants
-</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8" href="#__codelineno-39-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
-</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9" href="#__codelineno-39-9"></a>  ✓ fastqc (2.1s)
-</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10" href="#__codelineno-39-10"></a>  ✓ trim_reads (15.0s)
-</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11" href="#__codelineno-39-11"></a>  ✓ bwa_align (42.3s)
-</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12" href="#__codelineno-39-12"></a>  ✓ sort_bam (10.2s)
-</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13" href="#__codelineno-39-13"></a>  ✓ call_variants (8.4s)
-</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14" href="#__codelineno-39-14"></a>
-</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15" href="#__codelineno-39-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
-</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16" href="#__codelineno-39-16"></a>✓ 5 output files verified (118.3MB total)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>DAG: 5 rules in execution order
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>  1. fastqc
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a>  2. trim_reads
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5" href="#__codelineno-40-5"></a>  3. bwa_align
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6" href="#__codelineno-40-6"></a>  4. sort_bam
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7" href="#__codelineno-40-7"></a>  5. call_variants
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8" href="#__codelineno-40-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
+</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9" href="#__codelineno-40-9"></a>  ✓ fastqc (2.1s)
+</span><span id="__span-40-10"><a id="__codelineno-40-10" name="__codelineno-40-10" href="#__codelineno-40-10"></a>  ✓ trim_reads (15.0s)
+</span><span id="__span-40-11"><a id="__codelineno-40-11" name="__codelineno-40-11" href="#__codelineno-40-11"></a>  ✓ bwa_align (42.3s)
+</span><span id="__span-40-12"><a id="__codelineno-40-12" name="__codelineno-40-12" href="#__codelineno-40-12"></a>  ✓ sort_bam (10.2s)
+</span><span id="__span-40-13"><a id="__codelineno-40-13" name="__codelineno-40-13" href="#__codelineno-40-13"></a>  ✓ call_variants (8.4s)
+</span><span id="__span-40-14"><a id="__codelineno-40-14" name="__codelineno-40-14" href="#__codelineno-40-14"></a>
+</span><span id="__span-40-15"><a id="__codelineno-40-15" name="__codelineno-40-15" href="#__codelineno-40-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
+</span><span id="__span-40-16"><a id="__codelineno-40-16" name="__codelineno-40-16" href="#__codelineno-40-16"></a>✓ 5 output files verified (118.3MB total)
 </span></code></pre></div>
 <p>A progress bar shows execution progress with:</p>
 <ul>

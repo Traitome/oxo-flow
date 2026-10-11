@@ -3637,6 +3637,34 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[Unreleased]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#0231-2026-10-08" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3682,7 +3710,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
+  <a href="#features_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -3743,7 +3771,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_1" class="md-nav__link">
+  <a href="#features_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -3782,7 +3810,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_2" class="md-nav__link">
+  <a href="#features_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -3882,7 +3910,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_3" class="md-nav__link">
+  <a href="#features_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -3954,7 +3982,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_4" class="md-nav__link">
+  <a href="#features_5" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4034,6 +4062,34 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[Unreleased]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#0231-2026-10-08" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4079,7 +4135,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
+  <a href="#features_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4140,7 +4196,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_1" class="md-nav__link">
+  <a href="#features_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4179,7 +4235,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_2" class="md-nav__link">
+  <a href="#features_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4279,7 +4335,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_3" class="md-nav__link">
+  <a href="#features_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4351,7 +4407,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#features_4" class="md-nav__link">
+  <a href="#features_5" class="md-nav__link">
     <span class="md-ellipsis">
       
         Features
@@ -4421,6 +4477,16 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <a href="https://git-cliff.org">git-cliff</a> from conventional commit messages.</p>
 <!-- next-header -->
 
+<h2 id="unreleased">[Unreleased]<a class="headerlink" href="#unreleased" title="Permanent link">#</a></h2>
+<h3 id="features">Features<a class="headerlink" href="#features" title="Permanent link">#</a></h3>
+<ul>
+<li><strong>engine:</strong> Runtime disk-pressure monitoring — <code>[engine] min_free_disk</code> / <code>reclaim_free_disk</code> thresholds drive a Normal → Reclaim → Hold → abort ladder; completed temporary outputs are reclaimed mid-run (tombstoned, cascade-up on demand) and parked holds abort after a grace window (#843)</li>
+<li><strong>engine:</strong> Reclaim-dependent race fix — mid-run reclaim now requires each dependent to be checkpoint-completed <em>and</em> its declared outputs still on disk; a stale-completed dependent with missing outputs re-executes and keeps its inputs (<code>rule_outputs_exist</code> shared helper in core, reused by the CLI replay gate) (#843)</li>
+<li><strong>engine:</strong> Reclaim/sweep blind spots for <code>output_pattern</code> producers — post-run temporary cleanup now expands wildcard outputs per recorded instance (only paths that ran and completed, with a warning instead of a silent no-op), the sweep detects consumers structurally (pattern producers register no DAG edges), and the mid-run reclaim gate accepts pattern-typed dependents whose recorded instance paths exist (#844)</li>
+<li><strong>engine:</strong> Reclaim gate resolves pattern-dependent domains by template name — <code>output_pattern_domains</code> are recorded under the producer's expansion template, so the mid-run gate now looks dependents up the same way (config-expanded pattern text never matched, which had voided the gate); a dependent with no recorded domains is treated as <em>not proven done</em> and blocks reclaim of its producer's inputs (#843)</li>
+</ul>
+<!-- next-header -->
+
 <h2 id="0231-2026-10-08"><a href="https://github.com/Traitome/oxo-flow/compare/v0.23.0...v0.23.1">0.23.1</a> — 2026-10-08<a class="headerlink" href="#0231-2026-10-08" title="Permanent link">#</a></h2>
 <h3 id="bug-fixes">Bug Fixes<a class="headerlink" href="#bug-fixes" title="Permanent link">#</a></h3>
 <ul>
@@ -4441,7 +4507,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Drop title and frame heading from highlights (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add CNS cover letter highlights (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features">Features<a class="headerlink" href="#features" title="Permanent link">#</a></h3>
+<h3 id="features_1">Features<a class="headerlink" href="#features_1" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>workdir:</strong> Auto-link tool-convention index sidecars into workdir (#837) (<a href="https://github.com/Traitome/oxo-flow/pull/839">#839</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/839">#839</a>)</li>
 <li><strong>run:</strong> Link workflow-repo sources into workdir as symlinks (#837) (<a href="https://github.com/Traitome/oxo-flow/pull/838">#838</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/838">#838</a>)</li>
@@ -4464,7 +4530,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Mark VSCE_PAT as provisioned and align the PAT recipe (<a href="https://github.com/Traitome/oxo-flow/pull/816">#816</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/816">#816</a>)</li>
 <li><strong>skill:</strong> Point to the VS Code extension in the entry-point table (<a href="https://github.com/Traitome/oxo-flow/pull/815">#815</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/815">#815</a>)</li>
 </ul>
-<h3 id="features_1">Features<a class="headerlink" href="#features_1" title="Permanent link">#</a></h3>
+<h3 id="features_2">Features<a class="headerlink" href="#features_2" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>vscode:</strong> AI generation can use the editor language model (<a href="https://github.com/Traitome/oxo-flow/pull/820">#820</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/820">#820</a>)</li>
 <li><strong>vscode:</strong> Graph format quick pick + auto-open graph after run (#809) (<a href="https://github.com/Traitome/oxo-flow/pull/814">#814</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/814">#814</a>)</li>
@@ -4478,7 +4544,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>ci:</strong> Commit the VS Code extension manifests during sync-version (<a href="https://github.com/Traitome/oxo-flow/pull/810">#810</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/810">#810</a>)</li>
 <li><strong>eval:</strong> Make the gold set review-ready — judge fidelity, consistency linter, verified repairs (<a href="https://github.com/Traitome/oxo-flow/pull/802">#802</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/802">#802</a>)</li>
 </ul>
-<h3 id="features_2">Features<a class="headerlink" href="#features_2" title="Permanent link">#</a></h3>
+<h3 id="features_3">Features<a class="headerlink" href="#features_3" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>vscode:</strong> Show Run Status + Clean Outputs commands, editor-title buttons (<a href="https://github.com/Traitome/oxo-flow/pull/805">#805</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/805">#805</a>)</li>
 <li><strong>vscode:</strong> Task kind field, task-based AI generation, resource-scoped executable path (<a href="https://github.com/Traitome/oxo-flow/pull/804">#804</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/804">#804</a>)</li>
@@ -4571,7 +4637,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>guide:</strong> Align cluster scheduler strings and LSF memory example with engine (<a href="https://github.com/Traitome/oxo-flow/pull/701">#701</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/701">#701</a>)</li>
 <li><strong>guide:</strong> When-gated-off rules are skips, not failures — align all pages with #690 fix (<a href="https://github.com/Traitome/oxo-flow/pull/700">#700</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/700">#700</a>)</li>
 </ul>
-<h3 id="features_3">Features<a class="headerlink" href="#features_3" title="Permanent link">#</a></h3>
+<h3 id="features_4">Features<a class="headerlink" href="#features_4" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>core:</strong> Configurable stdout/stderr tail size, default 64 KiB (<a href="https://github.com/Traitome/oxo-flow/pull/720">#720</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/720">#720</a>)</li>
 </ul>
@@ -4713,7 +4779,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>variant-calling:</strong> Add reference-prep section (.dict) and declare GATK .tbi outputs (<a href="https://github.com/Traitome/oxo-flow/pull/445">#445</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/445">#445</a>)</li>
 <li><strong>first-workflow:</strong> Fix per-sample aggregation race — key multiqc to one sample (<a href="https://github.com/Traitome/oxo-flow/pull/444">#444</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/444">#444</a>)</li>
 </ul>
-<h3 id="features_4">Features<a class="headerlink" href="#features_4" title="Permanent link">#</a></h3>
+<h3 id="features_5">Features<a class="headerlink" href="#features_5" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>#469:</strong> Resolve every documented-but-unenforced field — implement, remove, or finalize by design (<a href="https://github.com/Traitome/oxo-flow/pull/507">#507</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/507">#507</a>)</li>
 <li><strong>validate:</strong> Run the raw-file schema pass (S001–S006) on oxo-flow validate (<a href="https://github.com/Traitome/oxo-flow/pull/482">#482</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/482">#482</a>)</li>
@@ -4841,7 +4907,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li><strong>workflow-format:</strong> Document directory outputs (trailing-slash idiom) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_5">Features<a class="headerlink" href="#features_5" title="Permanent link">#</a></h3>
+<h3 id="features_6">Features<a class="headerlink" href="#features_6" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>cluster:</strong> Element-wise aftercorr chaining for straight scatter chains (<a href="https://github.com/Traitome/oxo-flow/pull/371">#371</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/373">#373</a>)</li>
 </ul>
@@ -4874,7 +4940,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>ai:</strong> Raise Anthropic max_tokens ceiling for thinking backends; add generation frontier benchmark (<a href="https://github.com/Traitome/oxo-flow/pull/345">#345</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/345">#345</a>)</li>
 <li><strong>scheduler:</strong> Treat plan-absent deps as satisfied in ready_rules (<a href="https://github.com/Traitome/oxo-flow/pull/346">#346</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/346">#346</a>)</li>
 </ul>
-<h3 id="features_6">Features<a class="headerlink" href="#features_6" title="Permanent link">#</a></h3>
+<h3 id="features_7">Features<a class="headerlink" href="#features_7" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>ai:</strong> Opt-in Scientist Team profile with ablation-driven guards; frontier intent expansion (<a href="https://github.com/Traitome/oxo-flow/pull/351">#351</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/351">#351</a>)</li>
 <li><strong>ai:</strong> Unify pipeline generation on one agent + orchestrator harness (<a href="https://github.com/Traitome/oxo-flow/pull/349">#349</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/349">#349</a>)</li>
@@ -4906,7 +4972,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Clarify status --timing data sources for CLI and web runs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Document eval-finding behaviors — W032 lint, validate wildcard warning, typed run contract (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_7">Features<a class="headerlink" href="#features_7" title="Permanent link">#</a></h3>
+<h3 id="features_8">Features<a class="headerlink" href="#features_8" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>run:</strong> Accept owner/repo shorthand without gh: prefix (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>metro:</strong> Two-line merged-section displays + canonical-hue avoidance (<a href="https://github.com/Traitome/oxo-flow/pull/331">#331</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/331">#331</a>)</li>
@@ -4947,7 +5013,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Fix skill gate syntax and add version caveats from tx-ubuntu live test (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add AI agent skill (SKILL.md) with site nav entry and meta extension (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_8">Features<a class="headerlink" href="#features_8" title="Permanent link">#</a></h3>
+<h3 id="features_9">Features<a class="headerlink" href="#features_9" title="Permanent link">#</a></h3>
 <ul>
 <li>Lint W031 — warn when a consumer expands a when-gated producer's output unconditionally (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Metro maps — module sections, stage lines, used_by expansion channels (<a href="https://github.com/Traitome/oxo-flow/pull/318">#318</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/318">#318</a>)</li>
@@ -5026,7 +5092,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Clear stale version markers and pin bioconda counts to their source (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Resync AGENTS.md, README and guide with the code (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_9">Features<a class="headerlink" href="#features_9" title="Permanent link">#</a></h3>
+<h3 id="features_10">Features<a class="headerlink" href="#features_10" title="Permanent link">#</a></h3>
 <ul>
 <li>Data-dependent DAG pruning — when gates over runtime-produced files (#282) (<a href="https://github.com/Traitome/oxo-flow/pull/289">#289</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/289">#289</a>)</li>
 <li>Sheet columns as group metadata — long-read dimension (#283) (<a href="https://github.com/Traitome/oxo-flow/pull/288">#288</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/288">#288</a>)</li>
@@ -5125,7 +5191,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>guide:</strong> Document web_role_matrix + web_integration test targets in contributing (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>lint:</strong> Fix two broken relative links to workflow-format.md (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_10">Features<a class="headerlink" href="#features_10" title="Permanent link">#</a></h3>
+<h3 id="features_11">Features<a class="headerlink" href="#features_11" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>cluster:</strong> Record what a cluster job actually cost (<a href="https://github.com/andrewbudge">@andrewbudge</a>)</li>
 <li><strong>core:</strong> Wildcard.<key> placeholders render in shells (<a href="https://github.com/Traitome/oxo-flow/pull/201">#201</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/201">#201</a>)</li>
@@ -5187,7 +5253,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Cluster fairness — priority honored with aging, in-flight cancel, wait-visibility boundary (#134 follow-up) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Dag-engine — FIFO acquisition makes priority starvation impossible (the guarantee) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_11">Features<a class="headerlink" href="#features_11" title="Permanent link">#</a></h3>
+<h3 id="features_12">Features<a class="headerlink" href="#features_12" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>core:</strong> Cluster driver honors priority with fair-dispatch aging (<a href="https://github.com/Traitome/oxo-flow/pull/134">#134</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>core:</strong> FIFO-gated resource acquisition — the 100% no-starvation guarantee (<a href="https://github.com/Traitome/oxo-flow/pull/123">#123</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5206,7 +5272,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Dag-engine — fair dispatch prevents resource starvation (aging + submit cap) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_12">Features<a class="headerlink" href="#features_12" title="Permanent link">#</a></h3>
+<h3 id="features_13">Features<a class="headerlink" href="#features_13" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>cli:</strong> Fair dispatch — priority aging + -j submit cap; lint W019 empty outputs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>core:</strong> Resource-pool wait diagnostics — name what a waiting rule needs and who holds it (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5280,7 +5346,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>DAG edge inference expands {config.x} placeholders (from_rules_with_config) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Sync deadlock/resource semantics with the clamp change (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_13">Features<a class="headerlink" href="#features_13" title="Permanent link">#</a></h3>
+<h3 id="features_14">Features<a class="headerlink" href="#features_14" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>info:</strong> Derive workflow git provenance in info --json (<a href="https://github.com/Traitome/oxo-flow/pull/124">#124</a>) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>run-log:</strong> Per-run archived log with versioned header + report git sha (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5340,7 +5406,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>[[values]] fan-out, scratch rules, reference templates, profile override, {log}, pairs_list, plan JSON (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Editor setup how-to — .oxoflow files as TOML in VS Code and other editors (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_14">Features<a class="headerlink" href="#features_14" title="Permanent link">#</a></h3>
+<h3 id="features_15">Features<a class="headerlink" href="#features_15" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>core:</strong> Reference builder templates + naming standard (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>core:</strong> Rule-level scratch workdir (scratch = true) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5461,7 +5527,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>P0 execution-truth implementation plan (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Web full-lifecycle design spec — graphical editor, grounded AI, execution truth fixes (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_15">Features<a class="headerlink" href="#features_15" title="Permanent link">#</a></h3>
+<h3 id="features_16">Features<a class="headerlink" href="#features_16" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>web:</strong> Rule timeline — the terminal-native signature element (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>web:</strong> Quota endpoint reports the acting user's usage (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5659,7 +5725,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Move Wildcard Patterns admonition out of TOML code block (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Fix markdown list rendering in quickstart web UI section (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_16">Features<a class="headerlink" href="#features_16" title="Permanent link">#</a></h3>
+<h3 id="features_17">Features<a class="headerlink" href="#features_17" title="Permanent link">#</a></h3>
 <ul>
 <li>Repository workflows — pull/run clone git repos directly (no bundle required) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Consolidate commands — status absorbs history, export gains compose, remove history/package/profile/watch (issue #76) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5723,7 +5789,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Modernize homepage examples and fix capability claims (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add contributors section to README with GitHub-style avatar display (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_17">Features<a class="headerlink" href="#features_17" title="Permanent link">#</a></h3>
+<h3 id="features_18">Features<a class="headerlink" href="#features_18" title="Permanent link">#</a></h3>
 <ul>
 <li>Archive format abstraction (.tar.gz + .tar.zst), pull docs, confirmation gate (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add bundle execution confirmation gate with --yes flag (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5747,7 +5813,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>System check and optimize README.md (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Comprehensive DAG execution documentation overhaul (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_18">Features<a class="headerlink" href="#features_18" title="Permanent link">#</a></h3>
+<h3 id="features_19">Features<a class="headerlink" href="#features_19" title="Permanent link">#</a></h3>
 <ul>
 <li>PDF report support, secret scanning, Vega-Lite dashboard, and security docs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -5772,7 +5838,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Update design spec with Phase 2 implementation log (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>AI-native CLI comprehensive design document (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_19">Features<a class="headerlink" href="#features_19" title="Permanent link">#</a></h3>
+<h3 id="features_20">Features<a class="headerlink" href="#features_20" title="Permanent link">#</a></h3>
 <ul>
 <li>Oxo-flow ai test + ai setup + ai status subcommands (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Verify DeepSeek both API formats + update docs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5794,7 +5860,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Cargo update — semver-compatible dependency bumps (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
 <h2 id="094-2026-08-09"><a href="https://github.com/Traitome/oxo-flow/compare/v0.9.3...v0.9.4">0.9.4</a> — 2026-08-09<a class="headerlink" href="#094-2026-08-09" title="Permanent link">#</a></h2>
-<h3 id="features_20">Features<a class="headerlink" href="#features_20" title="Permanent link">#</a></h3>
+<h3 id="features_21">Features<a class="headerlink" href="#features_21" title="Permanent link">#</a></h3>
 <ul>
 <li>Typed config values + full ConfigDef runtime enforcement (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Enforce ConfigDef choices validation + sensitive masking (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5811,7 +5877,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>API maturity, accessibility, and cross-page state persistence (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Security hardening and web UI production readiness (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_21">Features<a class="headerlink" href="#features_21" title="Permanent link">#</a></h3>
+<h3 id="features_22">Features<a class="headerlink" href="#features_22" title="Permanent link">#</a></h3>
 <ul>
 <li>PostgreSQL backend activation + OpenAPI 3.1 spec regeneration (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -5844,7 +5910,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Comprehensive sample/pair discovery documentation (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_22">Features<a class="headerlink" href="#features_22" title="Permanent link">#</a></h3>
+<h3 id="features_23">Features<a class="headerlink" href="#features_23" title="Permanent link">#</a></h3>
 <ul>
 <li>Optional pair control for tumor-only CNV and unmatched scenarios (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Comprehensive sample/pair discovery with --sample flag (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5857,7 +5923,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Update all documentation for #50 (workflow args) and #51 (publish) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_23">Features<a class="headerlink" href="#features_23" title="Permanent link">#</a></h3>
+<h3 id="features_24">Features<a class="headerlink" href="#features_24" title="Permanent link">#</a></h3>
 <ul>
 <li>Add [arguments] block with --arg CLI flag for workflow parameters (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -5871,7 +5937,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Fail fast when a rule exceeds the --max-memory/--max-threads cap (<a href="https://github.com/Traitome/oxo-flow/pull/49">#49</a>) (<a href="https://github.com/andrewbudge">@andrewbudge</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/49">#49</a>)</li>
 <li>Make 'run' output honest on non-TTY and under --keep-going (<a href="https://github.com/Traitome/oxo-flow/pull/48">#48</a>) (<a href="https://github.com/andrewbudge">@andrewbudge</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/48">#48</a>)</li>
 </ul>
-<h3 id="features_24">Features<a class="headerlink" href="#features_24" title="Permanent link">#</a></h3>
+<h3 id="features_25">Features<a class="headerlink" href="#features_25" title="Permanent link">#</a></h3>
 <ul>
 <li>Add --with-lockfiles flag to publish for conda reproducibility (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Record container refs in manifest, warn on missing env files (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5922,7 +5988,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Deployment guide, AI provider env vars, UI polish (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add cloud storage reference doc, update LIMITATIONS.md and nav (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_25">Features<a class="headerlink" href="#features_25" title="Permanent link">#</a></h3>
+<h3 id="features_26">Features<a class="headerlink" href="#features_26" title="Permanent link">#</a></h3>
 <ul>
 <li>AI config API, runtime provider switching, Docker deployment, UI polish (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Docker deployment, custom AI URLs, frontend serving (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -5970,7 +6036,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>web:</strong> Add multi-user web system design specification (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>web:</strong> Add security model and DELETE endpoint to web API docs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_26">Features<a class="headerlink" href="#features_26" title="Permanent link">#</a></h3>
+<h3 id="features_27">Features<a class="headerlink" href="#features_27" title="Permanent link">#</a></h3>
 <ul>
 <li>Light theme, license upload web UI, and CLI license command (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>web:</strong> Embed default academic license with commercial notice (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6030,7 +6096,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Update command count to 31 (added history command) (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add CLI reference pages for all 29 commands (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_27">Features<a class="headerlink" href="#features_27" title="Permanent link">#</a></h3>
+<h3 id="features_28">Features<a class="headerlink" href="#features_28" title="Permanent link">#</a></h3>
 <ul>
 <li>Subprocess-based dynamic plugin loading (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Full plugin system with discovery, TOML integration, signatures (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6081,7 +6147,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Fix remaining stale subcommand count and add cargo install instruction (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_28">Features<a class="headerlink" href="#features_28" title="Permanent link">#</a></h3>
+<h3 id="features_29">Features<a class="headerlink" href="#features_29" title="Permanent link">#</a></h3>
 <ul>
 <li>Auto-create output directories and add dry-run shell safety checks (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -6129,7 +6195,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Add circRNA pipeline implementation plan (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add circRNA pipeline design specification (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_29">Features<a class="headerlink" href="#features_29" title="Permanent link">#</a></h3>
+<h3 id="features_30">Features<a class="headerlink" href="#features_30" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>rule:</strong> Add Dir variant to FilePatterns for directory input (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>executor:</strong> Implement optional rule skip logic (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6163,7 +6229,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Audit and clean up documentation, resolve implementation inconsistencies (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Clean up and fix issues in all .md files (<a href="https://github.com/Traitome/oxo-flow/pull/41">#41</a>) (<a href="https://github.com/Copilot">@Copilot</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/41">#41</a>)</li>
 </ul>
-<h3 id="features_30">Features<a class="headerlink" href="#features_30" title="Permanent link">#</a></h3>
+<h3 id="features_31">Features<a class="headerlink" href="#features_31" title="Permanent link">#</a></h3>
 <ul>
 <li>100% resolution of 40-user comprehensive testing — security, storage, CLI, docs (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Achieve 100% resolution of 100-user comprehensive review (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6198,7 +6264,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Add metadata field to pairs table documentation (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_31">Features<a class="headerlink" href="#features_31" title="Permanent link">#</a></h3>
+<h3 id="features_32">Features<a class="headerlink" href="#features_32" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>batch:</strong> Implement true parallel execution with Semaphore (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>config:</strong> Add pairs_pattern for auto-discovering pairs from filesystem (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6236,7 +6302,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Add resource management review design spec (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li><strong>design:</strong> Add transform operator design spec (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_32">Features<a class="headerlink" href="#features_32" title="Permanent link">#</a></h3>
+<h3 id="features_33">Features<a class="headerlink" href="#features_33" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>cli:</strong> Add batch subcommand for parallel task execution (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Complete rule lifecycle hooks, environment injection, and custom interpreters (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
@@ -6296,7 +6362,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Add config get/set commands and explain dependencies metric (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Update outdated CLI documentation (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_33">Features<a class="headerlink" href="#features_33" title="Permanent link">#</a></h3>
+<h3 id="features_34">Features<a class="headerlink" href="#features_34" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>cli:</strong> Add config get and set commands (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -6328,7 +6394,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Add comprehensive test suite with 120+ scenarios (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Mark junior user review issues as resolved (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
-<h3 id="features_34">Features<a class="headerlink" href="#features_34" title="Permanent link">#</a></h3>
+<h3 id="features_35">Features<a class="headerlink" href="#features_35" title="Permanent link">#</a></h3>
 <ul>
 <li>Implement persistent checkpointing, fix modular includes, and reduce TOML noise (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 <li>Add 81 new comprehensive tests for oxo-flow (145 total, covering CLI, core, Venus, bioinformatics) (<a href="https://github.com/Traitome/oxo-flow/pull/39">#39</a>) (<a href="https://github.com/Copilot">@Copilot</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/39">#39</a>)</li>
@@ -6368,7 +6434,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Sync docs changelog with root CHANGELOG.md via snippets include (<a href="https://github.com/Traitome/oxo-flow/pull/35">#35</a>) (<a href="https://github.com/Copilot">@Copilot</a>) (<a href="https://github.com/Traitome/oxo-flow/pull/35">#35</a>)</li>
 </ul>
-<h3 id="features_35">Features<a class="headerlink" href="#features_35" title="Permanent link">#</a></h3>
+<h3 id="features_36">Features<a class="headerlink" href="#features_36" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>web:</strong> Add request and active workflow metrics with frontend auto-refresh (<a href="https://github.com/ShixiangWang">@ShixiangWang</a>)</li>
 </ul>
@@ -6389,7 +6455,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Template variable substitution, DOT graph labels, and optional env check workflow (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
-<h3 id="features_36">Features<a class="headerlink" href="#features_36" title="Permanent link">#</a></h3>
+<h3 id="features_37">Features<a class="headerlink" href="#features_37" title="Permanent link">#</a></h3>
 <ul>
 <li>Enhance error types, re-export public API, docs update (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 <li><strong>wildcard:</strong> Add regex constraint validation and pattern-to-regex file discovery (<a href="https://github.com/Copilot">@Copilot</a>)</li>
@@ -6415,7 +6481,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <ul>
 <li>Add Windows ARM64, i686 Windows, and ARMv7 Linux release targets (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
-<h3 id="features_37">Features<a class="headerlink" href="#features_37" title="Permanent link">#</a></h3>
+<h3 id="features_38">Features<a class="headerlink" href="#features_38" title="Permanent link">#</a></h3>
 <ul>
 <li>Add Rule depends_on/retry_delay/workdir/hooks, DAG critical_path, format diff/lint codes (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
@@ -6485,7 +6551,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>Create complete documentation website (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 <li>Add CHANGELOG, CITATION, CODE_OF_CONDUCT, CONTRIBUTING, cliff.toml, and CI/CD pipeline (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 </ul>
-<h3 id="features_38">Features<a class="headerlink" href="#features_38" title="Permanent link">#</a></h3>
+<h3 id="features_39">Features<a class="headerlink" href="#features_39" title="Permanent link">#</a></h3>
 <ul>
 <li><strong>web:</strong> Add in-memory rate limiter and graceful shutdown (<a href="https://github.com/Copilot">@Copilot</a>)</li>
 <li><strong>container:</strong> Add multi-stage builds, rootless support, healthcheck, and docker run command (<a href="https://github.com/Copilot">@Copilot</a>)</li>
