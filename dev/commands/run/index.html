@@ -5379,8 +5379,18 @@ background process and returns to the shell immediately:</p>
 <li>The run log archives BOTH the structured tracing stream AND the
   user-facing progress narrative (<code>Running:</code> / <code>✓</code> / <code>Done:</code>) plus one
   JSON line per execution event (<code>workflow_started</code>, <code>rule_started</code>,
-  <code>rule_completed</code>, <code>workflow_completed</code>) — the whole run is replayable
-  from the single file (issue #194 B1/B3).</li>
+  <code>rule_completed</code>, <code>rule_failed</code>, <code>workflow_completed</code>) — the whole run is
+  replayable from the single file (issue #194 B1/B3). Failed rules emit
+  <code>"event":"rule_failed"</code> (compact serde_json, no space after <code>:</code>) carrying
+  <code>rule</code>, <code>exit_code</code>, <code>signal</code>, <code>retries</code>, and <code>duration_ms</code>, so
+  <code>grep -c 'rule_failed' run.launch.log</code> counts failures without parsing
+  the human-facing <code>✗</code> narration (issue #856); <code>"signal":9</code> after an
+  OOM-kill is the smoking gun distinguishing a memory-capped environment
+  from a tool bug. <code>duration_ms</code> spans all attempts including retry
+  delays, not just the final one. Staging failures (environment setup,
+  security checks) never start a process, so they surface as
+  <code>"event":"rule_completed"</code> with <code>"status":"failed"</code> and no exit
+  code/signal instead.</li>
 <li>The child's pid is written to <code>.oxo-flow/background.pid</code> in the workdir
   (also shown in the summary) while the run is in flight; the file is removed
   when the child exits, so a stale pid never survives a finished run.</li>
