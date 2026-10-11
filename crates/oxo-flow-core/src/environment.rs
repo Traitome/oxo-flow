@@ -170,7 +170,8 @@ fn conda_env_name_parts(kind: &str, spec: &str) -> Result<(String, String)> {
     }
 }
 
-/// Missing-manifest check for [`EnvironmentManager::validate_spec`].
+/// Missing-manifest check for pixi manifest specs (see
+/// [`EnvironmentResolver::validate_spec`], which calls this for pixi).
 ///
 /// The workflow contract names the manifest FILE (`pixi = "envs/pixi.toml"`,
 /// consumed as `pixi run --manifest-path <spec>`), so validate the declared
