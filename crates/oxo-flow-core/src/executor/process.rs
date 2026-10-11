@@ -1183,6 +1183,20 @@ impl LocalExecutor {
         self.resource_pool.lock().await.clear_waiters();
     }
 
+    /// Snapshot of the pool's FIFO waiter queue in arrival order (issue
+    /// #847): the run loop's spawn watchdog uses it to tell a benign
+    /// queued resource wait — which the scheduler already narrates with
+    /// throttled blockage WARNs — apart from a genuine no-child wedge.
+    pub async fn resource_waiters(&self) -> Vec<String> {
+        self.resource_pool
+            .lock()
+            .await
+            .waiters
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     async fn release_resources(&self, rule: &Rule) {
         let max_threads = self.config.max_threads.unwrap_or(self.system_threads);
         let max_memory_mb = self.config.max_memory_mb.unwrap_or(self.system_memory_mb);
@@ -5491,6 +5505,59 @@ mod tests {
             }),
             "the resolve info must be emitted: {events:?}"
         );
+    }
+
+    #[test]
+    fn resource_waiters_snapshot_reports_queued_rule() {
+        // Issue #847: the watchdog's queued-vs-wedged split reads the pool's
+        // FIFO waiter queue through `resource_waiters()`. A rule parked by
+        // `check_resources` must appear in the snapshot in arrival order,
+        // and drop out once it acquires.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let ex = executor_with(2, 2048);
+            let ex = Arc::new(ex);
+            // Occupy the whole pool so the waiter cannot acquire.
+            let holder_a = rule_with_resources("holder_a", 1, 1024);
+            let holder_b = rule_with_resources("holder_b", 1, 1024);
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.reserve(&holder_a, 2, 2048);
+                pool.reserve(&holder_b, 2, 2048);
+            }
+            assert!(
+                ex.resource_waiters().await.is_empty(),
+                "no waiter registered yet: {:?}",
+                ex.resource_waiters().await
+            );
+            let waiter = rule_with_resources("waiter", 2, 2048);
+            let ex_task = Arc::clone(&ex);
+            let task = tokio::spawn(async move { ex_task.check_resources(&waiter).await });
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            assert_eq!(
+                ex.resource_waiters().await,
+                vec!["waiter".to_string()],
+                "the parked rule must be visible as a pool waiter"
+            );
+            // Release everything: the waiter acquires and leaves the queue.
+            {
+                let mut pool = ex.resource_pool.lock().await;
+                pool.release(&holder_a, 2, 2048, &HashMap::new());
+                pool.release(&holder_b, 2, 2048, &HashMap::new());
+            }
+            ex.resource_notify.notify_waiters();
+            task.await
+                .expect("waiter task joins")
+                .expect("waiter acquires");
+            assert!(
+                ex.resource_waiters().await.is_empty(),
+                "acquired rule must leave the waiter queue: {:?}",
+                ex.resource_waiters().await
+            );
+        });
     }
 
     #[test]

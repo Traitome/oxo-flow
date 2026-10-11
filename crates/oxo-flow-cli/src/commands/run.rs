@@ -261,7 +261,9 @@ fn narrate_source_link_report(
 // reaches a child spawn (lost wakeup in the wait/dispatch path). The engine
 // then wedges: nothing completes, nothing fails, the process idles in a
 // futex wait. The watchdog compares the scheduler's running set against the
-// executor's live child pids on a fixed tick and reports stragglers.
+// executor's live child pids on a fixed tick and reports stragglers. Since
+// #847, rules queued in the resource pool are reported as benign waits
+// (WARN) — only unqueued rules keep the #685 ERROR.
 
 /// How often the watchdog compares running rules against live pids.
 const SPAWN_WATCHDOG_TICK_SECS: u64 = 30;
@@ -3491,7 +3493,9 @@ pub async fn run_command(
     // common completion funnel below; cleanup on every terminal path.
     let mut running_since: std::collections::HashMap<String, std::time::Instant> =
         Default::default();
-    // Rules the watchdog has already reported — one ERROR per rule per run.
+    // Rules the watchdog has already reported — one report per rule per run
+    // (WARN for benign resource-pool queues, ERROR for genuine no-child
+    // stragglers; issue #847).
     let mut watchdog_reported: std::collections::HashSet<String> = std::collections::HashSet::new();
     let watchdog_threshold = spawn_watchdog_threshold();
     let mut watchdog_tick =
@@ -4375,15 +4379,25 @@ pub async fn run_command(
             // wait (empty checkpoint running-set, zero completions). Every
             // SPAWN_WATCHDOG_TICK_SECS, compare the scheduler's running set
             // with the executor's live child pids: any rule running longer
-            // than the threshold with NO pid at all gets one ERROR naming
-            // it. This only logs — benign waits (env setup, resource pool)
-            // are possible and the message says so.
+            // than the threshold with NO pid at all gets one report naming
+            // it. Issue #847 splits the report: a rule still queued in the
+            // resource pool is a benign wait — the scheduler's own 60s
+            // blockage WARNs already narrate holders and FIFO position — so
+            // it only earns a louder one-shot WARN here. The #685 ERROR is
+            // reserved for rules NOT queued in the pool (env-setup stragglers
+            // have their own throttled WARN; anything else is the genuine
+            // lost-wakeup signature).
             _ = watchdog_tick.tick() => {
                 let live_rules: std::collections::HashSet<String> = executor
                     .active_pids()
                     .into_iter()
                     .map(|(rule, _)| rule)
                     .collect();
+                let queued: std::collections::HashSet<String> =
+                    executor.resource_waiters().await.into_iter().collect();
+                let n = |args: std::fmt::Arguments<'_>| {
+                    diagnostic_narrate(args, Some(&run_log));
+                };
                 for rule in sched.running_rules() {
                     if live_rules.contains(&rule) || watchdog_reported.contains(&rule) {
                         continue;
@@ -4395,16 +4409,32 @@ pub async fn run_command(
                         continue;
                     }
                     watchdog_reported.insert(rule.clone());
-                    tracing::error!(
-                        rule = %rule,
-                        running_secs = started.elapsed().as_secs(),
-                        "rule has been Running for over {}s but never spawned a child \
-                         process — likely causes: environment setup still in progress, \
-                         waiting on the resource pool, or a lost scheduler wakeup \
-                         (issue #685). The engine will keep waiting; if the rule never \
-                         starts, capture the run log and file an issue.",
-                        watchdog_threshold.as_secs()
-                    );
+                    let running_secs = started.elapsed().as_secs();
+                    if queued.contains(&rule) {
+                        n(format_args!(
+                            "{} rule '{rule}' has been Running for {running_secs}s while \
+                             queued in the resource pool — benign wait, the scheduler \
+                             reports blockage details every 60s (issue #847). The engine \
+                             will keep waiting.",
+                            "Watchdog:".yellow().bold()
+                        ));
+                    } else {
+                        n(format_args!(
+                            "{} rule '{rule}' has been Running for {running_secs}s but never \
+                             spawned a child process — likely causes: environment setup \
+                             still in progress, or a lost scheduler wakeup (issue #685). \
+                             The engine will keep waiting; if the rule never starts, \
+                             capture the run log and file an issue.",
+                            "Watchdog ERROR:".yellow().bold()
+                        ));
+                        tracing::error!(
+                            rule = %rule,
+                            running_secs,
+                            "rule has been Running for over {}s but never spawned a child \
+                             process (issue #685)",
+                            watchdog_threshold.as_secs()
+                        );
+                    }
                 }
                 None
             }
