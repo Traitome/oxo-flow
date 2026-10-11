@@ -4755,7 +4755,7 @@
 <td><code>--max-memory</code></td>
 <td>—</td>
 <td><code>0</code> (auto-detect)</td>
-<td>Maximum memory in MB available for execution</td>
+<td>Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest <code>memory.max</code> — see <a href="#notes">Notes</a>); set it explicitly (e.g. <code>--max-memory 430000 --retry 2</code>) when the clamp misreads a deliberately generous slice</td>
 </tr>
 <tr>
 <td><code>--skip-env-setup</code></td>
@@ -4881,11 +4881,11 @@
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Pinned to a git tag or branch (@ref selects a git ref — unlike `pull`,</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># where @tag means a GitHub Release bundle)</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>owner/pipeline@v0.23.1
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>owner/pipeline@v0.23.2
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
 </span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># The explicit forms work the same way (gh: can always be kept)</span>
 </span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline@v0.23.1
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>gh:owner/pipeline@v0.23.2
 </span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Any git URL or local repository directory</span>
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>https://example.com/team/pipeline.git
@@ -5808,7 +5808,7 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>oxo-flow v0.23.1 — Rust-native bioinformatics pipeline engine
+<div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>oxo-flow v0.23.2 — Rust-native bioinformatics pipeline engine
 </span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>DAG: 5 rules in execution order
 </span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>  1. fastqc
 </span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a>  2. trim_reads
@@ -5856,6 +5856,19 @@ the config surface.</p>
 <li><strong>Default targets:</strong> rules marked <code>target = true</code> are what <code>run</code>/<code>dry-run</code> build when neither <code>-t</code> nor <code>--module</code> selects anything — the marked rules and their transitive producers. With no marked rule the full DAG runs (backward compatible); an explicit <code>-t</code>/<code>--module</code> always wins.</li>
 <li><strong>Abort cancellation semantics:</strong> with fail-fast aborts, rules that were merely <em>killed</em> by the abort (signal death, no exit code) are recorded as <strong>cancelled</strong>, not failed — they are excluded from <code>failed_rules</code> and the failure counts, and narrated like skips. A sibling that failed on its own merit (exit code present) keeps its failure record. The checkpoint's per-rule <code>rule_runs</code> entries distinguish the two via their <code>status</code>/<code>skip_reason</code>/<code>signal</code> fields.</li>
 <li>Setting <code>--max-threads 0</code> or <code>--max-memory 0</code> auto-detects system resources</li>
+<li><strong>Cgroup-aware auto-detection:</strong> on Linux the auto-detected memory ceiling
+  is clamped to the tightest cgroup v2 <code>memory.max</code> applying to the engine
+  process — a container cap, a systemd user slice (<code>user@.service</code> with
+  <code>MemoryMax=</code>), or a <code>systemd-run --user -p MemoryMax=…</code> scope. Host RAM
+  figures ignore these limits: on a 1007G box whose user slice caps sessions
+  at 512G, scheduling against 1007G commits more memory than the kernel can
+  back inside the cgroup and the OOM-killer tears the run down (exit 137
+  cascading into a fail-fast teardown of healthy rules). The engine logs a
+  <code>cgroup memory limit is below the detected host memory</code> warning with both
+  figures when the clamp bites. The same clamp applies to the
+  <code>{effective_memory_mb}</code> placeholder and to container <code>--memory</code> ceilings.
+  For long cohort runs that park at the cap for hours, pair this with
+  <code>--retry</code> so a transient OOM does not kill the whole run.</li>
 <li>Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)</li>
 <li>Use <code>--skip-env-setup</code> when environments are pre-built to avoid redundant setup</li>
 <li>Use <code>--cache-dir</code> to persist environment setup state across runs for faster startup</li>
