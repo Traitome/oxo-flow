@@ -433,6 +433,7 @@ pub(crate) async fn run_on_cluster(
                     signal: None,
                     rule: rule.clone(),
                     status: oxo_flow_core::executor::JobStatus::Running,
+                    enqueued_at: Some(chrono::Utc::now()),
                     started_at: Some(chrono::Utc::now()),
                     finished_at: None,
                     exit_code: None,

@@ -96,6 +96,7 @@ fn simulate_100(c: &mut Criterion) {
                         signal: None,
                         rule: name,
                         status: JobStatus::Success,
+                        enqueued_at: None,
                         started_at: Some(now),
                         finished_at: Some(now),
                         exit_code: Some(0),

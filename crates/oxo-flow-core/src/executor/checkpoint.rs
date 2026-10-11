@@ -1910,6 +1910,7 @@ mod tests {
         let record = JobRecord {
             rule: "slow_scan".into(),
             status: crate::executor::JobStatus::Cancelled,
+            enqueued_at: None,
             started_at: None,
             finished_at: Some(chrono::Utc::now()),
             exit_code: None,
@@ -1949,6 +1950,7 @@ mod tests {
             JobRecord {
                 rule: "slow_scan".into(),
                 status,
+                enqueued_at: None,
                 started_at: None,
                 finished_at: Some(chrono::Utc::now()),
                 exit_code,
