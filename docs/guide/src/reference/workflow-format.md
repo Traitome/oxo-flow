@@ -1659,10 +1659,17 @@ environment still being set up, or waiting on the resource pool).
 Every 30s the engine compares rules it considers running against the
 processes it can actually see; a rule that has been Running for over
 `OXO_FLOW_SPAWN_WATCHDOG_SECS` (default 600) with no child process at
-all is reported by name with a `tracing::error!` entry. The watchdog
-only logs — it never kills — because the common causes are benign and
-self-resolving; if a named rule never starts, capture the run log and
-file an issue. Relatedly, the in-process environment-setup mutex now
+all is reported by name, and the report distinguishes two cases
+(issue #847). If the rule is queued in the resource pool — it has not
+acquired its threads/memory yet — the report is a one-shot WARN
+pointing at the scheduler's own 60-second blockage lines, because a
+queued wait is benign and self-resolving. A rule that is *not* queued
+(has acquired resources, or is parked in environment setup) and still
+has no child process keeps the `tracing::error!` report — that is the
+genuine lost-wakeup signature (issue #685). Both reports land in the
+run log as well as stderr. The watchdog only logs — it never kills;
+if a named rule never starts, capture the run log and file an issue.
+Relatedly, the in-process environment-setup mutex now
 waits on the same bounded schedule as the cross-process lock
 (`OXO_ENV_LOCK_TIMEOUT_SECS`, logging every 60s) so a task stuck behind
 another task's env creation becomes visible instead of hanging silently.
