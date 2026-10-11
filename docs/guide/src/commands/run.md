@@ -279,11 +279,12 @@ for per-backend checks.
 
 The remediation depends on **why** the spec failed (issue #848):
 
-- **Manifest file not found** (pixi/conda/mamba declared by relative path):
-  the spec is resolved against the workflow directory (the same base the
-  executor uses, issue #427), and the hint says to create the manifest at
-  the resolved path or correct the rule's `pixi`/`conda` path — installing
-  the backend would not help when the file itself is absent.
+- **Manifest file not found** (pixi declared by relative path): the spec
+  is resolved against the workflow directory (the same base the executor
+  uses, issue #427), and the hint says to create the manifest at the
+  resolved path or correct the rule's `pixi` path — installing the backend
+  would not help when the file itself is absent. Other backends keep the
+  install advice (a missing conda YAML surfaces only at task execution).
 - **Backend binary missing** (the manifest exists, or the backend cannot be
   located for another reason): the hint is the per-backend install advice
   (`install pixi (https://pixi.sh) and ensure it is on PATH`, and so on).
