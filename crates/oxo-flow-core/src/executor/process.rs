@@ -473,6 +473,90 @@ pub(crate) fn detect_swap_mb() -> u64 {
     0
 }
 
+/// Cgroup v2 memory limit in MB, when this process lives under one
+/// (container, systemd user slice, manual `systemd-run` scope). Issue
+/// #855: the box reports 1007G via sysinfo while the systemd user slice
+/// caps the session at 512G — scheduling against the host total let the
+/// pool commit far more declared memory than the cgroup allowed and the
+/// kernel OOM-killer tore the run down (exit 137 cascade).
+///
+/// Reads `memory.max` at the process's cgroup position and every
+/// ancestor under `/sys/fs/cgroup`; the tightest limit wins. `"max"`
+/// means unlimited. Returns `None` off-Linux, on cgroup v1, or when no
+/// limit applies.
+pub(crate) fn detect_cgroup_memory_limit_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let cgroup_path = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+        // Unified hierarchy only: the `0::` entry. v1 hosts have no such
+        // line and per-controller trees we deliberately do not interpret.
+        let rel = cgroup_path.lines().find_map(|l| l.strip_prefix("0::"))?;
+        let root = std::path::Path::new("/sys/fs/cgroup");
+        let full = if rel.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(rel.trim_start_matches('/'))
+        };
+        // Walk leaf → root; the tightest applicable limit wins. A missing
+        // file (namespaced path, v1 remnant) simply contributes nothing.
+        let mut cursor = Some(full.as_path());
+        let mut limit: Option<u64> = None;
+        while let Some(dir) = cursor {
+            if let Ok(content) = std::fs::read_to_string(dir.join("memory.max"))
+                && let Some(v) = parse_cgroup_memory_max(&content)
+                && limit.is_none_or(|cur| v < cur)
+            {
+                limit = Some(v);
+            }
+            cursor = dir.parent();
+            if dir == root {
+                break;
+            }
+        }
+        limit
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// Parse a `memory.max` body: a byte count, or the literal `max` meaning
+/// no limit. Zero and garbage parse as no limit — the sibling walkers
+/// treat them as unlimited, which matches kernel semantics for reads of
+/// `0` on files the kernel rejected.
+#[cfg_attr(not(test), allow(dead_code))] // exercised only on Linux
+fn parse_cgroup_memory_max(content: &str) -> Option<u64> {
+    let t = content.trim();
+    if t == "max" {
+        return None;
+    }
+    t.parse::<u64>()
+        .ok()
+        .map(|bytes| bytes / 1024 / 1024)
+        .filter(|&mb| mb > 0)
+}
+
+/// Clamp a detected MB figure to the cgroup limit when one applies and is
+/// tighter, logging the clamp loudly (issue #136: silent corrections hide
+/// misconfigurations). `ram_only` marks the tool-facing clamp (RAM term
+/// only) for the message. No-op when the detected figure is 0 (detection
+/// failed) — the caller's own fallback handles that.
+pub(crate) fn clamp_to_cgroup_limit(detected_mb: u64, ram_only: bool) -> u64 {
+    if let Some(cgroup_mb) = detect_cgroup_memory_limit_mb()
+        && cgroup_mb > 0
+        && detected_mb > cgroup_mb
+    {
+        tracing::warn!(
+            host_mb = detected_mb,
+            cgroup_limit_mb = cgroup_mb,
+            ram_only,
+            "cgroup memory limit is below the detected host memory — clamping the auto-detected ceiling (issue #855: scheduling past the cgroup cap OOM-kills the run; override with --max-memory if this is wrong)"
+        );
+        cgroup_mb
+    } else {
+        detected_mb
+    }
+}
+
 /// Removes a rule's pid entry when `execute_rule_with_config` returns on
 /// any path — a rule with no in-flight child must not be signalable
 /// (issue #131). Drop cannot be async, hence the `std::sync::Mutex`.
@@ -584,6 +668,12 @@ impl LocalExecutor {
                 8192
             }
         });
+
+        // Issue #855: a cgroup memory.max (container, systemd user slice)
+        // sits below the host total — scheduling against the host figure
+        // OOM-killed a 1007G box whose slice capped the session at 512G.
+        // Swap stays additive: it is backable inside the same cgroup.
+        let max_memory_mb = clamp_to_cgroup_limit(max_memory_mb, false);
 
         (max_threads, max_memory_mb)
     }
@@ -1009,10 +1099,13 @@ impl LocalExecutor {
         // limit. Live: eager's MarkDuplicates got --memory 4096M on a
         // 3723MB machine.
         let mut resources = rule.resources.clone();
+        // Issue #855: the ceiling must also honor a cgroup memory.max —
+        // inside a systemd slice capped at 512G, a container cgroup above
+        // that still gets OOM-killed even though the host shows 1007G.
         let container_ceiling_mb = self
             .config
             .max_memory_mb
-            .unwrap_or_else(detect_total_memory_mb);
+            .unwrap_or_else(|| clamp_to_cgroup_limit(detect_total_memory_mb(), true));
         if let Some(declared) = resources
             .memory
             .as_deref()
@@ -4752,6 +4845,30 @@ mod tests {
         assert_eq!(read_text_report(&fifo), None);
 
         let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    /// Issue #855: `memory.max` parsing — bytes → MB, `max` → unlimited,
+    /// zero/garbage → unlimited (the walk treats them as not-applicable).
+    #[test]
+    fn parse_cgroup_memory_max_handles_all_bodies() {
+        assert_eq!(parse_cgroup_memory_max("107374182400\n"), Some(102400));
+        assert_eq!(parse_cgroup_memory_max("536870912000"), Some(512000));
+        assert_eq!(parse_cgroup_memory_max("max\n"), None);
+        assert_eq!(parse_cgroup_memory_max("0"), None);
+        assert_eq!(parse_cgroup_memory_max(""), None);
+        assert_eq!(parse_cgroup_memory_max("bogus"), None);
+    }
+
+    /// The clamp helper passes figures through when no cgroup limit
+    /// applies (the off-Linux default on this CI) and never revives a 0
+    /// detection — the caller's own fallback owns that path.
+    #[test]
+    fn cgroup_clamp_passes_through_without_a_limit() {
+        assert_eq!(clamp_to_cgroup_limit(0, false), 0);
+        // On a Linux box under a tight cgroup this could in principle
+        // clamp; CI (macOS / uncgrouped Linux) has no applicable limit.
+        let n = clamp_to_cgroup_limit(8192, true);
+        assert!(n <= 8192);
     }
 
     #[test]
