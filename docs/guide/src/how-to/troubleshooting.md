@@ -332,8 +332,13 @@ output = ["variants/caller_b/{sample}.vcf"]  # ✅ Unique path
 Alternative writers that must never both run can share a path safely when
 gated with mutually exclusive `when` conditions (see the
 `wgs_coverage`/`wes_coverage` idiom in the [conditional execution
-gallery](../gallery/conditional-workflow.md)); `lint` still reports the
-pair so the intent stays visible.
+gallery](../gallery/conditional-workflow.md)); `lint` recognizes the
+common complementary shape — one rule gated `X != ''` and the other
+`X == ''` on the same expression — and reports the pair as an **info**
+instead of a warning ("output collision (unreachable): ... their `when`
+gates are complementary on 'X' — collision is not reachable at runtime"),
+so the intent stays visible without flagging a race that cannot happen
+(issue #860). Any other gating shape still reports the warning.
 
 ### Deadlock detected
 
