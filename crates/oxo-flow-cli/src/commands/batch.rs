@@ -58,17 +58,47 @@ pub async fn batch_command(
         );
     }
 
-    // Dry-run: print expanded commands
+    // Dry-run: print expanded commands. The preview IS the result in
+    // dry-run — with --json-output (or the global --json) it is emitted
+    // as JSON on stdout so scripts can consume the previewed commands
+    // without executing anything (issue #864). The human-readable preview
+    // stays on stderr in both modes, so piping stdout never mixes in
+    // non-JSON bytes.
     if dry_run {
+        let expanded: Vec<BatchResult> = items
+            .iter()
+            .enumerate()
+            .map(|(nr, item)| {
+                let cmd = expand_batch_template(&template, item, nr + 1);
+                BatchResult {
+                    item: item.clone(),
+                    command: cmd,
+                    exit_code: None,
+                    success: true,
+                    error: None,
+                }
+            })
+            .collect();
         eprintln!(
             "{} {} items with template: {}",
             "Batch (dry-run):".bold().yellow(),
             items.len(),
             template
         );
-        for (nr, item) in items.iter().enumerate() {
-            let cmd = expand_batch_template(&template, item, nr + 1);
-            eprintln!("  [{}] {}", nr + 1, cmd);
+        for (nr, r) in expanded.iter().enumerate() {
+            eprintln!("  [{}] {}", nr + 1, r.command);
+        }
+        if json_output {
+            let output = serde_json::json!({
+                "tool": "oxo-flow batch",
+                "dry_run": true,
+                "template": template,
+                "total": expanded.len(),
+                "failed": 0,
+                "success": true,
+                "results": expanded,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
         }
         return Ok(());
     }
