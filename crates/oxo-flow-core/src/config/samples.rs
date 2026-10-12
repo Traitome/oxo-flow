@@ -342,15 +342,18 @@ impl WorkflowConfig {
         // under the merged bindings, resolve `[config.*]` references, and
         // keep only FULLY-resolved paths (a residual `{` means an unbound
         // fresh/values wildcard — skipping it can only under-report, never
-        // false-positive).
+        // false-positive). Config resolution runs BEFORE the brace filter:
+        // `{config.out_dir}/x.vcf` only becomes filterable (or collidable)
+        // after its config reference resolves, mirroring the engine's
+        // config-expansion of producer outputs at DAG level.
         let instance_outputs =
             |rule: &Rule, merged: &crate::wildcard::WildcardValues| -> Result<Vec<String>> {
                 let mut outputs = expand_rule_patterns(&rule.output, merged).to_vec();
                 outputs.sort();
                 Ok(outputs
                     .into_iter()
-                    .filter(|o| !o.contains('{'))
                     .map(|o| expand_config_vars_in_path(&o, &self.config))
+                    .filter(|o| !o.contains('{'))
                     .collect())
             };
 
@@ -450,13 +453,20 @@ impl WorkflowConfig {
                         })
                     })
                 };
-                let is_pair_rule = mentions(
-                    &pair_wildcards
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                );
-                let is_group_rule = !is_pair_rule && mentions(GROUP_WILDCARDS);
+                // Gate classification on non-empty combo sets, exactly like
+                // expand_wildcards: when every pair (or group) entry is
+                // when-gated out, rules mentioning that vocabulary fall
+                // through to the other domain — keeping them classified as
+                // pair-rules would silently miss a group↔group duplicate.
+                let is_pair_rule = !pair_combos.is_empty()
+                    && mentions(
+                        &pair_wildcards
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                    );
+                let is_group_rule =
+                    !is_pair_rule && !group_combos.is_empty() && mentions(GROUP_WILDCARDS);
                 let domain_matches = if wants_group_rules {
                     is_group_rule
                 } else {
