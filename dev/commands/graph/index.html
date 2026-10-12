@@ -4457,6 +4457,7 @@ Station labels drop the <code>module::</code> prefix.</p>
 </tbody>
 </table>
 <p><strong>Dependencies count:</strong> The total number of edges in the DAG. When a rule has multiple input files from different upstream rules, each creates a separate edge. For example, a merge rule combining outputs from 3 parallel branches contributes 3 dependencies.</p>
+<p><strong>Edge matching:</strong> Inputs connect to producer outputs through progressively looser passes: exact path match, declared-directory prefix, glob, concrete-path-to-template regex, and finally positional wildcard unification — a wildcard-bearing input like <code>bqsr/{experiment}/{experiment}.bqsr.bam</code> matches a producer output like <code>bqsr/{sample}/{sample}.bqsr.bam</code> when the templates are identical apart from the wildcard <em>names</em> at the same positions (every <code>{...}</code> placeholder is replaced with <code>{}</code> before comparing, the same canonicalization <code>lint</code> uses for its output-collision check). Templates that differ in shape or in any literal segment never connect.</p>
 
 
 
