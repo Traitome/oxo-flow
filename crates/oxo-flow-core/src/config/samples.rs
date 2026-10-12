@@ -25,7 +25,7 @@ pub struct OwnerCollision {
     /// The rule writing `path` on the first owner's side.
     pub rule_a: String,
     /// The rule writing `path` on the second owner's side (same as
-    /// [`OwnerCollision::rule_a`] when one rule collides with itself).
+    /// `rule_a` when one rule collides with itself).
     pub rule_b: String,
     /// The exact path both instances would write.
     pub path: String,
@@ -241,14 +241,15 @@ impl WorkflowConfig {
     /// A duplicate sample `(S, owner_a, owner_b)` is only dangerous when the
     /// owner-instantiated rule instances actually expand some output to the
     /// SAME path — the benign cohort shape (`qc/{sample}.html` everywhere)
-    /// must stay silent. The analysis mirrors
-    /// [`expand_wildcards`](super::expand) branch-for-branch: same trigger
-    /// vocabulary, same `[[values]]` Cartesian fan-out, same constraint and
-    /// per-instance `when` gating, so a path reported here is a path the
-    /// engine would genuinely schedule twice.
+    /// must stay silent. The analysis mirrors `expand_wildcards`
+    /// branch-for-branch: same trigger vocabulary, same `[[values]]`
+    /// Cartesian fan-out, same constraint and per-instance `when` gating,
+    /// so a path reported here is a path the engine would genuinely
+    /// schedule twice.
     ///
-    /// Returns one [`OwnerCollision`] per duplicated sample, deduplicated
-    /// and sorted.
+    /// Returns one collision record per duplicated sample (struct is
+    /// module-private; fields carry the sample id, both owners, the
+    /// colliding rule(s), and the exact path), deduplicated and sorted.
     pub fn duplicate_owner_output_collisions(&self) -> Result<Vec<OwnerCollision>> {
         use crate::wildcard::{
             validate_wildcard_constraints_compiled, wildcard_combinations_from_groups,
