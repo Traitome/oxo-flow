@@ -646,7 +646,10 @@ oxo-flow run pipeline.oxoflow --samples ready
 
 A sample is **ready** when every external input belonging to it exists —
 that is, every rule input (after wildcard and `{config.x}` expansion) that
-the workflow itself does not produce. Intermediate products are never
+the workflow itself does not produce. Files declared in a rule's
+`protected_output` count as workflow-produced (a rule may declare expensive
+secondary artifacts only there, and downstream `expand_inputs` consumers
+read them during the run). Intermediate products are never
 checked (producing them is the DAG's job), and `optional = true` rules do
 not block readiness (the executor skips them when their inputs are absent).
 Relative paths resolve against the workflow file's directory (or
