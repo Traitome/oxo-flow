@@ -118,7 +118,11 @@ Rules are judged per sample:
 - A sample is **ready** when every external input belonging to it exists.
   External inputs are rule inputs (after wildcard and `{config.x}`
   expansion) that the workflow itself does not produce; intermediate
-  products are the DAG's job, so they are never checked.
+  products are the DAG's job, so they are never checked. Files a rule
+  declares in `protected_output` count as workflow-produced too — a rule
+  may declare expensive secondary artifacts only there (deliberately
+  absent from `output`), and downstream `expand_inputs` consumers read
+  them during the run, so they are not "missing".
 - `optional = true` rules do not block readiness — the executor skips them
   when their inputs are absent.
 - Missing files that belong to no specific sample (shared references) are

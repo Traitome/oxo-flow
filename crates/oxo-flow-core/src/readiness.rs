@@ -100,6 +100,43 @@ pub fn compute_readiness(config: &WorkflowConfig, base_dir: &std::path::Path) ->
                 &wildcard_values,
             ));
         }
+        // `protected_output` side effects are workflow-produced too
+        // (issue #865): a rule may declare expensive secondary artifacts
+        // only in `protected_output` (deliberately absent from `output`),
+        // and downstream `expand_inputs` consumers legitimately read them.
+        // Fan-out expansion bakes `input`/`output` but never touches
+        // `protected_output`, so per-instance declarations stay raw
+        // `{wildcard}` templates — concretize them with the same
+        // per-instance bindings the `expand_inputs` pass resolves
+        // (`expansion_values` winning over `expansion_pairs`, the
+        // `expand_pattern_variables` order), then resolve `{config.*}`.
+        // Report-only: this set never feeds the executor DAG. Shell-glob
+        // declarations (`results/*.bam`, issue #473) are left out — a glob
+        // has no finite path set here, and glob-shaped *inputs* are skipped
+        // in the loop below anyway.
+        let mut bindings = std::collections::HashMap::new();
+        for source in [
+            config.expansion_values.get(&rule.name),
+            config.expansion_pairs.get(&rule.name),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for (name, value) in source {
+                bindings
+                    .entry(name.clone())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+        for pattern in rule.protected_output.iter() {
+            let concrete = crate::config::expand_rule_shell(pattern, &bindings);
+            let concrete =
+                crate::executor::checkpoint::expand_config_in_path(&concrete, &wildcard_values);
+            if concrete.is_empty() || concrete.contains('{') || concrete.contains('*') {
+                continue;
+            }
+            produced.insert(concrete);
+        }
     }
 
     let mut missing_by_sample: std::collections::HashMap<&str, Vec<String>> =
@@ -758,5 +795,61 @@ mod tests {
             report.missing_global,
             vec![dir.path().join("refs/genome.fa").display().to_string()]
         );
+    }
+
+    #[test]
+    fn expand_inputs_side_effect_from_protected_output_not_reported_missing() {
+        // Issue #865: a producer declares expensive secondary artifacts only
+        // in `protected_output` (deliberately absent from `output`), and a
+        // cohort consumer reads them via `expand_inputs`. On a cold workdir
+        // the consumer's baked inputs are not on disk yet — but they ARE
+        // workflow-produced, so they must not be cited as "workflow-level
+        // inputs missing (block every sample)". Mirrors the issue's
+        // msi_paired/msi_cohort shape with [[pairs]] + config.pairs_list.
+        let dir = tempfile::tempdir().unwrap();
+
+        let toml = r#"
+            [workflow]
+            name = "msi"
+            version = "1.0.0"
+
+            [config]
+            pairs_list = "Pt01,Pt02"
+
+            [[pairs]]
+            pair_id = "Pt01"
+            experiment = "Pt01_T"
+
+            [[pairs]]
+            pair_id = "Pt02"
+            experiment = "Pt02_T"
+
+            [[rules]]
+            name = "msi_paired"
+            input = ["{input}"]
+            output = ["deliver/{pair_id}.msi.tsv"]
+            protected_output = ["deliver/{pair_id}.msi.tsv", "msi/{pair_id}_all", "msi/{pair_id}_unstable"]
+            shell = "touch {{output[0]}}"
+
+            [[rules]]
+            name = "msi_cohort"
+            input = []
+            expand_inputs = [
+                { pattern = "deliver/{pair_id}.msi.tsv", variables = { pair_id = "config.pairs_list" } },
+                { pattern = "msi/{pair_id}_all", variables = { pair_id = "config.pairs_list" } }
+            ]
+            output = ["msi_summary.tsv"]
+            shell = "cat {{input}} > {{output[0]}}"
+        "#
+        .to_string();
+
+        let report = readiness_for(&toml, dir.path());
+        // The side-effect files (msi/Pt0x_all) are produced by msi_paired —
+        // before the fix they landed in missing_global and "blocked every
+        // sample" on a cold workdir.
+        assert_eq!(report.missing_global, Vec::<String>::new(), "{report:#?}");
+        assert_eq!(report.waiting, Vec::<SampleStatus>::new());
+        assert_eq!(report.total, 2);
+        assert_eq!(report.ready.len(), 2);
     }
 }
