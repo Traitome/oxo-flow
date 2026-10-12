@@ -1904,9 +1904,7 @@ pub fn lint_format(
     /// placeholder replaced with `{}` so differently-named wildcards
     /// still unify. Literal paths canonicalize to themselves.
     fn canonical_template(pattern: &str) -> String {
-        static PLACEHOLDER_RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
-        PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned()
+        crate::wildcard::canonical_template(pattern)
     }
 
     /// A `when` gate that can actually disable the rule. `None`,

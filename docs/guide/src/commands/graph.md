@@ -303,3 +303,5 @@ The header shows key workflow metrics:
 | **Width** | Maximum parallelism (rules at same level) |
 
 **Dependencies count:** The total number of edges in the DAG. When a rule has multiple input files from different upstream rules, each creates a separate edge. For example, a merge rule combining outputs from 3 parallel branches contributes 3 dependencies.
+
+**Edge matching:** Inputs connect to producer outputs through progressively looser passes: exact path match, declared-directory prefix, glob, concrete-path-to-template regex, and finally positional wildcard unification — a wildcard-bearing input like `bqsr/{experiment}/{experiment}.bqsr.bam` matches a producer output like `bqsr/{sample}/{sample}.bqsr.bam` when the templates are identical apart from the wildcard *names* at the same positions (every `{...}` placeholder is replaced with `{}` before comparing, the same canonicalization `lint` uses for its output-collision check). Templates that differ in shape or in any literal segment never connect.

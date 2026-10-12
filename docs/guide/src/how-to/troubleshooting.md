@@ -293,7 +293,7 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 **Detection**: Use `oxo-flow graph workflow.oxoflow -f tree` and look for rules with no upstream or downstream indicators. (`oxo-flow clean --orphans` targets a different thing — leftover partial-transfer chunk directories under `.oxo-flow/chunks/`, not disconnected rules.)
 
-**Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules.
+**Solution**: Check input/output paths for typos. An orphan is usually a misspelled file path that prevents the engine from matching it to other rules. Note that differently-named wildcards at the same positions do connect (`bqsr/{experiment}/{experiment}.bam` matches `bqsr/{sample}/{sample}.bam` — see [graph → Edge matching](../commands/graph.md#understanding-metrics)); if a wildcard rule still shows as an orphan, the templates genuinely differ in shape or in a literal segment (e.g. `bqsr/` vs `bqsr2/`), and fixing the path is the remedy.
 
 ### Output collisions (silent overwrite)
 

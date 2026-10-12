@@ -755,6 +755,22 @@ pub fn has_wildcards(pattern: &str) -> bool {
     WILDCARD_RE.is_match(pattern)
 }
 
+/// Canonical form of a dataflow template: every `{...}` placeholder
+/// replaced with `{}` so differently-named wildcards still unify.
+///
+/// Both `bqsr/{sample}/{sample}.bam` and `bqsr/{experiment}/{experiment}.bam`
+/// canonicalize to `bqsr/{}/{}/{}.bam` — the same positional shape, so
+/// comparisons on canonical forms treat them as the same path family (the
+/// rule `lint` W031/W033 already applies). Literal paths canonicalize to
+/// themselves. Braces are matched non-recursively, mirroring the engine's
+/// single-level placeholder expansion.
+#[must_use = "canonicalizing returns a new String"]
+pub fn canonical_template(pattern: &str) -> String {
+    static PLACEHOLDER_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\{[^{}]*\}").expect("valid placeholder regex"));
+    PLACEHOLDER_RE.replace_all(pattern, "{}").into_owned()
+}
+
 /// Sanitize a wildcard value for use in an expanded rule instance name.
 ///
 /// Non-alphanumeric characters become `_`, so `1.5` → `1_5` and
