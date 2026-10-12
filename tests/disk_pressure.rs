@@ -358,8 +358,9 @@ shell = "cat {input} > {output}"
 /// detected structurally and the recorded instance combos expand to concrete
 /// paths: under `reclaim_free_disk = "999T"` every completed instance of
 /// `chunks/{i}.txt` is tombstoned and unlinked WHILE the run is still going
-/// (collect completes afterwards via cascade-up regeneration), not only by
-/// the post-run sweep.
+/// (the gate requires collect to be completed with its outputs present
+/// before split is touched, while summarize still runs afterwards), not only
+/// by the post-run sweep.
 ///
 /// The `summarize` rule exists for TIMING, not coverage: the mid-run gate
 /// fires at the top of the run loop, so reclaim can only happen while the
@@ -423,8 +424,9 @@ shell = "cat {input} > {output}"
             !dir.path().join(format!("chunks/{i}.txt")).exists(),
             "chunks/{i}.txt must be reclaimed mid-run, not just after the run"
         );
-        // The consumers completed afterwards, proving cascade-up regeneration
-        // works from the reclaimed state and the run genuinely continued.
+        // The consumers were completed (with outputs present) before the
+        // reclaim fired — the gate requires it — and the downstream rule
+        // completed afterwards, proving the run genuinely continued.
         assert_eq!(
             fs::read_to_string(dir.path().join(format!("merged/{i}.txt"))).unwrap(),
             format!("part-{i}\n"),
