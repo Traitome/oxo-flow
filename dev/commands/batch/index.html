@@ -1932,6 +1932,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#dry-run-json-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-run JSON preview
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3995,6 +4006,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#dry-run-json-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-run JSON preview
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4107,7 +4129,7 @@
 <td><code>--json-output</code></td>
 <td>—</td>
 <td>—</td>
-<td>Output results as formatted JSON (legacy alias — the global <code>--json</code> now drives the same output)</td>
+<td>Output results as formatted JSON (legacy alias — the global <code>--json</code> now drives the same output). With <code>--dry-run</code> it emits the previewed commands as JSON on stdout (issue #864)</td>
 </tr>
 <tr>
 <td><code>--dry-run</code></td>
@@ -4210,6 +4232,29 @@
 <h3 id="dry-run-preview">Dry-run preview<a class="headerlink" href="#dry-run-preview" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>-n<span class="w"> </span><span class="s2">"fastqc {item}"</span><span class="w"> </span>*.fastq.gz
 </span></code></pre></div>
+<h3 id="dry-run-json-preview">Dry-run JSON preview<a class="headerlink" href="#dry-run-json-preview" title="Permanent link">#</a></h3>
+<p>With <code>--json-output</code> (or the global <code>--json</code>), the dry-run preview is also
+written to stdout as JSON — the preview IS the result in dry-run, so
+scripts can consume the exact commands that would run without executing
+anything (issue #864). The human-readable preview stays on stderr either
+way, so redirecting stdout always yields pure JSON:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>oxo-flow<span class="w"> </span>batch<span class="w"> </span>-n<span class="w"> </span>--json-output<span class="w"> </span><span class="s2">"samtools flagstat {item}"</span><span class="w"> </span>*.bam<span class="w"> </span>&gt;<span class="w"> </span>preview.json
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">"tool"</span><span class="p">:</span><span class="w"> </span><span class="s2">"oxo-flow batch"</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">"dry_run"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">"template"</span><span class="p">:</span><span class="w"> </span><span class="s2">"samtools flagstat {item}"</span><span class="p">,</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="nt">"total"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nt">"failed"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="nt">"success"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="nt">"results"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"item"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a.bam"</span><span class="p">,</span><span class="w"> </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"samtools flagstat a.bam"</span><span class="p">,</span><span class="w"> </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"success"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"item"</span><span class="p">:</span><span class="w"> </span><span class="s2">"b.bam"</span><span class="p">,</span><span class="w"> </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"samtools flagstat b.bam"</span><span class="p">,</span><span class="w"> </span><span class="nt">"exit_code"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"success"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The <code>results</code> entries share the executed-mode shape — <code>exit_code</code> and
+<code>error</code> are <code>null</code> and <code>success</code> is <code>true</code> because nothing ran.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
@@ -4217,8 +4262,11 @@
 <li>Input file format: one item per line, blank lines and <code>#</code> comments ignored</li>
 <li>When no items provided and stdin has data, reads from pipe</li>
 <li><code>{}</code> is rush-compatible shorthand for <code>{item}</code></li>
+<li>Environment spec format: <code>conda: env.yaml</code> or <code>docker: image:tag</code></li>
 <li>
-<p>Environment spec format: <code>conda: env.yaml</code> or <code>docker: image:tag</code></p>
+<p>In dry-run, the human-readable preview goes to stderr; with
+  <code>--json-output</code>/<code>--json</code> the same preview is emitted as JSON on stdout
+  (issue #864)</p>
 </li>
 <li>
 <p>Generated workflows create one rule per item (<code>batch_item_1</code>, <code>batch_item_2</code>, ...)</p>
