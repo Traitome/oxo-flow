@@ -4221,7 +4221,11 @@ batches:</p>
 <li>A sample is <strong>ready</strong> when every external input belonging to it exists.
   External inputs are rule inputs (after wildcard and <code>{config.x}</code>
   expansion) that the workflow itself does not produce; intermediate
-  products are the DAG's job, so they are never checked.</li>
+  products are the DAG's job, so they are never checked. Files a rule
+  declares in <code>protected_output</code> count as workflow-produced too — a rule
+  may declare expensive secondary artifacts only there (deliberately
+  absent from <code>output</code>), and downstream <code>expand_inputs</code> consumers read
+  them during the run, so they are not "missing".</li>
 <li><code>optional = true</code> rules do not block readiness — the executor skips them
   when their inputs are absent.</li>
 <li>Missing files that belong to no specific sample (shared references) are

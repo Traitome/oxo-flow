@@ -5332,7 +5332,10 @@ as data arrives:</p>
 </span></code></pre></div>
 <p>A sample is <strong>ready</strong> when every external input belonging to it exists —
 that is, every rule input (after wildcard and <code>{config.x}</code> expansion) that
-the workflow itself does not produce. Intermediate products are never
+the workflow itself does not produce. Files declared in a rule's
+<code>protected_output</code> count as workflow-produced (a rule may declare expensive
+secondary artifacts only there, and downstream <code>expand_inputs</code> consumers
+read them during the run). Intermediate products are never
 checked (producing them is the DAG's job), and <code>optional = true</code> rules do
 not block readiness (the executor skips them when their inputs are absent).
 Relative paths resolve against the workflow file's directory (or
