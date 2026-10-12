@@ -80,7 +80,7 @@ at the pipeline definition. `status` handles it instead of rejecting it
 
   ```
   Warning: 'pipeline.oxoflow' appears to be a workflow file, not a checkpoint.
-    No checkpoint found at 'pipeline.oxoflow/../.oxo-flow/checkpoint.json' — 'status' expects a checkpoint file (JSON).
+    No checkpoint found at './.oxo-flow/checkpoint.json' — 'status' expects a checkpoint file (JSON).
     Run 'oxo-flow run pipeline.oxoflow' first to create one.
   ```
 
