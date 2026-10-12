@@ -203,6 +203,25 @@ impl WorkflowDag {
                 (*node, matcher)
             })
             .collect();
+        // Positional canonicalization (issue #863): a consumer may name its
+        // wildcards differently from the producer at the same positions
+        // (`bqsr/{experiment}/{experiment}.bqsr.bam` vs
+        // `bqsr/{sample}/{sample}.bqsr.bam`) — the same path family, but the
+        // template-level regex in `template_matchers` cannot match across
+        // the name difference. Precompute the canonical form of every
+        // `{...}`-bearing producer output (all placeholders → `{}`) once;
+        // the final fallback branch below compares canonical forms so the
+        // edge still connects (mirrors lint W031/W033 semantics).
+        let canonical_producers: Vec<(String, NodeIndex)> = producer_outputs
+            .iter()
+            .filter(|(output, node)| {
+                output.contains('{')
+                    && !pattern_claims
+                        .get(node)
+                        .is_some_and(|claims| claims.contains(output))
+            })
+            .map(|(output, node)| (crate::wildcard::canonical_template(output), *node))
+            .collect();
 
         for rule in rules {
             let consumer_node = name_to_node[&rule.name];
@@ -316,6 +335,25 @@ impl WorkflowDag {
                                         &mut input_producers,
                                     );
                                 }
+                            }
+                        }
+                    } else {
+                        // 5. Wildcard-bearing input that missed the exact
+                        //    match (issue #863): the consumer may name its
+                        //    wildcards differently from the producer at the
+                        //    same positions. Compare canonical forms (every
+                        //    `{...}` → `{}`) so positional templates still
+                        //    unify — the same semantics lint W031/W033 use.
+                        let canonical_input = crate::wildcard::canonical_template(&input);
+                        for (canonical_output, producer_node) in &canonical_producers {
+                            if *canonical_output == canonical_input {
+                                add_edge_dedup(graph, *producer_node, consumer_node);
+                                record_producer(
+                                    &rule.name,
+                                    &input,
+                                    &graph[*producer_node].name,
+                                    &mut input_producers,
+                                );
                             }
                         }
                     }
@@ -3387,6 +3425,71 @@ mod tests {
         let dag =
             WorkflowDag::from_rules_with_config(&[prod.clone(), cons.clone()], &divergent).unwrap();
         assert!(dag.dependencies("leiden").unwrap().is_empty());
+    }
+
+    #[test]
+    fn differently_named_wildcards_at_same_positions_connect() {
+        // Issue #863: a pair-scoped consumer names its wildcards
+        // `{experiment}` where the group-scoped producer says `{sample}` —
+        // the same positional template, so the edge must still connect
+        // (engine execution binds concrete values per instance; only the
+        // DAG view was missing the link).
+        let prod = make_rule("bqsr", vec![], vec!["bqsr/{sample}/{sample}.bqsr.bam"]);
+        let cons = make_rule(
+            "mutect2_paired",
+            vec!["bqsr/{experiment}/{experiment}.bqsr.bam"],
+            vec!["variants/{pair_id}.vcf"],
+        );
+        let dag = WorkflowDag::from_rules(&[prod, cons]).unwrap();
+        assert_eq!(dag.dependencies("mutect2_paired").unwrap(), vec!["bqsr"]);
+    }
+
+    #[test]
+    fn canonical_match_requires_same_positional_shape() {
+        // Differently SHAPED templates are different path families —
+        // canonicalization must not fabricate an edge.
+        let prod = make_rule("a", vec![], vec!["out/{sample}.bam"]);
+        let cons = make_rule("b", vec!["out/{sample}/{sample}.bam"], vec!["o.txt"]);
+        let dag = WorkflowDag::from_rules(&[prod, cons]).unwrap();
+        assert!(dag.dependencies("b").unwrap().is_empty());
+
+        // Same shape, different literal segments → still no edge.
+        let prod = make_rule("c", vec![], vec!["bqsr/{sample}/{sample}.bam"]);
+        let cons = make_rule(
+            "d",
+            vec!["bqsr2/{experiment}/{experiment}.bam"],
+            vec!["o.txt"],
+        );
+        let dag = WorkflowDag::from_rules(&[prod, cons]).unwrap();
+        assert!(dag.dependencies("d").unwrap().is_empty());
+    }
+
+    #[test]
+    fn same_named_wildcards_still_connect_after_canonical_fallback() {
+        // The exact match (branch 1) resolves same-name templates before the
+        // canonical fallback is reached; the fallback must not duplicate or
+        // distort that edge.
+        let prod = make_rule("bqsr", vec![], vec!["bqsr/{sample}/{sample}.bqsr.bam"]);
+        let cons = make_rule(
+            "collect",
+            vec!["bqsr/{sample}/{sample}.bqsr.bam"],
+            vec!["done.txt"],
+        );
+        let dag = WorkflowDag::from_rules(&[prod, cons]).unwrap();
+        assert_eq!(dag.dependencies("collect").unwrap(), vec!["bqsr"]);
+    }
+
+    #[test]
+    fn canonical_fallback_does_not_create_self_edge_on_write_back() {
+        // A rule writing into its own wildcard template must not gain a
+        // self-edge via the canonical pass.
+        let prod = make_rule(
+            "sort",
+            vec!["raw/{sample}.bam"],
+            vec!["raw/{sample}.sorted.bam"],
+        );
+        let dag = WorkflowDag::from_rules(&[prod]).unwrap();
+        assert!(dag.dependencies("sort").unwrap().is_empty());
     }
 
     #[test]

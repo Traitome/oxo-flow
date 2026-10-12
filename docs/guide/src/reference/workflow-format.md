@@ -1136,7 +1136,14 @@ and the raw patterns in the template-level graph — multiqc-style
 aggregators therefore connect to their contributors even in
 `graph -f dot` without `--expanded`), glob patterns
 (`raw/*.fastq.gz`), and directory inputs (every producer writing under
-that directory). Rules that declare the SAME output string (shared
+that directory). Wildcard-bearing inputs that name their placeholders
+differently from the producer still connect when the templates are
+identical apart from the wildcard names at the same positions
+(`bqsr/{experiment}/{experiment}.bam` matches
+`bqsr/{sample}/{sample}.bam`) — every `{...}` placeholder is
+canonicalized to `{}` before the final comparison (issue #863).
+Templates differing in shape or in any literal segment never connect.
+Rules that declare the SAME output string (shared
 bins/staging directories — e.g. two assembler variants emitting into one
 `GenomeBinning/<tool>/bins` dir) link ALL of their producers: every
 consumer of the shared path is ordered after every writer.
