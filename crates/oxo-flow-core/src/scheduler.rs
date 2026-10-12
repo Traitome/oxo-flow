@@ -1263,6 +1263,13 @@ impl ResourcePool {
     }
 
     /// Release resources after a rule completes.
+    ///
+    /// Only a rule that actually holds a reservation may credit the pool
+    /// back: releasing a rule with no entry in `active` (never reserved —
+    /// e.g. a pre-reservation wedge requeued by the #872 watchdog — or
+    /// already released by an internal completion path) is a no-op that
+    /// credits nothing. An unconditional add-back here would phantom-credit
+    /// free capacity and invite oversubscription (the #855 failure class).
     pub fn release(
         &mut self,
         rule: &Rule,
@@ -1270,6 +1277,9 @@ impl ResourcePool {
         max_memory_mb: u64,
         max_groups: &HashMap<String, u32>,
     ) {
+        if self.active.remove(&rule.name).is_none() {
+            return;
+        }
         self.threads = (self.threads + rule.effective_threads()).min(max_threads);
         let mem = rule
             .effective_memory()
@@ -1284,8 +1294,6 @@ impl ResourcePool {
                 *available = (*available + amount).min(max);
             }
         }
-
-        self.active.remove(&rule.name);
     }
 
     /// Human-readable explanation of why `rule` cannot be accommodated right

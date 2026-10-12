@@ -1347,9 +1347,11 @@ impl LocalExecutor {
     }
 
     /// Release a dispatched rule's resource reservation, if any (issue
-    /// #872 watchdog requeue). A rule that never forked may hold a pool
-    /// reservation or be parked in the resource wait loop; releasing is
-    /// clamped/no-op-safe when nothing is held, and wakes pool waiters.
+    /// #872 watchdog requeue). The pool gates on membership — a rule that
+    /// holds no reservation (never reserved, or already released by the
+    /// internal completion path) is a no-op that credits nothing, so an
+    /// external release can never phantom-credit free capacity. Wakes pool
+    /// waiters afterwards: released capacity may satisfy multiple rules.
     pub async fn release_resources(&self, rule: &Rule) {
         let max_threads = self.config.max_threads.unwrap_or(self.system_threads);
         let max_memory_mb = self.config.max_memory_mb.unwrap_or(self.system_memory_mb);

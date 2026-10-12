@@ -264,8 +264,9 @@ fn narrate_source_link_report(
 // executor's live child pids on a fixed tick and reports stragglers. Since
 // #847, rules queued in the resource pool are reported as benign waits
 // (WARN) — only unqueued rules keep the #685 ERROR. Since #872 the watchdog
-// re-arms every threshold interval and, after `WATCHDOG_REQUEUE_FIRES`
-// consecutive fires on the same rule, requeues it instead of waiting forever.
+// re-arms on every tick once a rule is past the threshold, and after
+// `WATCHDOG_REQUEUE_FIRES` consecutive fires on the same rule it requeues
+// the rule instead of waiting forever.
 
 /// How often the watchdog compares running rules against live pids.
 const SPAWN_WATCHDOG_TICK_SECS: u64 = 30;
@@ -275,7 +276,9 @@ const DEFAULT_SPAWN_WATCHDOG_SECS: u64 = 600;
 const SPAWN_WATCHDOG_ENV: &str = "OXO_FLOW_SPAWN_WATCHDOG_SECS";
 /// Consecutive watchdog fires on one unqueued rule after which the rule is
 /// requeued instead of being left to wedge its lane forever (issue #872).
-/// At the 600 s default threshold, 6 fires ≈ 1 h of zero dispatch progress.
+/// The first fire lands at the threshold (600 s default); subsequent fires
+/// land on every 30 s tick, so 6 fires ≈ 600 s + 5×30 s ≈ 13 minutes of
+/// zero dispatch progress at the defaults.
 const WATCHDOG_REQUEUE_FIRES: u32 = 6;
 /// Environment override for `WATCHDOG_REQUEUE_FIRES`. Same convention as
 /// the other watchdog knobs: unparseable or `0` falls back to the default —
@@ -4560,9 +4563,46 @@ pub async fn run_command(
                         .find_map(|(id, name)| (name == &rule).then_some(*id));
                     match stuck_id.and_then(|id| task_abort.get(&id).map(|h| (id, h))) {
                         Some((task_id, abort)) => {
+                            // Tree-kill before abort: the wedged task may have
+                            // spawned grand-children that kill_on_drop would
+                            // orphan; they could race the re-dispatched rule's
+                            // outputs. Snapshot the pid while the task is
+                            // still live, then sweep after the abort — same
+                            // shape as terminate_on_signal (#524) and the
+                            // first-failure abort. The fresh-pid check here
+                            // also closes the requeue-vs-reap race (review
+                            // NIT 6): a rule reaped between snapshot and
+                            // abort has no pid left to kill.
+                            let stuck_pids: Vec<u32> = executor
+                                .active_pids()
+                                .into_iter()
+                                .filter(|(name, _)| name == &rule)
+                                .map(|(_, pid)| pid)
+                                .collect();
                             abort.abort();
                             task_abort.remove(&task_id);
                             task_rule.remove(&task_id);
+                            if !stuck_pids.is_empty() {
+                                // kill_process_tree's grace poll sleeps up to
+                                // 10 s — run the sweep on the blocking pool,
+                                // not a runtime worker (#524).
+                                let rule_name = rule.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    for pid in stuck_pids {
+                                        if let Err(e) = oxo_flow_core::executor::timeout::
+                                            kill_process_tree(pid)
+                                        {
+                                            tracing::warn!(
+                                                rule = %rule_name,
+                                                pid,
+                                                "watchdog requeue: failed to kill stuck \
+                                                 process tree: {e}"
+                                            );
+                                        }
+                                    }
+                                })
+                                .await;
+                            }
                         }
                         None => {
                             // No task link: the id→rule registration is the only
@@ -4653,6 +4693,9 @@ pub async fn run_command(
                 // skipped — otherwise the requeue would double-count as a
                 // failure. The id→rule link is dropped here so the
                 // "no recorded rule" invariant stays intact for real panics.
+                // (NIT 8 review: a regression here — dropping the
+                // `!e.is_panic()` guard, say — must fail this test:
+                // `watchdog_requeue_cancellation_not_counted_as_failure`.)
                 if e.is_cancelled() && !e.is_panic() {
                     task_rule.remove(&e.id());
                     task_abort.remove(&e.id());

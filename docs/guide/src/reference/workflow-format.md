@@ -1675,18 +1675,22 @@ acquired resources, or is parked in environment setup) and still has
 no child process gets the `tracing::error!` report with the explicit
 dispatch state `dispatched-not-forked` — that is the genuine
 lost-wakeup signature (issue #685). Both reports land in the run log
-as well as stderr. The watchdog re-arms: the same rule is re-reported
-on every threshold interval, and each report carries a consecutive
-fire count. After `OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES` consecutive
-ERROR fires (default 6 — about an hour at the default threshold), the
-stuck rule is requeued to *Pending* instead of wedging its lane
-forever: the engine aborts the never-forked spawn task, releases any
-pool reservation it holds, clears the checkpoint running-set entry,
-and re-dispatches the rule when it next becomes ready (issue #872).
-A rule whose wedge repeats eventually fails the run through the
-ordinary retry/abort machinery instead of hanging it; if the requeue
-itself cannot find the rule's spawn task the run fails loudly with an
-internal error rather than silently shrinking the submit cap.
+as well as stderr. The watchdog re-arms: once a rule is past the
+threshold it is re-reported on every 30s tick, and each report carries
+a consecutive fire count. After `OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES`
+consecutive ERROR fires (default 6 — about 13 minutes at the defaults:
+the first fire lands at the 600s threshold, subsequent fires land on
+every 30s tick), the stuck rule is requeued to *Pending* instead of
+wedging its lane forever: the engine kills any stuck process tree,
+aborts the never-forked spawn task, releases any pool reservation it
+holds, clears the checkpoint running-set entry, and re-dispatches the
+rule when it next becomes ready (issue #872). If the wedge repeats,
+the engine keeps requeueing — the fire count restarts on each
+requeue, so a permanently wedged rule cycles between Running and
+Pending rather than failing the run; there is currently no cumulative
+requeue cap. If the requeue itself cannot find the rule's spawn task
+the run fails loudly with an internal error rather than silently
+shrinking the submit cap.
 
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
