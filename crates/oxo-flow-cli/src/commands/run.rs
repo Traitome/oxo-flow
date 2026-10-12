@@ -1389,6 +1389,33 @@ fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
     prev[b.len()]
 }
 
+/// Nearest rule names to a typo'd `--rule` value (issue #862): a typo of an
+/// existing rule/template name, or a name one of them extends (`mutect2`
+/// for `mutect2_paired`), within the top `limit` picks. Both names the user
+/// can legitimately pass — instance and template — live in `candidates`.
+fn nearest_rule_names(name: &str, candidates: &[&str], limit: usize) -> Vec<String> {
+    let lowered = name.to_ascii_lowercase();
+    let mut scored: Vec<(usize, &str)> = candidates
+        .iter()
+        .filter(|candidate| **candidate != name)
+        .filter_map(|candidate| {
+            let cand = candidate.to_ascii_lowercase();
+            if cand.starts_with(&lowered) || lowered.starts_with(&cand) {
+                Some((0, *candidate))
+            } else {
+                let d = edit_distance(&lowered, &cand, 3);
+                (d <= 3).then_some((d, *candidate))
+            }
+        })
+        .collect();
+    scored.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    scored.truncate(limit);
+    scored
+        .into_iter()
+        .map(|(_, name)| name.to_string())
+        .collect()
+}
+
 /// Quote a path for safe embedding in a reference build command (executed
 /// via `bash -c` / `sh -c`): wrap in single quotes and escape embedded
 /// quotes with the POSIX `'\''` sequence — the same idiom the environment
@@ -7073,8 +7100,45 @@ logical errors. Output format per rule:
         match config.rules.iter().find(|r| r.name == *name) {
             Some(r) => vec![r],
             None => {
-                eprintln!("{} rule '{}' not found", "error:".bold().red(), name);
-                return Err(anyhow::anyhow!("rule not found"));
+                // Instance names are what the expanded DAG holds, but every
+                // other surface — the workflow file, `lint`, `validate`,
+                // docs — uses the template name (issue #862). Accept it and
+                // show every instance expanded from that template.
+                let instances: Vec<&oxo_flow_core::rule::Rule> = config
+                    .rules
+                    .iter()
+                    .filter(|r| config.template_of(&r.name) == Some(name.as_str()))
+                    .collect();
+                if !instances.is_empty() {
+                    eprintln!(
+                        "{} template '{}' expanded to {} instance(s)",
+                        "Debug:".bold().cyan(),
+                        name,
+                        instances.len()
+                    );
+                    instances
+                } else {
+                    let mut candidates: Vec<&str> = config
+                        .rule_templates
+                        .iter()
+                        .map(|r| r.name.as_str())
+                        .chain(config.rules.iter().map(|r| r.name.as_str()))
+                        .collect();
+                    candidates.sort_unstable();
+                    candidates.dedup();
+                    let suggestions = nearest_rule_names(name, &candidates, 5);
+                    if suggestions.is_empty() {
+                        eprintln!("{} rule '{}' not found", "error:".bold().red(), name);
+                    } else {
+                        eprintln!(
+                            "{} rule '{}' not found — did you mean: {}?",
+                            "error:".bold().red(),
+                            name,
+                            suggestions.join(", ")
+                        );
+                    }
+                    return Err(anyhow::anyhow!("rule not found"));
+                }
             }
         }
     } else {
