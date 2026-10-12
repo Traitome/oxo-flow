@@ -12,6 +12,25 @@ use super::*;
 use crate::error::{OxoFlowError, Result};
 use std::collections::HashMap;
 
+/// One concrete output-path collision between two differently-owned
+/// instances of the same sample id (issue #871).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OwnerCollision {
+    /// The duplicated sample id.
+    pub sample: String,
+    /// First declaring owner (e.g. `group 'case'`).
+    pub owner_a: String,
+    /// Second declaring owner (e.g. `pair 'P1'`).
+    pub owner_b: String,
+    /// The rule writing `path` on the first owner's side.
+    pub rule_a: String,
+    /// The rule writing `path` on the second owner's side (same as
+    /// [`OwnerCollision::rule_a`] when one rule collides with itself).
+    pub rule_b: String,
+    /// The exact path both instances would write.
+    pub path: String,
+}
+
 /// Matches the namespaced `{values.name}` wildcard form.
 ///
 /// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
@@ -216,37 +235,337 @@ impl WorkflowConfig {
         duplicates
     }
 
-    /// The engine's dup-ownership warning, rendered once per parse.
+    /// Concrete output-path collisions between differently-owned instances
+    /// of the same sample id (issue #871).
     ///
-    /// `None` when every sample has a single owner. One duplicate renders a
-    /// per-sample message; several render a single aggregate line naming all
-    /// of them — a cohort that pairs every group sample (10 pairs × 2
-    /// members) otherwise prints 20 near-identical warnings on every
-    /// validate/dry-run/run, burying the one line that matters.
+    /// A duplicate sample `(S, owner_a, owner_b)` is only dangerous when the
+    /// owner-instantiated rule instances actually expand some output to the
+    /// SAME path — the benign cohort shape (`qc/{sample}.html` everywhere)
+    /// must stay silent. The analysis mirrors
+    /// [`expand_wildcards`](super::expand) branch-for-branch: same trigger
+    /// vocabulary, same `[[values]]` Cartesian fan-out, same constraint and
+    /// per-instance `when` gating, so a path reported here is a path the
+    /// engine would genuinely schedule twice.
+    ///
+    /// Returns one [`OwnerCollision`] per duplicated sample, deduplicated
+    /// and sorted.
+    pub fn duplicate_owner_output_collisions(&self) -> Result<Vec<OwnerCollision>> {
+        use crate::wildcard::{
+            validate_wildcard_constraints_compiled, wildcard_combinations_from_groups,
+            wildcard_combinations_from_pairs,
+        };
+
+        const GROUP_WILDCARDS: &[&str] = &["group", "sample"];
+
+        let duplicates = self.duplicate_sample_owners();
+        if duplicates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let config_values: HashMap<String, toml::Value> = self
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let active_pairs: Vec<crate::config::ExperimentControlPair> = self
+            .pairs
+            .iter()
+            .filter(|pair| {
+                pair.when.as_deref().is_none_or(|when| {
+                    crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                        when,
+                        &config_values,
+                        &HashMap::new(),
+                        self.base_dir.as_deref(),
+                    )
+                })
+            })
+            .cloned()
+            .collect();
+        let pair_combos = wildcard_combinations_from_pairs(&active_pairs);
+        let group_combos = wildcard_combinations_from_groups(&self.sample_groups);
+        let compiled_constraints = self.compiled_wildcard_constraints()?;
+
+        // At parse time `rule_templates` is still empty (expand_wildcards
+        // seeds it from `rules` on first entry) — mirror that here.
+        let templates = if self.rule_templates.is_empty() {
+            &self.rules
+        } else {
+            &self.rule_templates
+        };
+
+        // Per-rule domain classification happens inline in the main loop
+        // below (pair precedence, mirroring expand_wildcards' trigger
+        // classification). Rules mentioning neither vocabulary cannot
+        // produce owner-instantiated output paths; input_groups rules fan
+        // out in the post-loop pass and are out of scope here.
+        let pair_wildcards = self.pair_fanout_wildcards();
+
+        // Instantiations of one duplicate sample under one of its owners:
+        // a group owner fans out (group, sample) combos containing S; a pair
+        // owner fans out (active) pair combos naming P whose members
+        // include S. Empty set → that owner contributes no instances.
+        let owner_instantiations =
+            |sample: &str, owner: &str| -> Result<Vec<crate::wildcard::WildcardValues>> {
+                let mut instantiations: Vec<crate::wildcard::WildcardValues> = Vec::new();
+                if owner.starts_with("group '") {
+                    let group_name = owner.trim_start_matches("group '").trim_end_matches('\'');
+                    for group in &self.sample_groups {
+                        if group.name != group_name || !group.samples.iter().any(|s| s == sample) {
+                            continue;
+                        }
+                        for combo in &group_combos {
+                            if combo.get("group").map(String::as_str) == Some(group_name)
+                                && combo.get("sample").map(String::as_str) == Some(sample)
+                            {
+                                instantiations.push(combo.clone());
+                            }
+                        }
+                    }
+                } else if owner.starts_with("pair '") {
+                    let pair_id = owner.trim_start_matches("pair '").trim_end_matches('\'');
+                    let pair_covers_sample = |p: &crate::config::ExperimentControlPair| {
+                        p.pair_id == pair_id
+                            && (p.experiment == sample || p.control.as_deref() == Some(sample))
+                    };
+                    if active_pairs.iter().any(&pair_covers_sample) {
+                        for combo in &pair_combos {
+                            if combo.get("pair_id").map(String::as_str) == Some(pair_id) {
+                                instantiations.push(combo.clone());
+                            }
+                        }
+                    }
+                }
+                Ok(instantiations)
+            };
+        // Output paths for one rule instance: expand the template output
+        // under the merged bindings, resolve `[config.*]` references, and
+        // keep only FULLY-resolved paths (a residual `{` means an unbound
+        // fresh/values wildcard — skipping it can only under-report, never
+        // false-positive). Config resolution runs BEFORE the brace filter:
+        // `{config.out_dir}/x.vcf` only becomes filterable (or collidable)
+        // after its config reference resolves, mirroring the engine's
+        // config-expansion of producer outputs at DAG level.
+        let instance_outputs =
+            |rule: &Rule, merged: &crate::wildcard::WildcardValues| -> Result<Vec<String>> {
+                let mut outputs = expand_rule_patterns(&rule.output, merged).to_vec();
+                outputs.sort();
+                Ok(outputs
+                    .into_iter()
+                    .map(|o| expand_config_vars_in_path(&o, &self.config))
+                    .filter(|o| !o.contains('{'))
+                    .collect())
+            };
+
+        // Per-instance gating, identical order to expand_wildcards:
+        // constraints first, then per-instance `when` (both namespaces
+        // baked). Returns false when the combo produces no instance.
+        let instance_passes =
+            |rule: &Rule, merged: &crate::wildcard::WildcardValues| -> Result<bool> {
+                if validate_wildcard_constraints_compiled(merged, &compiled_constraints).is_err() {
+                    return Ok(false);
+                }
+                if let Some(ref when) = rule.when
+                    && (when.contains("wildcard.") || when.contains("{meta."))
+                {
+                    let combo_values = Self::expansion_when_context(merged);
+                    let baked = Self::bake_wildcard_when(when, merged);
+                    let baked = Self::bake_meta_when(&baked, &self.metadata, merged);
+                    if !crate::executor::process::evaluate_condition_with_wildcards_and_base_dir(
+                        &baked,
+                        &config_values,
+                        &combo_values,
+                        self.base_dir.as_deref(),
+                    ) {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            };
+
+        // Per-owner output map: which rule writes which concrete path for
+        // this duplicate sample's instances under ONE owner. A rule is
+        // instantiated by exactly ONE domain (pair precedence, mirroring
+        // expand_wildcards' trigger classification), so a group owner
+        // contributes group-domain rules expanded with its (group, sample)
+        // combos and a pair owner contributes pair-domain rules expanded
+        // with its pair combos — a group rule never runs on the pair side
+        // and vice versa.
+        let expanded_set =
+            |rule: &Rule, combos: &[crate::wildcard::WildcardValues]| -> Result<Vec<String>> {
+                let mut paths: Vec<String> = Vec::new();
+                let tables = self.active_value_tables_for_rule(rule);
+                if !tables.is_empty() {
+                    let tables: Vec<&ValueGroup> = tables.iter().collect();
+                    let value_combos = self.cartesian_value_combos(&tables)?;
+                    for combo in combos {
+                        for value_combo in &value_combos {
+                            let mut instance = combo.clone();
+                            instance.extend(value_combo.clone());
+                            if !instance_passes(rule, &instance)? {
+                                continue;
+                            }
+                            paths.extend(instance_outputs(rule, &instance)?);
+                        }
+                    }
+                } else {
+                    for combo in combos {
+                        if !instance_passes(rule, combo)? {
+                            continue;
+                        }
+                        paths.extend(instance_outputs(rule, combo)?);
+                    }
+                }
+                Ok(paths)
+            };
+
+        let owner_paths = |sample: &str, owner: &str| -> Result<HashMap<String, String>> {
+            let instantiations = owner_instantiations(sample, owner)?;
+            if instantiations.is_empty() {
+                return Ok(HashMap::new());
+            }
+            let wants_group_rules = owner.starts_with("group '");
+            let mut map: HashMap<String, String> = HashMap::new();
+            for rule in templates {
+                if !rule.input_groups.is_empty() {
+                    continue;
+                }
+                let trigger_text: Vec<String> = {
+                    let mut t: Vec<String> = Vec::new();
+                    for text in rule.input.iter().chain(rule.output.iter()) {
+                        t.push(text.clone());
+                    }
+                    if let Some(ref shell) = rule.shell {
+                        t.push(shell.clone());
+                    }
+                    if let Some(ref when) = rule.when {
+                        t.push(when.clone());
+                    }
+                    if let Some(ref op) = rule.output_pattern {
+                        t.push(op.clone());
+                    }
+                    t
+                };
+                let mentions = |wildcards: &[&str]| -> bool {
+                    trigger_text.iter().any(|t| {
+                        wildcards.iter().any(|w| {
+                            t.contains(&format!("{{{w}}}")) || t.contains(&format!("wildcard.{w}"))
+                        })
+                    })
+                };
+                // Gate classification on non-empty combo sets, exactly like
+                // expand_wildcards: when every pair (or group) entry is
+                // when-gated out, rules mentioning that vocabulary fall
+                // through to the other domain — keeping them classified as
+                // pair-rules would silently miss a group↔group duplicate.
+                let is_pair_rule = !pair_combos.is_empty()
+                    && mentions(
+                        &pair_wildcards
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                    );
+                let is_group_rule =
+                    !is_pair_rule && !group_combos.is_empty() && mentions(GROUP_WILDCARDS);
+                let domain_matches = if wants_group_rules {
+                    is_group_rule
+                } else {
+                    is_pair_rule
+                };
+                if !domain_matches {
+                    continue;
+                }
+                for path in expanded_set(rule, &instantiations)? {
+                    map.entry(path).or_insert_with(|| rule.name.clone());
+                }
+            }
+            Ok(map)
+        };
+
+        let mut collisions: std::collections::BTreeSet<OwnerCollision> =
+            std::collections::BTreeSet::new();
+        for (sample, owner_a, owner_b) in &duplicates {
+            let paths_a = owner_paths(sample, owner_a)?;
+            let paths_b = owner_paths(sample, owner_b)?;
+            for (path, rule_a) in &paths_a {
+                if let Some(rule_b) = paths_b.get(path) {
+                    collisions.insert(OwnerCollision {
+                        sample: sample.clone(),
+                        owner_a: owner_a.clone(),
+                        owner_b: owner_b.clone(),
+                        rule_a: rule_a.clone(),
+                        rule_b: rule_b.clone(),
+                        path: path.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(collisions.into_iter().collect())
+    }
+
+    /// The engine's dup-ownership warning, rendered once per parse
+    /// (issue #871).
+    ///
+    /// `None` when every sample has a single owner — or when duplicates
+    /// exist but no two owner-instantiated rule instances expand to the
+    /// same output path (the standard tumor/normal cohort shape: groups
+    /// feed `[[pairs]]`, every rule path already carries the full
+    /// `{sample}` name). A REAL collision renders one line per colliding
+    /// (sample, owners, rule, path), naming exactly what would be
+    /// double-scheduled.
     #[must_use]
     pub fn duplicate_owner_warning(&self) -> Option<String> {
-        let duplicates = self.duplicate_sample_owners();
-        let note = "unless every rule path distinguishes them (e.g. a {group} component), \
-                    the instances share an output path and one is skipped as up-to-date \
-                    while consuming the other's data";
-        match duplicates.len() {
-            0 => None,
-            1 => {
-                let (sample, first_owner, second_owner) = &duplicates[0];
+        match self.duplicate_owner_output_collisions() {
+            Ok(collisions) if collisions.is_empty() => None,
+            Ok(collisions) => {
+                let lines: Vec<String> = collisions
+                    .iter()
+                    .map(|c| {
+                        let rules = if c.rule_a == c.rule_b {
+                            format!("rule '{}'", c.rule_a)
+                        } else {
+                            format!("rules '{}' and '{}'", c.rule_a, c.rule_b)
+                        };
+                        format!(
+                            "  sample '{}' (declared by {} and {}): {} write '{}' \
+                             for both instances — one is skipped as up-to-date while \
+                             consuming the other's data",
+                            c.sample, c.owner_a, c.owner_b, rules, c.path
+                        )
+                    })
+                    .collect();
                 Some(format!(
-                    "sample '{sample}' is declared by both {first_owner} and {second_owner} \
-                     — {note}"
+                    "{} colliding output path(s) from samples declared by more than one \
+                     owner (cross-owner instance overlap):\n{}",
+                    lines.len(),
+                    lines.join("\n")
                 ))
             }
-            n => {
+            // Expansion prerequisites (a bad constraint regex, an
+            // unresolvable [[values]] values_from) must not silence the
+            // legacy message — fall back to the cheap ownership census so
+            // parse-time diagnostics stay actionable; validate/plan will
+            // surface the underlying error right after.
+            Err(_) => {
+                let duplicates = self.duplicate_sample_owners();
                 let list = duplicates
                     .iter()
                     .map(|(sample, first, second)| format!("{sample} ({first} / {second})"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                Some(format!(
-                    "{n} samples are declared by more than one owner: {list} — {note}"
-                ))
+                let note = "collision analysis could not run; unless every rule path \
+                            distinguishes the instances (e.g. a {group} component), they \
+                            share an output path and one is skipped as up-to-date while \
+                            consuming the other's data";
+                if duplicates.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "{} samples are declared by more than one owner: {list} — {note}",
+                        duplicates.len()
+                    ))
+                }
             }
         }
     }

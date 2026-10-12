@@ -8480,57 +8480,94 @@ fn duplicate_sample_owners_reports_cross_owner_ids() {
 }
 
 #[test]
-fn duplicate_owner_warning_collapses_to_one_message_per_parse() {
-    // The warning is rendered once per parse, not once per duplicate sample:
-    // a cohort that pairs every group sample (10 pairs × 2 members) would
-    // otherwise print 20 near-identical lines on every validate/dry-run/run.
-    // Clean workflows render nothing.
-    let clean = WorkflowConfig::parse(
+fn duplicate_owner_warning_is_collision_aware() {
+    // Issue #871: the multi-owner warning fires only when two
+    // differently-owned instances of a duplicated sample id expand some rule
+    // to the SAME concrete output path. The standard cohort shape (groups
+    // feed [[pairs]], every path carries the full {sample} name) stays
+    // silent even though ownership overlaps.
+    let shared = r#"
+        [[rules]]
+        name = "qc"
+        input = ["raw/{sample}.fastq"]
+        output = ["qc/{sample}.html"]
+        threads = 1
+        shell = "touch {output}"
+
+        [[rules]]
+        name = "align"
+        input = ["raw/{sample}.fastq"]
+        output = ["align/{sample}.bam"]
+        threads = 1
+        shell = "touch {output}"
+    "#;
+
+    // No duplicates at all → nothing.
+    let clean = WorkflowConfig::parse(&format!(
         r#"
         [workflow]
         name = "clean"
         version = "1.0.0"
 
+        {shared}
+
         [[pairs]]
         pair_id = "P1"
         experiment = "T1"
         control = "N1"
-        "#,
-    )
+        "#
+    ))
     .unwrap();
     assert!(clean.duplicate_owner_warning().is_none());
 
-    // A single duplicate names the sample and both owners.
-    let single = WorkflowConfig::parse(
+    // Duplicates, but every rule path carries the full {sample} name →
+    // group and pair instances write distinct paths → silent (this is the
+    // venus cohort shape that used to emit 20 warnings per parse).
+    let distinct = WorkflowConfig::parse(&format!(
         r#"
         [workflow]
-        name = "single"
+        name = "distinct"
         version = "1.0.0"
 
+        {shared}
+
         [[sample_groups]]
-        name = "cohort"
-        samples = ["S1"]
+        name = "case"
+        samples = ["S1", "S2"]
 
         [[pairs]]
         pair_id = "P1"
         experiment = "S1"
         control = "S2"
-        "#,
-    )
+        "#
+    ))
     .unwrap();
-    let warning = single.duplicate_owner_warning().unwrap();
-    assert!(
-        warning.contains("sample 'S1' is declared by both group 'cohort' and pair 'P1'"),
-        "per-sample message: {warning}"
-    );
-    assert_eq!(warning.matches("declared by").count(), 1);
+    assert!(distinct.duplicate_owner_warning().is_none());
 
-    // Several duplicates collapse into one line that still names all of them.
-    let many = WorkflowConfig::parse(
+    // Two rules whose outputs omit the distinguishing component collide
+    // across domains: the group-domain `multiqc` (`report/{sample}.html`,
+    // group 'case' sample 'S1') and the pair-domain `pair_report`
+    // (`report/{experiment}.html`, pair 'P1' experiment='S1') both resolve
+    // to report/S1.html — one line naming the rules and the exact path.
+    let colliding = WorkflowConfig::parse(
         r#"
         [workflow]
-        name = "many"
+        name = "colliding"
         version = "1.0.0"
+
+        [[rules]]
+        name = "multiqc"
+        input = ["align/{sample}.bam"]
+        output = ["report/{sample}.html"]
+        threads = 1
+        shell = "touch {output}"
+
+        [[rules]]
+        name = "pair_report"
+        input = ["align/{experiment}.bam"]
+        output = ["report/{experiment}.html"]
+        threads = 1
+        shell = "touch {output}"
 
         [[sample_groups]]
         name = "case"
@@ -8543,14 +8580,14 @@ fn duplicate_owner_warning_collapses_to_one_message_per_parse() {
         "#,
     )
     .unwrap();
-    let warning = many.duplicate_owner_warning().unwrap();
+    let warning = colliding.duplicate_owner_warning().unwrap();
     assert!(
-        warning.starts_with("2 samples are declared by more than one owner: ")
-            && warning.contains("S1 (group 'case' / pair 'P1')")
-            && warning.contains("S2 (group 'case' / pair 'P1')"),
-        "aggregate message names every duplicate: {warning}"
+        warning.contains("sample 'S1' (declared by group 'case' and pair 'P1')")
+            && warning.contains("'multiqc' and 'pair_report'")
+            && warning.contains("report/S1.html"),
+        "collision names sample, owners, rules, and path: {warning}"
     );
-    assert_eq!(warning.matches("declared by").count(), 1);
+    assert_eq!(warning.matches("(declared by").count(), 1);
 }
 
 #[test]

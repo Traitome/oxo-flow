@@ -374,14 +374,15 @@ impl WorkflowConfig {
 
         // ── Cross-owner duplicate sample ids (sample-group/pair merge) ────
         // The same id in two groups (or in a group and a pair) fans out two
-        // instances that share every output path the rule does not
-        // disambiguate with `{group}`: the second is skipped as "outputs
-        // up-to-date" while the checkpoint records both as completed, so one
-        // sample's data can silently be consumed as the other's. Warn (never
-        // error): orthogonal grouping with `{group}` in the paths is
-        // legitimate. Rendered once per parse, naming every duplicate — a
-        // cohort that pairs every group sample otherwise prints 20
-        // near-identical warnings on each validate/dry-run/run.
+        // instances that may write the same output path: the second is
+        // skipped as "outputs up-to-date" while the checkpoint records both
+        // as completed, so one sample's data can silently be consumed as the
+        // other's. Collision-aware (issue #871): the warning fires only when
+        // two differently-owned instances of the duplicated id expand some
+        // rule to the SAME concrete path; standard cohort shapes where every
+        // rule path distinguishes the instances (e.g. a {group} or full
+        // {sample} name component) stay silent. Rendered once per parse,
+        // naming the rule and exact colliding path per line.
         if let Some(warning) = config.duplicate_owner_warning() {
             tracing::warn!("{warning}");
         }

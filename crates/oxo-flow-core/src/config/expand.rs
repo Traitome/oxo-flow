@@ -48,7 +48,9 @@ impl WorkflowConfig {
     /// with empty strings so `wildcard.experiment_type != ''` predicates see
     /// a definite value (missing keys otherwise evaluate false). Metadata
     /// keys flow in through the combo itself.
-    fn expansion_when_context(combo: &crate::wildcard::WildcardValues) -> HashMap<String, String> {
+    pub(crate) fn expansion_when_context(
+        combo: &crate::wildcard::WildcardValues,
+    ) -> HashMap<String, String> {
         let mut ctx: HashMap<String, String> =
             combo.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for key in [
@@ -151,7 +153,7 @@ impl WorkflowConfig {
     /// - missing row OR column → `''` in a comparison (a closed gate) and
     ///   `false` in a truthiness position — never a bare token, which the
     ///   evaluator's default-true fallback would run.
-    fn bake_meta_when(
+    pub(crate) fn bake_meta_when(
         when: &str,
         table: &crate::wildcard::MetadataTable,
         combo: &crate::wildcard::WildcardValues,
@@ -1495,7 +1497,7 @@ impl WorkflowConfig {
     /// plan-time fan-out and the runtime output_pattern-consumer
     /// projection, so the per-consumer loop never recompiles them
     /// (#268 perf family).
-    fn compiled_wildcard_constraints(&self) -> Result<HashMap<String, regex::Regex>> {
+    pub(crate) fn compiled_wildcard_constraints(&self) -> Result<HashMap<String, regex::Regex>> {
         self.wildcard_constraints
             .iter()
             .map(|(name, pattern)| {
@@ -2374,7 +2376,7 @@ impl WorkflowConfig {
     /// Returns owned clones so the caller can hold the set across
     /// `&mut self` bookkeeping while expanding a rule borrowed from
     /// `self.rules`.
-    fn active_value_tables_for_rule(&self, rule: &Rule) -> Vec<ValueGroup> {
+    pub(crate) fn active_value_tables_for_rule(&self, rule: &Rule) -> Vec<ValueGroup> {
         let mut texts: Vec<&str> = rule.input.iter().map(String::as_str).collect();
         texts.extend(rule.output.iter().map(String::as_str));
         if let Some(ref shell) = rule.shell {
@@ -2403,7 +2405,7 @@ impl WorkflowConfig {
     /// referenced table varies fastest, mirroring declaration order. No
     /// tables yields a single empty combo — the identity element, so
     /// downstream loops run exactly as before.
-    fn cartesian_value_combos(
+    pub(crate) fn cartesian_value_combos(
         &self,
         active_value_tables: &[&ValueGroup],
     ) -> Result<Vec<crate::wildcard::WildcardValues>> {
