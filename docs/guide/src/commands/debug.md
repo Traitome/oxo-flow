@@ -48,6 +48,11 @@ oxo-flow debug pipeline.oxoflow
 oxo-flow debug pipeline.oxoflow -r bwa_align
 ```
 
+The `-r` value matches either the rule name as declared in the workflow
+file (the template name `lint`/`validate` print) or a full expanded
+instance name. Template names of wildcard rules resolve to all of their
+instances.
+
 ---
 
 ## Output
@@ -84,6 +89,10 @@ only on an interactive terminal and is suppressed by `--quiet`.
   `_<group>_<sample>` suffix (or `_<pair_id>` for pair/scatter rules; e.g.
   `bwa_mem2_align_cohort_NA12878`) and wildcard
   placeholders are replaced with concrete values
-- With `--rule`, use the full expanded rule name as shown in the output
-  (for wildcard workflows, the template name like `bwa_mem2_align` will not match)
+- With `--rule`, both names work: the template name as declared in the
+  workflow file (`bwa_mem2_align` — what `lint` and `validate` print)
+  shows every expanded instance of that template, and the full expanded
+  instance name (`bwa_mem2_align_cohort_NA12878`) shows that one instance.
+  A typo'd name that matches nothing suggests the nearest rule names
+  before failing
 - Use this command to verify variable substitution before running a workflow
