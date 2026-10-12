@@ -28,7 +28,7 @@ oxo-flow batch [OPTIONS] <TEMPLATE> [ITEMS...]
 | `--jobs` | `-j` | 1 | Number of parallel workers |
 | `--stop-on-error` | `-x` | — | Stop after first failure |
 | `--file` | `-f` | — | Read items from file |
-| `--json-output` | — | — | Output results as formatted JSON (legacy alias — the global `--json` now drives the same output) |
+| `--json-output` | — | — | Output results as formatted JSON (legacy alias — the global `--json` now drives the same output). With `--dry-run` it emits the previewed commands as JSON on stdout (issue #864) |
 | `--dry-run` | `-n` | — | Preview without executing |
 | `--workdir` | `-d` | . | Working directory |
 | `--environment` | `-e` | — | Environment spec |
@@ -100,6 +100,36 @@ oxo-flow batch --json-output "samtools flagstat {item}" *.bam > results.json
 oxo-flow batch -n "fastqc {item}" *.fastq.gz
 ```
 
+### Dry-run JSON preview
+
+With `--json-output` (or the global `--json`), the dry-run preview is also
+written to stdout as JSON — the preview IS the result in dry-run, so
+scripts can consume the exact commands that would run without executing
+anything (issue #864). The human-readable preview stays on stderr either
+way, so redirecting stdout always yields pure JSON:
+
+```bash
+oxo-flow batch -n --json-output "samtools flagstat {item}" *.bam > preview.json
+```
+
+```json
+{
+  "tool": "oxo-flow batch",
+  "dry_run": true,
+  "template": "samtools flagstat {item}",
+  "total": 2,
+  "failed": 0,
+  "success": true,
+  "results": [
+    { "item": "a.bam", "command": "samtools flagstat a.bam", "exit_code": null, "success": true, "error": null },
+    { "item": "b.bam", "command": "samtools flagstat b.bam", "exit_code": null, "success": true, "error": null }
+  ]
+}
+```
+
+The `results` entries share the executed-mode shape — `exit_code` and
+`error` are `null` and `success` is `true` because nothing ran.
+
 ---
 
 ## Notes
@@ -109,6 +139,9 @@ oxo-flow batch -n "fastqc {item}" *.fastq.gz
 - When no items provided and stdin has data, reads from pipe
 - `{}` is rush-compatible shorthand for `{item}`
 - Environment spec format: `conda: env.yaml` or `docker: image:tag`
+- In dry-run, the human-readable preview goes to stderr; with
+  `--json-output`/`--json` the same preview is emitted as JSON on stdout
+  (issue #864)
 
 - Generated workflows create one rule per item (`batch_item_1`, `batch_item_2`, ...)
 
