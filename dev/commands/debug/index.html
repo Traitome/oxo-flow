@@ -3963,6 +3963,10 @@ substituted correctly.</p>
 <h3 id="debug-a-specific-rule">Debug a specific rule<a class="headerlink" href="#debug-a-specific-rule" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>oxo-flow<span class="w"> </span>debug<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>-r<span class="w"> </span>bwa_align
 </span></code></pre></div>
+<p>The <code>-r</code> value matches either the rule name as declared in the workflow
+file (the template name <code>lint</code>/<code>validate</code> print) or a full expanded
+instance name. Template names of wildcard rules resolve to all of their
+instances.</p>
 <hr />
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
 <p>For each rule, the debug command shows:</p>
@@ -3993,8 +3997,12 @@ only on an interactive terminal and is suppressed by <code>--quiet</code>.</p>
   <code>_&lt;group&gt;_&lt;sample&gt;</code> suffix (or <code>_&lt;pair_id&gt;</code> for pair/scatter rules; e.g.
   <code>bwa_mem2_align_cohort_NA12878</code>) and wildcard
   placeholders are replaced with concrete values</li>
-<li>With <code>--rule</code>, use the full expanded rule name as shown in the output
-  (for wildcard workflows, the template name like <code>bwa_mem2_align</code> will not match)</li>
+<li>With <code>--rule</code>, both names work: the template name as declared in the
+  workflow file (<code>bwa_mem2_align</code> — what <code>lint</code> and <code>validate</code> print)
+  shows every expanded instance of that template, and the full expanded
+  instance name (<code>bwa_mem2_align_cohort_NA12878</code>) shows that one instance.
+  A typo'd name that matches nothing suggests the nearest rule names
+  before failing</li>
 <li>Use this command to verify variable substitution before running a workflow</li>
 </ul>
 
