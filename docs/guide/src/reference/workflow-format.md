@@ -3023,10 +3023,15 @@ Notes:
   workdir (honor `TMPDIR` deliberately if needed) are invisible to the
   monitor.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
-  per-instance values) does not fire: the event loop tracks reclaim
-  candidates by rule name and holds no instance bindings. Fail-safe — no
-  reclaim rather than a wrong one. The post-run sweep covers them (see
-  below).
+  per-instance values) fires only with full instance attribution
+  (issue #846): the recorded instance combos from
+  `checkpoint.output_pattern_domains` are expanded to concrete paths, and
+  every combo must resolve and every consumer (detected structurally —
+  pattern producers register no DAG edges) must be completed before any
+  deletion. If any instance combo cannot be attributed (missing domains,
+  an unresolvable combo), the WHOLE rule is skipped with a once-per-rule
+  warning — no partial tombstone is written. The post-run sweep covers
+  them regardless (see below).
 - Only paths declared by the rule (its `output` entries / matching
   `output_pattern` instances) are reclaimed; sidecar files a command
   writes without declaring are never touched. Declare index sidecars

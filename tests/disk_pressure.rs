@@ -350,3 +350,106 @@ shell = "cat {input} > {output}"
         "fully-expandable wildcard outputs must not be reported as skipped: {stderr}"
     );
 }
+
+/// Issue #846: mid-run reclaim must also fire for `output_pattern`
+/// producers. The split rule registers no DAG edges (pattern claims are
+/// excluded from template matching by design), so the pre-#846 gate
+/// misclassified it as a leaf and never reclaimed it. Now the consumer is
+/// detected structurally and the recorded instance combos expand to concrete
+/// paths: under `reclaim_free_disk = "999T"` every completed instance of
+/// `chunks/{i}.txt` is tombstoned and unlinked WHILE the run is still going
+/// (the gate requires collect to be completed with its outputs present
+/// before split is touched, while summarize still runs afterwards), not only
+/// by the post-run sweep.
+///
+/// The `summarize` rule exists for TIMING, not coverage: the mid-run gate
+/// fires at the top of the run loop, so reclaim can only happen while the
+/// run is still in flight. In a split→collect-only workflow the last
+/// consumer completes as the final rule and the loop exits before the gate
+/// re-evaluates — the post-run sweep would handle it and the mid-run path
+/// would be untestable. A downstream rule keeps the run alive through that
+/// iteration, mirroring the A→B→C chain test's shape.
+#[test]
+fn midrun_reclaim_unlinks_fanout_instances_while_run_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("fanout-reclaim.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "wildcard-reclaim"
+
+[engine]
+min_free_disk = "1M"
+reclaim_free_disk = "999T"
+
+[[rules]]
+name = "split"
+output_pattern = "chunks/{i}.txt"
+temporary = true
+shell = "mkdir -p chunks && for i in 1 2 3; do echo part-$i > chunks/$i.txt; done"
+
+[[rules]]
+name = "collect"
+input = ["chunks/{i}.txt"]
+output = ["merged/{i}.txt"]
+shell = "cat {input} > {output}"
+
+[[rules]]
+name = "summarize"
+input = ["merged/{i}.txt"]
+output = ["summary_{i}.txt"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(workspace_bin("oxo-flow"))
+        .args(["run", wf.to_str().unwrap(), "-j", "1"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "run must succeed: {stderr}");
+
+    // The mid-run path fired: its narration differs from the post-run
+    // sweep's "temporary outputs deleted for '...'".
+    assert!(
+        stderr.contains("reclaimed temporary outputs of 'split'"),
+        "mid-run reclaim must narrate the fan-out producer: {stderr}"
+    );
+
+    // Every recorded instance was unlinked mid-run — before the run ended.
+    for i in ["1", "2", "3"] {
+        assert!(
+            !dir.path().join(format!("chunks/{i}.txt")).exists(),
+            "chunks/{i}.txt must be reclaimed mid-run, not just after the run"
+        );
+        // The consumers were completed (with outputs present) before the
+        // reclaim fired — the gate requires it — and the downstream rule
+        // completed afterwards, proving the run genuinely continued.
+        assert_eq!(
+            fs::read_to_string(dir.path().join(format!("merged/{i}.txt"))).unwrap(),
+            format!("part-{i}\n"),
+            "final merged output must survive"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(format!("summary_{i}.txt"))).unwrap(),
+            format!("part-{i}\n"),
+            "the downstream rule must complete after the reclaim"
+        );
+    }
+
+    // Tombstones were persisted for the concrete instance paths.
+    let ck = fs::read_to_string(dir.path().join(".oxo-flow").join("checkpoint.json")).unwrap();
+    assert!(
+        ck.contains("chunks/1.txt") && ck.contains("chunks/2.txt") && ck.contains("chunks/3.txt"),
+        "checkpoint must tombstone every reclaimed instance path: {ck}"
+    );
+
+    // Fail-safe silence: the combos fully resolve, so the skip warning must
+    // not appear.
+    assert!(
+        !stderr.contains("mid-run reclaim skipped temporary output_pattern rule"),
+        "fully-attributable fan-out must not emit the fail-safe warning: {stderr}"
+    );
+}
