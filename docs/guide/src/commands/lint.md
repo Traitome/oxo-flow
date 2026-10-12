@@ -101,6 +101,22 @@ placeholders are resolved against the parsed config before the templates
 are compared, so `{config.out_dir}/{sample}.vcf` collides with its literal
 counterpart `results/{sample}.vcf` when `out_dir = "results"` — and does
 not collide with `{config.alt_dir}/{sample}.vcf` when the values differ.
+
+When both writers carry meaningful `when` gates that are *complementary
+empty-string checks on the same expression* — `X != ''` on one and
+`X == ''` on the other (issue #860; the paired/tumor-only
+`mutect2_paired`/`mutect2_tumoronly` shape) — each rule runs exactly when
+the other does not, so the pair can never race and the collision is not
+reachable at runtime. W033 then downgrades to an **info** note naming the
+shared expression ("... their `when` gates are complementary on 'X' —
+collision is not reachable at runtime") instead of the warning. The
+detection is deliberately narrow: a single top-level `==`/`!=` whose
+right side is the empty-string literal `''` or `""` and whose left sides
+are identical. Compound conditions (`&&`/`||`), comparison operators
+other than `==`/`!=`, different expressions, non-empty or unquoted
+right-hand sides, and pairs where either writer is ungated all keep the
+plain warning — a syntactic complement there would not prove a runtime
+one.
 See
 [Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
 W034 flags an `{input[N]}` / `{output[N]}` placeholder whose index is out

@@ -1919,6 +1919,89 @@ pub fn lint_format(
             .is_some_and(|w| !w.is_empty() && !w.eq_ignore_ascii_case("true"))
     }
 
+    /// Byte position of the single top-level (paren-depth- and
+    /// quote-aware) occurrence of `op` in `s`, or `None`. Mirrors the
+    /// executor's `find_top_level_op` split semantics so a gate the lint
+    /// calls complementary is one the evaluator also reads as a single
+    /// comparison.
+    fn find_top_level_cmp(s: &str, op: &str) -> Option<usize> {
+        let op_bytes = op.as_bytes();
+        let op_len = op_bytes.len();
+        let bytes = s.as_bytes();
+        let mut depth: i32 = 0;
+        let mut in_single = false;
+        let mut in_double = false;
+        let n = bytes.len();
+        let mut i = 0usize;
+        while i < n {
+            match bytes[i] {
+                b'\'' if !in_double => in_single = !in_single,
+                b'"' if !in_single => in_double = !in_double,
+                b'(' if !in_single && !in_double => depth += 1,
+                b')' if !in_single && !in_double => depth -= 1,
+                _ => {}
+            }
+            if !in_single
+                && !in_double
+                && depth == 0
+                && i + op_len <= n
+                && &bytes[i..i + op_len] == op_bytes
+            {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Complementary empty-string gates (issue #860): writer A gated
+    /// `X != ''` and writer B gated `X == ''` on the SAME expression.
+    /// Each rule runs exactly when the other does not, so the pair never
+    /// executes concurrently and the collision is not reachable at
+    /// runtime — W033 downgrades to an informational note instead of a
+    /// warning. Deliberately narrow: a single top-level `==`/`!=`
+    /// (no compound `&&`/`||`, no parentheses), both sides non-empty,
+    /// RHS an empty-string literal (`''` or `""`), LHS identical after
+    /// trimming. `!=`/`==` is the only complement pair this proves
+    /// (`>`/`<` etc. leave a gap); unquoted or non-empty RHS leaves it
+    /// open (an unbound variable stays literal text at bake time).
+    fn complementary_empty_gates(when_a: &str, when_b: &str) -> Option<String> {
+        let parse = |when: &str| -> Option<(bool, String)> {
+            let trimmed = when.trim();
+            let ne = find_top_level_cmp(trimmed, "!=");
+            let eq = find_top_level_cmp(trimmed, "==");
+            // Exactly one of the two operators: zero means this is not a
+            // simple comparison (compound truthiness), two would be an
+            // operator inside a string or repeated comparisons — both
+            // outside the provable shape.
+            match (ne, eq) {
+                (Some(pos), None) | (None, Some(pos)) => {
+                    let is_ne = ne.is_some();
+                    let lhs = trimmed[..pos].trim();
+                    let rhs = trimmed[pos + 2..].trim();
+                    // RHS must be the empty-string literal (`''`/`""`);
+                    // LHS any non-empty expression — the evaluator's
+                    // `== ''`/`!= ''` on whatever it computes are exact
+                    // complements, so the shape holds for any LHS.
+                    let rhs_empty = rhs == "''" || rhs == "\"\"";
+                    if rhs_empty && !lhs.is_empty() {
+                        Some((is_ne, lhs.to_string()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        };
+        let (is_ne_a, lhs_a) = parse(when_a)?;
+        let (is_ne_b, lhs_b) = parse(when_b)?;
+        if is_ne_a != is_ne_b && lhs_a == lhs_b {
+            Some(lhs_a)
+        } else {
+            None
+        }
+    }
+
     // W031: consumer reads the output of a when-gated producer without a
     // when gate of its own (issue #319). When the
     // producer's gate is off, the producer writes nothing, and the
@@ -2034,7 +2117,11 @@ pub fn lint_format(
     // Identical literals also flag (two rules writing the same literal
     // path); a literal whose canonical shape differs from a wildcard
     // template is a distinct path and stays unflagged.
-    let mut writers: Vec<(&str, String, &str)> = Vec::new();
+    // Writers carry their rule's raw `when` gate (pre-expansion: the
+    // lint view of the condition, before wildcard baking) so the
+    // pairwise loop can tell a reachable collision from an exclusive
+    // pair of alternatives (issue #860).
+    let mut writers: Vec<(&str, String, &str, Option<&str>)> = Vec::new();
     for rule in &config.rules {
         // A scatter rule fanned out over zero values writes zero
         // instances (issue #616) — its template colliding with another
@@ -2070,6 +2157,7 @@ pub fn lint_format(
                 &rule.name,
                 canonical_template(&expand_config_vars_in_path(output, &config.config)),
                 output.as_str(),
+                rule.when.as_deref(),
             ));
         }
         if let Some(ref pattern) = rule.output_pattern {
@@ -2077,31 +2165,60 @@ pub fn lint_format(
                 &rule.name,
                 canonical_template(&expand_config_vars_in_path(pattern, &config.config)),
                 pattern.as_str(),
+                rule.when.as_deref(),
             ));
         }
     }
 
     let mut flagged_pairs: std::collections::HashSet<(&str, &str)> =
         std::collections::HashSet::new();
-    for (idx, (rule_a, template_a, raw_a)) in writers.iter().enumerate() {
-        for (rule_b, template_b, raw_b) in writers.iter().skip(idx + 1) {
+    for (idx, (rule_a, template_a, raw_a, when_a)) in writers.iter().enumerate() {
+        for (rule_b, template_b, raw_b, when_b) in writers.iter().skip(idx + 1) {
             if rule_a == rule_b
                 || template_a != template_b
                 || !flagged_pairs.insert((rule_a, rule_b))
             {
                 continue;
             }
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                message: format!(
-                    "output collision: rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s)"
-                ),
-                rule: Some((*rule_a).to_string()),
-                code: "W033".to_string(),
-                suggestion: Some(
+            // Both writers meaningfully gated and syntactically
+            // complementary on the same expression (issue #860): the
+            // pair never runs concurrently, so the collision cannot
+            // happen — an informational note replaces the warning (the
+            // wgs_coverage/wes_coverage-style idiom). Every other shape
+            // keeps the plain warning.
+            let exclusive = if meaningful_gate(*when_a) && meaningful_gate(*when_b) {
+                complementary_empty_gates(
+                    when_a.expect("meaningful gate is Some"),
+                    when_b.expect("meaningful gate is Some"),
+                )
+            } else {
+                None
+            };
+            let (severity, message, suggestion) = if let Some(expr) = exclusive {
+                (
+                    Severity::Info,
+                    format!(
+                        "output collision (unreachable): rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s), but their `when` gates are complementary on '{expr}' — collision is not reachable at runtime"
+                    ),
+                    "no action needed; keep the complementary gates in sync if either writer changes"
+                        .to_string(),
+                )
+            } else {
+                (
+                    Severity::Warning,
+                    format!(
+                        "output collision: rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s)"
+                    ),
                     "if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory"
                         .to_string(),
-                ),
+                )
+            };
+            diagnostics.push(Diagnostic {
+                severity,
+                message,
+                rule: Some((*rule_a).to_string()),
+                code: "W033".to_string(),
+                suggestion: Some(suggestion),
             });
         }
     }
@@ -6400,6 +6517,124 @@ shell = "samtools faidx {{config.reference}}"
         assert!(
             !diagnostics.iter().any(|d| d.code == "W033"),
             "differently-valued config routes are distinct paths: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_complementary_when_gates_downgrade_to_info() {
+        // Issue #860: `wildcard.control != ''` vs `wildcard.control == ''`
+        // (the tumor-only/paired mutect2 shape). Each rule runs exactly
+        // when the other does not, so the pair never races — the
+        // collision is unreachable at runtime and W033 becomes an
+        // informational note naming the shared expression.
+        let toml = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "mutect2_paired"
+            when = "wildcard.control != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "mutect2 {tumor} {normal} > {output}"
+
+            [[rules]]
+            name = "mutect2_tumoronly"
+            when = "wildcard.control == ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "mutect2 {tumor} > {output}"
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w033: Vec<_> = diagnostics.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(
+            w033.len(),
+            1,
+            "the pair must still be reported (as info): {diagnostics:?}"
+        );
+        assert_eq!(
+            w033[0].severity,
+            Severity::Info,
+            "complementary empty-string gates downgrade W033 to info: {diagnostics:?}"
+        );
+        let msg = &w033[0].message;
+        assert!(
+            msg.contains("complementary on 'wildcard.control'") && msg.contains("not reachable"),
+            "note must name the shared expression: {msg}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_still_warns_when_gates_are_not_complementary() {
+        // Same expression, same operator — no complement.
+        let same_op = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "a_writer"
+            when = "wildcard.control != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "b_writer"
+            when = "wildcard.control != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "b > {output}"
+        "#;
+        let config = WorkflowConfig::parse(same_op).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w033: Vec<_> = diagnostics.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(
+            w033.len(),
+            1,
+            "identical gates still collide: {diagnostics:?}"
+        );
+        assert_eq!(
+            w033[0].severity,
+            Severity::Warning,
+            "same-op gates keep the warning: {diagnostics:?}"
+        );
+
+        // Different expressions — exclusive-on-nothing proves nothing.
+        let diff_expr = same_op.replace(
+            "wildcard.control != ''\n            output",
+            "config.mode != 'tumor'\n            output",
+        );
+        let config2 = WorkflowConfig::parse(&diff_expr).unwrap();
+        let diagnostics2 = lint_format(&config2, None);
+        let w033b: Vec<_> = diagnostics2.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(w033b.len(), 1, "still flagged: {diagnostics2:?}");
+        assert_eq!(
+            w033b[0].severity,
+            Severity::Warning,
+            "different expressions keep the warning: {diagnostics2:?}"
+        );
+
+        // One writer ungated — the unconditional writer always races.
+        let ungated = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "gated"
+            when = "wildcard.control == ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "g > {output}"
+
+            [[rules]]
+            name = "always"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "w > {output}"
+        "#;
+        let config3 = WorkflowConfig::parse(ungated).unwrap();
+        let diagnostics3 = lint_format(&config3, None);
+        let w033c: Vec<_> = diagnostics3.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(w033c.len(), 1, "still flagged: {diagnostics3:?}");
+        assert_eq!(
+            w033c[0].severity,
+            Severity::Warning,
+            "one ungated writer keeps the warning: {diagnostics3:?}"
         );
     }
 
