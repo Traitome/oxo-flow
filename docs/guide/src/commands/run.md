@@ -1151,11 +1151,14 @@ Tuning knobs (both fall back to their defaults when unset, invalid, or
 Known boundaries:
 
 - *Mid-run* reclaim of fan-out producers (`output_pattern` rules with
-  per-instance values) does not fire — the event loop tracks reclaim
-  candidates by rule name and holds no instance bindings, so those
-  intermediates are only cleaned by the post-run sweep (instance-level,
-  issue #844) or the next run. Fail-safe: no reclaim rather than a wrong
-  one.
+  per-instance values) fires only with full instance attribution (issue
+  #846): the recorded instance combos from
+  `checkpoint.output_pattern_domains` are expanded to concrete paths, and
+  every combo must resolve and every consumer (detected structurally —
+  pattern producers register no DAG edges) must be completed before any
+  deletion. If any instance combo cannot be attributed, the whole rule is
+  skipped with a once-per-rule warning — no partial tombstone is written.
+  The post-run sweep covers them regardless (see below).
 - Free space is measured at the working directory's filesystem, which is
   volume-level (statvfs): thresholds apply to the whole volume, not to a
   quota.

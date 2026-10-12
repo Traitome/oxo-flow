@@ -692,6 +692,143 @@ mod disk_pressure_tests {
         );
         assert_eq!(cands[0].rule, "gen");
     }
+
+    /// Fan-out producer + baked-instance consumer pair, mirroring what
+    /// `expand_output_pattern_consumers` produces in a real run: the
+    /// consumer's input is a concrete instance path (not the template).
+    fn fanout_fixtures() -> (tempfile::TempDir, Vec<Rule>, WorkflowDag) {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+
+        let mut split = reclaim_rule("split", &[], true);
+        split.output_pattern = Some("chunks/{i}.txt".to_string());
+        let mut collect = reclaim_rule("collect", &["merged/1.txt"], false);
+        collect.input = vec!["chunks/1.txt".to_string()].into();
+
+        let rules = vec![split, collect];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        std::fs::create_dir_all(workdir.join("chunks")).unwrap();
+        std::fs::write(workdir.join("chunks/1.txt"), "x").unwrap();
+        std::fs::write(workdir.join("chunks/2.txt"), "x").unwrap();
+        std::fs::create_dir_all(workdir.join("merged")).unwrap();
+        std::fs::write(workdir.join("merged/1.txt"), "x").unwrap();
+        (tmp, rules, dag)
+    }
+
+    fn combo(key: &str, value: &str) -> HashMap<String, String> {
+        let mut c = HashMap::new();
+        c.insert(key.to_string(), value.to_string());
+        c
+    }
+
+    #[test]
+    fn pattern_producer_instances_expand_from_recorded_domains() {
+        // Issue #846 happy path: a fan-out producer (output_pattern,
+        // temporary) registers no DAG edges, so dependents alone would
+        // misclassify it as a leaf and never reclaim it. With the structural
+        // consumer match + recorded-domain expansion it becomes a candidate
+        // whose paths are exactly the recorded instance paths.
+        let (_tmp, rules, dag) = fanout_fixtures();
+        let workdir = _tmp.path();
+
+        let mut ck = completed_checkpoint(&["split", "collect"]);
+        ck.record_output_pattern_domain("split", vec![combo("i", "1"), combo("i", "2")]);
+
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert_eq!(
+            cands.len(),
+            1,
+            "fan-out producer must become a reclaim candidate: {cands:?}"
+        );
+        assert_eq!(cands[0].rule, "split");
+        assert_eq!(
+            cands[0].paths,
+            vec!["chunks/1.txt".to_string(), "chunks/2.txt".to_string()]
+        );
+
+        // A recorded-but-deleted instance frees nothing: it is simply not
+        // proposed (nothing on disk to strand or delete), the others proceed.
+        std::fs::remove_file(workdir.join("chunks/2.txt")).unwrap();
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert_eq!(cands.len(), 1);
+        assert_eq!(
+            cands[0].paths,
+            vec!["chunks/1.txt".to_string()],
+            "absent instances are not proposed"
+        );
+
+        // Per-instance protection: a protected instance stays on disk while
+        // its siblings are reclaimable (mirrors the post-run sweep).
+        std::fs::write(workdir.join("chunks/2.txt"), "x").unwrap();
+        let mut rules_protected = rules.clone();
+        rules_protected[0].protected_output = vec!["chunks/2.txt".to_string()];
+        let cands = reclaim_candidates(
+            &rules_protected,
+            &dag,
+            &ck,
+            workdir,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(cands.len(), 1);
+        assert_eq!(
+            cands[0].paths,
+            vec!["chunks/1.txt".to_string()],
+            "protected instance must be kept while siblings proceed"
+        );
+    }
+
+    #[test]
+    fn pattern_producer_fails_safe_without_full_instance_attribution() {
+        // Issue #846 fail-safe: missing domains, or any combo that does not
+        // resolve to a concrete path, skips the WHOLE rule — a partial
+        // tombstone would claim outputs are gone while un-deleted instances
+        // remain on disk.
+        let (_tmp, rules, dag) = fanout_fixtures();
+        let workdir = _tmp.path();
+
+        let mut ck = completed_checkpoint(&["split", "collect"]);
+
+        // No domains recorded at all → nothing attributable → no candidate.
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "missing instance bindings must fail the whole rule: {cands:?}"
+        );
+
+        // One good combo + one unresolvable combo (wrong wildcard key keeps
+        // the {i} remnant) → still no candidate: chunks/1.txt must NOT be
+        // deleted just because its sibling happened to resolve.
+        ck.record_output_pattern_domain("split", vec![combo("i", "1"), combo("j", "2")]);
+        let cands =
+            reclaim_candidates(&rules, &dag, &ck, workdir, &HashMap::new(), &HashMap::new());
+        assert!(
+            cands.is_empty(),
+            "one unresolvable combo must skip the WHOLE rule: {cands:?}"
+        );
+
+        // A pending consumer blocks regardless of domain quality: collect
+        // still needs its inputs.
+        ck.output_pattern_domains.remove("split");
+        ck.record_output_pattern_domain("split", vec![combo("i", "1")]);
+        let ck_pending = completed_checkpoint(&["split"]);
+        let cands = reclaim_candidates(
+            &rules,
+            &dag,
+            &ck_pending,
+            workdir,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            cands.is_empty(),
+            "pending consumer must block reclaim of the fan-out producer: {cands:?}"
+        );
+    }
 }
 
 /// Pre-flight check: report rules whose declared request can never fit an
@@ -925,17 +1062,50 @@ pub struct ReclaimCandidate {
     pub paths: Vec<String>,
 }
 
+/// Warn once per (rule, reason) when mid-run reclaim skips an
+/// output_pattern producer whose instances cannot be fully attributed.
+/// The disk gate re-evaluates candidates on every tick — an unconditional
+/// warn would spam the run log each tick.
+fn warn_reclaim_skip(rule: &str, reason: &str) {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let mut seen = WARNED
+        .get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if seen.insert(format!("{rule}: {reason}")) {
+        tracing::warn!(
+            rule = %rule,
+            "mid-run reclaim skipped temporary output_pattern rule: {reason}; \
+             instance outputs stay on disk (nothing is deleted without full attribution)"
+        );
+    }
+}
+
 /// Collect outputs of completed temporary rules that are safe to delete to
 /// free disk space (issue #843). A candidate must pass ALL gates:
 ///
 /// - declared `temporary` (regenerable by definition);
 /// - completed in the checkpoint (never touch a rule that hasn't finished);
 /// - not already tombstoned (post-run cleanup already deleted its outputs);
-/// - non-leaf with every dependent completed (deleting outputs of a rule
-///   whose consumer still needs them — or hasn't run — breaks the DAG);
+/// - non-leaf with every consumer completed (deleting outputs of a rule
+///   whose consumer still needs them — or hasn't run — breaks the DAG).
+///   Consumers are the DAG dependents plus, for `output_pattern`
+///   producers (issue #846), any rule whose concrete input matches the
+///   config-expanded pattern: pattern producers register no DAG edges by
+///   design (dag.rs excludes pattern-claimed outputs from template
+///   matching), so `dependents` alone would misclassify them as leaves;
 /// - no `protected_output` declaration matches (shared matcher with the
-///   failure-invalidation destroy path);
-/// - no unexpanded wildcard remnants (`{` in the path).
+///   failure-invalidation destroy path) — per instance for pattern
+///   producers, mirroring the post-run sweep;
+/// - every deletion target resolves to a concrete path that exists
+///   (unexpanded wildcard remnants `{` are never proposed). Pattern
+///   producers expand the recorded instance combos from
+///   `checkpoint.output_pattern_domains` — never the pattern-level guess.
+///   Fail-safe (issue #846): missing domains or any combo that does not
+///   resolve to a concrete path skips the WHOLE rule with a once-per-rule
+///   warning — a partial tombstone would claim outputs are gone while
+///   un-deleted instances remain on disk.
 ///
 /// Order-independent: rules are visited in `rules` order and paths in
 /// declaration order; nothing here depends on hash iteration.
@@ -958,17 +1128,48 @@ pub fn reclaim_candidates(
             continue;
         }
         let dependents = dag.dependents(&rule.name).unwrap_or_default();
-        if dependents.is_empty() {
+        // Issue #846: output_pattern producers register no DAG edges by
+        // design (dag.rs excludes pattern-claimed outputs from template
+        // matching), so `dependents` alone misclassifies them as leaves.
+        // Detect consumers structurally instead: compile the producer's
+        // config-expanded output_pattern and match every other rule's
+        // config-expanded input paths against it. Consumer instantiation
+        // bakes instance inputs ("chunks/1.txt"), which match
+        // `^chunks/(?P<i>\S+)\.txt$`; consumer TEMPLATES still carry a
+        // `{` placeholder and are skipped so they cannot falsely match.
+        let mut consumers: HashSet<String> = dependents.iter().cloned().collect();
+        if let Some(pattern) = &rule.output_pattern {
+            let expanded_pattern =
+                crate::executor::checkpoint::expand_config_in_path(pattern, wildcard_values);
+            if let Ok(re) = crate::wildcard::pattern_to_regex(&expanded_pattern) {
+                for other in rules {
+                    if other.name == rule.name {
+                        continue;
+                    }
+                    for input in other.input.iter() {
+                        let expanded = crate::executor::checkpoint::expand_config_in_path(
+                            input,
+                            wildcard_values,
+                        );
+                        if !expanded.contains('{') && re.is_match(&expanded) {
+                            consumers.insert(other.name.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if consumers.is_empty() {
             continue;
         }
-        // A dependent only counts as done if it is checkpoint-completed AND
+        // A consumer only counts as done if it is checkpoint-completed AND
         // its declared outputs still exist. A completed rule whose outputs
         // were deleted (e.g. a mid-run reclaim before #843, or manual
         // cleanup) re-executes and needs its inputs on disk — deleting them
         // underneath it is the reclaim race this gate prevents (#843).
-        // Unknown dependents (not in `rules`) are treated as not-done:
+        // Unknown consumers (not in `rules`) are treated as not-done:
         // reclaiming without proof they are finished is unsafe.
-        let all_dependents_done = dependents.iter().all(|d| {
+        let all_consumers_done = consumers.iter().all(|d| {
             let Some(dep) = rules.iter().find(|r| &r.name == d) else {
                 return false;
             };
@@ -981,37 +1182,97 @@ pub fn reclaim_candidates(
                     expansion_templates,
                 )
         });
-        if !all_dependents_done {
+        if !all_consumers_done {
             continue;
         }
-        let paths: Vec<String> = rule
+        let mut paths: Vec<String> = Vec::new();
+        // Any pattern-derived path that cannot be attributed to a concrete
+        // instance fails the WHOLE rule (fail-safe, issue #846).
+        let mut unattributable = false;
+        for (output, from_pattern) in rule
             .output
             .iter()
-            .filter_map(|output| {
-                let expanded =
-                    crate::executor::checkpoint::expand_config_in_path(output, wildcard_values);
-                if expanded.contains('{')
-                    || crate::executor::output_invalidation::is_protected_path(
-                        rule,
-                        wildcard_values,
-                        &expanded,
-                    )
-                {
-                    return None;
+            .map(|o| (o, false))
+            .chain(rule.output_pattern.iter().map(|o| (o, true)))
+        {
+            let expanded =
+                crate::executor::checkpoint::expand_config_in_path(output, wildcard_values);
+            if !expanded.contains('{') {
+                if crate::executor::output_invalidation::is_protected_path(
+                    rule,
+                    wildcard_values,
+                    &expanded,
+                ) {
+                    continue;
                 }
                 // Only paths that actually exist can free space.
-                if !workdir.join(&expanded).exists() {
-                    return None;
+                if workdir.join(&expanded).exists() {
+                    paths.push(expanded);
                 }
-                Some(expanded)
-            })
-            .collect();
-        if !paths.is_empty() {
-            candidates.push(ReclaimCandidate {
-                rule: rule.name.clone(),
-                paths,
-            });
+                continue;
+            }
+            if !from_pattern {
+                // Legacy plain wildcard output: a completed instance's
+                // outputs were baked at plan time, so a surviving `{` means
+                // this path was never instantiated — skip the path, other
+                // concrete outputs still delete (pre-#846 behavior).
+                continue;
+            }
+            // Issue #846: an output_pattern producer has an EMPTY `output`
+            // list — the pattern itself is the deletion target, expanded
+            // per RECORDED instance combo, never the pattern-level guess.
+            // Domains are recorded under the producer TEMPLATE name.
+            let template = expansion_templates
+                .get(&rule.name)
+                .cloned()
+                .unwrap_or_else(|| rule.name.clone());
+            let combos = checkpoint
+                .output_pattern_domains
+                .get(&template)
+                .filter(|c| !c.is_empty());
+            let Some(combos) = combos else {
+                warn_reclaim_skip(
+                    &rule.name,
+                    "no recorded instance bindings (legacy checkpoint or discovery never ran)",
+                );
+                unattributable = true;
+                break;
+            };
+            for combo in combos {
+                let instance = crate::wildcard::expand_pattern(&expanded, combo)
+                    .unwrap_or_else(|_| expanded.clone());
+                if instance.contains('{') {
+                    warn_reclaim_skip(
+                        &rule.name,
+                        "an instance combo did not resolve to a concrete path",
+                    );
+                    unattributable = true;
+                    break;
+                }
+                if crate::executor::output_invalidation::is_protected_path(
+                    rule,
+                    wildcard_values,
+                    &instance,
+                ) {
+                    continue;
+                }
+                // Only instance paths that actually exist can free space; a
+                // recorded-but-absent instance has nothing to strand.
+                if workdir.join(&instance).exists() && !paths.contains(&instance) {
+                    paths.push(instance);
+                }
+            }
+            if unattributable {
+                break;
+            }
         }
+        if unattributable || paths.is_empty() {
+            continue;
+        }
+        candidates.push(ReclaimCandidate {
+            rule: rule.name.clone(),
+            paths,
+        });
     }
     candidates
 }
