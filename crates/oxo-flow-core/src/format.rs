@@ -1960,11 +1960,19 @@ pub fn lint_format(
     /// executes concurrently and the collision is not reachable at
     /// runtime — W033 downgrades to an informational note instead of a
     /// warning. Deliberately narrow: a single top-level `==`/`!=`
-    /// (no compound `&&`/`||`, no parentheses), both sides non-empty,
-    /// RHS an empty-string literal (`''` or `""`), LHS identical after
-    /// trimming. `!=`/`==` is the only complement pair this proves
-    /// (`>`/`<` etc. leave a gap); unquoted or non-empty RHS leaves it
-    /// open (an unbound variable stays literal text at bake time).
+    /// (no compound `&&`/`||`, no parentheses) whose LHS is a BARE
+    /// `config.<name>`/`wildcard.<name>` reference and whose RHS is an
+    /// empty-string literal (`''` or `""`), LHS identical after
+    /// trimming. The bare-reference restriction is load-bearing: the
+    /// executor's ops loop gives `==`/`!=` exact complement semantics
+    /// only for those two LHS prefixes — anything else (compound
+    /// `||`/`&&` disjunctions, function calls like `file_exists(...)`,
+    /// bare truthiness) short-circuits on the other operand or falls
+    /// through to the default-Yes verdict, so both gates can be true at
+    /// runtime and the collision stays reachable. `!=`/`==` is the only
+    /// complement pair this proves (`>`/`<` etc. leave a gap); unquoted
+    /// or non-empty RHS leaves it open (an unbound variable stays
+    /// literal text at bake time).
     fn complementary_empty_gates(when_a: &str, when_b: &str) -> Option<String> {
         let parse = |when: &str| -> Option<(bool, String)> {
             let trimmed = when.trim();
@@ -1980,11 +1988,18 @@ pub fn lint_format(
                     let lhs = trimmed[..pos].trim();
                     let rhs = trimmed[pos + 2..].trim();
                     // RHS must be the empty-string literal (`''`/`""`);
-                    // LHS any non-empty expression — the evaluator's
-                    // `== ''`/`!= ''` on whatever it computes are exact
-                    // complements, so the shape holds for any LHS.
+                    // LHS must be a bare `config.<name>`/`wildcard.<name>`
+                    // reference — the only forms the evaluator compares
+                    // with exact complement semantics.
                     let rhs_empty = rhs == "''" || rhs == "\"\"";
-                    if rhs_empty && !lhs.is_empty() {
+                    let bare_ref = lhs
+                        .strip_prefix("config.")
+                        .or_else(|| lhs.strip_prefix("wildcard."))
+                        .is_some_and(|name| {
+                            !name.is_empty()
+                                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        });
+                    if rhs_empty && bare_ref {
                         Some((is_ne, lhs.to_string()))
                     } else {
                         None
@@ -6560,6 +6575,97 @@ shell = "samtools faidx {{config.reference}}"
         assert!(
             msg.contains("complementary on 'wildcard.control'") && msg.contains("not reachable"),
             "note must name the shared expression: {msg}"
+        );
+    }
+
+    #[test]
+    fn lint_w033_compound_and_function_gates_keep_the_warning() {
+        // Issue #860 review finding: the downgrade is proven ONLY for
+        // bare `config.`/`wildcard.` references. A shared leading
+        // disjunct short-circuits BOTH gates to Yes (`||` Kleene-OR), so
+        // the pair can genuinely run concurrently — must stay a warning.
+        let compound = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "writer_a"
+            when = "config.paired || wildcard.control != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "writer_b"
+            when = "config.paired || wildcard.control == ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "b > {output}"
+        "#;
+        let config = WorkflowConfig::parse(compound).unwrap();
+        let diagnostics = lint_format(&config, None);
+        let w033: Vec<_> = diagnostics.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(w033.len(), 1, "still flagged: {diagnostics:?}");
+        assert_eq!(
+            w033[0].severity,
+            Severity::Warning,
+            "compound || gates keep the warning (shared disjunct short-circuits both to Yes): {diagnostics:?}"
+        );
+
+        // Function-call LHS: the evaluator only matches `file_exists(...)`
+        // as a bare call; with a trailing `!= ''`/`== ''` nothing matches
+        // and both gates hit the default-Yes verdict — collision fully
+        // reachable, must stay a warning.
+        let function_call = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "writer_a"
+            when = "file_exists('flag.txt') != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "writer_b"
+            when = "file_exists('flag.txt') == ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "b > {output}"
+        "#;
+        let config2 = WorkflowConfig::parse(function_call).unwrap();
+        let diagnostics2 = lint_format(&config2, None);
+        let w033b: Vec<_> = diagnostics2.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(w033b.len(), 1, "still flagged: {diagnostics2:?}");
+        assert_eq!(
+            w033b[0].severity,
+            Severity::Warning,
+            "function-call LHS keeps the warning (falls through to default-Yes): {diagnostics2:?}"
+        );
+
+        // Unqualified identifier LHS (bare truthiness path, not the ops
+        // loop) — outside the proven shape.
+        let bare_name = r#"
+            [workflow]
+            name = "test"
+
+            [[rules]]
+            name = "writer_a"
+            when = "control != ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "a > {output}"
+
+            [[rules]]
+            name = "writer_b"
+            when = "control == ''"
+            output = ["vcf.raw/{pair_id}/{chr}.vcf.gz"]
+            shell = "b > {output}"
+        "#;
+        let config3 = WorkflowConfig::parse(bare_name).unwrap();
+        let diagnostics3 = lint_format(&config3, None);
+        let w033c: Vec<_> = diagnostics3.iter().filter(|d| d.code == "W033").collect();
+        assert_eq!(w033c.len(), 1, "still flagged: {diagnostics3:?}");
+        assert_eq!(
+            w033c[0].severity,
+            Severity::Warning,
+            "unqualified identifier LHS keeps the warning: {diagnostics3:?}"
         );
     }
 
