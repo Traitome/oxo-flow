@@ -18,7 +18,7 @@ oxo-flow status [OPTIONS] [CHECKPOINT]
 
 | Argument | Description |
 |---|---|
-| `[CHECKPOINT]` | Path to a checkpoint JSON file. Defaults to `.oxo-flow/checkpoint.json` in the current directory |
+| `[CHECKPOINT]` | Path to a checkpoint JSON file. Defaults to `.oxo-flow/checkpoint.json` in the current directory. A workflow (`.oxoflow`) file is also accepted: its sibling `<workflow-dir>/.oxo-flow/checkpoint.json` is auto-resolved when it exists (issue #859) |
 
 ---
 
@@ -45,6 +45,10 @@ oxo-flow status
 # Status from an explicit checkpoint
 oxo-flow status .oxo-flow/checkpoint.json
 
+# Same thing via the workflow file — resolves .oxo-flow/checkpoint.json
+# next to it when that exists (handy while a run is live)
+oxo-flow status pipeline.oxoflow
+
 # Status for a run that executed with --workdir somewhere else
 oxo-flow status --workdir runs/cohort-2026-09
 
@@ -54,6 +58,33 @@ oxo-flow status --timing -n 5
 # Machine-readable output including timings
 oxo-flow status --timing --json
 ```
+
+---
+
+### Workflow-file arguments
+
+Passing a workflow (`.oxoflow`) file instead of a checkpoint is a common
+mistake — especially mid-run, when the natural instinct is to point `status`
+at the pipeline definition. `status` handles it instead of rejecting it
+(issue #859):
+
+- If `<workflow-dir>/.oxo-flow/checkpoint.json` exists, it is used directly
+  and the resolution is printed:
+
+  ```
+  Note: 'pipeline.oxoflow' is a workflow file — using its sibling checkpoint './.oxo-flow/checkpoint.json'.
+  ```
+
+- If no sibling checkpoint exists, the error names the exact path that was
+  checked and how to create one:
+
+  ```
+  Warning: 'pipeline.oxoflow' appears to be a workflow file, not a checkpoint.
+    No checkpoint found at 'pipeline.oxoflow/../.oxo-flow/checkpoint.json' — 'status' expects a checkpoint file (JSON).
+    Run 'oxo-flow run pipeline.oxoflow' first to create one.
+  ```
+
+An explicit non-workflow CHECKPOINT path is never second-guessed.
 
 ---
 
