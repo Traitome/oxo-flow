@@ -2056,23 +2056,35 @@ See [`examples/gallery/12_cohort_analysis.oxoflow`](https://github.com/Traitome/
 A sample may appear in both a user-declared `[[sample_groups]]` entry and an
 `[[pairs]]` entry (e.g. every group sample is also paired against a
 control). This is **legal** — group-wildcard rules and pair-wildcard rules
-expand independently — but the engine warns at parse time, because unless
-every rule path distinguishes the instances (e.g. a `{group}` component),
-the instances share an output path and one is skipped as up-to-date while
-consuming the other's data. The warning prints **once per parse** naming
-all duplicates, not once per duplicate sample:
+expand independently — and usually silent: each rule belongs to exactly one
+domain (pair wildcards win if a rule mentions `{experiment}`/`{control}`/
+`{tumor}`/`{normal}`/`{pair_id}`/…, otherwise group wildcards), so a group
+instance never instantiates the same rule as a pair instance. The engine
+warns at parse time only when ownership overlap is **real**: after
+expansion, two differently-owned instances of the duplicated sample id
+resolve some rule to the **same concrete output path** — then one is
+skipped as up-to-date while consuming the other's data. The warning names
+the duplicated sample, both owners, the colliding rule(s), and the exact
+path:
 
 ```text
-WARN oxo_flow_core::config::parse: 3 samples are declared by more than one owner: S1 (group 'case' / pair 'P1'), S2 (group 'case' / pair 'P2'), S3 (group 'case' / pair 'P3') — unless every rule path distinguishes them (e.g. a {group} component), the instances share an output path and one is skipped as up-to-date while consuming the other's data
+WARN oxo_flow_core::config::parse: 1 colliding output path(s) from samples declared by more than one owner (cross-owner instance overlap):
+  sample 'S1' (declared by group 'case' and pair 'P1'): rule 'report' writes 'report/S1.html' for both instances — one is skipped as up-to-date while consuming the other's data
 ```
 
-A single duplicate renders a per-sample message instead:
-`sample 'S1' is declared by both group 'case' and pair 'P1' — {same note}`.
-Auto-discovered
-samples (`sample_pattern`) feeding `[[pairs]]` are the documented pairing
-workflow, not a competing owner — only user-declared groups are compared
-against pair membership. Fix by adding a `{group}`/`{pair_id}` component to
-the affected rules' output paths, or by keeping the domains disjoint.
+A cross-domain collision (a group rule such as `report/{sample}.html` and a
+pair rule such as `report/{experiment}.html` both writing `report/S1.html`)
+names both rules: `rules 'a' and 'b' write …`. The standard cohort shape —
+groups feed `[[pairs]]`, every rule path carries the full `{sample}` name —
+stays silent even though ownership overlaps, because every instance resolves
+to a distinct path. If the collision analysis itself cannot run (a bad
+wildcard constraint regex, an unresolvable `values_from`), the engine falls
+back to the ownership census naming all duplicates so validate/plan surface
+the underlying error right after. Auto-discovered samples (`sample_pattern`)
+feeding `[[pairs]]` are the documented pairing workflow, not a competing
+owner — only user-declared groups are compared against pair membership. Fix
+a real collision by adding a `{group}`/`{pair_id}` component to the
+affected rules' output paths, or by keeping the domains disjoint.
 
 ### Auto-Discovery with `sample_pattern`
 
