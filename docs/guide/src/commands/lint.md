@@ -111,12 +111,18 @@ reachable at runtime. W033 then downgrades to an **info** note naming the
 shared expression ("... their `when` gates are complementary on 'X' —
 collision is not reachable at runtime") instead of the warning. The
 detection is deliberately narrow: a single top-level `==`/`!=` whose
-right side is the empty-string literal `''` or `""` and whose left sides
-are identical. Compound conditions (`&&`/`||`), comparison operators
-other than `==`/`!=`, different expressions, non-empty or unquoted
+right side is the empty-string literal `''` or `""` and whose left side
+is the same bare `config.<name>` or `wildcard.<name>` reference on both
+sides. These are the only left-hand forms the executor compares with
+exact complement semantics — compound conditions (`&&`/`||`),
+comparison operators
+other than `==`/`!=`, function-call or unqualified-identifier left
+sides, different expressions, non-empty or unquoted
 right-hand sides, and pairs where either writer is ungated all keep the
 plain warning — a syntactic complement there would not prove a runtime
-one.
+one (a shared disjunct short-circuits both gates to true; anything the
+executor cannot parse as a reference falls through to its default-true
+verdict).
 See
 [Troubleshooting → Output collisions](../how-to/troubleshooting.md#output-collisions-silent-overwrite).
 W034 flags an `{input[N]}` / `{output[N]}` placeholder whose index is out
