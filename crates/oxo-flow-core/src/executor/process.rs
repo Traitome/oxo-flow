@@ -1346,7 +1346,11 @@ impl LocalExecutor {
             .collect()
     }
 
-    async fn release_resources(&self, rule: &Rule) {
+    /// Release a dispatched rule's resource reservation, if any (issue
+    /// #872 watchdog requeue). A rule that never forked may hold a pool
+    /// reservation or be parked in the resource wait loop; releasing is
+    /// clamped/no-op-safe when nothing is held, and wakes pool waiters.
+    pub async fn release_resources(&self, rule: &Rule) {
         let max_threads = self.config.max_threads.unwrap_or(self.system_threads);
         let max_memory_mb = self.config.max_memory_mb.unwrap_or(self.system_memory_mb);
         let mut pool = self.resource_pool.lock().await;

@@ -50,6 +50,17 @@ impl SchedulerState {
         self.running.insert(rule.to_owned());
     }
 
+    /// Return a dispatched rule to the pending queue (issue #872 watchdog
+    /// requeue). Clears both the running marker and the `Running` status so
+    /// `ready_rules` re-admits the rule once its dependencies hold; an
+    /// unknown rule is a no-op.
+    pub fn reset_to_pending(&mut self, rule: &str) {
+        self.statuses
+            .entry(rule.to_string())
+            .and_modify(|s| *s = JobStatus::Pending);
+        self.running.remove(rule);
+    }
+
     /// Names of the rules currently marked running (issue #685 watchdog).
     /// Sorted for deterministic diagnostics; `HashSet` iteration order is
     /// per-process random.
@@ -1589,6 +1600,62 @@ mod tests {
         assert_eq!(summary.total, 3);
         assert_eq!(summary.running, 1);
         assert_eq!(summary.pending, 2);
+    }
+
+    #[test]
+    fn scheduler_reset_to_pending_requeues_dispatched_rule() {
+        let rules = make_rules();
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+        let mut state = SchedulerState::new(&["a", "b"]);
+
+        state.mark_running("a");
+        assert_eq!(state.running_count(), 1);
+
+        state.reset_to_pending("a");
+        assert_eq!(state.status("a"), Some(JobStatus::Pending));
+        assert_eq!(state.running_count(), 0);
+        assert!(state.running_rules().is_empty());
+
+        // The requeued rule is immediately ready again (no dependencies).
+        let ready = state.ready_rules(&dag).unwrap();
+        assert_eq!(ready, vec!["a"]);
+    }
+
+    #[test]
+    fn scheduler_reset_to_pending_unknown_rule_is_noop() {
+        let mut state = SchedulerState::new(&["a"]);
+        state.reset_to_pending("missing");
+        assert_eq!(state.status("missing"), None);
+        assert_eq!(state.running_count(), 0);
+    }
+
+    #[test]
+    fn scheduler_reset_to_pending_keeps_completed_verdict() {
+        // A rule that already finished is NOT touched by a requeue of a
+        // different (stuck) rule — reset only flips the named rule.
+        let mut state = SchedulerState::new(&["a", "b"]);
+        state.mark_completed(JobRecord {
+            signal: None,
+            rule: "a".to_string(),
+            status: JobStatus::Success,
+            enqueued_at: None,
+            started_at: None,
+            finished_at: None,
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            command: None,
+            retries: 0,
+            skip_reason: None,
+            max_rss_mb: None,
+            cpu_seconds: None,
+            caption: None,
+        });
+        state.mark_running("b");
+        state.reset_to_pending("b");
+
+        assert_eq!(state.status("a"), Some(JobStatus::Success));
+        assert_eq!(state.status("b"), Some(JobStatus::Pending));
     }
 
     #[test]
