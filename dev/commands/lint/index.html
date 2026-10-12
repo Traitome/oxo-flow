@@ -4022,7 +4022,28 @@ a supported feature, so this is a warning, not an error. <code>{config.*}</code>
 placeholders are resolved against the parsed config before the templates
 are compared, so <code>{config.out_dir}/{sample}.vcf</code> collides with its literal
 counterpart <code>results/{sample}.vcf</code> when <code>out_dir = "results"</code> — and does
-not collide with <code>{config.alt_dir}/{sample}.vcf</code> when the values differ.
+not collide with <code>{config.alt_dir}/{sample}.vcf</code> when the values differ.</p>
+<p>When both writers carry meaningful <code>when</code> gates that are <em>complementary
+empty-string checks on the same expression</em> — <code>X != ''</code> on one and
+<code>X == ''</code> on the other (issue #860; the paired/tumor-only
+<code>mutect2_paired</code>/<code>mutect2_tumoronly</code> shape) — each rule runs exactly when
+the other does not, so the pair can never race and the collision is not
+reachable at runtime. W033 then downgrades to an <strong>info</strong> note naming the
+shared expression ("... their <code>when</code> gates are complementary on 'X' —
+collision is not reachable at runtime") instead of the warning. The
+detection is deliberately narrow: a single top-level <code>==</code>/<code>!=</code> whose
+right side is the empty-string literal <code>''</code> or <code>""</code> and whose left side
+is the same bare <code>config.&lt;name&gt;</code> or <code>wildcard.&lt;name&gt;</code> reference on both
+sides. These are the only left-hand forms the executor compares with
+exact complement semantics — compound conditions (<code>&amp;&amp;</code>/<code>||</code>),
+comparison operators
+other than <code>==</code>/<code>!=</code>, function-call or unqualified-identifier left
+sides, different expressions, non-empty or unquoted
+right-hand sides, and pairs where either writer is ungated all keep the
+plain warning — a syntactic complement there would not prove a runtime
+one (a shared disjunct short-circuits both gates to true; anything the
+executor cannot parse as a reference falls through to its default-true
+verdict).
 See
 <a href="../../how-to/troubleshooting/#output-collisions-silent-overwrite">Troubleshooting → Output collisions</a>.
 W034 flags an <code>{input[N]}</code> / <code>{output[N]}</code> placeholder whose index is out
