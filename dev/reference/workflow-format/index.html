@@ -8603,18 +8603,29 @@ processes it can actually see; a rule that has been Running for over
 <code>OXO_FLOW_SPAWN_WATCHDOG_SECS</code> (default 600) with no child process at
 all is reported by name, and the report distinguishes two cases
 (issue #847). If the rule is queued in the resource pool — it has not
-acquired its threads/memory yet — the report is a one-shot WARN
-pointing at the scheduler's own 60-second blockage lines, because a
-queued wait is benign and self-resolving. A rule that is <em>not</em> queued
-(has acquired resources, or is parked in environment setup) and still
-has no child process keeps the <code>tracing::error!</code> report — that is the
-genuine lost-wakeup signature (issue #685). Both reports land in the
-run log as well as stderr. The watchdog only logs — it never kills;
-if a named rule never starts, capture the run log and file an issue.
-Relatedly, the in-process environment-setup mutex now
-waits on the same bounded schedule as the cross-process lock
-(<code>OXO_ENV_LOCK_TIMEOUT_SECS</code>, logging every 60s) so a task stuck behind
-another task's env creation becomes visible instead of hanging silently.</p>
+acquired its threads/memory yet — the report is a WARN pointing at
+the scheduler's own 60-second blockage lines, because a queued wait
+is benign and self-resolving. A rule that is <em>not</em> queued (has
+acquired resources, or is parked in environment setup) and still has
+no child process gets the <code>tracing::error!</code> report with the explicit
+dispatch state <code>dispatched-not-forked</code> — that is the genuine
+lost-wakeup signature (issue #685). Both reports land in the run log
+as well as stderr. The watchdog re-arms: once a rule is past the
+threshold it is re-reported on every 30s tick, and each report carries
+a consecutive fire count. After <code>OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES</code>
+consecutive ERROR fires (default 6 — about 13 minutes at the defaults:
+the first fire lands at the 600s threshold, subsequent fires land on
+every 30s tick), the stuck rule is requeued to <em>Pending</em> instead of
+wedging its lane forever: the engine kills any stuck process tree,
+aborts the never-forked spawn task, releases any pool reservation it
+holds, clears the checkpoint running-set entry, and re-dispatches the
+rule when it next becomes ready (issue #872). If the wedge repeats,
+the engine keeps requeueing — the fire count restarts on each
+requeue, so a permanently wedged rule cycles between Running and
+Pending rather than failing the run; there is currently no cumulative
+requeue cap. If the requeue itself cannot find the rule's spawn task
+the run fails loudly with an internal error rather than silently
+shrinking the submit cap.</p>
 <p><strong>Array-valued <code>{config.*}</code></strong> — a <code>[config]</code> key holding an array renders
 as a space-joined list in the shell (<code>["a", "b"]</code> → <code>a b</code>), matching the
 <code>{input}</code> convention; iterate with <code>for x in {config.tools}</code>.</p>
@@ -8966,20 +8977,32 @@ column (e.g. <code>sample_id</code>).</p>
 <p>A sample may appear in both a user-declared <code>[[sample_groups]]</code> entry and an
 <code>[[pairs]]</code> entry (e.g. every group sample is also paired against a
 control). This is <strong>legal</strong> — group-wildcard rules and pair-wildcard rules
-expand independently — but the engine warns at parse time, because unless
-every rule path distinguishes the instances (e.g. a <code>{group}</code> component),
-the instances share an output path and one is skipped as up-to-date while
-consuming the other's data. The warning prints <strong>once per parse</strong> naming
-all duplicates, not once per duplicate sample:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>WARN oxo_flow_core::config::parse: 3 samples are declared by more than one owner: S1 (group 'case' / pair 'P1'), S2 (group 'case' / pair 'P2'), S3 (group 'case' / pair 'P3') — unless every rule path distinguishes them (e.g. a {group} component), the instances share an output path and one is skipped as up-to-date while consuming the other's data
+expand independently — and usually silent: each rule belongs to exactly one
+domain (pair wildcards win if a rule mentions <code>{experiment}</code>/<code>{control}</code>/
+<code>{tumor}</code>/<code>{normal}</code>/<code>{pair_id}</code>/…, otherwise group wildcards), so a group
+instance never instantiates the same rule as a pair instance. The engine
+warns at parse time only when ownership overlap is <strong>real</strong>: after
+expansion, two differently-owned instances of the duplicated sample id
+resolve some rule to the <strong>same concrete output path</strong> — then one is
+skipped as up-to-date while consuming the other's data. The warning names
+the duplicated sample, both owners, the colliding rule(s), and the exact
+path:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>WARN oxo_flow_core::config::parse: 1 colliding output path(s) from samples declared by more than one owner (cross-owner instance overlap):
+</span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a>  sample 'S1' (declared by group 'case' and pair 'P1'): rule 'report' writes 'report/S1.html' for both instances — one is skipped as up-to-date while consuming the other's data
 </span></code></pre></div>
-<p>A single duplicate renders a per-sample message instead:
-<code>sample 'S1' is declared by both group 'case' and pair 'P1' — {same note}</code>.
-Auto-discovered
-samples (<code>sample_pattern</code>) feeding <code>[[pairs]]</code> are the documented pairing
-workflow, not a competing owner — only user-declared groups are compared
-against pair membership. Fix by adding a <code>{group}</code>/<code>{pair_id}</code> component to
-the affected rules' output paths, or by keeping the domains disjoint.</p>
+<p>A cross-domain collision (a group rule such as <code>report/{sample}.html</code> and a
+pair rule such as <code>report/{experiment}.html</code> both writing <code>report/S1.html</code>)
+names both rules: <code>rules 'a' and 'b' write …</code>. The standard cohort shape —
+groups feed <code>[[pairs]]</code>, every rule path carries the full <code>{sample}</code> name —
+stays silent even though ownership overlaps, because every instance resolves
+to a distinct path. If the collision analysis itself cannot run (a bad
+wildcard constraint regex, an unresolvable <code>values_from</code>), the engine falls
+back to the ownership census naming all duplicates so validate/plan surface
+the underlying error right after. Auto-discovered samples (<code>sample_pattern</code>)
+feeding <code>[[pairs]]</code> are the documented pairing workflow, not a competing
+owner — only user-declared groups are compared against pair membership. Fix
+a real collision by adding a <code>{group}</code>/<code>{pair_id}</code> component to the
+affected rules' output paths, or by keeping the domains disjoint.</p>
 <h3 id="auto-discovery-with-sample_pattern">Auto-Discovery with <code>sample_pattern</code><a class="headerlink" href="#auto-discovery-with-sample_pattern" title="Permanent link">#</a></h3>
 <p>The <code>[workflow]</code> <code>sample_pattern</code> auto-discovers samples from the filesystem:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-74-1"><a id="__codelineno-74-1" name="__codelineno-74-1" href="#__codelineno-74-1"></a><span class="k">[workflow]</span>
