@@ -7575,24 +7575,49 @@ pub async fn handle_status(
 ) -> Result<()> {
     print_banner();
 
-    // Detect common mistake: user passes a .oxoflow file instead of checkpoint
-    if let Some(path) = &checkpoint
-        && path.extension().is_some_and(|ext| ext == "oxoflow")
-    {
-        eprintln!(
-            "{} '{}' appears to be a workflow file, not a checkpoint.",
-            "Warning:".bold().yellow(),
-            path.display()
-        );
-        eprintln!(
-            "  The 'status' command expects a checkpoint file (e.g., .oxo-flow/checkpoint.json)."
-        );
-        eprintln!(
-            "  Run 'oxo-flow run {}' first to generate a checkpoint.",
-            path.display()
-        );
-        anyhow::bail!("Cannot read workflow file as checkpoint");
-    }
+    // Detect common mistake: user passes a .oxoflow file instead of a
+    // checkpoint (issue #859). During a live run — the highest-frequency
+    // inspection moment — the sibling checkpoint
+    // `<workflow-dir>/.oxo-flow/checkpoint.json` usually already exists, so
+    // auto-resolve to it instead of telling the user to "run first". Only a
+    // genuinely missing checkpoint keeps the (reworded) error.
+    let checkpoint = match &checkpoint {
+        Some(path) if path.extension().is_some_and(|ext| ext == "oxoflow") => {
+            // The workflow's directory (or "." for a bare filename) is where
+            // `run` would have written the checkpoint.
+            let base = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let sibling = base.join(".oxo-flow/checkpoint.json");
+            if sibling.exists() {
+                eprintln!(
+                    "{} '{}' is a workflow file — using its sibling checkpoint '{}'.",
+                    "Note:".bold().cyan(),
+                    path.display(),
+                    sibling.display()
+                );
+                Some(sibling)
+            } else {
+                eprintln!(
+                    "{} '{}' appears to be a workflow file, not a checkpoint.",
+                    "Warning:".bold().yellow(),
+                    path.display()
+                );
+                eprintln!(
+                    "  No checkpoint found at '{}' — 'status' expects a checkpoint file (JSON).",
+                    sibling.display()
+                );
+                eprintln!(
+                    "  Run 'oxo-flow run {}' first to create one.",
+                    path.display()
+                );
+                anyhow::bail!("Cannot read workflow file as checkpoint");
+            }
+        }
+        other => other.clone(),
+    };
 
     // Issue #432(d): mirror `run --workdir` so users do not need to know the
     // checkpoint's internal path — the run directory is enough. An explicit
