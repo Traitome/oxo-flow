@@ -4693,9 +4693,13 @@ pub async fn run_command(
                 // skipped — otherwise the requeue would double-count as a
                 // failure. The id→rule link is dropped here so the
                 // "no recorded rule" invariant stays intact for real panics.
-                // (NIT 8 review: a regression here — dropping the
-                // `!e.is_panic()` guard, say — must fail this test:
-                // `watchdog_requeue_cancellation_not_counted_as_failure`.)
+                // Invariant (review NIT 8): ONLY a non-panic cancellation
+                // may take this early-continue. The loop is inline in
+                // `run_command` and not unit-testable without a refactor,
+                // so this branch is guarded by review, not by a test — a
+                // regression here (dropping the `!e.is_panic()` guard, say)
+                // would double-count every watchdog requeue as a rule
+                // failure.
                 if e.is_cancelled() && !e.is_panic() {
                     task_rule.remove(&e.id());
                     task_abort.remove(&e.id());
