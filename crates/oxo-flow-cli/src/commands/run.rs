@@ -263,15 +263,37 @@ fn narrate_source_link_report(
 // futex wait. The watchdog compares the scheduler's running set against the
 // executor's live child pids on a fixed tick and reports stragglers. Since
 // #847, rules queued in the resource pool are reported as benign waits
-// (WARN) — only unqueued rules keep the #685 ERROR.
+// (WARN) — only unqueued rules keep the #685 ERROR. Since #872 the watchdog
+// re-arms on every tick once a rule is past the threshold, and after
+// `WATCHDOG_REQUEUE_FIRES` consecutive fires on the same rule it requeues
+// the rule instead of waiting forever.
 
 /// How often the watchdog compares running rules against live pids.
 const SPAWN_WATCHDOG_TICK_SECS: u64 = 30;
 /// Default age at which a Running rule with no live child process is
-/// reported. Generous: legitimate env setup can take tens of minutes, and
-/// the watchdog only logs — it never kills.
+/// reported. Generous: legitimate env setup can take tens of minutes.
 const DEFAULT_SPAWN_WATCHDOG_SECS: u64 = 600;
 const SPAWN_WATCHDOG_ENV: &str = "OXO_FLOW_SPAWN_WATCHDOG_SECS";
+/// Consecutive watchdog fires on one unqueued rule after which the rule is
+/// requeued instead of being left to wedge its lane forever (issue #872).
+/// The first fire lands at the threshold (600 s default); subsequent fires
+/// land on every 30 s tick, so 6 fires ≈ 600 s + 5×30 s ≈ 13 minutes of
+/// zero dispatch progress at the defaults.
+const WATCHDOG_REQUEUE_FIRES: u32 = 6;
+/// Environment override for `WATCHDOG_REQUEUE_FIRES`. Same convention as
+/// the other watchdog knobs: unparseable or `0` falls back to the default —
+/// a typo can never disable the requeue (it would wedge the lane instead).
+const WATCHDOG_REQUEUE_FIRES_ENV: &str = "OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES";
+
+fn watchdog_requeue_fires() -> u32 {
+    parse_watchdog_requeue_fires(std::env::var(WATCHDOG_REQUEUE_FIRES_ENV).ok().as_deref())
+}
+
+fn parse_watchdog_requeue_fires(raw: Option<&str>) -> u32 {
+    raw.and_then(|v| v.parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(WATCHDOG_REQUEUE_FIRES)
+}
 
 /// How often the #843 disk-pressure monitor re-measures free space while the
 /// run is parked under Hold (nothing in flight) or between completion batches.
@@ -3431,6 +3453,10 @@ pub async fn run_command(
     // the only way to learn which rule died and release its scheduler slot.
     let mut task_rule: std::collections::HashMap<tokio::task::Id, String> =
         std::collections::HashMap::new();
+    // Task id → abort handle (issue #872): the watchdog requeue aborts a
+    // specific stuck spawn task; `JoinSet` itself cannot abort by id.
+    let mut task_abort: std::collections::HashMap<tokio::task::Id, tokio::task::AbortHandle> =
+        std::collections::HashMap::new();
 
     // Pre-process checkpoint-completed rules so they are never re-submitted.
     {
@@ -3529,10 +3555,13 @@ pub async fn run_command(
     // common completion funnel below; cleanup on every terminal path.
     let mut running_since: std::collections::HashMap<String, std::time::Instant> =
         Default::default();
-    // Rules the watchdog has already reported — one report per rule per run
-    // (WARN for benign resource-pool queues, ERROR for genuine no-child
-    // stragglers; issue #847).
-    let mut watchdog_reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Watchdog fire counters (issue #872): the watchdog re-arms every
+    // threshold interval instead of reporting once per rule per run, and
+    // counts consecutive fires per rule. A rule reaching
+    // `watchdog_requeue_fires` on the ERROR branch (dispatched but never
+    // forked) is requeued to Pending; queued (WARN) rules never escalate.
+    let mut watchdog_fires: std::collections::HashMap<String, u32> = Default::default();
+    let watchdog_requeue_fires = watchdog_requeue_fires();
     let watchdog_threshold = spawn_watchdog_threshold();
     let mut watchdog_tick =
         tokio::time::interval(std::time::Duration::from_secs(SPAWN_WATCHDOG_TICK_SECS));
@@ -4377,6 +4406,7 @@ pub async fn run_command(
                 }
             });
             task_rule.insert(handle.id(), task_rule_name);
+            task_abort.insert(handle.id(), handle);
         }
 
         // ---- wait for completions -----------------------------------------
@@ -4430,14 +4460,18 @@ pub async fn run_command(
             // wait (empty checkpoint running-set, zero completions). Every
             // SPAWN_WATCHDOG_TICK_SECS, compare the scheduler's running set
             // with the executor's live child pids: any rule running longer
-            // than the threshold with NO pid at all gets one report naming
-            // it. Issue #847 splits the report: a rule still queued in the
-            // resource pool is a benign wait — the scheduler's own 60s
-            // blockage WARNs already narrate holders and FIFO position — so
-            // it only earns a louder one-shot WARN here. The #685 ERROR is
-            // reserved for rules NOT queued in the pool (env-setup stragglers
-            // have their own throttled WARN; anything else is the genuine
-            // lost-wakeup signature).
+            // than the threshold is re-reported each interval, with the
+            // consecutive-fire count. Issue #847 splits the report: a rule
+            // still queued in the resource pool is a benign wait — the
+            // scheduler's own 60s blockage WARNs already narrate holders
+            // and FIFO position — so it only earns a WARN here and never
+            // escalates. The #685 ERROR is reserved for rules NOT queued in
+            // the pool (env-setup stragglers have their own throttled WARN;
+            // anything else is the genuine lost-wakeup signature). After
+            // `watchdog_requeue_fires` consecutive ERROR fires the rule is
+            // requeued to Pending (issue #872): both live wedge recoveries
+            // needed ~9× the threshold to self-heal, so a bounded requeue
+            // beats indefinite lane-freezing keep-waiting.
             _ = watchdog_tick.tick() => {
                 let live_rules: std::collections::HashSet<String> = executor
                     .active_pids()
@@ -4450,7 +4484,8 @@ pub async fn run_command(
                     diagnostic_narrate(args, Some(&run_log));
                 };
                 for rule in sched.running_rules() {
-                    if live_rules.contains(&rule) || watchdog_reported.contains(&rule) {
+                    if live_rules.contains(&rule) {
+                        watchdog_fires.remove(&rule);
                         continue;
                     }
                     let Some(started) = running_since.get(&rule) else {
@@ -4459,33 +4494,160 @@ pub async fn run_command(
                     if started.elapsed() < watchdog_threshold {
                         continue;
                     }
-                    watchdog_reported.insert(rule.clone());
                     let running_secs = started.elapsed().as_secs();
                     if queued.contains(&rule) {
+                        let fires = watchdog_fires.entry(rule.clone()).or_insert(0);
+                        *fires += 1;
                         n(format_args!(
                             "{} rule '{rule}' has been Running for {running_secs}s while \
-                             queued in the resource pool — benign wait, the scheduler \
-                             reports blockage details every 60s (issue #847). The engine \
-                             will keep waiting.",
-                            "Watchdog:".yellow().bold()
+                             queued in the resource pool — benign wait (watchdog fire {}), \
+                             the scheduler reports blockage details every 60s (issue #847). \
+                             The engine will keep waiting.",
+                            "Watchdog:".yellow().bold(),
+                            *fires
                         ));
-                    } else {
+                        continue;
+                    }
+                    // Not queued and no live child: dispatched but never
+                    // forked (issue #872 dispatch-state wording).
+                    let fires = watchdog_fires.entry(rule.clone()).or_insert(0);
+                    *fires += 1;
+                    if *fires < watchdog_requeue_fires {
                         n(format_args!(
                             "{} rule '{rule}' has been Running for {running_secs}s but never \
-                             spawned a child process — likely causes: environment setup \
-                             still in progress, or a lost scheduler wakeup (issue #685). \
-                             The engine will keep waiting; if the rule never starts, \
-                             capture the run log and file an issue.",
-                            "Watchdog ERROR:".yellow().bold()
+                             spawned a child process (dispatched but not forked, fire {} of {}) \
+                             — likely causes: environment setup still in progress, or a lost \
+                             scheduler wakeup (issue #685). The engine will keep waiting; at \
+                             fire {} the rule is requeued to Pending.",
+                            "Watchdog ERROR:".yellow().bold(),
+                            *fires,
+                            watchdog_requeue_fires,
+                            watchdog_requeue_fires
                         ));
                         tracing::error!(
                             rule = %rule,
                             running_secs,
+                            fires = *fires,
+                            state = "dispatched-not-forked",
                             "rule has been Running for over {}s but never spawned a child \
                              process (issue #685)",
                             watchdog_threshold.as_secs()
                         );
+                        continue;
                     }
+                    // Escalation: requeue the stuck rule (issue #872). Abort
+                    // its spawn task so the submit-cap slot is freed; the
+                    // reap path routes the resulting non-panic cancellation
+                    // to a no-op — all cleanup happens here.
+                    n(format_args!(
+                        "{} rule '{rule}' has been Running for {running_secs}s but never \
+                         spawned a child process after {} watchdog fires (~{}s) — requeueing \
+                         it to Pending. Its submit slot is released and the rule is \
+                         re-dispatched when it next becomes ready; if it wedges again the \
+                         watchdog will re-report and requeue it (issue #872).",
+                        "Watchdog ERROR:".yellow().bold(),
+                        *fires,
+                        running_secs
+                    ));
+                    tracing::error!(
+                        rule = %rule,
+                        running_secs,
+                        fires = *fires,
+                        state = "requeued",
+                        "rule requeued to Pending after {} watchdog fires without a child \
+                         process (issue #872)",
+                        *fires
+                    );
+                    let stuck_id = task_rule
+                        .iter()
+                        .find_map(|(id, name)| (name == &rule).then_some(*id));
+                    match stuck_id.and_then(|id| task_abort.get(&id).map(|h| (id, h))) {
+                        Some((task_id, abort)) => {
+                            // Tree-kill before abort: the wedged task may have
+                            // spawned grand-children that kill_on_drop would
+                            // orphan; they could race the re-dispatched rule's
+                            // outputs. Snapshot the pid while the task is
+                            // still live, then sweep after the abort — same
+                            // shape as terminate_on_signal (#524) and the
+                            // first-failure abort. The fresh-pid check here
+                            // also closes the requeue-vs-reap race (review
+                            // NIT 6): a rule reaped between snapshot and
+                            // abort has no pid left to kill.
+                            let stuck_pids: Vec<u32> = executor
+                                .active_pids()
+                                .into_iter()
+                                .filter(|(name, _)| name == &rule)
+                                .map(|(_, pid)| pid)
+                                .collect();
+                            abort.abort();
+                            task_abort.remove(&task_id);
+                            task_rule.remove(&task_id);
+                            if !stuck_pids.is_empty() {
+                                // kill_process_tree's grace poll sleeps up to
+                                // 10 s — run the sweep on the blocking pool,
+                                // not a runtime worker (#524).
+                                let rule_name = rule.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    for pid in stuck_pids {
+                                        if let Err(e) = oxo_flow_core::executor::timeout::
+                                            kill_process_tree(pid)
+                                        {
+                                            tracing::warn!(
+                                                rule = %rule_name,
+                                                pid,
+                                                "watchdog requeue: failed to kill stuck \
+                                                 process tree: {e}"
+                                            );
+                                        }
+                                    }
+                                })
+                                .await;
+                            }
+                        }
+                        None => {
+                            // No task link: the id→rule registration is the only
+                            // path back to the spawn task. Without it we cannot
+                            // free the submit slot, so fail the run loudly
+                            // instead of silently shrinking the cap (mirrors the
+                            // reap-path internal-error invariant).
+                            json_summary.emit(
+                                "failed",
+                                &RunCounts {
+                                    succeeded: success_count
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                    skipped: skipped_count
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                    failed: fail_count
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                    non_required_failed: non_required_fail_count
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                    blocked: blocked.lock().await.len(),
+                                },
+                                vec![],
+                            );
+                            return Err(anyhow::anyhow!(
+                                "internal error: watchdog requeue found no task for rule '{rule}'"
+                            ));
+                        }
+                    }
+                    executor.clear_resource_waiters().await;
+                    if let Some(rule_cfg) = config.get_rule(&rule) {
+                        executor.release_resources(rule_cfg).await;
+                    }
+                    // The spawn task may still be reaped later this tick; the
+                    // scheduler running-set entry it would otherwise hold is
+                    // already cleared above, so dependents re-admit normally.
+                    sched.reset_to_pending(&rule);
+                    {
+                        let mut ck = checkpoint.lock().await;
+                        ck.clear_running(&rule);
+                        if let Err(save_err) = ck.save_to_file_async(&checkpoint_path).await {
+                            tracing::warn!("Failed to save checkpoint: {save_err}");
+                        }
+                    }
+                    running_since.remove(&rule);
+                    submitted.remove(&rule);
+                    watchdog_fires.remove(&rule);
                 }
                 None
             }
@@ -4518,9 +4680,31 @@ pub async fn run_command(
             // rules Failed in the checkpoint.)
             Some(Ok((id, v))) => {
                 task_rule.remove(&id);
+                task_abort.remove(&id);
                 v
             }
             Some(Err(e)) => {
+                // Watchdog-initiated requeue (issue #872): a non-panic
+                // cancellation is the abort issued by the watchdog's
+                // escalation path, which already released the pool
+                // reservation, requeued the rule to Pending, and cleared the
+                // checkpoint running-set. All the engine-fault bookkeeping
+                // below (fail_count, ck.mark_failed, failures.push) must be
+                // skipped — otherwise the requeue would double-count as a
+                // failure. The id→rule link is dropped here so the
+                // "no recorded rule" invariant stays intact for real panics.
+                // Invariant (review NIT 8): ONLY a non-panic cancellation
+                // may take this early-continue. The loop is inline in
+                // `run_command` and not unit-testable without a refactor,
+                // so this branch is guarded by review, not by a test — a
+                // regression here (dropping the `!e.is_panic()` guard, say)
+                // would double-count every watchdog requeue as a rule
+                // failure.
+                if e.is_cancelled() && !e.is_panic() {
+                    task_rule.remove(&e.id());
+                    task_abort.remove(&e.id());
+                    continue;
+                }
                 if e.is_panic() {
                     tracing::error!("Task panicked: {e}");
                 }
@@ -4541,6 +4725,7 @@ pub async fn run_command(
                 // blocked, the checkpoint records the engine fault, and
                 // the standard abort path fails the run loudly.
                 let Some(rule_name) = task_rule.remove(&e.id()) else {
+                    task_abort.remove(&e.id());
                     // Internal invariant: every spawned task registers its
                     // name at spawn. Fail the run rather than leak the cap.
                     // The engine fault counts as a failure in the summary
@@ -8216,8 +8401,8 @@ mod tests {
         age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
         config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
         missing_source_lines, parse_cli_overrides, parse_disk_hold_abort_rounds,
-        parse_disk_tick_secs, parse_spawn_watchdog_threshold, reconcile_failed_rules,
-        substitute_source_placeholder, suggest_jobs,
+        parse_disk_tick_secs, parse_spawn_watchdog_threshold, parse_watchdog_requeue_fires,
+        reconcile_failed_rules, substitute_source_placeholder, suggest_jobs,
     };
     use oxo_flow_core::dag::WorkflowDag;
     use std::collections::{HashMap, HashSet};
@@ -9281,6 +9466,17 @@ shell = "cp stage1.txt stage2.txt"
             parse_spawn_watchdog_threshold(Some("120")),
             std::time::Duration::from_secs(120)
         );
+    }
+
+    #[test]
+    fn watchdog_requeue_fires_parsing() {
+        // issue #872: same convention as the threshold — unset, garbage, and
+        // `0` all fall back to the default so a typo can never disable the
+        // requeue (it would wedge the lane instead). Pure derivation.
+        assert_eq!(parse_watchdog_requeue_fires(None), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("abc")), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("0")), 6);
+        assert_eq!(parse_watchdog_requeue_fires(Some("3")), 3);
     }
 
     fn pixi_env(manifest: &str) -> oxo_flow_core::rule::EnvironmentSpec {

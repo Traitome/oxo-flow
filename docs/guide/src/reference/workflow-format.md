@@ -1668,18 +1668,29 @@ processes it can actually see; a rule that has been Running for over
 `OXO_FLOW_SPAWN_WATCHDOG_SECS` (default 600) with no child process at
 all is reported by name, and the report distinguishes two cases
 (issue #847). If the rule is queued in the resource pool — it has not
-acquired its threads/memory yet — the report is a one-shot WARN
-pointing at the scheduler's own 60-second blockage lines, because a
-queued wait is benign and self-resolving. A rule that is *not* queued
-(has acquired resources, or is parked in environment setup) and still
-has no child process keeps the `tracing::error!` report — that is the
-genuine lost-wakeup signature (issue #685). Both reports land in the
-run log as well as stderr. The watchdog only logs — it never kills;
-if a named rule never starts, capture the run log and file an issue.
-Relatedly, the in-process environment-setup mutex now
-waits on the same bounded schedule as the cross-process lock
-(`OXO_ENV_LOCK_TIMEOUT_SECS`, logging every 60s) so a task stuck behind
-another task's env creation becomes visible instead of hanging silently.
+acquired its threads/memory yet — the report is a WARN pointing at
+the scheduler's own 60-second blockage lines, because a queued wait
+is benign and self-resolving. A rule that is *not* queued (has
+acquired resources, or is parked in environment setup) and still has
+no child process gets the `tracing::error!` report with the explicit
+dispatch state `dispatched-not-forked` — that is the genuine
+lost-wakeup signature (issue #685). Both reports land in the run log
+as well as stderr. The watchdog re-arms: once a rule is past the
+threshold it is re-reported on every 30s tick, and each report carries
+a consecutive fire count. After `OXO_FLOW_SPAWN_WATCHDOG_REQUEUE_FIRES`
+consecutive ERROR fires (default 6 — about 13 minutes at the defaults:
+the first fire lands at the 600s threshold, subsequent fires land on
+every 30s tick), the stuck rule is requeued to *Pending* instead of
+wedging its lane forever: the engine kills any stuck process tree,
+aborts the never-forked spawn task, releases any pool reservation it
+holds, clears the checkpoint running-set entry, and re-dispatches the
+rule when it next becomes ready (issue #872). If the wedge repeats,
+the engine keeps requeueing — the fire count restarts on each
+requeue, so a permanently wedged rule cycles between Running and
+Pending rather than failing the run; there is currently no cumulative
+requeue cap. If the requeue itself cannot find the rule's spawn task
+the run fails loudly with an internal error rather than silently
+shrinking the submit cap.
 
 **Array-valued `{config.*}`** — a `[config]` key holding an array renders
 as a space-joined list in the shell (`["a", "b"]` → `a b`), matching the
