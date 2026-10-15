@@ -22,12 +22,31 @@
 # the legacy stack. Re-evaluate on every aws-smithy-http-client /
 # aws-smithy-runtime bump and drop the entries when smithy-rs ships a
 # default without it. Keep parity with the ignore list in deny.toml.
+#
+# Re-verified 2026-10-15 (v0.24.0 tag CI): RUSTSEC-2026-0346..0349
+# (published 2026-10-14, patched only in rustls 0.23.46) forced a lock
+# bump of the primary stack 0.23.45 -> 0.23.46; 0347/0348 are gone from
+# the graph entirely. 0346 (TLS secrets in `Debug` impls, medium) and
+# 0349 (unauthenticated ServerHello can downgrade later connections to
+# classical-only key exchange, low) still match the legacy rustls
+# 0.21.12 — 0346 declares `unaffected = ["< 0.21.0"]` and 0349 has no
+# unaffected range — so both are ignored here for the same
+# compile-time-only / runtime-unreachable reasons as above. Note:
+# aws-smithy-http-client 1.5.0 (2026-09-30) made its legacy deps
+# optional (`default = None`), but aws-sdk-s3's default `rustls`
+# feature still activates `aws-smithy-runtime/tls-rustls` ->
+# `connector-hyper-0-14-x` -> `hyper-014` + `legacy-rustls-ring`, so
+# feature unification keeps rustls 0.21 in the s3-storage graph. Drop
+# these entries when the legacy stack leaves the graph. Keep parity
+# with the ignore list in deny.toml.
 ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0258",
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
 ]
 
 # Report unmaintained crate warnings as informational (not errors)

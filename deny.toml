@@ -61,13 +61,17 @@ yanked = "deny"
 # Only the AWS legacy-client stack is knowingly accepted (issue #658):
 # compile-time presence ONLY under the opt-in `s3-storage` feature,
 # runtime-unreachable, and unfixable downstream — see .cargo/audit.toml
-# for the full justification, the RUSTSEC-2023-0071 context, and the
-# re-evaluation rule. Keep this list in lockstep with audit.toml.
+# for the full justification, the RUSTSEC-2023-0071 context, the
+# re-evaluation rule, and the 2026-10-15 re-verification covering
+# RUSTSEC-2026-0346/0349 (which match the legacy rustls 0.21.12 only).
+# Keep this list in lockstep with audit.toml.
 ignore = [
     "RUSTSEC-2026-0258",
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
 ]
 
 [bans]
