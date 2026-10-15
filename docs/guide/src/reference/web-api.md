@@ -68,7 +68,7 @@ Returns status, version, mode, uptime, component health (database, filesystem, s
   "status": "ok",
   "components": {
     "engine": {
-      "version": "0.23.2",
+      "version": "0.24.0",
       "path": "/usr/local/bin/oxo-flow",
       "version_mismatch": false
     }
