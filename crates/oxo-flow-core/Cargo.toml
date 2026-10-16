@@ -41,7 +41,10 @@ csv = "1.4.0"
 # FASTQ gzip decompression for `reads_count()` runtime `when` gates (#282)
 flate2 = "1.0"
 async-trait = { workspace = true }
-aws-sdk-s3 = { version = "1", optional = true }
+# s3-storage: default-features = false minus `rustls` (#876) — the rustls
+# feature is the sole activator of the legacy hyper-0.14 / rustls-0.21 /
+# h2-0.3 chain; TLS stays via default-https-client (rustls 0.23 + aws-lc-rs).
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"], optional = true }
 aws-config = { version = "1", optional = true }
 hmac = { workspace = true }
 sha1 = { workspace = true, optional = true }
