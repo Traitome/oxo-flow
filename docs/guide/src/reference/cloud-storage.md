@@ -61,10 +61,15 @@ consulted.
   "service error" line), and 404s are detected on the typed error
   (`HeadObjectError::is_not_found`), never by string-matching.
 
-When using MinIO or LocalStack for testing, set `AWS_ENDPOINT_URL` to
-point to your local S3-compatible service:
+When testing against a local S3-compatible service, set `AWS_ENDPOINT_URL`
+to point to it. Note that the MinIO community server is no longer
+distributed (upstream archived the binaries/images); any S3-compatible
+endpoint works — e.g. [RustFS](https://rustfs.com), which this project's
+own E2E suite is verified against:
 
 ```bash
+# RustFS example (same defaults as MinIO: minioadmin/minioadmin)
+rustfs server --address :9000
 export AWS_ENDPOINT_URL=http://localhost:9000
 export AWS_ACCESS_KEY_ID=minioadmin
 export AWS_SECRET_ACCESS_KEY=minioadmin
@@ -212,17 +217,17 @@ re-execute) instead of using the cache.
   `oxo-flow-cli`'s `s3-storage` / `gcs-storage` features to register them
   in the shared run/dry-run storage resolver. The default build includes
   only the local filesystem backend. The `s3-storage` feature compiles and
-  is tested (unit fixtures + a live MinIO E2E suite, see
-  `crates/oxo-flow-cli/tests/remote_staging.rs`). Since #876, the
-  `aws-sdk-s3` dependency is declared with `default-features = false`
-  (minus the `rustls` feature), so the legacy hyper-0.14 / rustls-0.21 /
-  h2-0.3 TLS stack never enters the graph — TLS is provided by the modern
-  rustls 0.23 + aws-lc-rs path only.
+  is tested (unit fixtures + a live S3-compatible E2E suite, see
+  `crates/oxo-flow-cli/tests/remote_staging.rs`; verified against RustFS).
+  Since #876, the `aws-sdk-s3` dependency is declared with
+  `default-features = false` (minus the `rustls` feature), so the legacy
+  hyper-0.14 / rustls-0.21 / h2-0.3 TLS stack never enters the graph — TLS
+  is provided by the modern rustls 0.23 + aws-lc-rs path only.
 - **S3 credentials come from the environment** —
   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
   (plus `AWS_REGION`); the SDK's profile-file/IMDS chain lives in
   aws_config's async loader and is deliberately not loaded — the same
-  env-only contract the GCS backend has. S3-compatible servers (MinIO,
+  env-only contract the GCS backend has. S3-compatible servers (RustFS,
   LocalStack) additionally need `AWS_ENDPOINT_URL` and
   `OXO_S3_FORCE_PATH_STYLE=1` (path-style addressing).
 - **UTF-8 only** — `read_to_string` requires the content to be valid
