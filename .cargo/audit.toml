@@ -1,53 +1,14 @@
 [advisories]
-# RSA vulnerability - not applicable (we use sqlite, not mysql)
-# rustls-webpki vulns - transitive dep of aws-sdk-s3 (optional s3-storage feature)
-# via aws-smithy-runtime -> hyper-rustls 0.24 -> rustls 0.21 -> rustls-webpki 0.101
-# Our primary TLS stack uses reqwest/rustls 0.23/rustls-webpki 0.103 which is unaffected.
-# These cannot be fixed without upstream aws-sdk-s3 updating its hyper-rustls dependency.
-# RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) - h2 0.3.27 via
-# aws-smithy-http-client under the optional s3-storage feature; the 0.3
-# line has no patched release and the advisory only fixes 0.4.16+ (our
-# h2 0.4 is already at 0.4.19). Re-evaluate when the AWS SDK migrates
-# off h2 0.3.
-#
-# Re-verified 2026-09-28 (#658): the four AWS-stack advisories are
-# compile-time presence ONLY under the opt-in `s3-storage` feature —
-# default-feature graphs never contain them (which is why
-# `cargo deny check advisories` passes) — and runtime-unreachable:
-# nothing in the engine references the legacy connector
-# (`Connector::hyper_014_legacy` et al., zero grep hits). smithy-rs
-# enables the client crate's default features from aws-smithy-runtime's
-# dependency declaration, and `hyper-014` is among them; feature
-# unification is additive, so no downstream declaration can subtract
-# the legacy stack. Re-evaluate on every aws-smithy-http-client /
-# aws-smithy-runtime bump and drop the entries when smithy-rs ships a
-# default without it. Keep parity with the ignore list in deny.toml.
-#
-# Re-verified 2026-10-15 (v0.24.0 tag CI): RUSTSEC-2026-0346..0349
-# (published 2026-10-14, patched only in rustls 0.23.46) forced a lock
-# bump of the primary stack 0.23.45 -> 0.23.46; 0347/0348 are gone from
-# the graph entirely. 0346 (TLS secrets in `Debug` impls, medium) and
-# 0349 (unauthenticated ServerHello can downgrade later connections to
-# classical-only key exchange, low) still match the legacy rustls
-# 0.21.12 — 0346 declares `unaffected = ["< 0.21.0"]` and 0349 has no
-# unaffected range — so both are ignored here for the same
-# compile-time-only / runtime-unreachable reasons as above. Note:
-# aws-smithy-http-client 1.5.0 (2026-09-30) made its legacy deps
-# optional (`default = None`), but aws-sdk-s3's default `rustls`
-# feature still activates `aws-smithy-runtime/tls-rustls` ->
-# `connector-hyper-0-14-x` -> `hyper-014` + `legacy-rustls-ring`, so
-# feature unification keeps rustls 0.21 in the s3-storage graph. Drop
-# these entries when the legacy stack leaves the graph. Keep parity
-# with the ignore list in deny.toml.
-ignore = [
-    "RUSTSEC-2023-0071",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0258",
-    "RUSTSEC-2026-0346",
-    "RUSTSEC-2026-0349",
-]
+# No advisory ignores remain (#876): the AWS legacy TLS stack
+# (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101 / h2 0.3) was removed
+# from the s3-storage feature graph by declaring aws-sdk-s3 with
+# default-features = false minus the `rustls` feature — see crates/
+# oxo-flow-core/Cargo.toml. This supersedes the #658 ignore list (the
+# last seven entries it carried, RUSTSEC-2023-0071 / 0098 / 0099 / 0104 /
+# 0258 / 0346 / 0349, all matched the legacy stack only). If cargo audit
+# flags a new advisory, fix or justify it here instead of assuming it is
+# known.
+ignore = []
 
 # Report unmaintained crate warnings as informational (not errors)
 informational_warnings = ["unmaintained"]

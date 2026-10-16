@@ -58,21 +58,13 @@ license-files = []
 [advisories]
 version = 2
 yanked = "deny"
-# Only the AWS legacy-client stack is knowingly accepted (issue #658):
-# compile-time presence ONLY under the opt-in `s3-storage` feature,
-# runtime-unreachable, and unfixable downstream — see .cargo/audit.toml
-# for the full justification, the RUSTSEC-2023-0071 context, the
-# re-evaluation rule, and the 2026-10-15 re-verification covering
-# RUSTSEC-2026-0346/0349 (which match the legacy rustls 0.21.12 only).
-# Keep this list in lockstep with audit.toml.
-ignore = [
-    "RUSTSEC-2026-0258",
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0346",
-    "RUSTSEC-2026-0349",
-]
+# No advisory ignores remain (#876): the AWS legacy TLS stack
+# (hyper 0.14 / rustls 0.21 / rustls-webpki 0.101 / h2 0.3) was removed
+# from the s3-storage feature graph — see .cargo/audit.toml and
+# crates/oxo-flow-core/Cargo.toml. This supersedes the #658 ignore list
+# (the six entries it carried all matched the legacy stack only). Keep
+# this list empty; new advisories must be fixed or justified explicitly.
+ignore = []
 
 [bans]
 # Duplicates warn only: a full dedupe would chase transitive bumps in

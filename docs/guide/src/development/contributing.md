@@ -55,7 +55,8 @@ the window before adding retries.
 make ci
 # Runs: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings,
 #       cargo build, cargo test, schema-drift, version-check, cargo audit,
-#       cargo-deny, aws-legacy-tripwire, secrets scan, docs build,
+#       cargo-deny, aws-legacy-tripwire (fails if the legacy AWS TLS stack
+#       re-enters the s3-storage graph, #876), secrets scan, docs build,
 #       frontend-lint, eval-tests
 ```
 

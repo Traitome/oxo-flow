@@ -26,24 +26,23 @@ audit:
 deny:
 	cargo deny check
 
-## AWS legacy-client tripwire (#658): the RUSTSEC ignores in
-## .cargo/audit.toml and deny.toml are valid only while BOTH hold — (a) the
-## legacy hyper-0.14 stack is merely compiled in under the opt-in
-## s3-storage feature, and (b) nothing in the engine references the legacy
-## connector at runtime. This gate fails — prompting removal of the
-## ignores — the day upstream drops `hyper-014` from the client defaults
-## (h2 0.3 leaves the graph), and fails if someone introduces runtime
-## reachability, invalidating the justification. Keep in lockstep with the
-## two config files.
+## AWS legacy-client tripwire (#658, inverted by #876): the legacy
+## hyper-0.14 / rustls-0.21 / h2-0.3 stack was removed from the
+## s3-storage graph by declaring aws-sdk-s3 with default-features = false
+## minus `rustls` (#876), and all AWS-stack advisory ignores were deleted
+## from .cargo/audit.toml and deny.toml. The gate now FAILS when the
+## legacy stack re-appears in the graph (regression = re-linked), and
+## fails if engine code references the legacy connector. Cargo.lock must
+## be up to date for the graph probe to be meaningful.
 aws-legacy-tripwire:
 	@if cargo tree -p oxo-flow-core --features s3-storage -i h2@0.3.27 >/dev/null 2>&1; then \
-	  echo "aws-legacy-tripwire: legacy stack still linked — advisory ignores remain valid"; \
-	else \
-	  echo "aws-legacy-tripwire: h2 0.3 is GONE from the s3-storage graph — remove the RUSTSEC ignores from .cargo/audit.toml and deny.toml now (issue #658)"; \
+	  echo "aws-legacy-tripwire: legacy h2 0.3 is BACK in the s3-storage graph — the #876 fix regressed; remove it (issue #658/#876)"; \
 	  exit 1; \
+	else \
+	  echo "aws-legacy-tripwire: h2 0.3 absent from the s3-storage graph — legacy stack stays out (issue #876)"; \
 	fi
 	@if grep -rn "hyper_014" crates --include="*.rs"; then \
-	  echo "aws-legacy-tripwire: the legacy connector is referenced in engine code — the advisory ignores no longer hold; remove them and re-assess (issue #658)"; \
+	  echo "aws-legacy-tripwire: the legacy connector is referenced in engine code — re-assess the #876 feature-level fix"; \
 	  exit 1; \
 	fi
 

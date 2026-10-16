@@ -213,7 +213,11 @@ re-execute) instead of using the cache.
   in the shared run/dry-run storage resolver. The default build includes
   only the local filesystem backend. The `s3-storage` feature compiles and
   is tested (unit fixtures + a live MinIO E2E suite, see
-  `crates/oxo-flow-cli/tests/remote_staging.rs`).
+  `crates/oxo-flow-cli/tests/remote_staging.rs`). Since #876, the
+  `aws-sdk-s3` dependency is declared with `default-features = false`
+  (minus the `rustls` feature), so the legacy hyper-0.14 / rustls-0.21 /
+  h2-0.3 TLS stack never enters the graph — TLS is provided by the modern
+  rustls 0.23 + aws-lc-rs path only.
 - **S3 credentials come from the environment** —
   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
   (plus `AWS_REGION`); the SDK's profile-file/IMDS chain lives in
