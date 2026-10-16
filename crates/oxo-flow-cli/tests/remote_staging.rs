@@ -1,14 +1,16 @@
 //! Live S3 E2E (issue #80 item 1): real etag-driven invalidation against a
-//! MinIO instance.
+//! local S3-compatible server (verified against RustFS; MinIO's community
+//! server is no longer distributed).
 //!
 //! Gated twice so the default suite stays hermetic:
 //! 1. `#![cfg(feature = "s3-storage")]` — only built when the CLI enables
 //!    the backend (run with `cargo test -p oxo-flow-cli --features
 //!    s3-storage --test remote_staging`).
 //! 2. `OXO_S3_E2E=1` — only executes against a live endpoint; otherwise it
-//!    returns early with a notice (CI stays green without MinIO).
+//!    returns early with a notice (CI stays green without a server).
 //!
-//! Expected environment (defaults target a local MinIO):
+//! Expected environment (defaults target localhost:9000; credentials follow
+//! the MinIO convention and RustFS's defaults):
 //!   OXO_S3_E2E=1  AWS_ENDPOINT_URL=http://127.0.0.1:9000
 //!   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION
 //!   OXO_S3_FORCE_PATH_STYLE=1
@@ -109,7 +111,7 @@ async fn etag_rewrite_invalidates_exactly_the_remote_input_rule() {
     let backend = S3Storage::with_client(S3Storage::build_client());
     let bucket = format!("oxo-e2e-{}", std::process::id());
     backend.ensure_bucket(&bucket).await.unwrap_or_else(|e| {
-        panic!("MinIO bucket setup failed ({e:?}); is a server listening at AWS_ENDPOINT_URL?")
+        panic!("S3 bucket setup failed ({e:?}); is a server listening at AWS_ENDPOINT_URL?")
     });
     let remote = format!("s3://{bucket}/k1");
 
