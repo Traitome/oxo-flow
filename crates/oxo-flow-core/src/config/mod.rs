@@ -348,7 +348,8 @@ impl WorkflowConfig {
     /// True when `key` was injected by the engine at parse time (reference
     /// keyed-config values or reference_dir-derived paths), not written by
     /// the user. Run-time injections (samples_list / pairs_list /
-    /// samples_*) are covered by `config_impact::is_engine_injected_key`.
+    /// paired_pairs_* / samples_*) are covered by
+    /// `config_impact::is_engine_injected_key`.
     pub fn is_injected_config_key(&self, key: &str) -> bool {
         self.injected_config_keys.contains(key)
     }

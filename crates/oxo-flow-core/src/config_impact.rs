@@ -52,7 +52,10 @@ static CONFIG_BARE_RE: LazyLock<regex::Regex> =
 /// reused against the old directory after a change. The per-group list
 /// keys (`samples_<group>`, injected by samples.rs) remain exempt via the
 /// declared-group registry — a user key does not match any group name and
-/// stays diff-visible.
+/// stays diff-visible. The paired-pair subset keys (#881,
+/// paired_pairs_list/paired_pairs_count) are derived from the `[[pairs]]`
+/// declarations and follow the same exemption: they change exactly when
+/// pairs_list does.
 pub fn is_engine_injected_key(key: &str) -> bool {
     is_engine_injected_key_with(key, &[])
 }
@@ -61,7 +64,10 @@ pub fn is_engine_injected_key(key: &str) -> bool {
 /// `[[sample_groups]]` names, deciding which `samples_<name>` keys are
 /// engine-injected.
 pub fn is_engine_injected_key_with(key: &str, group_names: &[&str]) -> bool {
-    if matches!(key, "samples_list" | "pairs_list") {
+    if matches!(
+        key,
+        "samples_list" | "pairs_list" | "paired_pairs_list" | "paired_pairs_count"
+    ) {
         return true;
     }
     if let Some(group) = key.strip_prefix("samples_") {

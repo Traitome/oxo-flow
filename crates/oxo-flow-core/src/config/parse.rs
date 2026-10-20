@@ -449,6 +449,43 @@ impl WorkflowConfig {
             );
         }
 
+        // ── Inject config.paired_pairs_list / paired_pairs_count (#881) ───
+        // The subset of pairs whose control is non-empty. Cohort aggregation
+        // rules fan out over pairs_list, which drags in tumor-only pairs
+        // whose paired-only producers were when-skipped; `paired_pairs_list`
+        // scopes the fan-out to genuinely paired ids, and `paired_pairs_count`
+        // (an integer, 0 when absent) lets `when = "config.paired_pairs_count
+        // != 0"` gate a paired-only cohort rule without a manual mode flag.
+        // The rhs must stay UNQUOTED: the comparison evaluator parses an
+        // integer rhs with i64::parse and does not strip quotes, so the
+        // quoted form `!= '0'` silently never fires.
+        // TSV/CSV rows keep blank control cells as Some(""), so "paired"
+        // means Some(non-empty), not merely Some. Both keys are ALWAYS
+        // present (empty list / 0 for a tumor-only cohort) so the when-gate
+        // never sees an unresolved variable — matching the filter_samples /
+        // override_sample_groups re-sync paths, which also write the empty
+        // case.
+        let paired_pair_ids: Vec<String> = config
+            .pairs
+            .iter()
+            .filter(|p| p.control.as_deref().is_some_and(|c| !c.is_empty()))
+            .map(|p| p.pair_id.clone())
+            .collect();
+        let existing = config
+            .config
+            .get("paired_pairs_list")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let merged = merge_comma_list(existing, &paired_pair_ids);
+        config.config.insert(
+            "paired_pairs_list".to_string(),
+            toml::Value::String(merged.join(",")),
+        );
+        config.config.insert(
+            "paired_pairs_count".to_string(),
+            toml::Value::Integer(merged.len() as i64),
+        );
+
         // Derive standard reference paths from reference_dir (e.g., reference_fasta = reference_dir + "/genome.fa")
         config = config.with_derived_references();
 
