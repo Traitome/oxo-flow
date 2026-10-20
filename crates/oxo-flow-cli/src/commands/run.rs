@@ -6633,8 +6633,24 @@ pub async fn dry_run_command(
             )
             .context("failed to rebuild workflow DAG after re-entry replay")?;
             let new_order: Vec<String> = if target.is_empty() {
+                // When-aware closure (#882/#883), same as the main dry-run
+                // plan: raw `execution_order` would resurrect consumers of
+                // when-gated producers on the replayed DAG.
+                let (filtered, pruned) = dag
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &[],
+                        &when_false_rules,
+                        // Pre-built inputs (atacseq bwa_mem finding): see
+                        // the main target-closure call — existence in the
+                        // dry-run base dir keeps the consumer plannable.
+                        &|path| run_workdir_check(Some(base_dir), path),
+                    )
+                    .with_context(|| "failed to compute full-run execution order")?;
+                for rule_name in &pruned {
+                    print_when_pruned_note(rule_name, None);
+                }
                 let order_set: std::collections::HashSet<String> =
-                    dag.execution_order()?.into_iter().collect();
+                    filtered.iter().cloned().collect();
                 let mut ordered: Vec<String> = Vec::new();
                 for group in dag.parallel_groups()? {
                     let mut level: Vec<String> = group

@@ -397,7 +397,33 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                     .collect()
             };
             let order = if target.is_empty() {
-                dag.execution_order()?
+                // When-aware closure (#882/#883), same as the `run` command:
+                // raw `execution_order` would send consumers of when-gated
+                // producers to the cluster and fail them on absent files.
+                let (filtered, pruned) = dag
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &[],
+                        &when_false_rules,
+                        // Pre-built inputs (atacseq bwa_mem finding): the
+                        // generated scripts run in the workflow's own
+                        // directory, so existence anchors there.
+                        &|path| {
+                            let p = Path::new(path);
+                            if p.is_absolute() {
+                                p.exists()
+                            } else {
+                                workflow.parent().unwrap_or(Path::new(".")).join(p).exists()
+                            }
+                        },
+                    )
+                    .with_context(|| "failed to compute full-run execution order")?;
+                for rule_name in &pruned {
+                    eprintln!(
+                        "{} rule '{rule_name}' is unreachable — its upstream is when-gated false; removed from the full-run execution set",
+                        "Note:".yellow()
+                    );
+                }
+                filtered
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                 let (filtered, skipped_targets) = dag

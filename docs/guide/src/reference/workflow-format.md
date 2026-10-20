@@ -2460,6 +2460,16 @@ The engine closes that gap in two layers (issues #882/#883):
   the plan: the executor evaluates its `when` and counts it as skipped
   exactly once.
 
+The baked-input drop is **per path**: it does not check whether a second,
+surviving rule also declares the identical output path (the duplicate-owner
+shape lint [W033](../commands/lint.md) warns about). In that corner the
+surviving producer's file is dropped from the baked list too, even though
+the DAG-level plan still keeps the consumer plannable (one surviving
+producer of the input group is enough) — so the command would see fewer
+`{input}` entries than exist. Avoid `expand_inputs` over an output path
+that two rules both declare; when one owner is when-gated, list the input
+directly or fan out with a pattern that only the surviving owner produces.
+
 ```toml
 [[pairs]]
 pair_id = "P1"

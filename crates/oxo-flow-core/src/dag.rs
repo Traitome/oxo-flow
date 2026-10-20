@@ -643,9 +643,9 @@ impl WorkflowDag {
             // `expand_inputs` literals of pruned producers runs and fails
             // on the absent file. Same fixpoint, but the surviving plan is
             // every node minus the NEWLY-pruned consumers (not just target
-            // ancestors) and nothing is reported as a "skipped target".
-            // The seeds themselves stay in the order — the executor
-            // evaluates their `when` and counts the skip exactly once.
+            // ancestors). The seeds themselves stay in the order — the
+            // executor evaluates their `when` and counts the skip exactly
+            // once.
             let mut pruned: HashSet<String> = skip.clone();
             loop {
                 let mut grew = false;
@@ -679,14 +679,16 @@ impl WorkflowDag {
             // "count skips once" contract). Only newly-propagated dead
             // consumers — unrunnable because every producer of some input
             // group died — leave the plan; pruning the seeds themselves
-            // would zero the executor's skipped count.
+            // would zero the executor's skipped count. The second element
+            // carries the newly-pruned names so callers can narrate the
+            // plan change ("unreachable" note); skipped TARGETS are
+            // meaningless here — the user selected nothing.
             let newly_pruned: HashSet<String> = pruned.difference(skip).cloned().collect();
-            let order = full_order
+            let (order, pruned_names): (Vec<String>, Vec<String>) = full_order
                 .into_iter()
-                .filter(|n| !newly_pruned.contains(&n.name))
                 .map(|n| n.name.clone())
-                .collect();
-            return Ok((order, Vec::new()));
+                .partition(|name| !newly_pruned.contains(name.as_str()));
+            return Ok((order, pruned_names));
         }
 
         // Resolve targets (same validation + prefix matching as the
@@ -2856,22 +2858,23 @@ mod tests {
         // when-false seed itself STAYS in the order: the executor
         // evaluates its `when` and counts the skip exactly once ("count
         // skips once" contract). The surviving producer instance stays.
-        let (order, skipped_targets) = dag
+        let (order, pruned_names) = dag
             .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|_| false)
             .unwrap();
-        assert!(
-            skipped_targets.is_empty(),
-            "full run reports no skipped targets"
-        );
         assert!(order.contains(&"fit_purity_P1".to_string()), "{order:?}");
         assert!(order.contains(&"fit_purity_P2".to_string()), "{order:?}");
         assert!(!order.contains(&"ascat_cohort".to_string()), "{order:?}");
         assert!(!order.contains(&"reporter".to_string()), "{order:?}");
+        // The second element carries the NEWLY-pruned consumers (not the
+        // seeds) so callers narrate the plan change via the "unreachable"
+        // note — the executor still owns the skip count for the seeds.
+        assert_eq!(pruned_names, vec!["ascat_cohort", "reporter"]);
+        assert!(!pruned_names.contains(&"fit_purity_P2".to_string()));
 
         // With the P2 output pre-built on disk the consumer is satisfiable
         // and must stay in the plan (same existence semantics as the
         // targeted branch); the seed still stays as an executor skip.
-        let (order, _) = dag
+        let (order, pruned_names) = dag
             .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|path| {
                 path == "ascat/P2/purity.tsv"
             })
@@ -2879,6 +2882,8 @@ mod tests {
         assert!(order.contains(&"ascat_cohort".to_string()), "{order:?}");
         assert!(order.contains(&"reporter".to_string()), "{order:?}");
         assert!(order.contains(&"fit_purity_P2".to_string()), "{order:?}");
+        // Satisfied by the pre-built file, no consumer died this time.
+        assert!(pruned_names.is_empty(), "{pruned_names:?}");
     }
 
     #[test]

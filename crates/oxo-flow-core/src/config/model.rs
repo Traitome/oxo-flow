@@ -1960,9 +1960,9 @@ pub struct WorkflowConfig {
     /// would still bake the absent paths into a consumer's `input` from the
     /// `expand_inputs` pattern, leaving a dead literal the shell trips over.
     /// Paths recorded here are dropped from the baked input list (with a
-    /// warning) while [`Self::expand_inputs_baked`] keeps the full
-    /// provenance for snapshot invalidation. Never serialized — user TOML
-    /// cannot set it.
+    /// warning) while [`Rule::expand_inputs_baked`](crate::rule::Rule::expand_inputs_baked)
+    /// keeps the full provenance for snapshot invalidation. Never
+    /// serialized — user TOML cannot set it.
     #[serde(skip)]
     pub when_skipped_outputs: std::collections::HashSet<String>,
 
