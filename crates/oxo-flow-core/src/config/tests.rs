@@ -4309,6 +4309,233 @@ fn filter_samples_clears_injected_lists_when_everything_dropped() {
 }
 
 #[test]
+fn from_file_injects_paired_pairs_list_and_count() {
+    // #881: pairs with a non-empty control form the "paired" subset —
+    // injected as config.paired_pairs_list (sorted, comma-joined) and
+    // config.paired_pairs_count (integer) so cohort aggregation rules can
+    // fan out over paired pairs only and gate on the count. TSV/CSV rows
+    // keep blank control cells as Some(""), so "paired" means a non-empty
+    // control string, not merely Some.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pairs.tsv"),
+        // TSV blank control cell → Some(""): tumor-only.
+        "pair_id\texperiment\tcontrol\nP4\tT4\t\n",
+    )
+    .unwrap();
+    let workflow_path = dir.path().join("pairs.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "pairs"
+        pairs_file = "pairs.tsv"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+        control = "N1"
+
+        [[pairs]]
+        pair_id = "P2"
+        experiment = "T2"
+
+        [[pairs]]
+        pair_id = "P3"
+        experiment = "T3"
+        control = "N3"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+        "#,
+    )
+    .unwrap();
+
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    // Inline TOML pairs: P1 (control set), P2 (None → tumor-only); TSV: P4
+    // (Some("") → tumor-only).
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_list")
+            .and_then(toml::Value::as_str),
+        Some("P1,P3")
+    );
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_count")
+            .and_then(toml::Value::as_integer),
+        Some(2)
+    );
+    // Expandable per value for expand_inputs fan-out.
+    assert_eq!(
+        config.resolve_config_list("config.paired_pairs_list"),
+        Some(vec!["P1".to_string(), "P3".to_string(),])
+    );
+}
+
+#[test]
+fn from_file_paired_pairs_count_zero_for_tumor_only_cohort() {
+    // #881 shape 2: a cohort with NO controls injects an empty
+    // paired_pairs_list (not omitted) and count 0, so
+    // `when = "config.paired_pairs_count != '0'"` distinguishes a
+    // tumor-only cohort from a paired one without a manual mode flag.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("pairs.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "pairs"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+        "#,
+    )
+    .unwrap();
+
+    let config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_list")
+            .and_then(toml::Value::as_str),
+        Some("")
+    );
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_count")
+            .and_then(toml::Value::as_integer),
+        Some(0)
+    );
+}
+
+#[test]
+fn expand_inputs_resolves_injected_paired_pairs_list() {
+    // #881: a cohort aggregation rule fans out over paired pairs only —
+    // in a mixed cohort the tumor-only pairs' producers are when-skipped,
+    // so expanding over all of pairs_list references unproducible inputs.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("pairs.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "pairs"
+
+        [[pairs]]
+        pair_id = "CASE_001"
+        experiment = "EXP_01"
+        control = "CTR_01"
+
+        [[pairs]]
+        pair_id = "CASE_002"
+        experiment = "EXP_02"
+
+        [[rules]]
+        name = "fit_cohort"
+        input = []
+        expand_inputs = [
+            { pattern = "ascat/{pair_id}/purity_ploidy.tsv", variables = { pair_id = "config.paired_pairs_list" } }
+        ]
+        output = ["ascat/cohort_purity_ploidy.tsv"]
+        shell = "cat {input} > {output[0]}"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+
+    let fit = config
+        .rules
+        .iter()
+        .find(|r| r.name == "fit_cohort")
+        .expect("fit_cohort rule should survive expansion");
+    assert_eq!(
+        fit.input.to_vec(),
+        vec!["ascat/CASE_001/purity_ploidy.tsv".to_string(),]
+    );
+}
+
+#[test]
+fn filter_samples_syncs_injected_paired_pairs_list() {
+    // --samples filtering must rewrite the paired subset (#881) alongside
+    // pairs_list, including clearing both when the last paired pair drops.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("pairs.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+        [workflow]
+        name = "pairs"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "T1"
+        control = "N1"
+
+        [[pairs]]
+        pair_id = "P2"
+        experiment = "T2"
+        control = "N2"
+
+        [[rules]]
+        name = "step1"
+        shell = "echo hi"
+        "#,
+    )
+    .unwrap();
+
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    let (kept, _) = config
+        .filter_samples(&["T1".to_string(), "N1".to_string()])
+        .unwrap();
+    assert_eq!(kept, vec!["T1", "N1"]);
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_list")
+            .and_then(toml::Value::as_str),
+        Some("P1")
+    );
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_count")
+            .and_then(toml::Value::as_integer),
+        Some(1)
+    );
+
+    // Dropping the surviving pair's control side empties the subset.
+    let (kept, _) = config.filter_samples(&["T9".to_string()]).unwrap();
+    assert!(kept.is_empty());
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_list")
+            .and_then(toml::Value::as_str),
+        Some("")
+    );
+    assert_eq!(
+        config
+            .config
+            .get("paired_pairs_count")
+            .and_then(toml::Value::as_integer),
+        Some(0)
+    );
+}
+
+#[test]
 fn merge_profile_tolerates_quoted_threads_in_defaults() {
     // Profiles historically tolerated quoted numerics in [defaults]
     // (`threads = "16"`): coercion keeps that tolerance, while a

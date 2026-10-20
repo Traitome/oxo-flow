@@ -151,6 +151,21 @@ impl WorkflowConfig {
             "pairs_list".to_string(),
             toml::Value::String(pair_ids.join(",")),
         );
+        // Keep the paired subset (#881) in sync with the surviving pairs.
+        let paired_ids: Vec<String> = self
+            .pairs
+            .iter()
+            .filter(|p| p.control.as_deref().is_some_and(|c| !c.is_empty()))
+            .map(|p| p.pair_id.clone())
+            .collect();
+        self.config.insert(
+            "paired_pairs_list".to_string(),
+            toml::Value::String(paired_ids.join(",")),
+        );
+        self.config.insert(
+            "paired_pairs_count".to_string(),
+            toml::Value::Integer(paired_ids.len() as i64),
+        );
         self.config.insert(
             "samples_list".to_string(),
             toml::Value::String(kept.join(",")),
@@ -631,6 +646,21 @@ impl WorkflowConfig {
         self.config.insert(
             "pairs_list".to_string(),
             toml::Value::String(pair_ids.join(",")),
+        );
+        // Keep the paired subset (#881) in sync with the surviving pairs.
+        let paired_ids: Vec<String> = self
+            .pairs
+            .iter()
+            .filter(|p| p.control.as_deref().is_some_and(|c| !c.is_empty()))
+            .map(|p| p.pair_id.clone())
+            .collect();
+        self.config.insert(
+            "paired_pairs_list".to_string(),
+            toml::Value::String(paired_ids.join(",")),
+        );
+        self.config.insert(
+            "paired_pairs_count".to_string(),
+            toml::Value::Integer(paired_ids.len() as i64),
         );
 
         Ok(final_samples)

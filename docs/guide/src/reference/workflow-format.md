@@ -279,6 +279,17 @@ Several keys are **engine-injected**:
   parallel list by hand. A user-declared `config.samples_list` is
   union-merged with the discovered samples, and the two lists are also
   rewritten by `--samples` filtering.
+- `config.paired_pairs_list` (pair ids whose control is non-empty,
+  comma-joined) and `config.paired_pairs_count` (their count, an integer,
+  `0` for a tumor-only cohort) — the paired subset of `[[pairs]]` (#881).
+  Use `paired_pairs_list` in `expand_inputs` to scope cohort aggregation
+  rules to genuinely paired pairs, and gate paired-only cohort rules with
+  `when = "config.paired_pairs_count != '0'"` so a tumor-only cohort skips
+  them instead of referencing unproducible inputs. "Paired" means a
+  non-empty control string: TSV/CSV `pairs_file` rows keep blank control
+  cells as empty strings. Both keys always exist (empty list / `0` when no
+  pair has a control) and follow the same `--samples`-filter rewriting and
+  invalidation-diff exemption as `pairs_list`.
 - `config.samples_<group>` (one per `[[sample_groups]]` entry).
 - `config.<reference name>` (each `[[references]]` entry's `output`) and,
   with `reference_dir`, the ten derived paths (`reference_fasta`,
