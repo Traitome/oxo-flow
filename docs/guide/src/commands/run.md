@@ -217,6 +217,19 @@ outputs are pruned too. Naming a when-gated-false target explicitly
 reports it and aborts with "nothing to run" instead of planning a run
 that cannot produce output.
 
+The same when-aware closure applies to **full runs** (no `--target`) and
+`--module` runs: a consumer left without any surviving producer of an
+input group (all of its producers when-gated false, the files not
+pre-built on disk, and the group not `optional = "any"`) is dropped from
+the plan with a note — `rule '...' is unreachable — its upstream is
+when-gated false; removed from the full-run execution set` — instead of
+failing mid-run on a file that was never produced (issues #882/#883).
+The when-gated rule itself stays in the plan and is counted as skipped
+exactly once by the executor. See
+[when-skipped instances](../reference/workflow-format.md#when-skipped-instances-and-downstream-consumers)
+for how the consumer's baked `expand_inputs` list is cleaned in the same
+sweep.
+
 ### Set a per-job timeout
 
 ```bash

@@ -2437,6 +2437,60 @@ rule's `when` at expansion time, so the execution-time re-check
 re-evaluates the exact same per-instance verdict; config-only predicates
 continue to gate at execution as before.
 
+### When-skipped instances and downstream consumers
+
+A pair/group-level gate prunes the failing instance during expansion, but
+a downstream **cohort consumer** that fans its input over
+`config.pairs_list` via `expand_inputs` still bakes every pair's concrete
+path into `rule.input` — including the path of the instance that never ran.
+The engine closes that gap in two layers (issues #882/#883):
+
+- **Baked inputs** — output paths of when-skipped instances are dropped
+  from the consumer's baked input list, with a warning naming the dropped
+  paths (`expand_inputs entries dropped: producers skipped by
+  when-condition`). The full list stays in `expand_inputs_baked`
+  provenance, so snapshot invalidation still tracks every declared entry.
+- **Full-run plan** — a consumer whose every producer of some input group
+  was when-gated false (and whose inputs are not pre-built on disk and
+  not `optional = "any"`) is pruned from the full-run execution plan with
+  a note ("rule … is unreachable — its upstream is when-gated false"),
+  instead of failing at runtime on the absent file. The same
+  death-propagation already applied to `--target` runs (issue #247)
+  applies when no targets are given. The when-gated rule itself stays in
+  the plan: the executor evaluates its `when` and counts it as skipped
+  exactly once.
+
+```toml
+[[pairs]]
+pair_id = "P1"
+experiment = "Pt01_T"
+control = "Pt01_N"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "Pt02_T"   # tumor-only: {control} expands empty
+
+[[rules]]
+name = "fit_purity"
+input = ["raw/{pair_id}.txt"]
+output = ["ascat/{pair_id}/purity_ploidy.tsv"]
+when = "wildcard.control != ''"   # P2 instance never enters the DAG
+
+[[rules]]
+name = "ascat_cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity_ploidy.tsv",
+    variables = { pair_id = "config.pairs_list" } },
+]
+output = ["cohort/purity_ploidy_summary.tsv"]
+shell = "cat {input} > {output}"   # receives only P1's path
+```
+
+To scope a cohort fan-out to genuinely paired ids in the first place, use
+the injected `config.paired_pairs_list` / `config.paired_pairs_count`
+variables (see [`[[pairs]]`](#pairs-paired-samples)).
+
 **`wildcard.*` is a `when`-only vocabulary.** The dotted form is not a
 shell placeholder — the engine's placeholder syntax is bare `{name}`, so
 `{wildcard.input_type}` in a `shell` renders literally. Group/pair
