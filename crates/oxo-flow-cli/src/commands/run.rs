@@ -1940,29 +1940,40 @@ pub async fn run_command(
         run_log_path.display()
     );
 
-    // Targeted runs (-t) close over the INSTANTIATED DAG (issue #247):
-    // instances whose `when` evaluates false under the effective config
-    // never enter the execution set, and the closure does not expand
-    // through them. Prefix matching still resolves the entries.
-    let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        let wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
-        config
-            .rules
-            .iter()
-            .filter(|rule| {
-                crate::commands::run_preview::when_condition_false(rule, &config, &wildcard_values)
-            })
-            .map(|rule| rule.name.clone())
-            .collect()
-    };
+    // When-aware planning (#882/#883): rules whose template `when` evaluates
+    // false under the effective config seed the pruned set. Targeted runs
+    // close over the INSTANTIATED DAG (issue #247) — instances whose `when`
+    // evaluates false never enter the execution set, and the closure does
+    // not expand through them. Full runs apply the same seeds so consumers
+    // of when-skipped producers get pruned instead of failing at runtime.
+    let wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
+    let when_false_rules: std::collections::HashSet<String> = config
+        .rules
+        .iter()
+        .filter(|rule| {
+            crate::commands::run_preview::when_condition_false(rule, &config, &wildcard_values)
+        })
+        .map(|rule| rule.name.clone())
+        .collect();
 
     // Default targets (issue #469): `target = true` rules seed the build
     // when nothing explicit was selected. Explicit -t/--module wins.
     let target = resolve_default_targets(&config, &target);
     let mut order = if target.is_empty() {
-        dag.execution_order()?
+        let (filtered_order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(
+                &[],
+                &when_false_rules,
+                // Pre-built inputs (atacseq bwa_mem finding): an input whose
+                // concrete file already exists in the run workdir is
+                // satisfiable — a when-false producer must not gate it.
+                &|path| run_workdir_check(Some(workdir.as_ref().unwrap_or(&workdir_default)), path),
+            )
+            .with_context(|| "failed to compute full-run execution order")?;
+        for rule_name in &pruned {
+            print_when_pruned_note(rule_name, Some(&run_log));
+        }
+        filtered_order
     } else {
         let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
         let (filtered_order, skipped_targets) = dag
@@ -3347,7 +3358,22 @@ pub async fn run_command(
             )
             .context("failed to rebuild workflow DAG after re-entry replay")?;
             order = if target.is_empty() {
-                dag.execution_order()?
+                let (filtered, pruned) = dag
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &[],
+                        &when_false_rules,
+                        &|path| {
+                            run_workdir_check(
+                                Some(workdir.as_ref().unwrap_or(&workdir_default)),
+                                path,
+                            )
+                        },
+                    )
+                    .with_context(|| "failed to compute full-run execution order")?;
+                for rule_name in &pruned {
+                    print_when_pruned_note(rule_name, Some(&run_log));
+                }
+                filtered
             } else {
                 let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                 let (filtered, skipped_targets) = dag
@@ -3416,7 +3442,22 @@ pub async fn run_command(
                 )
                 .context("failed to rebuild workflow DAG after output_pattern replay")?;
                 order = if target.is_empty() {
-                    dag.execution_order()?
+                    let (filtered, pruned) = dag
+                        .execution_order_for_targets_skipping_with_source_check(
+                            &[],
+                            &when_false_rules,
+                            &|path| {
+                                run_workdir_check(
+                                    Some(workdir.as_ref().unwrap_or(&workdir_default)),
+                                    path,
+                                )
+                            },
+                        )
+                        .with_context(|| "failed to compute full-run execution order")?;
+                    for rule_name in &pruned {
+                        print_when_pruned_note(rule_name, Some(&run_log));
+                    }
+                    filtered
                 } else {
                     let target_refs: Vec<&str> = target.iter().map(String::as_str).collect();
                     let (filtered, skipped_targets) = dag
@@ -6451,30 +6492,34 @@ pub async fn dry_run_command(
     // the same when-gate filter `run` applies, so the preview cannot list
     // instances that would never execute.
     let dry_wildcard_values: HashMap<String, String> = config_placeholder_values(&config.config);
-    let when_false_rules: std::collections::HashSet<String> = if target.is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        config
-            .rules
-            .iter()
-            .filter(|rule| {
-                crate::commands::run_preview::when_condition_false(
-                    rule,
-                    &config,
-                    &dry_wildcard_values,
-                )
-            })
-            .map(|rule| rule.name.clone())
-            .collect()
-    };
+    let when_false_rules: std::collections::HashSet<String> = config
+        .rules
+        .iter()
+        .filter(|rule| {
+            crate::commands::run_preview::when_condition_false(rule, &config, &dry_wildcard_values)
+        })
+        .map(|rule| rule.name.clone())
+        .collect();
 
     // Compute the execution set (respects --target), then display it in
     // parallel-group order — the same grouping `run` uses for scheduling.
     // Independent rules at the same level appear adjacent, so the listing
     // reflects actual concurrency instead of an arbitrary topological order.
     let mut order = if target.is_empty() {
-        let order_set: std::collections::HashSet<String> =
-            dag.execution_order()?.into_iter().collect();
+        let (filtered_order, pruned) = dag
+            .execution_order_for_targets_skipping_with_source_check(
+                &[],
+                &when_false_rules,
+                // Pre-built inputs (atacseq bwa_mem finding): see the main
+                // target-closure call — existence in the dry-run base dir
+                // keeps the consumer plannable.
+                &|path| run_workdir_check(Some(base_dir), path),
+            )
+            .with_context(|| "failed to compute full-run execution order")?;
+        for rule_name in &pruned {
+            print_when_pruned_note(rule_name, None);
+        }
+        let order_set: std::collections::HashSet<String> = filtered_order.iter().cloned().collect();
         let mut ordered: Vec<String> = Vec::new();
         for group in dag.parallel_groups()? {
             let mut level: Vec<String> = group
@@ -6588,8 +6633,24 @@ pub async fn dry_run_command(
             )
             .context("failed to rebuild workflow DAG after re-entry replay")?;
             let new_order: Vec<String> = if target.is_empty() {
+                // When-aware closure (#882/#883), same as the main dry-run
+                // plan: raw `execution_order` would resurrect consumers of
+                // when-gated producers on the replayed DAG.
+                let (filtered, pruned) = dag
+                    .execution_order_for_targets_skipping_with_source_check(
+                        &[],
+                        &when_false_rules,
+                        // Pre-built inputs (atacseq bwa_mem finding): see
+                        // the main target-closure call — existence in the
+                        // dry-run base dir keeps the consumer plannable.
+                        &|path| run_workdir_check(Some(base_dir), path),
+                    )
+                    .with_context(|| "failed to compute full-run execution order")?;
+                for rule_name in &pruned {
+                    print_when_pruned_note(rule_name, None);
+                }
                 let order_set: std::collections::HashSet<String> =
-                    dag.execution_order()?.into_iter().collect();
+                    filtered.iter().cloned().collect();
                 let mut ordered: Vec<String> = Vec::new();
                 for group in dag.parallel_groups()? {
                     let mut level: Vec<String> = group
@@ -7632,6 +7693,19 @@ fn print_target_skipped_note(
              false; removed from the execution set"
         )
     };
+    diagnostic_narrate(format_args!("{} {detail}", "Note:".yellow()), run_log);
+}
+
+/// Explain a rule dropped from a FULL-RUN execution set by when-aware
+/// propagation (#882/#883): its own upstream is when-gated false, so its
+/// inputs can never be produced in this config. Unlike the targeted note
+/// above there is no user-selected target — the wording reports the plan
+/// change without the "requested target" framing.
+fn print_when_pruned_note(rule_name: &str, run_log: Option<&SharedRunLog>) {
+    let detail = format!(
+        "rule '{rule_name}' is unreachable — its upstream is when-gated \
+         false; removed from the full-run execution set"
+    );
     diagnostic_narrate(format_args!("{} {detail}", "Note:".yellow()), run_log);
 }
 

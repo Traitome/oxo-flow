@@ -274,6 +274,7 @@ impl WorkflowConfig {
         self.expansion_values.clear();
         self.expansion_pairs.clear();
         self.expansion_instance_combos.clear();
+        self.when_skipped_outputs.clear();
 
         // Environment field-level validation (the CLI run path does not
         // call per-rule `validate`): `gpus` requires a container backend.
@@ -679,6 +680,11 @@ impl WorkflowConfig {
                                 &combo_values,
                                 self.base_dir.as_deref(),
                             ) {
+                                // The instance never enters the DAG (#882):
+                                // record its would-be outputs so a consumer's
+                                // `expand_inputs` does not bake dead literals.
+                                let skipped = expand_rule_patterns(&rule.output, &combo);
+                                self.when_skipped_outputs.extend(skipped.to_vec());
                                 continue;
                             }
                         }
@@ -804,6 +810,27 @@ impl WorkflowConfig {
                                 &combo_values,
                                 self.base_dir.as_deref(),
                             ) {
+                                // Instance skipped (#882) — record its
+                                // would-be outputs for expand_inputs
+                                // filtering (mirrors the pair branch).
+                                let skipped = rule
+                                    .output
+                                    .iter()
+                                    .map(|p| {
+                                        if has_wildcards(p)
+                                            || crate::wildcard::contains_values_namespace(p)
+                                        {
+                                            crate::wildcard::expand_values_namespace(
+                                                &expand_pattern(p, &merged)
+                                                    .unwrap_or_else(|_| p.clone()),
+                                                &merged,
+                                            )
+                                        } else {
+                                            p.clone()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                self.when_skipped_outputs.extend(skipped);
                                 continue;
                             }
                         }
@@ -966,6 +993,11 @@ impl WorkflowConfig {
                             &combo_values,
                             self.base_dir.as_deref(),
                         ) {
+                            // Instance skipped (#882) — record its would-be
+                            // outputs for expand_inputs filtering (mirrors
+                            // the pair branch).
+                            let skipped = expand_rule_patterns(&rule.output, combo);
+                            self.when_skipped_outputs.extend(skipped.to_vec());
                             continue;
                         }
                     }
@@ -1567,6 +1599,27 @@ impl WorkflowConfig {
             // aligner-gated producer skipped under the active config)
             // instead of letting it poison the whole snapshot.
             rule.expand_inputs_baked.extend(expanded.iter().cloned());
+            // When-gated producer instances skipped during expansion
+            // (#882/#883): their outputs never enter the DAG, so baking
+            // them into `input` leaves a dead literal the shell trips
+            // over. Drop those entries with a warning — the full list
+            // stays in `expand_inputs_baked` as provenance.
+            let mut dropped = Vec::new();
+            expanded.retain(|path| {
+                if self.when_skipped_outputs.contains(path) {
+                    dropped.push(path.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            if !dropped.is_empty() {
+                tracing::warn!(
+                    rule = %rule.name,
+                    dropped = %dropped.join(", "),
+                    "expand_inputs entries dropped: producers skipped by when-condition (instances absent from the DAG)"
+                );
+            }
             current_input.extend(expanded);
             rule.input = FilePatterns::List(current_input);
         }
@@ -3012,4 +3065,79 @@ fn bake_when_escapes_values_containing_both_quote_types() {
             None,
         )
     );
+}
+
+#[test]
+fn materialize_expand_inputs_drops_when_skipped_outputs() {
+    // #882/#883: a pair-level `when` gate skipped the P2 instance during
+    // expansion, but the cohort consumer's `expand_inputs` still baked the
+    // P2 path into `rule.input` — the run died on the dead literal. The
+    // baked entry must be dropped (with the full list kept in
+    // `expand_inputs_baked` as provenance). `from_file` is required: the
+    // `config.pairs_list` injection happens in the file-load path.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+control = "N1"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "T2"
+
+[[rules]]
+name = "fit_purity"
+input = ["raw/{pair_id}.txt"]
+output = ["ascat/{pair_id}/purity.tsv"]
+when = "wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity.tsv", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["cohort/summary.tsv"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    let cohort = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cohort")
+        .expect("cohort rule must exist");
+    // Only the surviving P1 instance's output survives baking; the P2
+    // literal (would-be output of the when-skipped instance) is dropped.
+    assert!(
+        !cohort
+            .input
+            .to_vec()
+            .contains(&"ascat/P2/purity.tsv".to_string()),
+        "when-skipped producer output must be dropped from input: {:?}",
+        cohort.input.to_vec()
+    );
+    assert!(
+        cohort
+            .input
+            .to_vec()
+            .contains(&"ascat/P1/purity.tsv".to_string()),
+        "surviving producer output must stay: {:?}",
+        cohort.input.to_vec()
+    );
+    // Full provenance list keeps both entries (#757 snapshot machinery).
+    assert!(cohort.expand_inputs_baked.contains("ascat/P1/purity.tsv"));
+    assert!(cohort.expand_inputs_baked.contains("ascat/P2/purity.tsv"));
 }

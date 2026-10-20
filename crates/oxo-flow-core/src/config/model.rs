@@ -1951,6 +1951,21 @@ pub struct WorkflowConfig {
     /// instance's own pair. Never serialized — user TOML cannot set it.
     #[serde(skip)]
     pub expansion_pairs: HashMap<String, crate::wildcard::WildcardValues>,
+
+    /// Engine-internal: concrete output paths of rule instances skipped by
+    /// an instance-level `when` gate during expansion (issues #882/#883).
+    ///
+    /// When a pair/group/value instance fails its baked `when` condition,
+    /// the instance never enters the DAG — but `materialize_expand_inputs`
+    /// would still bake the absent paths into a consumer's `input` from the
+    /// `expand_inputs` pattern, leaving a dead literal the shell trips over.
+    /// Paths recorded here are dropped from the baked input list (with a
+    /// warning) while [`Rule::expand_inputs_baked`](crate::rule::Rule::expand_inputs_baked)
+    /// keeps the full provenance for snapshot invalidation. Never
+    /// serialized — user TOML cannot set it.
+    #[serde(skip)]
+    pub when_skipped_outputs: std::collections::HashSet<String>,
+
     /// Instance → template rule name for every fan-out expansion (issue #74
     /// phase 3): the cluster driver groups instances into job arrays by
     /// their TEMPLATE, never by guessing name suffixes. Never serialized.

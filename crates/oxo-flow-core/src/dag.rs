@@ -637,7 +637,58 @@ impl WorkflowDag {
         source_exists: &dyn Fn(&str) -> bool,
     ) -> Result<(Vec<String>, Vec<String>)> {
         if targets.is_empty() {
-            return Ok((self.execution_order()?, Vec::new()));
+            // Full run (#882/#883): no target closure to intersect with, so
+            // the when-gated `skip` seeds must still propagate death to
+            // their consumers — otherwise a consumer with baked
+            // `expand_inputs` literals of pruned producers runs and fails
+            // on the absent file. Same fixpoint, but the surviving plan is
+            // every node minus the NEWLY-pruned consumers (not just target
+            // ancestors). The seeds themselves stay in the order — the
+            // executor evaluates their `when` and counts the skip exactly
+            // once.
+            let mut pruned: HashSet<String> = skip.clone();
+            loop {
+                let mut grew = false;
+                for idx in self.graph.node_indices() {
+                    let name = &self.graph[idx].name;
+                    if pruned.contains(name) {
+                        continue;
+                    }
+                    if let Some(groups) = self.input_producers.get(name) {
+                        // `optional = "any"` stays executor-owned — see the
+                        // base method's note before touching this gate.
+                        let optional_any = self.graph[idx].optional.is_any();
+                        let is_unrunnable = groups.iter().any(|(input_path, producers)| {
+                            if source_exists(input_path) {
+                                return false;
+                            }
+                            !producers.is_empty() && producers.iter().all(|p| pruned.contains(p))
+                        });
+                        if is_unrunnable && !optional_any && pruned.insert(name.clone()) {
+                            grew = true;
+                        }
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+            let full_order = self.topological_order()?;
+            // Seeds (`skip`) STAY in the order: the executor evaluates their
+            // `when` and counts the skip exactly once (the historic
+            // "count skips once" contract). Only newly-propagated dead
+            // consumers — unrunnable because every producer of some input
+            // group died — leave the plan; pruning the seeds themselves
+            // would zero the executor's skipped count. The second element
+            // carries the newly-pruned names so callers can narrate the
+            // plan change ("unreachable" note); skipped TARGETS are
+            // meaningless here — the user selected nothing.
+            let newly_pruned: HashSet<String> = pruned.difference(skip).cloned().collect();
+            let (order, pruned_names): (Vec<String>, Vec<String>) = full_order
+                .into_iter()
+                .map(|n| n.name.clone())
+                .partition(|name| !newly_pruned.contains(name.as_str()));
+            return Ok((order, pruned_names));
         }
 
         // Resolve targets (same validation + prefix matching as the
@@ -2769,6 +2820,70 @@ mod tests {
             );
         }
         assert!(!order.contains(&"gated_producer".to_string()), "{order:?}");
+    }
+
+    #[test]
+    fn execution_order_full_run_prunes_dead_consumers_of_skipped_rules() {
+        // Issue #882/#883, full-run branch: with NO targets the closure
+        // would normally be "every node", so when-gated skips never
+        // propagated. A consumer whose sole producer group is entirely
+        // when-gated false (baked expand_inputs literals of pruned pair
+        // instances) must be pruned from the full-run plan instead of
+        // failing at runtime on the absent file.
+        let rules = vec![
+            make_rule(
+                "fit_purity_P1",
+                vec!["raw/P1.txt"],
+                vec!["ascat/P1/purity.tsv"],
+            ),
+            make_rule(
+                "fit_purity_P2",
+                vec!["raw/P2.txt"],
+                vec!["ascat/P2/purity.tsv"],
+            ),
+            make_rule(
+                "ascat_cohort",
+                vec!["ascat/P1/purity.tsv", "ascat/P2/purity.tsv"],
+                vec!["cohort/summary.tsv"],
+            ),
+            make_rule("reporter", vec!["cohort/summary.tsv"], vec!["report.html"]),
+        ];
+        let dag = WorkflowDag::from_rules(&rules).unwrap();
+
+        let skip = std::collections::HashSet::from(["fit_purity_P2".to_string()]);
+
+        // Full run (empty targets): P2's instance is when-gated false, so
+        // ascat_cohort can never receive ascat/P2/purity.tsv — it and its
+        // downstream reporter are dead and must leave the plan. The
+        // when-false seed itself STAYS in the order: the executor
+        // evaluates its `when` and counts the skip exactly once ("count
+        // skips once" contract). The surviving producer instance stays.
+        let (order, pruned_names) = dag
+            .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|_| false)
+            .unwrap();
+        assert!(order.contains(&"fit_purity_P1".to_string()), "{order:?}");
+        assert!(order.contains(&"fit_purity_P2".to_string()), "{order:?}");
+        assert!(!order.contains(&"ascat_cohort".to_string()), "{order:?}");
+        assert!(!order.contains(&"reporter".to_string()), "{order:?}");
+        // The second element carries the NEWLY-pruned consumers (not the
+        // seeds) so callers narrate the plan change via the "unreachable"
+        // note — the executor still owns the skip count for the seeds.
+        assert_eq!(pruned_names, vec!["ascat_cohort", "reporter"]);
+        assert!(!pruned_names.contains(&"fit_purity_P2".to_string()));
+
+        // With the P2 output pre-built on disk the consumer is satisfiable
+        // and must stay in the plan (same existence semantics as the
+        // targeted branch); the seed still stays as an executor skip.
+        let (order, pruned_names) = dag
+            .execution_order_for_targets_skipping_with_source_check(&[], &skip, &|path| {
+                path == "ascat/P2/purity.tsv"
+            })
+            .unwrap();
+        assert!(order.contains(&"ascat_cohort".to_string()), "{order:?}");
+        assert!(order.contains(&"reporter".to_string()), "{order:?}");
+        assert!(order.contains(&"fit_purity_P2".to_string()), "{order:?}");
+        // Satisfied by the pre-built file, no consumer died this time.
+        assert!(pruned_names.is_empty(), "{pruned_names:?}");
     }
 
     #[test]
