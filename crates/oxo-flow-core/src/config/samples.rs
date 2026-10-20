@@ -140,8 +140,9 @@ impl WorkflowConfig {
             allowed.contains(&p.experiment)
                 && p.control.as_ref().is_none_or(|c| allowed.contains(c))
         });
-        // Keep the injected config.pairs_list / samples_list in sync with
-        // the surviving sets — including the empty case, so a filter that
+        // Keep the injected config.pairs_list / paired_pairs_list /
+        // samples_list in sync with the surviving sets — including the
+        // empty case, so a filter that
         // drops EVERY pair/sample cannot leave a stale list behind for
         // expand_inputs to resolve against rules that no longer exist.
         let mut pair_ids: Vec<String> = self.pairs.iter().map(|p| p.pair_id.clone()).collect();
@@ -152,12 +153,14 @@ impl WorkflowConfig {
             toml::Value::String(pair_ids.join(",")),
         );
         // Keep the paired subset (#881) in sync with the surviving pairs.
-        let paired_ids: Vec<String> = self
+        let mut paired_ids: Vec<String> = self
             .pairs
             .iter()
             .filter(|p| p.control.as_deref().is_some_and(|c| !c.is_empty()))
             .map(|p| p.pair_id.clone())
             .collect();
+        paired_ids.sort();
+        paired_ids.dedup();
         self.config.insert(
             "paired_pairs_list".to_string(),
             toml::Value::String(paired_ids.join(",")),
@@ -648,12 +651,14 @@ impl WorkflowConfig {
             toml::Value::String(pair_ids.join(",")),
         );
         // Keep the paired subset (#881) in sync with the surviving pairs.
-        let paired_ids: Vec<String> = self
+        let mut paired_ids: Vec<String> = self
             .pairs
             .iter()
             .filter(|p| p.control.as_deref().is_some_and(|c| !c.is_empty()))
             .map(|p| p.pair_id.clone())
             .collect();
+        paired_ids.sort();
+        paired_ids.dedup();
         self.config.insert(
             "paired_pairs_list".to_string(),
             toml::Value::String(paired_ids.join(",")),

@@ -4380,7 +4380,8 @@ fn from_file_injects_paired_pairs_list_and_count() {
 fn from_file_paired_pairs_count_zero_for_tumor_only_cohort() {
     // #881 shape 2: a cohort with NO controls injects an empty
     // paired_pairs_list (not omitted) and count 0, so
-    // `when = "config.paired_pairs_count != '0'"` distinguishes a
+    // `when = "config.paired_pairs_count != 0"` (unquoted rhs — the
+    // comparison evaluator parses an integer rhs directly) distinguishes a
     // tumor-only cohort from a paired one without a manual mode flag.
     let dir = tempfile::tempdir().unwrap();
     let workflow_path = dir.path().join("pairs.oxoflow");

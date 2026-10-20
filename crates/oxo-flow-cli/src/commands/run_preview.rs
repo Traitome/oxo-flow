@@ -614,7 +614,8 @@ pub fn detect_input_manifest_invalidations(
 /// #142 M1).
 ///
 /// The documented contract (run.md): `samples_list` / `samples_<group>` /
-/// `pairs_list` are engine-injected and never trigger invalidation, so
+/// `pairs_list` / `paired_pairs_list` are engine-injected and never trigger
+/// invalidation, so
 /// toggling `--samples` stays cheap. Config-impact detection already
 /// excludes those keys; the input-manifest path must too — a gather rule
 /// whose input list is baked from `expand_inputs` over `config.samples_list`
@@ -662,7 +663,8 @@ fn manifest_mismatch_is_sample_selection(
 ///
 /// Returns None when no `expand_inputs` pattern resolves against an
 /// engine-injected config key (`samples_list` / `samples_<group>` /
-/// `pairs_list`) — the only rules whose manifest mismatch can be a pure
+/// `pairs_list` / `paired_pairs_list`) — the only rules whose manifest
+/// mismatch can be a pure
 /// sample-selection change. `[[values]]` per-instance bindings are not
 /// re-applied here: a pattern depending on them fails the path-set
 /// reproduction check (condition 2) and falls back to normal invalidation —

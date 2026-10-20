@@ -1785,7 +1785,8 @@ pub struct WorkflowConfig {
     /// reference_dir-derived paths. Catalog tooling (CLI `info`, the
     /// oxo-community drift gate) uses this to report only user-declared
     /// parameters. Run-time injections (samples_list / pairs_list /
-    /// samples_*) are covered separately by `is_engine_injected_key`.
+    /// paired_pairs_* / samples_*) are covered separately by
+    /// `is_engine_injected_key`.
     #[serde(skip)]
     pub(crate) injected_config_keys: BTreeSet<String>,
 

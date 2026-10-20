@@ -455,7 +455,10 @@ impl WorkflowConfig {
         // whose paired-only producers were when-skipped; `paired_pairs_list`
         // scopes the fan-out to genuinely paired ids, and `paired_pairs_count`
         // (an integer, 0 when absent) lets `when = "config.paired_pairs_count
-        // != '0'"` gate a paired-only cohort rule without a manual mode flag.
+        // != 0"` gate a paired-only cohort rule without a manual mode flag.
+        // The rhs must stay UNQUOTED: the comparison evaluator parses an
+        // integer rhs with i64::parse and does not strip quotes, so the
+        // quoted form `!= '0'` silently never fires.
         // TSV/CSV rows keep blank control cells as Some(""), so "paired"
         // means Some(non-empty), not merely Some. Both keys are ALWAYS
         // present (empty list / 0 for a tumor-only cohort) so the when-gate

@@ -139,9 +139,9 @@ fn derive_meta(
     }
 
     // [config] keys, excluding engine-injected keys — the run-time churn
-    // keys (samples_list, pairs_list, samples_*) and the parse-time
-    // injections (reference keyed-config values, reference_dir-derived
-    // paths) are never catalog-relevant.
+    // keys (samples_list, pairs_list, paired_pairs_*, samples_*) and the
+    // parse-time injections (reference keyed-config values,
+    // reference_dir-derived paths) are never catalog-relevant.
     let mut config_keys: Vec<String> = cfg
         .config
         .keys()
@@ -811,7 +811,8 @@ shell = "cp {input} {output}"
         assert_eq!(meta["name"], "simple-variant-calling");
         // singularity images count as container tools ("docker://" stripped).
         assert_eq!(meta["tools"], json!(["alignment", "fastp", "gatk", "qc"]));
-        // Engine-injected keys (samples_list, pairs_list, samples_*) excluded.
+        // Engine-injected keys (samples_list, pairs_list, paired_pairs_*,
+        // samples_*) excluded.
         assert_eq!(meta["config_keys"], json!(["known_sites", "reference"]));
         assert_eq!(meta["sample_groups"][0]["name"], "samples");
         assert_eq!(

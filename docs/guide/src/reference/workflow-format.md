@@ -284,7 +284,9 @@ Several keys are **engine-injected**:
   `0` for a tumor-only cohort) — the paired subset of `[[pairs]]` (#881).
   Use `paired_pairs_list` in `expand_inputs` to scope cohort aggregation
   rules to genuinely paired pairs, and gate paired-only cohort rules with
-  `when = "config.paired_pairs_count != '0'"` so a tumor-only cohort skips
+  `when = "config.paired_pairs_count != 0"` (unquoted — the comparison
+  evaluator parses an integer rhs directly and treats `'0'` as unparseable)
+  so a tumor-only cohort skips
   them instead of referencing unproducible inputs. "Paired" means a
   non-empty control string: TSV/CSV `pairs_file` rows keep blank control
   cells as empty strings. Both keys always exist (empty list / `0` when no
