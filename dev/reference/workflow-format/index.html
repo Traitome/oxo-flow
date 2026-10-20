@@ -6749,6 +6749,19 @@ lists in the shell.</p>
   parallel list by hand. A user-declared <code>config.samples_list</code> is
   union-merged with the discovered samples, and the two lists are also
   rewritten by <code>--samples</code> filtering.</li>
+<li><code>config.paired_pairs_list</code> (pair ids whose control is non-empty,
+  comma-joined) and <code>config.paired_pairs_count</code> (their count, an integer,
+  <code>0</code> for a tumor-only cohort) — the paired subset of <code>[[pairs]]</code> (#881).
+  Use <code>paired_pairs_list</code> in <code>expand_inputs</code> to scope cohort aggregation
+  rules to genuinely paired pairs, and gate paired-only cohort rules with
+  <code>when = "config.paired_pairs_count != 0"</code> (unquoted — the comparison
+  evaluator parses an integer rhs directly and treats <code>'0'</code> as unparseable)
+  so a tumor-only cohort skips
+  them instead of referencing unproducible inputs. "Paired" means a
+  non-empty control string: TSV/CSV <code>pairs_file</code> rows keep blank control
+  cells as empty strings. Both keys always exist (empty list / <code>0</code> when no
+  pair has a control) and follow the same <code>--samples</code>-filter rewriting and
+  invalidation-diff exemption as <code>pairs_list</code>.</li>
 <li><code>config.samples_&lt;group&gt;</code> (one per <code>[[sample_groups]]</code> entry).</li>
 <li><code>config.&lt;reference name&gt;</code> (each <code>[[references]]</code> entry's <code>output</code>) and,
   with <code>reference_dir</code>, the ten derived paths (<code>reference_fasta</code>,
