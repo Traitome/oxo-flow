@@ -4989,6 +4989,18 @@ its upstream is not pulled in, and consumers of its (never-produced)
 outputs are pruned too. Naming a when-gated-false target explicitly
 reports it and aborts with "nothing to run" instead of planning a run
 that cannot produce output.</p>
+<p>The same when-aware closure applies to <strong>full runs</strong> (no <code>--target</code>) and
+<code>--module</code> runs: a consumer left without any surviving producer of an
+input group (all of its producers when-gated false, the files not
+pre-built on disk, and the group not <code>optional = "any"</code>) is dropped from
+the plan with a note — <code>rule '...' is unreachable — its upstream is
+when-gated false; removed from the full-run execution set</code> — instead of
+failing mid-run on a file that was never produced (issues #882/#883).
+The when-gated rule itself stays in the plan and is counted as skipped
+exactly once by the executor. See
+<a href="../../reference/workflow-format/#when-skipped-instances-and-downstream-consumers">when-skipped instances</a>
+for how the consumer's baked <code>expand_inputs</code> list is cleaned in the same
+sweep.</p>
 <h3 id="set-a-per-job-timeout">Set a per-job timeout<a class="headerlink" href="#set-a-per-job-timeout" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># 3600 seconds, or equivalently:</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--timeout<span class="w"> </span>1h
