@@ -2133,8 +2133,10 @@ is captured by the glob and never bound: every matching file collapses to the
 same `{sample}` value and expansion fails with `duplicate rule name`. Point
 the pattern at one file per sample (R1 for paired-end data) and list the mate
 in each rule's `input`. Discovered samples are emitted in **sorted order**
-(regardless of filesystem directory order), so fan-out and the injected
-`{config.samples_list}` are reproducible across machines:
+(alphabetical, regardless of filesystem directory order — `S10` sorts
+before `S2`, so zero-pad sample names like `S02` when numeric order
+matters), so fan-out and the injected `{config.samples_list}` are
+reproducible across machines:
 
 ```toml
 sample_pattern = "raw/{sample}_R1.fastq.gz"

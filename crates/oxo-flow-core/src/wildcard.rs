@@ -626,10 +626,9 @@ pub fn discover_wildcards_from_pattern_tree_glob(
     walk(dir, dir, pattern, &re, &wildcard_names, &mut results);
 
     // Filesystem-independent order — same rationale as the flat walker.
-    // The glob face returns (path, combo) pairs; sort by the pair.
-    results.sort_by(|(path_a, combo_a), (path_b, combo_b)| {
-        (wildcard_combo_key(combo_a), path_a).cmp(&(wildcard_combo_key(combo_b), path_b))
-    });
+    // The glob face returns (path, combo) pairs; sort by the pair, with the
+    // combo key computed once per element.
+    results.sort_by_cached_key(|(path, combo)| (wildcard_combo_key(combo), path.clone()));
     Ok(results)
 }
 
