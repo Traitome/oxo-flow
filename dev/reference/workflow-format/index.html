@@ -6577,7 +6577,7 @@ and includes without a contract behave exactly as before.</p>
 <tr>
 <td><code>repo</code> + <code>ref</code></td>
 <td>String pair</td>
-<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.24.0"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;@&lt;hash&gt;</code> (the hash disambiguates confusable repo/ref pairs; <code>OXO_FLOW_MODULE_CACHE</code> overrides the cache root) — versioned modules, reproducible composition</td>
+<td>Pin the included path to a git repository at a tag/branch/commit: <code>repo = "https://github.com/org/oxo-flow-modules"</code>, <code>ref = "v0.24.1"</code>, <code>path = "rules/qc.oxoflow"</code>. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under <code>~/.cache/oxo-flow/modules/&lt;repo&gt;@&lt;ref&gt;@&lt;hash&gt;</code> (the hash disambiguates confusable repo/ref pairs; <code>OXO_FLOW_MODULE_CACHE</code> overrides the cache root) — versioned modules, reproducible composition</td>
 </tr>
 </tbody>
 </table>
@@ -6647,7 +6647,7 @@ and includes without a contract behave exactly as before.</p>
 <td>String</td>
 <td>No</td>
 <td>—</td>
-<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.24.0"</code>)</td>
+<td>Minimum engine version required to load this workflow: an older engine refuses it at parse time (compares major.minor.patch; <code>"0.21"</code> equals <code>"0.24.1"</code>)</td>
 </tr>
 <tr>
 <td><code>format_version</code></td>
@@ -9056,7 +9056,11 @@ expanded, but any other wildcard name (<code>{read}</code>, <code>{replicate}</c
 is captured by the glob and never bound: every matching file collapses to the
 same <code>{sample}</code> value and expansion fails with <code>duplicate rule name</code>. Point
 the pattern at one file per sample (R1 for paired-end data) and list the mate
-in each rule's <code>input</code>:</p>
+in each rule's <code>input</code>. Discovered samples are emitted in <strong>sorted order</strong>
+(alphabetical, regardless of filesystem directory order — <code>S10</code> sorts
+before <code>S2</code>, so zero-pad sample names like <code>S02</code> when numeric order
+matters), so fan-out and the injected <code>{config.samples_list}</code> are
+reproducible across machines:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="n">sample_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"raw/{sample}_R1.fastq.gz"</span>
 </span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2" href="#__codelineno-75-2"></a>
 </span><span id="__span-75-3"><a id="__codelineno-75-3" name="__codelineno-75-3" href="#__codelineno-75-3"></a><span class="k">[[rules]]</span>
