@@ -443,6 +443,12 @@ pub fn discover_wildcards_from_pattern(
         }
     }
 
+    // Sort by combo key so the fan-out order is filesystem-independent:
+    // read_dir iteration order is arbitrary (ext4/overlayfs hash order on
+    // Linux differs from APFS), and downstream consumers fan rules out in
+    // list order — nondeterministic instances break reproducibility and
+    // made order-sensitive assertions flaky on CI.
+    results.sort_by_key(wildcard_combo_key);
     Ok(results)
 }
 
@@ -547,6 +553,8 @@ pub fn discover_wildcards_from_pattern_tree_with(
         &mut results,
     );
 
+    // Filesystem-independent order — same rationale as the flat walker.
+    results.sort_by_key(wildcard_combo_key);
     Ok(results)
 }
 
@@ -617,6 +625,11 @@ pub fn discover_wildcards_from_pattern_tree_glob(
     }
     walk(dir, dir, pattern, &re, &wildcard_names, &mut results);
 
+    // Filesystem-independent order — same rationale as the flat walker.
+    // The glob face returns (path, combo) pairs; sort by the pair.
+    results.sort_by(|(path_a, combo_a), (path_b, combo_b)| {
+        (wildcard_combo_key(combo_a), path_a).cmp(&(wildcard_combo_key(combo_b), path_b))
+    });
     Ok(results)
 }
 
