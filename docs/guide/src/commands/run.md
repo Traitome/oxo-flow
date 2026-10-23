@@ -1227,6 +1227,54 @@ A progress bar shows execution progress with:
 - Estimated time remaining (ETA), plus the rule currently executing
 - The final summary line reports succeeded / skipped / failed counts
 
+### Module-grouped output
+
+Workflows composed from `[[include]]` modules group the plan listing and the
+`--keep-going` failure summary under module headers, so a composed pipeline
+reads as module → rule instead of one long flat list (issue #887):
+
+```
+DAG: 6 rules in execution order
+  Preprocessing — 2 rules
+    1. fastqc
+    2. trim_reads
+  Alignment — 3 rules
+    3. bwa_align
+    4. sort_bam
+    5. markdup
+  Main workflow — 1 rule
+    6. report_summary
+```
+
+- Rules from a module file (`[[include]]`) collect under their module's
+  display title; rules declared in the main file land under `Main workflow`
+- Attribution is the same logic the metro graph export uses: a
+  `module::rule` namespace prefix wins, then member matching; host rules
+  that merely extend a member's name may land in that module's group (a
+  display-only quirk — edges and execution are unaffected)
+- Group order follows first appearance in the execution order, and the
+  per-rule numbers stay a single global sequence so plan position remains
+  greppable
+- Workflows without modules keep the flat listing above byte-for-byte —
+  grouping is opt-in by structure, not a flag
+
+The failure summary groups the same way:
+
+```
+Failed rules:
+  Germline (1):
+    ✗ haplotype_caller — exit code 1
+
+Blocked rules (did not run):
+  Germline (1):
+    ⊘ joint_genotyper — depends on 'haplotype_caller'
+  Main workflow (1):
+    ⊘ qc_report — depends on 'joint_genotyper'
+```
+
+Per-line shapes (`✗ name — reason`, `⊘ name — depends on 'dep'`) are
+unchanged, so tooling that parses run logs keeps working.
+
 ---
 
 ## Notes

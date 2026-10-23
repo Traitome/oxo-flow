@@ -7404,6 +7404,216 @@ shell = "echo reads > bam/n.bam"
     );
 }
 
+// ─── #887: module-grouped run output ───────────────────────────────────────
+
+/// With [[include]] modules the DAG plan listing groups under module headers
+/// (issue #887). The header text is `Title — N rules` (curated
+/// module_display title), and the per-rule lines keep the flat listing's
+/// `N. name` shape with a global running number so plan position stays
+/// greppable across groups.
+#[test]
+fn cli_run_plan_listing_groups_by_module() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("germline.oxoflow"),
+        r#"[workflow]
+name = "germline"
+version = "1.0.0"
+
+[[rules]]
+name = "call"
+input = ["bam/n.bam"]
+output = ["vcf/n.vcf"]
+shell = "cp bam/n.bam vcf/n.vcf"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("somatic.oxoflow"),
+        r#"[workflow]
+name = "somatic"
+version = "1.0.0"
+
+[[rules]]
+name = "mutect"
+input = ["bam/n.bam"]
+output = ["vcf/somatic.vcf"]
+shell = "cp bam/n.bam vcf/somatic.vcf"
+"#,
+    )
+    .unwrap();
+    let wf = dir.path().join("main.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "composed"
+version = "1.0.0"
+
+[[include]]
+path = "germline.oxoflow"
+inputs = ["bam/n.bam"]
+outputs = ["vcf/n.vcf"]
+
+[[include]]
+path = "somatic.oxoflow"
+inputs = ["bam/n.bam"]
+outputs = ["vcf/somatic.vcf"]
+
+[[rules]]
+name = "align"
+output = ["bam/n.bam"]
+shell = "echo reads > bam/n.bam"
+"#,
+    )
+    .unwrap();
+
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-j", "1"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+
+    // The global DAG header and count are unchanged.
+    assert!(
+        stderr.contains("DAG: 3 rules in execution order"),
+        "DAG header: {stderr}"
+    );
+
+    // Module groups appear with their curated display titles.
+    assert!(
+        stderr.contains("Germline — 1 rule"),
+        "germline group: {stderr}"
+    );
+    assert!(
+        stderr.contains("Somatic — 1 rule"),
+        "somatic group: {stderr}"
+    );
+    assert!(
+        stderr.contains("Main workflow — 1 rule"),
+        "main bucket: {stderr}"
+    );
+
+    // Global numbering survives grouping (DAG order: align, mutect, call).
+    assert!(stderr.contains("  2. mutect"), "global numbering: {stderr}");
+}
+
+/// A workflow with no [[include]] modules keeps the flat plan listing and
+/// the flat Failed/Blocked shapes exactly as before (grouping is
+/// opt-in-by-structure — regression guard for issue #887).
+#[test]
+fn cli_run_single_file_output_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("flat.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "flat"
+version = "1.0.0"
+
+[[rules]]
+name = "fail_rule"
+output = ["out/never.txt"]
+shell = "exit 1"
+"#,
+    )
+    .unwrap();
+
+    // --keep-going so the Failed rules summary prints (the non-keep-going
+    // path ends at `Error: workflow execution failed` without the summary).
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-j", "1", "--keep-going"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!run.status.success(), "fail_rule must fail the run");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+
+    // Flat plan listing, no module headers.
+    assert!(
+        stderr.contains("DAG: 1 rules in execution order"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("  1. fail_rule"), "{stderr}");
+    assert!(
+        !stderr.contains("Main workflow"),
+        "no group header without modules: {stderr}"
+    );
+
+    // Flat failed-rules listing (no group sub-headers).
+    assert!(stderr.contains("Failed rules:"), "{stderr}");
+    assert!(stderr.contains("  ✗ fail_rule"), "{stderr}");
+    assert!(
+        !stderr.contains("Main workflow ("),
+        "no group sub-headers without modules: {stderr}"
+    );
+}
+
+/// Failures under [[include]] modules group under module headers in the
+/// final Failed rules listing (issue #887); per-line content stays
+/// `✗ name — reason`.
+#[test]
+fn cli_run_failed_rules_group_by_module() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("germline.oxoflow"),
+        r#"[workflow]
+name = "germline"
+version = "1.0.0"
+
+[[rules]]
+name = "call"
+input = ["bam/n.bam"]
+output = ["vcf/n.vcf"]
+shell = "exit 4"
+"#,
+    )
+    .unwrap();
+    let wf = dir.path().join("main.oxoflow");
+    fs::write(
+        &wf,
+        r#"[workflow]
+name = "composed"
+version = "1.0.0"
+
+[[include]]
+path = "germline.oxoflow"
+inputs = ["bam/n.bam"]
+outputs = ["vcf/n.vcf"]
+
+[[rules]]
+name = "align"
+output = ["bam/n.bam"]
+shell = "echo reads > bam/n.bam"
+"#,
+    )
+    .unwrap();
+
+    // --keep-going so the Failed rules summary prints after call's failure.
+    let run = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap(), "-j", "1", "--keep-going"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!run.status.success(), "call must fail (shell exits 4)");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+
+    assert!(stderr.contains("Failed rules:"), "header: {stderr}");
+    assert!(
+        stderr.contains("Germline (1):"),
+        "module group sub-header: {stderr}"
+    );
+    assert!(
+        stderr.contains("    ✗ call"),
+        "grouped failure line: {stderr}"
+    );
+}
+
 // ─── #101: rule subprocesses never block on stdin ─────────────────────────
 
 /// Contract smoke test: rule shells must observe null stdin (issue #101).
