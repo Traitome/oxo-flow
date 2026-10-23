@@ -28,8 +28,8 @@ pub fn rule_report_caption(rule: &Rule, workdir: &Path) -> Option<String> {
 
 use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
-    sanitize_shell_command, validate_path_safety, validate_shell_safety_in_workdir,
-    validate_wildcard_injection,
+    sanitize_shell_command, sanitize_shell_command_detailed, validate_path_safety,
+    validate_shell_safety_in_workdir, validate_wildcard_injection,
 };
 
 /// Default interpreter mapping for script file extensions.
@@ -1921,11 +1921,14 @@ impl LocalExecutor {
             // #890 string batch: every wildcard instance of the same rule
             // shares the template's idioms, so the identical warning would
             // re-print once per instance (hundreds of lines for a fan-out
-            // rule). Emit each distinct warning once per rule instead — the
-            // rule's stderr still carries the first instance's copy.
-            for warning in sanitize_shell_command(cmd) {
-                emit_once_per_rule(&rule.name, &warning, |w| {
-                    tracing::info!(rule = %rule.name, "{w}");
+            // rule). Emit each distinct pattern once per rule instead —
+            // keyed on the pattern description, because the rendered
+            // warning embeds the instance's own command and would never
+            // collide. The rule's stderr still carries the first
+            // instance's copy.
+            for (pattern, warning) in sanitize_shell_command_detailed(cmd) {
+                emit_once_per_rule(&rule.name, &pattern, |_| {
+                    tracing::info!(rule = %rule.name, "{warning}");
                 });
             }
         }
@@ -3069,21 +3072,24 @@ fn warn_shell_fallback_once() {
     }
 }
 
-/// Print a shell-safety warning once per (rule, warning) pair instead of once
-/// per wildcard instance (#890 string batch): a 200-sample fan-out rule with a
-/// `$(...)` idiom used to log the same line 200 times. The set lives for the
-/// process lifetime — a run is one process, and re-warning about the same
-/// rule's idiom across checkpoint resumes is harmless (and rare).
-fn emit_once_per_rule(rule: &str, warning: &str, emit: impl FnOnce(&str)) {
+/// Print a shell-safety warning once per (rule, pattern description) pair
+/// instead of once per wildcard instance (#890 string batch): a 200-sample
+/// fan-out rule with a `$(...)` idiom used to log the same line 200 times
+/// (each instance's warning embeds its own rendered command, so keying on
+/// the full warning text would never dedupe). Different patterns in the
+/// same rule each still print once. The set lives for the process
+/// lifetime — a run is one process, and it is bounded by the pattern
+/// count times rule count, not by run length. A poisoned lock (a panic
+/// while holding it) is recovered from rather than silently suppressing
+/// every future warning.
+fn emit_once_per_rule(rule: &str, pattern: &str, emit: impl FnOnce(&str)) {
     use std::collections::HashSet;
     use std::sync::Mutex;
     static SEEN: LazyLock<Mutex<HashSet<(String, String)>>> =
         LazyLock::new(|| Mutex::new(HashSet::new()));
-    let key = (rule.to_string(), warning.to_string());
-    if let Ok(mut seen) = SEEN.lock()
-        && seen.insert(key)
-    {
-        emit(warning);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert((rule.to_string(), pattern.to_string())) {
+        emit(pattern);
     }
 }
 

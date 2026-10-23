@@ -2941,14 +2941,12 @@ pub async fn run_command(
         // Pre-execution abort: nothing ran — the summary still reports
         // the failed run for --json consumers (issue #142 H6).
         json_summary.emit("failed", &RunCounts::default(), vec![]);
+        let n_backends = env_failures.len();
+        let backend_desc =
+            oxo_flow_core::plural(n_backends, "environment backend", "environment backends");
+        let verb = if n_backends == 1 { "is" } else { "are" };
         return Err(anyhow::anyhow!(
-            "{} required by pending rules are unavailable; no rules were run:\n{}",
-            oxo_flow_core::plural(
-                env_failures.len(),
-                "environment backend",
-                "environment backends"
-            ),
-            detail
+            "{backend_desc} required by pending rules {verb} unavailable; no rules were run:\n{detail}"
         ));
     }
 

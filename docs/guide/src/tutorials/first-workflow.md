@@ -285,7 +285,7 @@ multiqc results -o results/multiqc --force
 
 Summary: 7 rules, total 25 threads declared, max 4 threads/rule
          7 rules with memory requirements
-         1 sample group(s), 0 pair(s)
+         1 sample group, 0 pairs
 
 To execute:  oxo-flow run qc-pipeline.oxoflow -j 2
 ```

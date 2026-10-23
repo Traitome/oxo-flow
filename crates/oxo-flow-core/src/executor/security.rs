@@ -165,7 +165,25 @@ static WARNING_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(||
 ///
 /// This is a best-effort heuristic, not a security guarantee.
 #[must_use]
+/// Scan a rendered command for shell idioms that are allowed but flagged.
+/// Returns one human-readable warning per matched pattern (may be empty).
+///
+/// Thin wrapper over [`sanitize_shell_command_detailed`] — new callers that
+/// need a stable dedupe/categorization key should use that function
+/// directly, since this string embeds the (instance-specific) command.
 pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
+    sanitize_shell_command_detailed(cmd)
+        .into_iter()
+        .map(|(_, warning)| warning)
+        .collect()
+}
+
+/// Like [`sanitize_shell_command`], but each element carries the matched
+/// pattern's short `description` alongside the rendered warning. The
+/// description is stable across wildcard instances of the same rule, which
+/// makes it the right key for per-rule warning dedupe
+/// ([`crate::executor::process::emit_once_per_rule`]).
+pub fn sanitize_shell_command_detailed(cmd: &str) -> Vec<(String, String)> {
     let mut warnings = Vec::new();
     for (re, description) in WARNING_PATTERNS.iter() {
         if re.is_match(cmd) {
@@ -173,11 +191,14 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
             // means, that the run proceeds, and where the explanation lives —
             // a bare "Shell command warning" left operators guessing whether
             // the rule would even run.
-            warnings.push(format!(
-                "{} in '{}': this shell idiom is allowed and the rule will run; \
-                 it is flagged because such content can also ride in on rendered \
-                 wildcard values — verify it is intentional",
-                description, cmd
+            warnings.push((
+                description.to_string(),
+                format!(
+                    "{} in '{}': this shell idiom is allowed and the rule will run; \
+                     it is flagged because such content can also ride in on rendered \
+                     wildcard values — verify it is intentional",
+                    description, cmd
+                ),
             ));
         }
     }
