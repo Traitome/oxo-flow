@@ -2424,6 +2424,42 @@ mod tests {
     }
 
     #[test]
+    fn owning_module_exact_beats_prefix() {
+        let members = [("fastqc", "qc"), ("fastp", "qc2"), ("trim", "trim")];
+        // Exact member match wins even when another member would prefix it.
+        let extended = [("fastp", "qc"), ("fastp_extra", "other")];
+        assert_eq!(owning_module("fastqc", &members), Some("qc"));
+        assert_eq!(owning_module("fastp", &extended), Some("qc"));
+        assert_eq!(owning_module("fastp_extra", &extended), Some("other"));
+    }
+
+    #[test]
+    fn owning_module_wildcard_instance_prefix() {
+        let members = [("fastqc", "qc")];
+        // Wildcard-expanded instances resolve through the longest `_`-boundary prefix.
+        assert_eq!(owning_module("fastqc_S1", &members), Some("qc"));
+        assert_eq!(owning_module("fastqc_S1_trimmed", &members), Some("qc"));
+    }
+
+    #[test]
+    fn owning_module_longest_member_wins() {
+        // Two members prefix the name; the longer one claims it.
+        let members = [("align", "a"), ("align_stats", "b")];
+        assert_eq!(owning_module("align_stats_S1", &members), Some("b"));
+        assert_eq!(owning_module("align_S1", &members), Some("a"));
+    }
+
+    #[test]
+    fn owning_module_no_partial_prefix_without_boundary() {
+        let members = [("fastq", "qc")];
+        // `fastqc` extends `fastq` without a `_` boundary — not an instance.
+        assert_eq!(owning_module("fastqc", &members), None);
+        // Unrelated and empty-member lists yield None.
+        assert_eq!(owning_module("other", &members), None);
+        assert_eq!(owning_module("anything", &[]), None);
+    }
+
+    #[test]
     fn linear_dag() {
         let rules = vec![
             make_rule("step1", vec!["input.txt"], vec!["mid.txt"]),
