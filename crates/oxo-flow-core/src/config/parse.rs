@@ -30,6 +30,11 @@ impl WorkflowConfig {
         known_keys::check(&raw)?;
         let mut config = Self::deserialize(toml::Value::Table(raw))?;
         config.extract_declarative_config()?;
+        // User-declared groups must not collide with the engine's
+        // auto-discovery group (issue #895). This string path runs no
+        // discovery, so any hit here is a user declaration. from_file is
+        // covered by the dedup pass, which runs before its discovery push.
+        Self::reject_reserved_sample_group_names(&config.sample_groups)?;
         config = config.with_reference_builder_templates()?;
         config.validate()?;
         Ok(config)
@@ -1288,7 +1293,14 @@ impl WorkflowConfig {
 
     /// Sample groups consolidated after inline + `sample_groups_file` merge
     /// (issue #823), mirroring [`Self::dedup_or_error_duplicate_pairs`].
+    ///
+    /// Also rejects user-declared groups named `auto-discovered` (issue
+    /// #895): this runs before the sample_pattern discovery push, so a hit
+    /// here is always a genuine user declaration, never the engine's own
+    /// group. `WorkflowConfig::parse` (the string path behind the web API)
+    /// reuses this check because it runs no discovery and no dedup pass.
     fn dedup_or_error_duplicate_sample_groups(groups: &mut Vec<SampleGroup>) -> Result<()> {
+        Self::reject_reserved_sample_group_names(groups)?;
         dedup_or_error_duplicate(
             groups,
             "sample group",

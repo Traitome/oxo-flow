@@ -36,6 +36,34 @@ pub struct OwnerCollision {
 /// The engine's placeholder regex (`\w+` only) cannot match dotted names, so
 /// this namespace is detected and substituted textually — see
 impl WorkflowConfig {
+    /// Reject user-declared sample groups named `auto-discovered` — the
+    /// engine's own group for `sample_pattern` discovery results
+    /// ([`AUTO_DISCOVERED_GROUP_NAME`](crate::config::AUTO_DISCOVERED_GROUP_NAME),
+    /// issue #895). A user group with that name is indistinguishable from
+    /// the engine group: the `duplicate_sample_owners` pair-exemption keys
+    /// on the literal owner string, so a real collision with the user group
+    /// would be silently swallowed, and rule instances fan out under the
+    /// same `{rule}_{group}_{sample}` names.
+    pub(crate) fn reject_reserved_sample_group_names(groups: &[SampleGroup]) -> Result<()> {
+        for group in groups {
+            if group.name == crate::config::AUTO_DISCOVERED_GROUP_NAME {
+                return Err(OxoFlowError::Validation {
+                    message: format!(
+                        "[[sample_groups]] name '{}' is reserved — the engine uses it for \
+                         sample_pattern discovery results",
+                        group.name
+                    ),
+                    rule: None,
+                    suggestion: Some(
+                        "rename the group (e.g. use a cohort- or condition-specific name)"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Filter the workflow's samples to a pilot subset.
     ///
     /// Specs are `first:N` (the first N samples in workflow order) and/or
@@ -604,6 +632,7 @@ impl WorkflowConfig {
     ///
     /// Returns the final deduplicated, order-preserving sample list.
     pub fn override_sample_groups(&mut self, groups: Vec<SampleGroup>) -> Result<Vec<String>> {
+        Self::reject_reserved_sample_group_names(&groups)?;
         let mut final_samples: Vec<String> = Vec::new();
         for group in &groups {
             for sample in &group.samples {
@@ -684,6 +713,7 @@ impl WorkflowConfig {
     ///
     /// Returns the final deduplicated, order-preserving sample list.
     pub fn append_sample_groups(&mut self, groups: Vec<SampleGroup>) -> Result<Vec<String>> {
+        Self::reject_reserved_sample_group_names(&groups)?;
         for incoming in groups {
             if let Some(existing) = self
                 .sample_groups

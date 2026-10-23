@@ -207,7 +207,7 @@ fn resolve_group_name(config: &WorkflowConfig, group: Option<&str>) -> String {
     group
         .map(str::to_string)
         .or_else(|| config.sample_groups.first().map(|g| g.name.clone()))
-        .unwrap_or_else(|| "auto-discovered".to_string())
+        .unwrap_or_else(|| crate::config::AUTO_DISCOVERED_GROUP_NAME.to_string())
 }
 
 /// Re-expand from the preserved rule templates. The expansion is

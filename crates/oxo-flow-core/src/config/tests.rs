@@ -9196,6 +9196,154 @@ fn duplicate_sample_groups_across_sources_dedup_identical_error_conflicting() {
     );
 }
 
+// Issue #895: 'auto-discovered' is the engine's own sample_pattern
+// discovery group. A user-declared group with that name is
+// indistinguishable from it (the pair-exemption in duplicate_sample_owners
+// keys on the literal owner string), so every user-declaration path must
+// reject the name up front.
+#[test]
+fn reserved_auto_discovered_group_name_is_rejected_everywhere() {
+    let reserved_error = "is reserved — the engine uses it for sample_pattern";
+
+    // 1. Inline [[sample_groups]] via from_file (pre-discovery dedup pass).
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("reserved.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "reserved"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "auto-discovered"
+        samples = ["S1"]
+        "#,
+    )
+    .unwrap();
+    let err = WorkflowConfig::from_file(&wf).unwrap_err().to_string();
+    assert!(
+        err.contains(reserved_error),
+        "from_file inline path rejects the name: {err}"
+    );
+
+    // 2. sample_groups_file sheet row.
+    std::fs::write(
+        dir.path().join("groups.tsv"),
+        "name\tsamples\nauto-discovered\t\"S1,S2\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "reserved"
+        version = "1.0.0"
+        sample_groups_file = "groups.tsv"
+        "#,
+    )
+    .unwrap();
+    let err = WorkflowConfig::from_file(&wf).unwrap_err().to_string();
+    assert!(
+        err.contains(reserved_error),
+        "sample_groups_file path rejects the name: {err}"
+    );
+
+    // 3. WorkflowConfig::parse string path (the web API surface).
+    let err = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "reserved"
+        version = "1.0.0"
+
+        [[sample_groups]]
+        name = "auto-discovered"
+        samples = ["S1"]
+        "#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains(reserved_error),
+        "parse string path rejects the name: {err}"
+    );
+
+    // 4. CLI override path (@sheet) and append path (+@sheet).
+    let reserved_group = SampleGroup {
+        name: crate::config::AUTO_DISCOVERED_GROUP_NAME.to_string(),
+        samples: vec!["S1".to_string()],
+        metadata: HashMap::new(),
+    };
+    let mut config = WorkflowConfig::parse(
+        r#"
+        [workflow]
+        name = "reserved"
+        version = "1.0.0"
+        "#,
+    )
+    .unwrap();
+    let err = config
+        .override_sample_groups(vec![reserved_group.clone()])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(reserved_error),
+        "override path rejects the name: {err}"
+    );
+    let err = config
+        .append_sample_groups(vec![reserved_group])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(reserved_error),
+        "append path rejects the name: {err}"
+    );
+}
+
+// Issue #895 companion: the rejection must only cover user declarations —
+// the engine's own discovery group is still created and still feeds pairs
+// (the documented pairing workflow relies on that exemption).
+#[test]
+fn auto_discovery_group_still_works_after_reserved_name_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = dir.path().join("raw");
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::write(raw.join("S1_R1.fastq.gz"), b"x").unwrap();
+
+    let wf = dir.path().join("ok.oxoflow");
+    std::fs::write(
+        &wf,
+        r#"
+        [workflow]
+        name = "ok"
+        version = "1.0.0"
+        sample_pattern = "raw/{sample}_R1.fastq.gz"
+
+        [[pairs]]
+        pair_id = "P1"
+        experiment = "S1"
+        control = "S2"
+
+        [[rules]]
+        name = "qc"
+        input = ["raw/{sample}_R1.fastq.gz"]
+        output = ["qc/{sample}.html"]
+        shell = "touch {output}"
+        "#,
+    )
+    .unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    let group = config
+        .sample_groups
+        .iter()
+        .find(|g| g.name == crate::config::AUTO_DISCOVERED_GROUP_NAME)
+        .expect("engine discovery group created");
+    assert_eq!(group.samples, vec!["S1".to_string()]);
+    // Pair S2 is not in any group — S1's auto ownership is exempt against
+    // the pair, so no duplicate-owner finding may fire.
+    assert!(config.duplicate_sample_owners().is_empty());
+}
+
 #[test]
 fn transform_n_chunking_substitutes_the_split_variable_everywhere() {
     // The documented `n` chunking form (`by = "chunk"`, `n = "3"`) left the

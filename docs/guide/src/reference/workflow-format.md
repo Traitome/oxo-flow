@@ -1994,9 +1994,18 @@ samples = ["CASE_001", "CASE_002"]
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | String | **Yes** | Group name |
+| `name` | String | **Yes** | Group name. The name `auto-discovered` is **reserved** — see below |
 | `samples` | Array of strings | **Yes** | Sample identifiers in this group |
 | `metadata` | Table | No | Arbitrary group-level metadata; each key is available as a wildcard in paths, shells, and `when` conditions (`wildcard.<key>`) |
+
+**Reserved group name:** `auto-discovered` cannot be used in any user
+declaration (inline `[[sample_groups]]`, `sample_groups_file` sheets, or the
+CLI `@`/`+@` sample sheets) — the engine uses it internally for
+[`sample_pattern`](#auto-discovery-with-sample_pattern) discovery results,
+and a user group with the same name would be indistinguishable from it in
+duplicate-ownership analysis and instance naming
+(`{rule}_{group}_{sample}`). Declaring it is a config error; rename your
+group.
 
 Any rule that references `{sample}` or `{group}` is expanded once per `(group, sample)` pair across all groups.
 
@@ -2144,7 +2153,10 @@ wildcard constraint regex, an unresolvable `values_from`), the engine falls
 back to the ownership census naming all duplicates so validate/plan surface
 the underlying error right after. Auto-discovered samples (`sample_pattern`)
 feeding `[[pairs]]` are the documented pairing workflow, not a competing
-owner — only user-declared groups are compared against pair membership. Fix
+owner — only user-declared groups are compared against pair membership
+(the `auto-discovered` group name itself is
+[reserved](#sample_groups-multi-sample-cohorts-wc-02), so an ownership
+comparison can never be defeated by reusing the engine's group name). Fix
 a real collision by adding a `{group}`/`{pair_id}` component to the
 affected rules' output paths, or by keeping the domains disjoint.
 
