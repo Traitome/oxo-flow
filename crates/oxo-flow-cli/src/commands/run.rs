@@ -1472,6 +1472,57 @@ fn known_modules_hint(module_rules: &std::collections::HashMap<String, Vec<Strin
     }
 }
 
+/// Group rule names by their owning `[[include]]` module for run output
+/// (issue #887). Attribution mirrors the metro export exactly: a
+/// `module::rule` namespace prefix wins, then member/instance matching via
+/// [`oxo_flow_core::dag::owning_module`]; rules no module claims land in the
+/// main-file bucket (`None`), titled `Main workflow` by [`run_group_title`].
+/// Groups keep first-appearance order over the input and the input's order
+/// within each group. `None` overall = the workflow declares no modules —
+/// grouping is opt-in-by-structure, so single-file output stays flat.
+fn module_groups_for_rules<'a>(
+    names: &[&'a str],
+    module_rules: &'a HashMap<String, Vec<String>>,
+) -> Option<Vec<(Option<&'a str>, Vec<&'a str>)>> {
+    if module_rules.is_empty() {
+        return None;
+    }
+    // Flattened (member, module) pairs — the same shape to_metro builds.
+    let module_members: Vec<(&str, &str)> = module_rules
+        .iter()
+        .flat_map(|(module, members)| {
+            members
+                .iter()
+                .map(move |member| (member.as_str(), module.as_str()))
+        })
+        .collect();
+    let mut groups: Vec<(Option<&str>, Vec<&str>)> = Vec::new();
+    let mut group_index: HashMap<Option<&str>, usize> = HashMap::new();
+    for &name in names {
+        let group = if let Some((prefix, _)) = name.split_once("::") {
+            Some(prefix)
+        } else {
+            oxo_flow_core::dag::owning_module(name, &module_members)
+        };
+        let idx = *group_index.entry(group).or_insert_with(|| {
+            groups.push((group, Vec::new()));
+            groups.len() - 1
+        });
+        groups[idx].1.push(name);
+    }
+    Some(groups)
+}
+
+/// Display title for a run-output group: curated module names via
+/// [`oxo_flow_core::stage::module_display`], `Main workflow` for the
+/// main-file bucket.
+fn run_group_title(group: Option<&str>) -> String {
+    match group {
+        Some(module) => oxo_flow_core::stage::module_display(module),
+        None => "Main workflow".to_string(),
+    }
+}
+
 /// Issue #142 H1 gate: an unknown `{config.*}` placeholder used to expand to
 /// literal text while the run exited 0 — silent wrong outputs. This is the
 /// same E005 detector `validate` uses, applied as a hard gate by both `run`
@@ -2052,8 +2103,29 @@ pub async fn run_command(
             order.len()
         );
 
-        for (i, rule_name) in order.iter().enumerate() {
-            eprintln!("  {}. {}", i + 1, rule_name);
+        // Issue #887: with [[include]] modules, group the plan under module
+        // headers so a long pipeline reads as module → rule. Attribution is
+        // the same function the metro graph export uses. Single-file
+        // workflows keep the flat listing below.
+        let names: Vec<&str> = order.iter().map(String::as_str).collect();
+        if let Some(groups) = module_groups_for_rules(&names, &config.module_rules) {
+            let mut seen = 0usize;
+            for (group, members) in &groups {
+                eprintln!(
+                    "  {} — {} rule{}",
+                    run_group_title(*group).bold(),
+                    members.len(),
+                    if members.len() == 1 { "" } else { "s" }
+                );
+                for (i, rule_name) in members.iter().enumerate() {
+                    eprintln!("    {}. {}", seen + i + 1, rule_name);
+                }
+                seen += members.len();
+            }
+        } else {
+            for (i, rule_name) in order.iter().enumerate() {
+                eprintln!("  {}. {}", i + 1, rule_name);
+            }
         }
     }
 
@@ -5547,10 +5619,28 @@ pub async fn run_command(
 
     // With --keep-going, execution continues past failures, so list every failed
     // rule (and why) in one place rather than making the user hunt for them.
+    // Issue #887: with modules, failures and blocked rules group under the
+    // same module headers as the plan listing; the flat per-line shapes are
+    // unchanged (web SSE / report tooling parse these lines).
     if !failures.is_empty() {
         eprintln!("\n{}", "Failed rules:".bold().red());
-        for (name, reason) in failures.iter() {
-            eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
+        let names: Vec<&str> = failures.iter().map(|(name, _)| name.as_str()).collect();
+        match module_groups_for_rules(&names, &config.module_rules) {
+            Some(groups) => {
+                for (group, members) in &groups {
+                    eprintln!("  {} ({}):", run_group_title(*group).bold(), members.len());
+                    for name in members {
+                        if let Some((_, reason)) = failures.iter().find(|(n, _)| n == name) {
+                            eprintln!("    {} {} — {}", "✗".red(), name.bold(), reason);
+                        }
+                    }
+                }
+            }
+            None => {
+                for (name, reason) in failures.iter() {
+                    eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
+                }
+            }
         }
     }
 
@@ -5558,8 +5648,28 @@ pub async fn run_command(
     // fallout of a failure visible without disguising it as a genuine failure.
     if !blocked.is_empty() {
         eprintln!("\n{}", "Blocked rules (did not run):".bold().yellow());
-        for (name, dep) in blocked.iter() {
-            eprintln!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep);
+        let names: Vec<&str> = blocked.iter().map(|(name, _)| name.as_str()).collect();
+        match module_groups_for_rules(&names, &config.module_rules) {
+            Some(groups) => {
+                for (group, members) in &groups {
+                    eprintln!("  {} ({}):", run_group_title(*group).bold(), members.len());
+                    for name in members {
+                        if let Some((_, dep)) = blocked.iter().find(|(n, _)| n == name) {
+                            eprintln!(
+                                "    {} {} — depends on '{}'",
+                                "⊘".yellow(),
+                                name.bold(),
+                                dep
+                            );
+                        }
+                    }
+                }
+            }
+            None => {
+                for (name, dep) in blocked.iter() {
+                    eprintln!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep);
+                }
+            }
         }
     }
 

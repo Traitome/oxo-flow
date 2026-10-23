@@ -953,6 +953,37 @@ pub enum MetroGranularity {
     Module,
 }
 
+/// Resolve which `[[include]]` module owns `name`, given a flattened
+/// `(member, module)` list. Exact member match wins; otherwise the longest
+/// member that prefixes the name at a `_` boundary claims it — a
+/// wildcard-expanded instance `fastqc_S1` of member `fastqc` stays in its
+/// module. Returns `None` for rules no member matches (host rules the
+/// caller groups by its own fallback: metro uses the rule's stage, run
+/// output a "Main workflow" bucket).
+///
+/// Known limitation (documented at the to_metro call site): a main-file
+/// rule whose name extends a member (`fastp` member, `fastp_extra` host
+/// rule) takes the prefix path and lands in that module. Exact member
+/// matches always win, so the cost is a misattributed group label only —
+/// no edges are lost.
+pub fn owning_module<'a>(name: &str, module_members: &[(&'a str, &'a str)]) -> Option<&'a str> {
+    let mut best: Option<(&str, &'a str)> = None;
+    for &(member, module) in module_members {
+        if name == member {
+            return Some(module);
+        }
+        let is_instance_prefix = name
+            .as_bytes()
+            .get(member.len())
+            .is_some_and(|b| *b == b'_')
+            && name.starts_with(member);
+        if is_instance_prefix && best.is_none_or(|(bm, _)| member.len() > bm.len()) {
+            best = Some((member, module));
+        }
+    }
+    best.map(|(_, module)| module)
+}
+
 impl WorkflowDag {
     /// Export the DAG as an nf-metro "metro map" definition.
     ///
@@ -1001,11 +1032,7 @@ impl WorkflowDag {
         // rewrite them, so an expanded instance `fastqc_S1` is resolved by
         // exact match first, then by the longest member prefix (`module_rules`
         // members are original names — see expand.rs instance naming).
-        // Known limitation: a MAIN-file rule whose name extends a module
-        // member (`fastp` member, `fastp_extra` host rule) takes the prefix
-        // path and lands in that module's section. Exact member matches
-        // always win and stage fallback never regresses from the old
-        // export, so the cost is a misplaced section only — no lost edges.
+        // Shared with the run output grouping — see [`owning_module`].
         let module_members: Vec<(&str, &str)> = modules
             .into_iter()
             .flat_map(|map| map.iter())
@@ -1015,23 +1042,7 @@ impl WorkflowDag {
                     .map(move |member| (member.as_str(), module.as_str()))
             })
             .collect();
-        let find_module = |name: &str| -> Option<&str> {
-            let mut best: Option<(&str, &str)> = None;
-            for &(member, module) in &module_members {
-                if name == member {
-                    return Some(module);
-                }
-                let is_instance_prefix = name
-                    .as_bytes()
-                    .get(member.len())
-                    .is_some_and(|b| *b == b'_')
-                    && name.starts_with(member);
-                if is_instance_prefix && best.is_none_or(|(bm, _)| member.len() > bm.len()) {
-                    best = Some((member, module));
-                }
-            }
-            best.map(|(_, module)| module)
-        };
+        let find_module = |name: &str| -> Option<&str> { owning_module(name, &module_members) };
 
         // Two orthogonal groupings, mirroring nf-core's transit maps:
         // - the LINE is the rule's stage (tags → module prefix → shell
