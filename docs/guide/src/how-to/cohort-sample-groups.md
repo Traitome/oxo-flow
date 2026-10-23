@@ -148,6 +148,9 @@ Extra columns beyond `name` and `samples` become group metadata — see
 
 Both `name` and `samples` columns are **required** — a sheet missing
 either fails at parse with the schema contract in the error message.
+The group name `auto-discovered` is reserved for the engine (see
+[sample_groups](../reference/workflow-format.md#sample_groups-multi-sample-cohorts-wc-02))
+and is rejected in sheets as well — including via re-entry checkpoints.
 
 !!! note "CSV: quote comma-separated samples"
 
