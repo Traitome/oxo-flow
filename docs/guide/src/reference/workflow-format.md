@@ -3165,11 +3165,6 @@ Notes:
   ends below the floor (or on any run without an `[engine]` section,
   matching the historical unconditional behavior). If free space cannot
   be measured (non-Unix), outputs are kept as a precaution.
-- Only paths declared by the rule (its `output` entries / matching
-  `output_pattern` instances) are reclaimed; sidecar files a command
-  writes without declaring are never touched. Declare index sidecars
-  explicitly (e.g. a `genome.fa` rule also declaring `genome.fa.fai`) so
-  reclaim + cleanup can track them.
 
 ## See Also
 

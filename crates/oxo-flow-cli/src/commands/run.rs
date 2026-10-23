@@ -5871,6 +5871,9 @@ pub async fn run_command(
     // orphan the freshly created chunk files).
     if fail_count == 0 {
         let workdir_actual = workdir.as_ref().unwrap_or(&workdir_default);
+        // Not gated by the #893 disk floor below: chunk inputs are small
+        // scratch files, and deleting them regardless of free space prevents
+        // unbounded accumulation between runs.
         for rule in &config.rules {
             if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
                 // Migrate the chunk checksums BEFORE deleting the files
