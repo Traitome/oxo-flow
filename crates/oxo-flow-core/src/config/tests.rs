@@ -587,6 +587,208 @@ fn resolve_includes_depth_limit() {
 }
 
 #[test]
+fn resolve_includes_merge_sample_groups() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Module declares its own sample domain — the host file has none.
+    let included_content = r#"
+        [workflow]
+        name = "germline-module"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "align"
+        input = ["reads/{sample}_R1.fastq"]
+        output = ["aligned/{sample}.sam.txt"]
+        shell = "cat {input[0]} > {output[0]}"
+    "#;
+    std::fs::write(dir.path().join("germline.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[include]]
+        path = "germline.oxoflow"
+        namespace = "germline"
+    "#;
+
+    let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+    config.resolve_includes(dir.path()).unwrap();
+
+    // The module's group reaches the host config, so {sample} can bind.
+    assert_eq!(config.sample_groups.len(), 1);
+    assert_eq!(config.sample_groups[0].name, "all");
+    assert_eq!(config.sample_groups[0].samples, vec!["S1", "S2"]);
+}
+
+#[test]
+fn resolve_includes_dedup_identical_module_sample_groups() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Host and module declare the SAME group with identical content —
+    // dedup keeps one copy with a warning (issue #823 semantics).
+    let included_content = r#"
+        [workflow]
+        name = "germline-module"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "align"
+        shell = "true"
+    "#;
+    std::fs::write(dir.path().join("germline.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2"]
+
+        [[include]]
+        path = "germline.oxoflow"
+        namespace = "germline"
+    "#;
+
+    let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+    config.resolve_includes(dir.path()).unwrap();
+
+    assert_eq!(config.sample_groups.len(), 1);
+    assert_eq!(config.sample_groups[0].samples, vec!["S1", "S2"]);
+}
+
+#[test]
+fn resolve_includes_error_conflicting_module_sample_groups() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Same group name, different samples — expansion would collide on the
+    // same instance/output paths, so this is a config error.
+    let included_content = r#"
+        [workflow]
+        name = "germline-module"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["S1", "S2"]
+
+        [[rules]]
+        name = "align"
+        shell = "true"
+    "#;
+    std::fs::write(dir.path().join("germline.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[sample_groups]]
+        name = "all"
+        samples = ["HOST1"]
+
+        [[include]]
+        path = "germline.oxoflow"
+        namespace = "germline"
+    "#;
+
+    let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+    let err = config
+        .resolve_includes(dir.path())
+        .expect_err("conflicting sample-group declarations must be a config error");
+    let message = err.to_string();
+    assert!(
+        message.contains("conflicting duplicate sample group"),
+        "error should name the conflict, got: {message}"
+    );
+    // Both sides named so the user can fix the right declaration.
+    assert!(
+        message.contains("HOST1") && message.contains("S1"),
+        "error should show both declarations, got: {message}"
+    );
+}
+
+#[test]
+fn resolve_includes_merge_module_pairs() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Module declares [[pairs]] for its own {pair_id} fan-out.
+    let included_content = r#"
+        [workflow]
+        name = "pairing-module"
+
+        [[pairs]]
+        pair_id = "P01"
+        experiment = "T1"
+        control = "N1"
+
+        [[rules]]
+        name = "call"
+        input = ["{experiment}.bam", "{control}.bam"]
+        output = ["calls/{pair_id}.vcf"]
+        shell = "true"
+    "#;
+    std::fs::write(dir.path().join("pairing.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[include]]
+        path = "pairing.oxoflow"
+        namespace = "m"
+    "#;
+
+    let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+    config.resolve_includes(dir.path()).unwrap();
+
+    assert_eq!(config.pairs.len(), 1);
+    assert_eq!(config.pairs[0].pair_id, "P01");
+}
+
+#[test]
+fn resolve_includes_sample_pattern_module_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // A module's sample_pattern is a filesystem scan owned by the host —
+    // it is not merged (host declares none, so the field stays None).
+    let included_content = r#"
+        [workflow]
+        name = "scan-module"
+        sample_pattern = "reads/{sample}_R1.fastq"
+
+        [[rules]]
+        name = "step"
+        shell = "true"
+    "#;
+    std::fs::write(dir.path().join("scan.oxoflow"), included_content).unwrap();
+
+    let main_content = r#"
+        [workflow]
+        name = "main"
+
+        [[include]]
+        path = "scan.oxoflow"
+        namespace = "m"
+    "#;
+
+    let mut config: WorkflowConfig = toml::from_str(main_content).unwrap();
+    config.resolve_includes(dir.path()).unwrap();
+
+    assert!(config.workflow.sample_pattern.is_none());
+    assert!(
+        config.sample_groups.is_empty(),
+        "no host-side scan ran, so no auto-discovered group"
+    );
+}
+
+#[test]
 fn checksum_deterministic() {
     let toml = r#"
         [workflow]
