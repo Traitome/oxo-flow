@@ -278,7 +278,7 @@ pub fn pipeline_output_validator() -> oxo_flow_ai::agent::pipeline_gen::OutputVa
             passed: false,
             errors: v.errors.iter().map(|e| e.message.clone()).collect(),
             warnings: vec![],
-            summary: format!("{} validation error(s)", v.errors.len()),
+            summary: oxo_flow_core::plural(v.errors.len(), "validation error", "validation errors"),
         },
         Err(e) => oxo_flow_ai::agent::ValidationResult {
             passed: false,

@@ -86,7 +86,7 @@ Run with --force to actually delete these files.
 
 ```
 oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
-⚠ 2 file(s) will be deleted. Continue? [y/N]
+⚠ 2 files will be deleted. Continue? [y/N]
 y
   ✓ results/trimmed/sample1_R1.fastq.gz
   ✓ results/trimmed/sample1_R2.fastq.gz

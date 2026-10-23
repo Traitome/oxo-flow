@@ -161,14 +161,14 @@ pub enum Commands {
         #[arg(
             long = "arg",
             value_name = "KEY=VALUE",
-            help = "Set a workflow config value (overrides [config] defaults). Repeatable."
+            help = "Set a workflow config value (overrides `[config]` defaults). Repeatable."
         )]
         args: Vec<String>,
         #[arg(
             value_name = "KEY=VALUE",
             trailing_var_arg = true,
             allow_hyphen_values = true,
-            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared [config] keys — unknown --flags are rejected"
+            help = "Direct config overrides: KEY=VALUE or --KEY=VALUE; --KEY VALUE (space form) is accepted for declared `[config]` keys — unknown --flags are rejected"
         )]
         config_overrides: Vec<String>,
         /// Enable AI error recovery on rule failure.
@@ -266,9 +266,7 @@ pub enum Commands {
         #[arg(long)]
         background: bool,
     },
-    /// Preview execution without running any commands (alias: plan — the
-    /// documentation's vocabulary; `oxo-flow plan` ≡ `oxo-flow dry-run`,
-    /// issue #831).
+    /// Preview execution without running any commands (alias: plan).
     #[command(alias = "plan")]
     DryRun {
         #[arg(value_name = "WORKFLOW", help = "Path to the .oxoflow workflow file")]
@@ -1013,7 +1011,7 @@ pub enum ClusterAction {
             help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
+        #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
         job_ids: Vec<String>,
     },
     /// Cancel submitted cluster jobs.
@@ -1024,7 +1022,7 @@ pub enum ClusterAction {
             help = "Cluster backend: slurm, pbs, sge, or lsf (defaults to $OXO_FLOW_CLUSTER_BACKEND, then slurm)"
         )]
         backend: Option<String>,
-        #[arg(value_name = "JOB_IDS", help = "Job ID(s)")]
+        #[arg(value_name = "JOB_IDS", help = "One or more job IDs")]
         job_ids: Vec<String>,
     },
     /// Fetch logs for a submitted cluster job.

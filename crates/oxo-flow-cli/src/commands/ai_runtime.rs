@@ -117,8 +117,9 @@ impl AiRuntime {
                             }
                             mcp_tools += count;
                             tracing::info!(
-                                "skill '{}': registered {count} MCP tool(s) from {url}",
-                                skill.name
+                                "skill '{}': registered {} from {url}",
+                                skill.name,
+                                oxo_flow_core::plural(count, "MCP tool", "MCP tools")
                             );
                         }
                         Err(e) => tracing::warn!(
@@ -132,9 +133,9 @@ impl AiRuntime {
         }
         if mcp_tools > 0 {
             eprintln!(
-                "  {} {} MCP tool(s) from activated tool skill(s) (non-read-only calls require approval)",
+                "  {} {} from activated tool skills (non-read-only calls require approval)",
                 "•".cyan(),
-                mcp_tools
+                oxo_flow_core::plural(mcp_tools, "MCP tool", "MCP tools")
             );
         }
 

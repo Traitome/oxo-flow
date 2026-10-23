@@ -1223,9 +1223,9 @@ fn lint_io_placeholder_range(rule: &Rule) -> Vec<Diagnostic> {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
                     message: format!(
-                        "`{token}` is out of range: the rule declares only {} {noun}(s), so the \
+                        "`{token}` is out of range: the rule declares only {}, so the \
                          placeholder is never substituted and the tool receives literal brace text",
-                        patterns.len()
+                        crate::plural(patterns.len(), noun, &format!("{noun}s"))
                     ),
                     rule: Some(rule.name.clone()),
                     code: "W034".to_string(),
@@ -2211,7 +2211,7 @@ pub fn lint_format(
                 (
                     Severity::Info,
                     format!(
-                        "output collision (unreachable): rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s), but their `when` gates are complementary on '{expr}' — collision is not reachable at runtime"
+                        "output collision (unreachable): rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path, but their `when` gates are complementary on '{expr}' — collision is not reachable at runtime",
                     ),
                     "no action needed; keep the complementary gates in sync if either writer changes"
                         .to_string(),
@@ -2220,7 +2220,7 @@ pub fn lint_format(
                 (
                     Severity::Warning,
                     format!(
-                        "output collision: rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path(s)"
+                        "output collision: rules '{rule_a}' ('{raw_a}') and '{rule_b}' ('{raw_b}') write the same path"
                     ),
                     "if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory"
                         .to_string(),
@@ -6119,7 +6119,7 @@ shell = "samtools faidx {{config.reference}}"
         let hit = diagnostics.iter().find(|d| d.code == "W034").unwrap();
         assert_eq!(hit.rule.as_deref(), Some("caller"));
         assert!(
-            hit.message.contains("{input[5]}") && hit.message.contains("only 2 input(s)"),
+            hit.message.contains("{input[5]}") && hit.message.contains("only 2 inputs"),
             "message must name the token and the declared count: {}",
             hit.message
         );

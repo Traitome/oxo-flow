@@ -67,7 +67,7 @@ oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
   ✓ sample2.bam
   ✓ sample2.bam.bai
 
-Done: 4 file(s) touched, 0 wildcard pattern(s) skipped
+Done: 4 files touched, 0 wildcard patterns skipped
 ```
 
 ---

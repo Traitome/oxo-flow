@@ -59,7 +59,7 @@ $ oxo-flow test pipeline.oxoflow --deep
   References:
     ⚠ reference path not found: /data/references/GRCh38/genome.fa (rule: bwa_mem2_align) [D004]
 
-Deep check summary: 1 error(s), 3 warning(s)
+Deep check summary: 1 error, 3 warnings
 ```
 
 ### Check categories

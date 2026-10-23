@@ -277,9 +277,9 @@ for large cohorts). When a required backend binary is missing
 before anything executes:
 
 ```
-2 environment backend(s) required by pending rules are unavailable; no rules were run:
-  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
-  - pixi: pixi is not installed or not in PATH — required by 1 pending rule(s), e.g. `report` (environment: pixi.toml); install pixi (https://pixi.sh) and ensure it is on PATH
+2 environment backends required by pending rules are unavailable; no rules were run:
+  - conda: conda is not installed or not in PATH — required by 3 pending rules, e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+  - pixi: pixi is not installed or not in PATH — required by 1 pending rule, e.g. `report` (environment: pixi.toml); install pixi (https://pixi.sh) and ensure it is on PATH
 ```
 
 Rules sharing one broken spec, and distinct specs failing with the
@@ -1017,7 +1017,7 @@ path, size, and modification time — plus a content hash for files up to
   `workflow is missing required source input(s) — no rule produces them`,
   naming each affected rule and pattern (exit non-zero). Previously a
   fully-completed checkpoint plus a deleted raw data file could exit 0
-  from stale checkpoint credit ("re-running 0 producer rule(s)"); that
+  from stale checkpoint credit ("re-running 0 producer rules"); that
   silent-success hole is closed. The gate never fires for generated
   intermediates (they have producers and are governed by the manifest
   cascade below), `[[references]]` outputs (built later in the same run),
@@ -1030,7 +1030,7 @@ oxo-flow run pipeline.oxoflow
 ```
 
 ```console
-  ↻ input changes invalidated 2 rule(s): gather, report
+  ↻ input changes invalidated 2 rules: gather, report
   Running: gather
   Running: report
   …
@@ -1110,9 +1110,9 @@ This is checkpoint-aware, not a blind delete:
   work for them to enable.
 
 ```console
-  ↻ temporary outputs needed again — re-running 1 producer rule(s): trim_S1
+  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1
   …
-  ⊘ temporary outputs deleted for 'trim_S1' (1 file(s), regenerated on demand)
+  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)
 ```
 
 Dry-run predicts exactly when a tombstoned rule will regenerate

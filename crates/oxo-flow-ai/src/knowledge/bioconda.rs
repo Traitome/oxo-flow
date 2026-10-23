@@ -97,8 +97,12 @@ pub fn format_search_results(query: &str, limit: usize) -> String {
         return format!("No Bioconda CLI tools matched '{}'.", query);
     }
     let mut s = format!(
-        "Found {} Bioconda CLI tool(s) matching '{}' (of {} total):\n",
-        results.len(),
+        "Found {} matching '{}' (of {} total):\n",
+        if results.len() == 1 {
+            "1 Bioconda CLI tool"
+        } else {
+            "Bioconda CLI tools"
+        },
         query,
         tool_count()
     );

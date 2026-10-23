@@ -591,7 +591,10 @@ fn print_plan_skeleton(plan: &ExplainPlan) {
     } else {
         format!(", domains: {}", plan.domains.join(", "))
     };
-    println!("  {} rule(s){domains}", plan.rule_count);
+    println!(
+        "  {}{domains}",
+        oxo_flow_core::plural(plan.rule_count, "rule", "rules")
+    );
     println!("  entry rules: {}", plan.entry_rules.join(", "));
     println!("  final rules: {}", plan.final_rules.join(", "));
     for step in &plan.steps {

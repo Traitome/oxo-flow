@@ -162,10 +162,10 @@ convention.
 
 ### Run aborts before any rule: environment backend unavailable
 
-**Symptom**: `N environment backend(s) required by pending rules are unavailable; no rules were run:` followed by one entry per root cause, e.g.
+**Symptom**: `N environment backends required by pending rules are unavailable; no rules were run:` followed by one entry per root cause, e.g.
 
 ```
-  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+  - conda: conda is not installed or not in PATH — required by 3 pending rules, e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
 ```
 
 **Cause**: a fail-fast preflight runs after DAG construction and before any
@@ -303,7 +303,7 @@ Use `oxo-flow graph workflow.oxoflow` to see all rule names.
 
 ```console
 $ oxo-flow lint pipeline.oxoflow
-  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)
+  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path
     hint: if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory
 ```
 
@@ -398,7 +398,7 @@ hash for files up to 64 MiB). When a glob or directory input gained or lost
 files, or a plain input file was edited — including same-size rewrites that
 preserve the mtime — the rule and its downstream re-execute, even though
 their outputs still exist, and the console prints
-`input changes invalidated N rule(s)`. See
+`input changes invalidated N rules`. See
 [Input changes and manifest invalidation](../commands/run.md#input-changes-and-manifest-invalidation).
 
 To see the blast radius *before* spending compute,

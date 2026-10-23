@@ -445,7 +445,7 @@ right after a submit:
 ```bash
 $ oxo-flow cluster status
 Cluster: Executing 'squeue -u alice --noheader -o %i|%T'...
-Cluster: 2 queued job(s)
+Cluster: 2 queued jobs
   12345: running
   12346: pending
 ```

@@ -144,7 +144,7 @@ max_jobs = 10           # Parsed, but not yet enforced by any command
     **before anything is submitted**, naming every offender:
 
     ```
-    Error: 1 rule(s) exceed the workflow's [resource_budget] — nothing was submitted:
+    Error: [resource_budget] exceeded by 1 rule — nothing was submitted:
       rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
     ```
 

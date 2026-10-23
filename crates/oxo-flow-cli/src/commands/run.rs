@@ -223,8 +223,8 @@ fn narrate_source_link_report(
     if !report.linked.is_empty() {
         diagnostic_narrate(
             format_args!(
-                "workdir source linking: created {} symlink(s) into the workdir (repo stays the single source of truth): {}",
-                report.linked.len(),
+                "workdir source linking: created {} into the workdir (repo stays the single source of truth): {}",
+                oxo_flow_core::plural(report.linked.len(), "symlink", "symlinks"),
                 report.linked.join(", ")
             ),
             run_log,
@@ -233,8 +233,12 @@ fn narrate_source_link_report(
     if !report.sidecars.is_empty() {
         diagnostic_narrate(
             format_args!(
-                "workdir source linking: linked {} tool-convention index sidecar(s) next to linked file(s) (bwa/samtools/picard auto-discovery — not spelled out in any shell command): {}",
-                report.sidecars.len(),
+                "workdir source linking: linked {} next to their linked files (bwa/samtools/picard auto-discovery — not spelled out in any shell command): {}",
+                oxo_flow_core::plural(
+                    report.sidecars.len(),
+                    "tool-convention index sidecar",
+                    "tool-convention index sidecars"
+                ),
                 report.sidecars.join(", ")
             ),
             run_log,
@@ -243,8 +247,9 @@ fn narrate_source_link_report(
     if !report.converted.is_empty() {
         diagnostic_narrate(
             format_args!(
-                "workdir source linking: replaced {} byte-identical workdir duplicate(s) with symlink(s) into the repo: {}",
+                "workdir source linking: replaced {} byte-identical workdir duplicates with {}: {}",
                 report.converted.len(),
+                oxo_flow_core::plural(report.converted.len(), "a symlink", "symlinks"),
                 report.converted.join(", ")
             ),
             run_log,
@@ -263,7 +268,7 @@ fn narrate_source_link_report(
     if !report.undeclared.is_empty() {
         diagnostic_narrate(
             format_args!(
-                "{} workdir source linking: shell command(s) reference workflow-repo file(s) that no rule declares as inputs — they were NOT linked (declaring the path as a rule input links it automatically):\n  {}",
+                "{} workdir source linking: shell commands reference workflow-repo files that no rule declares as inputs — they were NOT linked (declaring the path as a rule input links it automatically):\n  {}",
                 "Note:".yellow(),
                 report.undeclared.join("\n  ")
             ),
@@ -622,10 +627,10 @@ async fn reclaim_rule_outputs(
     }
     diagnostic_narrate(
         format_args!(
-            "  {} reclaimed temporary outputs of '{}' ({} file(s)) — regenerated on demand via cascade-up",
+            "  {} reclaimed temporary outputs of '{}' ({}) — regenerated on demand via cascade-up",
             "⊘".dimmed(),
             candidate.rule,
-            unlinked
+            oxo_flow_core::plural(unlinked, "file", "files")
         ),
         Some(run_log),
     );
@@ -1803,6 +1808,19 @@ pub async fn run_command(
         None => (resolve_workflow(None)?, false),
     };
     json_summary.set_workflow(&workflow);
+    // A#2 (persona campaign): name the workflow file once, right after
+    // resolution — auto-discovery would otherwise pick a file silently when
+    // no path was passed, and repo checkouts extract to a temp path the user
+    // never typed. The run log is not armed yet at this point (it is created
+    // further down), so this stays stderr-only for now.
+    diagnostic_narrate(
+        format_args!(
+            "{} Using workflow file: {}",
+            "Info:".bold().cyan(),
+            workflow.display()
+        ),
+        None,
+    );
     // Issue #427: everything downstream — base_dir, workflow_root,
     // runtime_workdir comparison in expand.rs, reference anchoring, env
     // resolution — compares against this directory. A bare `wf.oxoflow`
@@ -1917,7 +1935,7 @@ pub async fn run_command(
     if !e005.is_empty() {
         json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
-            "workflow references undefined config variable(s) — fix before running:\n  {}",
+            "workflow references undefined config variables — fix before running:\n  {}",
             e005.join("\n  ")
         ));
     }
@@ -2104,7 +2122,14 @@ pub async fn run_command(
     if !missing_sources.is_empty() {
         json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
-            "workflow is missing required source input(s) — no rule produces them:\n  {}",
+            "workflow is missing {} required source input{} — no rule produces {}:\n  {}",
+            missing_sources.len(),
+            if missing_sources.len() == 1 { "" } else { "s" },
+            if missing_sources.len() == 1 {
+                "it"
+            } else {
+                "them"
+            },
             missing_sources.join("\n  ")
         ));
     }
@@ -2211,10 +2236,10 @@ pub async fn run_command(
         }
         diagnostic_narrate(
             format_args!(
-                "  {} checkpoint lists {} rule(s) as running from a previous run \
+                "  {} checkpoint lists {} as running from a previous run \
                  ({}): they died with it and will re-run.",
                 "!".yellow(),
-                stale_running.len(),
+                oxo_flow_core::plural(stale_running.len(), "rule", "rules"),
                 stale_running.join(", ")
             ),
             Some(&run_log),
@@ -2369,9 +2394,9 @@ pub async fn run_command(
     if !change_report.sample_selection_exempt.is_empty() {
         diagnostic_narrate(
             format_args!(
-                "  {} skipped {} rule(s) whose definition only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                "  {} skipped {} whose definition only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
                 "⚠".yellow(),
-                change_report.sample_selection_exempt.len(),
+                oxo_flow_core::plural(change_report.sample_selection_exempt.len(), "rule", "rules"),
                 change_report.sample_selection_exempt.join(", ")
             ),
             Some(&run_log),
@@ -2435,9 +2460,9 @@ pub async fn run_command(
             let names: Vec<&str> = sample_selection_driven.iter().map(String::as_str).collect();
             diagnostic_narrate(
                 format_args!(
-                    "  {} skipped {} rule(s) whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
+                    "  {} skipped {} whose inputs only changed with the --samples selection: {} — outputs still cover the previous run's full sample set; use --rerun to regenerate with the new selection",
                     "⚠".yellow(),
-                    names.len(),
+                    oxo_flow_core::plural(names.len(), "rule", "rules"),
                     names.join(", ")
                 ),
                 Some(&run_log),
@@ -2462,8 +2487,14 @@ pub async fn run_command(
                 );
                 diagnostic_narrate(
                     format_args!(
-                        "  {} required input(s) missing and cannot be regenerated in this run — affected rule(s):\n{}",
+                        "  {} {} missing and cannot be regenerated in this run — affected rule{}:\n{}",
                         "⚠".yellow(),
+                        oxo_flow_core::plural(
+                            missing_inputs.len(),
+                            "required input",
+                            "required inputs"
+                        ),
+                        if missing_inputs.len() == 1 { ":" } else { "s:" },
                         lines.join("\n")
                     ),
                     Some(&run_log),
@@ -2471,9 +2502,9 @@ pub async fn run_command(
             } else {
                 diagnostic_narrate(
                     format_args!(
-                        "  {} missing intermediate inputs — re-running {} producer rule(s): {}",
+                        "  {} missing intermediate inputs — re-running {}: {}",
                         "↻".yellow(),
-                        upstream.len(),
+                        oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
                         upstream.join(", ")
                     ),
                     Some(&run_log),
@@ -2495,9 +2526,9 @@ pub async fn run_command(
             let prior_failures = !ck.failed_rules.is_empty();
             diagnostic_narrate(
                 format_args!(
-                    "  {} input changes invalidated {} rule(s): {}{}",
+                    "  {} input changes invalidated {}: {}{}",
                     "↻".yellow(),
-                    invalidated.len(),
+                    oxo_flow_core::plural(invalidated.len(), "rule", "rules"),
                     invalidated.join(", "),
                     if prior_failures {
                         " — the previous run failed after some rules wrote into shared input dirs (logs/ QC dirs); their inputs changed on disk, so affected rules re-run. This is expected invalidation, not lost credit"
@@ -2511,8 +2542,8 @@ pub async fn run_command(
         if baselined > 0 {
             diagnostic_narrate(
                 format_args!(
-                    "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed rule(s); future input changes will invalidate them automatically",
-                    baselined
+                    "  Note: checkpoint predates input tracking: recorded baseline input manifests for {} completed; future input changes will invalidate them automatically",
+                    oxo_flow_core::plural(baselined, "rule", "rules")
                 ),
                 Some(&run_log),
             );
@@ -2578,9 +2609,9 @@ pub async fn run_command(
             force_rules.extend(upstream.iter().cloned());
             diagnostic_narrate(
                 format_args!(
-                    "  {} temporary outputs needed again — re-running {} producer rule(s): {}",
+                    "  {} temporary outputs needed again — re-running {}: {}",
                     "↻".yellow(),
-                    upstream.len(),
+                    oxo_flow_core::plural(upstream.len(), "producer rule", "producer rules"),
                     upstream.join(", ")
                 ),
                 Some(&run_log),
@@ -2803,8 +2834,8 @@ pub async fn run_command(
         // the failed run for --json consumers (issue #142 H6).
         json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
-            "resource budget too small for {} rule(s); no rules were run:\n{}",
-            breaches.len(),
+            "resource budget too small for {}; no rules were run:\n{}",
+            oxo_flow_core::plural(breaches.len(), "rule", "rules"),
             detail
         ));
     }
@@ -2911,8 +2942,12 @@ pub async fn run_command(
         // the failed run for --json consumers (issue #142 H6).
         json_summary.emit("failed", &RunCounts::default(), vec![]);
         return Err(anyhow::anyhow!(
-            "{} environment backend(s) required by pending rules are unavailable; no rules were run:\n{}",
-            env_failures.len(),
+            "{} required by pending rules are unavailable; no rules were run:\n{}",
+            oxo_flow_core::plural(
+                env_failures.len(),
+                "environment backend",
+                "environment backends"
+            ),
             detail
         ));
     }
@@ -3399,9 +3434,9 @@ pub async fn run_command(
                     tracing::warn!(error = %e, "failed to save checkpoint after reference rebuild");
                 }
                 eprintln!(
-                    "  {} reference rebuild invalidated {} rule(s): {}",
+                    "  {} reference rebuild invalidated {}: {}",
                     "↻".yellow(),
-                    invalidated.len(),
+                    oxo_flow_core::plural(invalidated.len(), "rule", "rules"),
                     invalidated.join(", ")
                 );
             }
@@ -4401,7 +4436,7 @@ pub async fn run_command(
                                 }
                             }
                             if let Some(code) = record.exit_code {
-                                err_msg.push_str(&format!("\nexit code: {}", code));
+                                err_msg.push_str(&format!("\n  exit code: {}", code));
                             }
                             progress_narrate(
                             format_args!("  {} {}", "✗".red(), err_msg),
@@ -5608,7 +5643,10 @@ pub async fn run_command(
         && let Err(e) =
             crate::commands::output::snapshot_report(&workflow, &workdir_actual, &checkpoint)
     {
-        eprintln!("  {} Report snapshot failed: {e}", "⚠".yellow());
+        progress_narrate(
+            format_args!("  {} Report snapshot failed: {e}", "⚠".yellow()),
+            &run_log,
+        );
     }
 
     // --provenance recorded nothing: say so loudly. The historical failure
@@ -5618,11 +5656,14 @@ pub async fn run_command(
     if provenance {
         let recorded = provenance_recorded.load(std::sync::atomic::Ordering::Relaxed);
         if recorded == 0 {
-            eprintln!(
-                "  {} --provenance recorded 0 checksums — no literal outputs completed \
-                 (templated or wildcard outputs are tracked per instance only after fan-out); \
-                 'provenance verify' will find nothing to check",
-                "⚠".yellow()
+            progress_narrate(
+                format_args!(
+                    "  {} --provenance recorded 0 checksums — no literal outputs completed \
+                     (templated or wildcard outputs are tracked per instance only after fan-out); \
+                     'provenance verify' will find nothing to check",
+                    "⚠".yellow()
+                ),
+                &run_log,
             );
         }
     }
@@ -5655,22 +5696,31 @@ pub async fn run_command(
     // same module headers as the plan listing; the flat per-line shapes are
     // unchanged (web SSE / report tooling parse these lines).
     if !failures.is_empty() {
-        eprintln!("\n{}", "Failed rules:".bold().red());
+        progress_narrate(format_args!("\n{}", "Failed rules:".bold().red()), &run_log);
         let names: Vec<&str> = failures.iter().map(|(name, _)| name.as_str()).collect();
         match module_groups_for_rules(&names, &config.module_rules) {
             Some(groups) => {
                 for (group, members) in &groups {
-                    eprintln!("  {} ({}):", run_group_title(*group).bold(), members.len());
+                    progress_narrate(
+                        format_args!("  {} ({}):", run_group_title(*group).bold(), members.len()),
+                        &run_log,
+                    );
                     for name in members {
                         if let Some((_, reason)) = failures.iter().find(|(n, _)| n == name) {
-                            eprintln!("    {} {} — {}", "✗".red(), name.bold(), reason);
+                            progress_narrate(
+                                format_args!("    {} {} — {}", "✗".red(), name.bold(), reason),
+                                &run_log,
+                            );
                         }
                     }
                 }
             }
             None => {
                 for (name, reason) in failures.iter() {
-                    eprintln!("  {} {} — {}", "✗".red(), name.bold(), reason);
+                    progress_narrate(
+                        format_args!("  {} {} — {}", "✗".red(), name.bold(), reason),
+                        &run_log,
+                    );
                 }
             }
         }
@@ -5679,19 +5729,28 @@ pub async fn run_command(
     // Blocked rules did not run and produced no outputs. Listing them keeps the
     // fallout of a failure visible without disguising it as a genuine failure.
     if !blocked.is_empty() {
-        eprintln!("\n{}", "Blocked rules (did not run):".bold().yellow());
+        progress_narrate(
+            format_args!("\n{}", "Blocked rules (did not run):".bold().yellow()),
+            &run_log,
+        );
         let names: Vec<&str> = blocked.iter().map(|(name, _)| name.as_str()).collect();
         match module_groups_for_rules(&names, &config.module_rules) {
             Some(groups) => {
                 for (group, members) in &groups {
-                    eprintln!("  {} ({}):", run_group_title(*group).bold(), members.len());
+                    progress_narrate(
+                        format_args!("  {} ({}):", run_group_title(*group).bold(), members.len()),
+                        &run_log,
+                    );
                     for name in members {
                         if let Some((_, dep)) = blocked.iter().find(|(n, _)| n == name) {
-                            eprintln!(
-                                "    {} {} — depends on '{}'",
-                                "⊘".yellow(),
-                                name.bold(),
-                                dep
+                            progress_narrate(
+                                format_args!(
+                                    "    {} {} — depends on '{}'",
+                                    "⊘".yellow(),
+                                    name.bold(),
+                                    dep
+                                ),
+                                &run_log,
                             );
                         }
                     }
@@ -5699,7 +5758,10 @@ pub async fn run_command(
             }
             None => {
                 for (name, dep) in blocked.iter() {
-                    eprintln!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep);
+                    progress_narrate(
+                        format_args!("  {} {} — depends on '{}'", "⊘".yellow(), name.bold(), dep),
+                        &run_log,
+                    );
                 }
             }
         }
@@ -5753,9 +5815,9 @@ pub async fn run_command(
         }
         if !missing_outputs.is_empty() {
             eprintln!(
-                "{} {} output file(s) were not found:",
+                "{} {} were not found:",
                 "⚠".yellow(),
-                missing_outputs.len()
+                oxo_flow_core::plural(missing_outputs.len(), "output file", "output files")
             );
             for m in &missing_outputs {
                 eprintln!("{}", m.dimmed());
@@ -6039,10 +6101,10 @@ pub async fn run_command(
                         };
                     }
                     eprintln!(
-                        "  {} temporary outputs deleted for '{}' ({} file(s), regenerated on demand)",
+                        "  {} temporary outputs deleted for '{}' ({}, regenerated on demand)",
                         "⊘".dimmed(),
                         rule,
-                        paths.len()
+                        oxo_flow_core::plural(paths.len(), "file", "files")
                     );
                 }
             }
@@ -6092,9 +6154,13 @@ pub async fn run_command(
                 }
             }
             eprintln!(
-                "  {} distinct scientific preflight finding(s) ({} instance(s) across sample rules) — see 'oxo-flow dry-run --samples ...'",
-                distinct.len(),
-                scientific.len()
+                "  {} ({} across sample rules) — see 'oxo-flow dry-run --samples ...'",
+                oxo_flow_core::plural(
+                    distinct.len(),
+                    "distinct scientific preflight finding",
+                    "distinct scientific preflight findings"
+                ),
+                oxo_flow_core::plural(scientific.len(), "instance", "instances")
             );
             for (key, group) in &distinct {
                 eprintln!("    ⚠ [{}] {} (×{})", key.0, group[0].rule, group.len());
@@ -6110,12 +6176,12 @@ pub async fn run_command(
                 .collect::<Vec<_>>()
                 .join("\n");
             let prompt = format!(
-                "A pilot run of {} sample(s) out of {} completed in {:.1}s ({} succeeded, {} failed).\n\
+                "A pilot run of {} out of {} completed in {:.1}s ({} succeeded, {} failed).\n\
                  Per-sample wall time: {:.1}s; projected full run: ~{:.0}s.\n\
                  Scientific preflight findings:\n{}\n\n\
                  Write a short pilot report (3-5 sentences): whether the pilot results are\n\
                  healthy, whether scaling up is advisable, and what to fix first.",
-                pilot_count,
+                oxo_flow_core::plural(pilot_count, "sample", "samples"),
                 total_count,
                 elapsed_secs,
                 success_count,
@@ -6244,7 +6310,7 @@ async fn notify_webhook(
             rule: None,
             exit_code: None,
             error: if failed > 0 {
-                Some(format!("{failed} rule(s) failed"))
+                Some(oxo_flow_core::plural(failed, "rule failed", "rules failed"))
             } else {
                 None
             },
@@ -6494,6 +6560,17 @@ pub async fn dry_run_command(
     print_banner();
     let workflow = resolve_workflow(workflow)?;
     let workflow_dir = oxo_flow_core::parent_dir(&workflow).to_path_buf();
+    // A#2 (persona campaign): auto-discovery silently picked a file when no
+    // path was given — name the pick so `oxo-flow dry-run` in a multi-file
+    // directory never operates on a surprise file.
+    diagnostic_narrate(
+        format_args!(
+            "{} Using workflow file: {}",
+            "Info:".bold().cyan(),
+            workflow.display()
+        ),
+        None,
+    );
     // Path resolution base: --workdir wins, default is the workflow file's
     // directory — the same base the executor uses for run (issue #68).
     let base_dir = workdir.as_deref().unwrap_or(&workflow_dir);
@@ -6603,7 +6680,7 @@ pub async fn dry_run_command(
     let e005 = undefined_config_findings(&config);
     if !e005.is_empty() {
         return Err(anyhow::anyhow!(
-            "workflow references undefined config variable(s) — fix before running:\n  {}",
+            "workflow references undefined config variables — fix before running:\n  {}",
             e005.join("\n  ")
         ));
     }
@@ -6906,9 +6983,13 @@ pub async fn dry_run_command(
     };
     if !reference_builds.is_empty() {
         eprintln!(
-            "{} {} reference build(s) would run: {}",
+            "{} {} would run: {}",
             "References:".bold().cyan(),
-            reference_builds.len(),
+            oxo_flow_core::plural(
+                reference_builds.len(),
+                "reference build",
+                "reference builds"
+            ),
             reference_builds.join(", ")
         );
         eprintln!(
@@ -7058,9 +7139,9 @@ pub async fn dry_run_command(
     // listing so the plan context stays visible, before the JSON document.
     if !env_manifest_issues.is_empty() {
         eprintln!(
-            "\n  {} {} pixi manifest(s) declared by pending rule(s) do not exist:",
+            "\n  {} {} declared by pending rules do not exist:",
             "✗".red().bold(),
-            env_manifest_issues.len()
+            oxo_flow_core::plural(env_manifest_issues.len(), "pixi manifest", "pixi manifests")
         );
         for (rule, spec) in &env_manifest_issues {
             eprintln!("    - {rule}: {spec} (resolved relative to the workflow directory)");
@@ -7094,15 +7175,15 @@ pub async fn dry_run_command(
     );
     if !memory_values.is_empty() {
         eprintln!(
-            "         {} rule(s) with memory requirements",
-            memory_values.len()
+            "         {} with memory requirements",
+            oxo_flow_core::plural(memory_values.len(), "rule", "rules")
         );
     }
     if !config.sample_groups.is_empty() {
         eprintln!(
-            "         {} sample group(s), {} pair(s)",
-            config.sample_groups.len(),
-            config.pairs.len()
+            "         {}, {}",
+            oxo_flow_core::plural(config.sample_groups.len(), "sample group", "sample groups"),
+            oxo_flow_core::plural(config.pairs.len(), "pair", "pairs")
         );
     }
 
@@ -7400,10 +7481,10 @@ pub async fn dry_run_command(
     // output on this failure path (same contract as `validate --json`).
     if !env_manifest_issues.is_empty() {
         anyhow::bail!(
-            "{} pixi manifest(s) declared by pending rule(s) do not exist — \
+            "{} declared by pending rules do not exist — \
              create the manifest at the resolved path or correct the rule's \
              `pixi` path (resolved relative to the workflow directory)",
-            env_manifest_issues.len()
+            oxo_flow_core::plural(env_manifest_issues.len(), "pixi manifest", "pixi manifests")
         );
     }
 
@@ -7499,10 +7580,10 @@ logical errors. Output format per rule:
                     .collect();
                 if !instances.is_empty() {
                     eprintln!(
-                        "{} template '{}' expanded to {} instance(s)",
+                        "{} template '{}' expanded to {}",
                         "Debug:".bold().cyan(),
                         name,
-                        instances.len()
+                        oxo_flow_core::plural(instances.len(), "instance", "instances")
                     );
                     instances
                 } else {
@@ -8221,11 +8302,7 @@ pub async fn handle_status(
         return Ok(());
     }
 
-    eprintln!(
-        "{} Status for checkpoint: {}",
-        "Status:".bold().cyan(),
-        checkpoint_path.display()
-    );
+    eprintln!("{} {}", "Status:".bold().cyan(), checkpoint_path.display());
     // Issue #849: the checkpoint is a flushed snapshot, not live state —
     // the observed flush lag on a live 561-rule run was ~1–2 min. Surface
     // the age so "Completed: 0" is never mistaken for "nothing ran".
@@ -8418,16 +8495,26 @@ pub async fn resume_command(
     eprintln!("  State: {completed} completed, {failed} failed, {remaining} remaining");
     if !skipped_when_false.is_empty() {
         eprintln!(
-            "  Note: {} rule(s) were skipped by their `when` condition (recorded false); the gate is re-judged on this resume.",
-            skipped_when_false.len()
+            "  Note: {} {} skipped by their `when` condition (recorded false); the gate is re-judged on this resume.",
+            skipped_when_false.len(),
+            if skipped_when_false.len() == 1 {
+                "rule was"
+            } else {
+                "rules were"
+            }
         );
     }
     // Issue #685: entries persisting in the running set mean the prior run
     // died mid-flight; run_command clears them (with a warning) on start.
     if !state.running_rules().is_empty() {
         eprintln!(
-            "  Note: {} rule(s) were still running when the previous run died; they will re-run.",
-            state.running_rules().len()
+            "  Note: {} {} still running when the previous run died; they will re-run.",
+            state.running_rules().len(),
+            if state.running_rules().len() == 1 {
+                "rule was"
+            } else {
+                "rules were"
+            }
         );
     }
 
@@ -8443,9 +8530,9 @@ pub async fn resume_command(
     // already-finished rules to be skipped automatically
     eprintln!();
     eprintln!(
-        "{} Launching executor with {} parallel job(s)...",
+        "{} Launching executor with {}...",
         "Info:".bold().cyan(),
-        jobs
+        oxo_flow_core::plural(jobs, "parallel job", "parallel jobs")
     );
 
     // Workdir precedence (issue #68): explicit --workdir > the directory the
@@ -8508,10 +8595,10 @@ impl std::fmt::Display for BackendPreflightFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{kind}: {message} — required by {count} pending rule(s), e.g. `{example_rule}` (environment: {spec}); {hint}",
+            "{kind}: {message} — required by {count}, e.g. `{example_rule}` (environment: {spec}); {hint}",
             kind = self.kind,
             message = self.message,
-            count = self.count,
+            count = oxo_flow_core::plural(self.count, "pending rule", "pending rules"),
             example_rule = self.example_rule,
             spec = self.spec,
             hint = backend_install_hint(self),
@@ -9780,7 +9867,7 @@ shell = "cp stage1.txt stage2.txt"
         assert_eq!(f.spec, "envs/absent/pixi.toml");
         let rendered = f.to_string();
         assert!(
-            rendered.contains("required by 2 pending rule(s)"),
+            rendered.contains("required by 2 pending rules"),
             "the message must carry the cohort size: {rendered}"
         );
         // Whether THIS test observes the manifest mode depends on whether

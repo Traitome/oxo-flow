@@ -119,3 +119,16 @@ pub fn parent_dir(path: &std::path::Path) -> &std::path::Path {
         _ => std::path::Path::new("."),
     }
 }
+
+/// Render `count` with the correct singular/plural form: `plural(n, "rule",
+/// "rules")` yields `"1 rule"` / `"2 rules"`. Shared by every CLI/core
+/// summary count so no message reads "1 rules" (persona-campaign string
+/// batch; the CLI's `quality::plural` is the same shape — use this one).
+#[must_use]
+pub fn plural(count: usize, singular: &str, plural_form: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural_form}")
+    }
+}

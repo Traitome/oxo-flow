@@ -8,13 +8,10 @@ use std::path::{Path, PathBuf};
 use crate::commands::print_banner;
 
 /// `"1 rule"` / `"2 rules"` — the summary counts read "1 rules" before the
-/// CLI grew pluralisation (audit P4-1d).
+/// CLI grew pluralisation (audit P4-1d). Now a thin alias for the shared
+/// core helper (reuse-never-retype).
 fn plural(count: usize, singular: &str, plural_form: &str) -> String {
-    if count == 1 {
-        format!("1 {singular}")
-    } else {
-        format!("{count} {plural_form}")
-    }
+    oxo_flow_core::plural(count, singular, plural_form)
 }
 
 pub async fn validate_command(
@@ -182,10 +179,10 @@ pub async fn validate_command(
                     );
                 } else {
                     eprintln!(
-                        "{} {} — {} validation error(s)",
+                        "{} {} — {}",
                         "✗".red().bold(),
                         workflow.display(),
-                        error_count
+                        plural(error_count, "validation error", "validation errors")
                     );
                 }
 
@@ -207,7 +204,8 @@ pub async fn validate_command(
             // report (audit #666). The top-level dispatcher still exits 1.
             if error_count > 0 {
                 anyhow::bail!(
-                    "validation failed: {error_count} error(s) in {}",
+                    "validation failed: {} in {}",
+                    plural(error_count, "error", "errors"),
                     workflow.display()
                 );
             }
@@ -227,7 +225,10 @@ pub async fn validate_command(
             } else {
                 eprintln!("{} {} — {}", "✗".red().bold(), workflow.display(), e);
             }
-            anyhow::bail!("workflow parse failed: {e}");
+            // The full parse error was already printed above (or embedded in
+            // the JSON document); a bare context keeps the bail from
+            // duplicating the message.
+            anyhow::bail!("workflow parse failed");
         }
     }
     Ok(())
@@ -333,11 +334,11 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
     }
 
     eprintln!(
-        "\n{} {} error(s), {} warning(s), {} info",
+        "\n{} {}, {}, {}",
         "Summary:".bold(),
-        error_count,
-        warning_count,
-        info_count
+        plural(error_count, "error", "errors"),
+        plural(warning_count, "warning", "warnings"),
+        plural(info_count, "info", "info")
     );
 
     // JSON output mode
@@ -373,13 +374,21 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
         if error_count > 0 || (strict && warning_count > 0) {
             // Return Err instead of process::exit so `test --json` can
             // compose this step into its aggregate document (audit #666).
-            anyhow::bail!("lint failed: {error_count} error(s), {warning_count} warning(s)");
+            anyhow::bail!(
+                "lint failed: {}, {}",
+                plural(error_count, "error", "errors"),
+                plural(warning_count, "warning", "warnings")
+            );
         }
         return Ok(());
     }
 
     if error_count > 0 || (strict && warning_count > 0) {
-        anyhow::bail!("lint failed: {error_count} error(s), {warning_count} warning(s)");
+        anyhow::bail!(
+            "lint failed: {}, {}",
+            plural(error_count, "error", "errors"),
+            plural(warning_count, "warning", "warnings")
+        );
     }
     Ok(())
 }
@@ -518,19 +527,23 @@ fn print_deep_console(report: &oxo_flow_core::deep_check::DeepCheckReport) {
         eprintln!("{}", "  References:".bold());
         if report.references_checked > 0 && !has("D004") {
             eprintln!(
-                "    {} {} reference path(s) found",
+                "    {} {} found",
                 "✓".green().bold(),
-                report.references_checked
+                plural(
+                    report.references_checked,
+                    "reference path",
+                    "reference paths"
+                )
             );
         }
         finding_lines("D004");
     }
 
     eprintln!(
-        "\n{} {} error(s), {} warning(s)",
+        "\n{} {}, {}",
         "Deep check summary:".bold(),
-        report.error_count,
-        report.warning_count
+        plural(report.error_count, "error", "errors"),
+        plural(report.warning_count, "warning", "warnings")
     );
 }
 
@@ -719,10 +732,10 @@ pub fn touch_command(
     }
 
     eprintln!(
-        "\n{} {} file(s) touched, {} wildcard pattern(s) skipped",
+        "\n{} {}, {} skipped",
         "Done:".bold(),
-        touched,
-        skipped
+        plural(touched, "file", "files"),
+        plural(skipped, "wildcard pattern", "wildcard patterns")
     );
 
     if !skipped_patterns.is_empty() {
@@ -757,9 +770,13 @@ pub fn touch_command(
     // difference between "touched" and "nothing matched".
     if !unknown_rules.is_empty() {
         anyhow::bail!(
-            "{} requested rule name(s) not found in '{}' — nothing was touched for them.\n  \
+            "{} not found in '{}' — nothing was touched for them.\n  \
              Run `oxo-flow dry-run {}` to list the expanded rule names.",
-            unknown_rules.len(),
+            oxo_flow_core::plural(
+                unknown_rules.len(),
+                "requested rule name",
+                "requested rule names"
+            ),
             workflow.display(),
             workflow.display()
         );
@@ -770,7 +787,8 @@ pub fn touch_command(
     // "outputs marked up-to-date" when nothing was marked (audit #668).
     if failed_touched > 0 {
         anyhow::bail!(
-            "touch: {failed_touched} output path(s) failed to mark in {}",
+            "touch: {} failed to mark in {}",
+            oxo_flow_core::plural(failed_touched, "output path", "output paths"),
             workflow.display()
         );
     }

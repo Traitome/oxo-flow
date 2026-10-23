@@ -451,19 +451,26 @@ impl Orchestrator {
         };
         log_session_usage(&completed);
 
+        let rounds_desc = if rounds == 1 {
+            "1 round".to_string()
+        } else {
+            format!("{rounds} rounds")
+        };
+        let summary = if success {
+            format!(
+                "{} completed in {rounds_desc} with {:.0}% confidence.",
+                agent.name(),
+                confidence * 100.0
+            )
+        } else {
+            format!("{} failed after {rounds_desc}.", agent.name())
+        };
+
         Ok(AgentOutcome {
             success,
             content: final_content,
             rounds,
-            summary: if success {
-                format!(
-                    "{} completed in {rounds} round(s) with {:.0}% confidence.",
-                    agent.name(),
-                    confidence * 100.0
-                )
-            } else {
-                format!("{} failed after {rounds} round(s).", agent.name())
-            },
+            summary,
             confidence,
             session: completed,
         })

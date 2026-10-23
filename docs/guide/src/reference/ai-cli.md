@@ -221,7 +221,7 @@ explicit disable:
     {
       "code": "SCI-VQSR-COHORT",
       "rule": "vqsr_snps",
-      "message": "VariantRecalibrator trains on the cohort, but only 3 sample(s) are in this run...",
+      "message": "VariantRecalibrator trains on the cohort, but only 3 samples are in this run...",
       "suggestion": "stop the pilot before VQSR (-t <rule>) or use hard filtering..."
     }
   ],
