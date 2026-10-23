@@ -168,6 +168,44 @@ shell = "true"
 | `name` | String | Module identity for partial runs (`run --module <name>`). Defaults to the included file's stem (`rules/20_germline.oxoflow` → `20_germline`), so existing composed workflows are addressable without changes |
 | `repo` + `ref` | String pair | Pin the included path to a git repository at a tag/branch/commit: `repo = "https://github.com/org/oxo-flow-modules"`, `ref = "v0.24.1"`, `path = "rules/qc.oxoflow"`. Any git URL works (https/ssh/file://); github.com clones fall back to China mirrors. Checkouts are cached under `~/.cache/oxo-flow/modules/<repo>@<ref>@<hash>` (the hash disambiguates confusable repo/ref pairs; `OXO_FLOW_MODULE_CACHE` overrides the cache root) — versioned modules, reproducible composition |
 
+### Sample Domain in Modules (`sample_groups` / `pairs`)
+
+A module may declare its own `[[sample_groups]]` or `[[pairs]]` so that its
+wildcarded rules (`{sample}`, `{pair_id}`, `{experiment}`, …) fan out
+without the host having to re-declare them. These declarations are merged
+into the host workflow at include time and behave exactly as if the host
+had written them:
+
+```toml
+# rules/germline.oxoflow — module declares its own sample domain
+[[sample_groups]]
+name = "all"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "align"
+input = ["reads/{sample}_R1.fastq"]
+output = ["aligned/{sample}.sam.txt"]
+shell = "cat {input[0]} > {output[0]}"
+```
+
+Merge semantics:
+
+- Identifiers (`group name`, `pair_id`) are **workflow-global** — they are
+  not namespaced by the module. Two modules that both need a group named
+  `all` share it, exactly as two host-side sections would.
+- **Identical duplicate declarations** (same identifier, same content)
+  collapse into one with a warning naming the group/pair — the issue #823
+  cross-source semantics.
+- **Conflicting declarations** (same identifier, different content) fail
+  with a config error naming both sides, because fan-out would produce
+  colliding task/output paths.
+- A module's `sample_pattern` in `[workflow]` is **ignored** (warning):
+  sample_pattern is a filesystem scan relative to the workflow root, which
+  is meaningless from a module file — and flatly wrong for repo-cached
+  includes. Declare it in the host `[workflow]` section instead; the
+  discovered samples are visible to every module rule.
+
 ---
 
 ## `[workflow]` — Metadata

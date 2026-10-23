@@ -671,7 +671,7 @@ impl WorkflowConfig {
                 }
             }
             self.module_rules
-                .entry(module_name)
+                .entry(module_name.clone())
                 .or_default()
                 .extend(module_members);
             // Contract params fill config keys in profile-style — host
@@ -696,7 +696,40 @@ impl WorkflowConfig {
                     .entry(key.clone())
                     .or_insert_with(|| def.clone());
             }
+            // Sample-domain merge: a module may declare its own sample
+            // groups / pairs so its wildcarded rules ({sample}, {pair_id}, …)
+            // bind at fan-out time (previously these were silently dropped —
+            // the rule stayed one task with a literal `{sample}` and
+            // validate flagged "no sample groups/pairs/sample_pattern
+            // declared"). Identifiers are workflow-global, NOT namespaced:
+            // the downstream dedup after this loop (issue #823 semantics)
+            // collapses identical cross-module duplicates with a warning
+            // and errors on conflicting content.
+            self.sample_groups
+                .extend(std::mem::take(&mut inc_config.sample_groups));
+            self.pairs.extend(std::mem::take(&mut inc_config.pairs));
+            // A module's `sample_pattern` is host-wins-ignored: the pattern
+            // is a filesystem scan relative to the workflow root, which is
+            // meaningless from a module file (and flatly wrong for
+            // repo-cached includes). Warn so the silent drop is visible.
+            if let Some(ref pattern) = inc_config.workflow.sample_pattern {
+                tracing::warn!(
+                    "module '{}' declares sample_pattern = \"{}\" — ignored; \
+                     sample_pattern is a filesystem scan owned by the host workflow \
+                     (declare it in the host [workflow] section)",
+                    module_name,
+                    pattern
+                );
+            }
         }
+        // Consolidate cross-source sample-domain duplicates (issue #823):
+        // module-declared groups/pairs merged above can collide with each
+        // other or with host declarations. Identical copies dedup with a
+        // warning; a shared identifier with different content is a config
+        // error naming both declarations. Re-running here is idempotent —
+        // from_file's own pass after this covers file/pattern sources.
+        Self::dedup_or_error_duplicate_pairs(&mut self.pairs)?;
+        Self::dedup_or_error_duplicate_sample_groups(&mut self.sample_groups)?;
         self.includes = includes;
         Ok(())
     }
