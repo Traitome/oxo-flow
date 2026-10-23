@@ -1108,6 +1108,19 @@ This is checkpoint-aware, not a blind delete:
   failed), so debugging a broken run never has to re-fetch intermediates.
 - Leaf rules (no dependents) keep their outputs — there is no downstream
   work for them to enable.
+- With an `[engine]` section present, the deletion is **disk-gated**
+  (issue #893): it only fires when free space at the workdir is below
+  `reclaim_free_disk` at run end. With disk comfortable, the outputs are
+  kept — so the next run skips the completed producer instead of
+  re-materializing it — and one line explains the choice:
+
+```console
+  ℹ free space 39876544MB ≥ reclaim_free_disk 5120000MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)
+```
+
+  If free space cannot be measured (non-Unix platforms), the outputs are
+  kept as a precaution. Workflows without `[engine]` thresholds keep the
+  historical unconditional deletion.
 
 ```console
   ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1
@@ -1139,6 +1152,9 @@ The response ladder:
   when every dependent is completed *and* its own outputs still exist (a
   dependent whose outputs are missing will re-run and needs its inputs).
   The narration line is `⊘ reclaimed temporary outputs of '<rule>' …`.
+  The same floor gates the success-path deletion of `temporary = true`
+  outputs (see [Temporary rules](#temporary-rules-temporary--true)) —
+  with disk comfortable at run end they are kept, not pruned.
 - **Hold** (`free < min`): new rule dispatches are withheld; in-flight
   rules continue. If nothing is in flight and nothing is reclaimable, the
   run parks and re-measures every 60 s.

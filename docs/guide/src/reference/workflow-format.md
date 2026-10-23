@@ -982,7 +982,7 @@ oxo-flow automatically cleans up temporary outputs:
 | Failure + `temp_output` | Cleaned to prevent stale partial files |
 | Failure + declared `output` | Partial outputs created by the failed attempt are deleted; **all** pre-existing declared outputs are moved aside as `<name>.oxo-failed` (modified or untouched — a stale file from an earlier run era would otherwise block the re-execution the recorded failure schedules with `File exists` errors; issue #756) |
 | Transform with `cleanup=true` | Chunk files cleaned after the whole run finishes successfully (kept on failed runs for debugging; re-runs recompute the map rules) |
-| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
+| Success + `temporary = true` | Outputs deleted after the run once every dependent rule has completed; a tombstone is recorded in the checkpoint so a later run that needs the outputs regenerates the rule first (lazy cascade-up). Leaf rules (no dependents) keep their outputs. With `[engine]` thresholds configured, this post-run deletion only fires when free space is below `reclaim_free_disk` at run end — with disk comfortable the outputs are kept so later runs skip the producer (issue #893; see the [engine] notes). For `output_pattern` rules, deletion is per recorded instance (only the concrete paths that ran and completed — issue #844); patterns that cannot be expanded produce a warning naming the rule instead of a silent no-op. If a dependent has not completed yet, the outputs are kept and a warning names the rule and its pending dependents — a later run (or resume) cleans them up once the dependents finish |
 
 `temporary` is for whole intermediates (e.g. multi-GB per-sample BAMs kept
 only until the queue-level callers finish): the deletion is checkpoint-aware,
@@ -3156,6 +3156,15 @@ Notes:
   writes without declaring are never touched. Declare index sidecars
   explicitly (e.g. a `genome.fa` rule also declaring `genome.fa.fai`) so
   reclaim + cleanup can track them.
+- When `[engine]` thresholds are configured, the success-path `temporary`
+  sweep is gated on the same reclaim floor as mid-run reclaim (issue
+  #893): if free space at the workdir is at/above `reclaim_free_disk`
+  when the run finishes, temporary outputs are **kept** (a one-line ℹ
+  note names both numbers) so the next run skips the completed producers
+  instead of re-materializing them. The sweep only fires when the run
+  ends below the floor (or on any run without an `[engine]` section,
+  matching the historical unconditional behavior). If free space cannot
+  be measured (non-Unix), outputs are kept as a precaution.
 
 ## See Also
 

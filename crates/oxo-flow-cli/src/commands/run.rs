@@ -371,6 +371,46 @@ fn parse_spawn_watchdog_threshold(raw: Option<&str>) -> std::time::Duration {
         .unwrap_or(std::time::Duration::from_secs(DEFAULT_SPAWN_WATCHDOG_SECS))
 }
 
+/// Pure decision for the end-of-run temporary sweep (#893): should the
+/// fully-successful run prune temporary outputs?
+///
+/// - No `[engine]` thresholds configured → sweep unconditionally (the
+///   documented historical behavior; disk pressure mid-run is the only
+///   reclaim path).
+/// - Thresholds configured and free space measured at/above
+///   `reclaim_free_disk` → skip the sweep (disk pressure alone triggers
+///   re-materialization, not every run).
+/// - Thresholds configured but the measurement is unavailable (non-Unix) →
+///   keep outputs, matching `DiskPressureMonitor`'s fail-open stance.
+fn endofrun_prune_decision(
+    free_mb: Option<u64>,
+    thresholds: Option<(u64, u64)>,
+) -> EndOfRunPruneDecision {
+    let Some((_, reclaim_mb)) = thresholds else {
+        return EndOfRunPruneDecision::Sweep;
+    };
+    match free_mb {
+        Some(free) if free >= reclaim_mb => EndOfRunPruneDecision::Skip {
+            free_mb: free,
+            reclaim_mb,
+        },
+        Some(_) => EndOfRunPruneDecision::Sweep,
+        None => EndOfRunPruneDecision::KeepOnUnknown,
+    }
+}
+
+/// Outcome of [`endofrun_prune_decision`] — see that function for the
+/// semantics of each arm.
+#[derive(Debug)]
+enum EndOfRunPruneDecision {
+    /// Run the post-run temporary sweep (historical behavior).
+    Sweep,
+    /// Free space is at/above the reclaim floor — keep temporary outputs.
+    Skip { free_mb: u64, reclaim_mb: u64 },
+    /// Free space could not be measured — keep temporary outputs (fail-open).
+    KeepOnUnknown,
+}
+
 /// Strip ANSI escape sequences: run-log files are plain text. Mirrors the
 /// file-side filter of `crate::logging`, which exposes no public writer.
 fn strip_ansi(text: &str) -> String {
@@ -5831,6 +5871,9 @@ pub async fn run_command(
     // orphan the freshly created chunk files).
     if fail_count == 0 {
         let workdir_actual = workdir.as_ref().unwrap_or(&workdir_default);
+        // Not gated by the #893 disk floor below: chunk inputs are small
+        // scratch files, and deleting them regardless of free space prevents
+        // unbounded accumulation between runs.
         for rule in &config.rules {
             if rule.cleanup_chunks && checkpoint.is_completed(&rule.name) {
                 // Migrate the chunk checksums BEFORE deleting the files
@@ -5878,9 +5921,42 @@ pub async fn run_command(
         // outputs once every dependent is complete and record a tombstone.
         // A future run regenerates them via cascade-up (missing inputs
         // re-run the completed producer). Leaf rules keep their outputs.
+        // #893: when `[engine]` disk thresholds are configured, the sweep
+        // only fires under the SAME free-space floor as the mid-run
+        // reclaim — with disk comfortable, temporary outputs are kept so
+        // dependent runs skip their producers instead of re-materializing
+        // them every time. Without `[engine]`, the historical unconditional
+        // sweep applies.
+        let sweep_outputs = match endofrun_prune_decision(
+            oxo_flow_core::scheduler::check_available_disk_mb(workdir_actual),
+            disk_thresholds,
+        ) {
+            EndOfRunPruneDecision::Skip {
+                free_mb,
+                reclaim_mb,
+            } => {
+                diagnostic_narrate(
+                    format_args!(
+                        "ℹ free space {free_mb}MB ≥ reclaim_free_disk {reclaim_mb}MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)"
+                    ),
+                    Some(&run_log),
+                );
+                false
+            }
+            EndOfRunPruneDecision::KeepOnUnknown => {
+                diagnostic_narrate(
+                    format_args!(
+                        "ℹ free space unavailable on this platform — temporary outputs kept as a precaution ([engine] thresholds are set)"
+                    ),
+                    Some(&run_log),
+                );
+                false
+            }
+            EndOfRunPruneDecision::Sweep => true,
+        };
         let mut new_tombstones: Vec<(String, Vec<String>)> = Vec::new();
         for rule in &config.rules {
-            if !rule.temporary || !checkpoint.is_completed(&rule.name) {
+            if !sweep_outputs || !rule.temporary || !checkpoint.is_completed(&rule.name) {
                 continue;
             }
             // #843: mid-run reclamation may already have tombstoned this
@@ -8743,6 +8819,7 @@ mod sigpipe_narrate_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::{EndOfRunPruneDecision as Prune, endofrun_prune_decision};
     use super::{
         age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
         config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
@@ -8803,6 +8880,82 @@ mod tests {
         assert_eq!(parse_disk_tick_secs(Some("300")), 300);
         assert_eq!(parse_disk_hold_abort_rounds(Some("1")), 1);
         assert_eq!(parse_disk_hold_abort_rounds(Some("10")), 10);
+    }
+
+    #[test]
+    fn endofrun_prune_sweeps_without_engine_thresholds() {
+        // No `[engine]` section → the historical unconditional sweep, on
+        // every free-space outcome (the measurement is simply irrelevant).
+        assert!(matches!(
+            endofrun_prune_decision(Some(0), None),
+            Prune::Sweep
+        ));
+        assert!(matches!(
+            endofrun_prune_decision(Some(39_000_000), None),
+            Prune::Sweep
+        ));
+        assert!(matches!(endofrun_prune_decision(None, None), Prune::Sweep));
+    }
+
+    #[test]
+    fn endofrun_prune_skips_above_reclaim_floor() {
+        // #893: with thresholds configured, comfortable free space keeps
+        // temporary outputs — the same floor the mid-run reclaim uses.
+        let thresholds = Some((5_000_000, 5_000_000)); // 5T reclaim
+        match endofrun_prune_decision(Some(39_000_000), thresholds) {
+            Prune::Skip {
+                free_mb,
+                reclaim_mb,
+            } => {
+                assert_eq!(free_mb, 39_000_000);
+                assert_eq!(reclaim_mb, 5_000_000);
+            }
+            other => panic!("expected Skip, got {other:?}"),
+        }
+        // Exactly at the floor counts as above it (mid-run reclaim only
+        // fires BELOW reclaim_free_disk — mirror that boundary).
+        assert!(matches!(
+            endofrun_prune_decision(Some(5_000_000), thresholds),
+            Prune::Skip { .. }
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_sweeps_below_reclaim_floor() {
+        // Under pressure → sweep (delete temporaries to free the space).
+        assert!(matches!(
+            endofrun_prune_decision(Some(4_999_999), Some((5_000_000, 5_000_000))),
+            Prune::Sweep
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_keeps_outputs_when_measurement_unknown() {
+        // Fail-open matches DiskPressureMonitor: a non-Unix platform under
+        // configured thresholds must NOT sweep (an unknown disk state is
+        // not a license to delete).
+        assert!(matches!(
+            endofrun_prune_decision(None, Some((5_000_000, 5_000_000))),
+            Prune::KeepOnUnknown
+        ));
+    }
+
+    #[test]
+    fn endofrun_prune_debug_representations_are_distinct() {
+        // Guards the enum from collapsing arms (e.g. Skip accidentally
+        // constructed for the KeepOnUnknown case) in a debug-print context.
+        let skip = format!(
+            "{:?}",
+            Prune::Skip {
+                free_mb: 1,
+                reclaim_mb: 1
+            }
+        );
+        let unknown = format!("{:?}", Prune::KeepOnUnknown);
+        let sweep = format!("{:?}", Prune::Sweep);
+        assert_ne!(skip, unknown);
+        assert_ne!(skip, sweep);
+        assert_ne!(unknown, sweep);
     }
 
     #[test]
