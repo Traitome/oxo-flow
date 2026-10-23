@@ -417,7 +417,10 @@ pub async fn logout(headers: axum::http::HeaderMap) -> ApiResult<serde_json::Val
             .await
         {
             Ok(result) => {
-                tracing::info!("logout revoked {} session(s)", result.rows_affected());
+                tracing::info!(
+                    "logout revoked {}",
+                    oxo_flow_core::plural(result.rows_affected() as usize, "session", "sessions")
+                );
             }
             Err(e) => {
                 tracing::error!("DB error deleting session on logout: {e}");

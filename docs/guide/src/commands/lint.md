@@ -62,7 +62,7 @@ oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
   info [W025]: rule uses deprecated rule-level threads/memory (rule: bwa_align)
     hint: replace `threads = N` / `memory = "8G"` with `resources.threads = N` / `resources.memory = "8G"` under this rule
 
-Summary: 0 error(s), 1 warning(s), 3 info
+Summary: 0 errors, 1 warning, 3 info
 ```
 
 Each diagnostic prints a `hint:` line (when a suggestion exists) showing

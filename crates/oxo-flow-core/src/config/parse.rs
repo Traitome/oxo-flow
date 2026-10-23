@@ -308,11 +308,11 @@ impl WorkflowConfig {
                     crate::wildcard::discover_wildcards_from_pattern(&fallback_dir, &file_pattern)?;
                 if !fallback_discovered.is_empty() {
                     tracing::info!(
-                        "sample_pattern '{}' matched no files under {} — discovered {} file(s) \
+                        "sample_pattern '{}' matched no files under {} — discovered {} \
                          under the run workdir {} instead (issue #751)",
                         sample_pattern,
                         search_dir.display(),
-                        fallback_discovered.len(),
+                        crate::plural(fallback_discovered.len(), "file", "files"),
                         fallback_dir.display()
                     );
                     (fallback_discovered, fallback_dir)

@@ -416,7 +416,7 @@ Node-level execution statuses pulled from the run's checkpoint — the input the
 ```
 GET /api/runs/{id}/report
 ```
-The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rule(s) and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data (stdout captured since #691, surfaced since #765).
+The deterministic report object the report page renders: run identity, node statuses with timings, output file tree. Zero AI — the same object answers `report/ask` and feeds `report/visualize`. Like the diagnostics endpoint, the report summarizes only the newest 256 KiB of `execution.log` (issue #710); the full log stays on `GET /api/runs/{id}/logs`. The report is **failure-aware** (issue #759): a failed run's narrative headline names the failed rules and exit codes, and carries `run_status` + `failed_rules: [{rule, exit_code, stderr_tail, stdout_tail}]` from the checkpoint's structured failure data (stdout captured since #691, surfaced since #765).
 
 ### Report Q&A
 ```

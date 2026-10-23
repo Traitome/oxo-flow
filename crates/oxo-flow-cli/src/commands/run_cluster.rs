@@ -159,8 +159,8 @@ fn check_budget(
         return Ok(());
     }
     Err(anyhow::anyhow!(
-        "{} rule(s) exceed the workflow's [resource_budget] — nothing was submitted:\n  {}",
-        breaches.len(),
+        "[resource_budget] exceeded by {} — nothing was submitted:\n  {}",
+        oxo_flow_core::plural(breaches.len(), "rule", "rules"),
         breaches.join("\n  ")
     ))
 }
@@ -402,9 +402,9 @@ pub(crate) async fn run_on_cluster(
     };
 
     eprintln!(
-        "{} submitting {} job(s) to {} (max {} in flight)",
+        "{} submitting {} to {} (max {} in flight)",
         "Cluster:".bold().cyan(),
-        to_run.len(),
+        oxo_flow_core::plural(to_run.len(), "job", "jobs"),
         backend,
         driver_config.max_submitted
     );

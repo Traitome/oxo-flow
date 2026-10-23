@@ -57,7 +57,11 @@ pub fn generate_report(
     }
     if run_status == "failed" && !failed_rules.is_empty() {
         let names: Vec<&str> = failed_rules.iter().map(|f| f.rule.as_str()).collect();
-        caveats.push(format!("Failed rule(s): {}", names.join(", ")));
+        caveats.push(format!(
+            "Failed {}: {}",
+            oxo_flow_core::plural(names.len(), "rule", "rules"),
+            names.join(", ")
+        ));
     }
 
     // Suggest next steps based on typical RNA-seq/variant analysis

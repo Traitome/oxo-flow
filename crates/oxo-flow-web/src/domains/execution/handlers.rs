@@ -509,7 +509,11 @@ pub async fn create_run(
         let staged = crate::workspace::stage_user_inputs(&user.id, &run_dir);
         match staged {
             Ok(0) => {}
-            Ok(n) => tracing::info!("Staged {n} uploaded input file(s) into {:?}", run_dir),
+            Ok(n) => tracing::info!(
+                "Staged {} into {:?}",
+                oxo_flow_core::plural(n, "uploaded input file", "uploaded input files"),
+                run_dir
+            ),
             Err(e) => tracing::warn!("Could not stage user inputs for run {}: {e}", resp.run_id),
         }
 

@@ -649,9 +649,9 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 })?;
 
                 eprintln!(
-                    "{} {} queued job(s)",
+                    "{} {}",
                     "Cluster:".bold().cyan(),
-                    listing.len()
+                    oxo_flow_core::plural(listing.len(), "queued job", "queued jobs")
                 );
                 for (id, status) in &listing {
                     eprintln!("{}", status_line(id, *status));
@@ -693,7 +693,11 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             })?;
 
-            eprintln!("{} {} job(s):", "Cluster:".bold().cyan(), report.len());
+            eprintln!(
+                "{} {}:",
+                "Cluster:".bold().cyan(),
+                oxo_flow_core::plural(report.len(), "job", "jobs")
+            );
             // The live queue only answers for jobs still in it. A finished
             // job is invisible to squeue/qstat, yet that is exactly the
             // state a user asks about most — layer the accounting store
@@ -749,9 +753,9 @@ pub async fn cluster_command(action: ClusterAction) -> Result<()> {
                 );
             } else {
                 eprintln!(
-                    "{} Canceling {} job(s)...",
+                    "{} Canceling {}...",
                     "Cluster:".bold().cyan(),
-                    job_ids.len()
+                    oxo_flow_core::plural(job_ids.len(), "job", "jobs")
                 );
 
                 match std::process::Command::new(cancel_cmd)

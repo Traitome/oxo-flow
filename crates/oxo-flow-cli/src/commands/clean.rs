@@ -191,7 +191,10 @@ pub fn clean_command(
                 // #540 semantics (scripts read the exit code) apply to the
                 // orphan branch too (audit #667) — exit non-zero so a
                 // reclaim script knows `.oxo-flow/chunks` is not clean.
-                anyhow::bail!("clean: {failed} orphan director(y/ies) failed to delete");
+                anyhow::bail!(
+                    "clean: {} failed to delete",
+                    oxo_flow_core::plural(failed, "orphan directory", "orphan directories")
+                );
             }
         }
         return Ok(());
@@ -373,9 +376,9 @@ pub fn clean_command(
             // Confirmation prompt before destructive action (interactive only)
             if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 eprintln!(
-                    "\n{} {} file(s) will be deleted. Continue? [y/N]",
+                    "\n{} {} will be deleted. Continue? [y/N]",
                     "⚠".yellow(),
-                    deletable.len()
+                    oxo_flow_core::plural(deletable.len(), "file", "files")
                 );
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).ok();
@@ -429,7 +432,8 @@ pub fn clean_command(
             // not read as success.
             if total_failed > 0 {
                 return Err(anyhow::anyhow!(
-                    "clean: {total_failed} path(s) failed to delete"
+                    "clean: {} failed to delete",
+                    oxo_flow_core::plural(total_failed, "path", "paths")
                 ));
             }
         }

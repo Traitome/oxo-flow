@@ -877,7 +877,7 @@ pub fn dashboard_section(metrics: &DashboardMetrics) -> ReportSection {
     let desc = if metrics.failed == 0 {
         "All rules completed successfully".to_string()
     } else {
-        format!("{} rule(s) failed", metrics.failed)
+        format!("{} failed", crate::plural(metrics.failed, "rule", "rules"))
     };
     status_items.push(QcIndicator {
         label: "Pipeline Status".into(),
@@ -2140,7 +2140,7 @@ impl ReportSectionGenerator for UniversalGenerator {
             Some(_) if failed > 0 => (
                 format!("{failed} failed, {completed} succeeded"),
                 QcStatusLevel::Warn,
-                format!("{failed} task(s) failed"),
+                format!("{} failed", crate::plural(failed, "task", "tasks")),
             ),
             // No failures and the completed set covers the plan exactly
             // (one instance per rule — the common single-sample case).
@@ -2900,7 +2900,7 @@ impl ReportSectionGenerator for EnvironmentInfoGenerator {
         } else {
             env_counts
                 .iter()
-                .map(|(kind, count)| format!("{kind} ({count} rule(s))"))
+                .map(|(kind, count)| format!("{kind} ({})", crate::plural(*count, "rule", "rules")))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -2956,12 +2956,14 @@ fn scan_notes_text(skipped: usize, unreadable: usize) -> String {
     let mut parts = Vec::new();
     if skipped > 0 {
         parts.push(format!(
-            "{skipped} file(s) matched known tool patterns but failed to parse"
+            "{} matched known tool patterns but failed to parse",
+            crate::plural(skipped, "file", "files")
         ));
     }
     if unreadable > 0 {
         parts.push(format!(
-            "{unreadable} file(s)/director(y|ies) matched tool patterns but could not be read at all"
+            "{} matched tool patterns but could not be read at all",
+            crate::plural(unreadable, "file or directory", "files or directories")
         ));
     }
     parts.join("; ")
@@ -3435,7 +3437,11 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             let cascade_text = if cascade.is_empty() {
                 "none — no rules consume this rule's outputs".to_string()
             } else {
-                format!("{} ({} rule(s))", cascade.join(", "), cascade.len())
+                format!(
+                    "{} ({})",
+                    cascade.join(", "),
+                    crate::plural(cascade.len(), "rule", "rules")
+                )
             };
 
             let pairs = vec![
@@ -3494,9 +3500,9 @@ impl ReportSectionGenerator for FailureDiagnosisGenerator {
             id: "failure-diagnosis".into(),
             content: ReportContent::Text {
                 text: format!(
-                    "{} rule(s) failed. For each: exit code, affected downstream rules, \
+                    "{} failed. For each: exit code, affected downstream rules, \
                      stderr/stdout excerpts when available, and a suggested next step.",
-                    failed.len()
+                    crate::plural(failed.len(), "rule", "rules")
                 ),
             },
             subsections,
@@ -5100,7 +5106,7 @@ report = { file = "does_not_exist.md" }
         assert_eq!(agg.subsections[0].title, "Scan Notes");
         match &agg.subsections[0].content {
             ReportContent::Text { text } => {
-                assert!(text.contains("1 file(s) matched known tool patterns"));
+                assert!(text.contains("1 file matched known tool patterns"));
             }
             _ => panic!("expected text subsection"),
         }
@@ -5165,7 +5171,7 @@ report = { file = "does_not_exist.md" }
             assert_eq!(section.subsections[0].title, "Scan Notes");
             match &section.subsections[0].content {
                 ReportContent::Text { text } => {
-                    assert!(text.contains("1 file(s)/director(y|ies)"), "{text}");
+                    assert!(text.contains("1 file or directory"), "{text}");
                     assert!(text.contains("could not be read at all"), "{text}");
                     assert!(!text.contains("failed to parse"), "{text}");
                 }
@@ -5180,17 +5186,17 @@ report = { file = "does_not_exist.md" }
         let text = scan_notes_text(2, 1);
         assert_eq!(
             text,
-            "2 file(s) matched known tool patterns but failed to parse; \
-             1 file(s)/director(y|ies) matched tool patterns but could not be read at all"
+            "2 files matched known tool patterns but failed to parse; \
+             1 file or directory matched tool patterns but could not be read at all"
         );
         // Each counter is named only when non-zero (issue #774).
         assert_eq!(
             scan_notes_text(0, 3),
-            "3 file(s)/director(y|ies) matched tool patterns but could not be read at all"
+            "3 files or directories matched tool patterns but could not be read at all"
         );
         assert_eq!(
             scan_notes_text(1, 0),
-            "1 file(s) matched known tool patterns but failed to parse"
+            "1 file matched known tool patterns but failed to parse"
         );
         assert_eq!(scan_notes_text(0, 0), "");
     }
@@ -5285,7 +5291,7 @@ report = { file = "does_not_exist.md" }
         assert_eq!(notes.title, "Scan Notes");
         match &notes.content {
             ReportContent::Text { text } => {
-                assert!(text.contains("1 file(s) matched known tool patterns"));
+                assert!(text.contains("1 file matched known tool patterns"));
             }
             _ => panic!("expected text subsection"),
         }
@@ -5947,6 +5953,6 @@ shell = "false"
 
         // Assert — "1 failed, 1 succeeded", never a ratio against 2 rules.
         assert!(html.contains("1 failed, 1 succeeded"), "got: {html}");
-        assert!(html.contains("1 task(s) failed"), "got: {html}");
+        assert!(html.contains("1 task failed"), "got: {html}");
     }
 }

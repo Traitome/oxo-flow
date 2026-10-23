@@ -2088,11 +2088,11 @@ warns at parse time only when ownership overlap is **real**: after
 expansion, two differently-owned instances of the duplicated sample id
 resolve some rule to the **same concrete output path** — then one is
 skipped as up-to-date while consuming the other's data. The warning names
-the duplicated sample, both owners, the colliding rule(s), and the exact
+the duplicated sample, both owners, the colliding rules, and the exact
 path:
 
 ```text
-WARN oxo_flow_core::config::parse: 1 colliding output path(s) from samples declared by more than one owner (cross-owner instance overlap):
+WARN oxo_flow_core::config::parse: 1 colliding output path from samples declared by more than one owner (cross-owner instance overlap):
   sample 'S1' (declared by group 'case' and pair 'P1'): rule 'report' writes 'report/S1.html' for both instances — one is skipped as up-to-date while consuming the other's data
 ```
 

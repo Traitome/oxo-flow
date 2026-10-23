@@ -149,9 +149,9 @@ pub(crate) fn apply_samples_filter(
             anyhow::bail!("--samples matched no samples in this workflow");
         }
         eprintln!(
-            "  {} Running {} sample(s) via --samples (sheet selection)",
+            "  {} Running {} via --samples (sheet selection)",
             "Samples:".cyan(),
-            total
+            oxo_flow_core::plural(total, "sample", "samples")
         );
         return Ok(None);
     }
@@ -175,9 +175,9 @@ pub(crate) fn apply_samples_filter(
         config.override_samples(&bare_names)?;
         if pure_filter_specs.is_empty() {
             eprintln!(
-                "  {} Running {} sample(s) via --samples (name declaration)",
+                "  {} Running {} via --samples (name declaration)",
                 "Samples:".cyan(),
-                bare_names.len()
+                oxo_flow_core::plural(bare_names.len(), "sample", "samples")
             );
             return Ok(None);
         }

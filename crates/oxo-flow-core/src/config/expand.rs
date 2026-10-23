@@ -1079,8 +1079,8 @@ impl WorkflowConfig {
             pair_orphan_rules.sort();
             tracing::warn!(
                 rules = pair_orphan_rules.len(),
-                "{n} rule(s) reference a pair wildcard ({{pair_id}}/{{experiment}}/{{control}}, …) but no [[pairs]] entries remain after filtering — they will execute as unexpanded templates and fail the execution-time wildcard check: {rules}",
-                n = pair_orphan_rules.len(),
+                "{} reference a pair wildcard ({{pair_id}}/{{experiment}}/{{control}}, …) but no [[pairs]] entries remain after filtering — they will execute as unexpanded templates and fail the execution-time wildcard check: {rules}",
+                crate::plural(pair_orphan_rules.len(), "rule", "rules"),
                 rules = pair_orphan_rules.join(", ")
             );
         }
@@ -1095,8 +1095,8 @@ impl WorkflowConfig {
             tracing::warn!(
                 column = %column,
                 rules = refs.len(),
-                "no metadata row defines a column '{column}' but {n} rule(s) reference '{{meta.{column}}}' — the placeholder will render empty on every instance: {refs}",
-                n = refs.len(),
+                "no metadata row defines a column '{column}' but {} reference '{{meta.{column}}}' — the placeholder will render empty on every instance: {refs}",
+                crate::plural(refs.len(), "rule", "rules"),
                 refs = refs.join(", ")
             );
         }
@@ -2195,8 +2195,9 @@ impl WorkflowConfig {
                         rule = %rule.name,
                         pattern = %decl.pattern,
                         missing = ?missing,
-                        "input_groups rule '{}' produced NO instances for declared sample(s) {:?} — pattern '{}' matched no files for them; downstream consumers of this rule have no producers and the run will fail on those paths (check the pattern, or the producer declaration order — v1 requires producers declared BEFORE their input_groups consumer)",
+                        "input_groups rule '{}' produced NO instances for declared sample{} {:?} — pattern '{}' matched no files for them; downstream consumers of this rule have no producers and the run will fail on those paths (check the pattern, or the producer declaration order — v1 requires producers declared BEFORE their input_groups consumer)",
                         rule.name,
+                        if missing.len() == 1 { "" } else { "s" },
                         missing,
                         decl.pattern
                     );

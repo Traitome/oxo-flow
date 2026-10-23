@@ -1183,10 +1183,10 @@ mod tests {
 
     #[test]
     fn summary_extracts_input_manifest_invalidations() {
-        let log = "  ↻ input changes invalidated 2 rule(s): gather, report\n\
-                   Note: checkpoint predates input tracking: recorded baseline input manifests for 1 completed rule(s); future input changes will invalidate them automatically\n";
+        let log = "  ↻ input changes invalidated 2 rules: gather, report\n\
+                   Note: checkpoint predates input tracking: recorded baseline input manifests for 1 completed rule; future input changes will invalidate them automatically\n";
         let summary = extract_invalidation_summary(log).expect("invalidation lines must be found");
-        assert!(summary.contains("input changes invalidated 2 rule(s): gather, report"));
+        assert!(summary.contains("input changes invalidated 2 rules: gather, report"));
         assert!(summary.contains("recorded baseline input manifests"));
     }
 
@@ -1197,11 +1197,11 @@ mod tests {
         let log = "\u{1b}[1;36mConfig change:\u{1b}[0m\n\
                    \x20 n_threads: 4 → 8\n\
                    \x20 → invalidated 2 (1 directly affected), re-running 2/3 this run, skipping 1\n\
-                   \u{1b}[33m↻\u{1b}[0m input changes invalidated 1 rule(s): align\n";
+                   \u{1b}[33m↻\u{1b}[0m input changes invalidated 1 rule: align\n";
         let summary = extract_invalidation_summary(log).expect("must parse ANSI-wrapped lines");
         assert!(summary.contains("Config change:"));
         assert!(summary.contains("n_threads: 4 → 8"));
-        assert!(summary.contains("input changes invalidated 1 rule(s): align"));
+        assert!(summary.contains("input changes invalidated 1 rule: align"));
     }
 
     #[test]

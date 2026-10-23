@@ -314,7 +314,7 @@ wildcards over one template (`variants/{smp}.vcf` vs
 a warning, because the second to finish silently overwrites the first.
 
 ```
-W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)
+W033: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path
 ```
 
 Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`, `caller_b/{sample}.vcf`). See
@@ -329,7 +329,7 @@ Resolve by giving each rule distinct output paths (e.g., `caller_a/{sample}.vcf`
 | `Cycle detected: A → B → A` | Two or more rules form a circular dependency | Use `oxo-flow graph` to visualize; break the cycle by removing an input/output connection or using `depends_on` to express the intended ordering |
 | `Duplicate rule name` | Two rules share the same `name` field | Rename one rule; use `namespace` with `[[include]]` to avoid conflicts |
 | `Rule not found: 'name'` | `-t` target references a non-existent rule | Check spelling; try prefix matching (`-t al` may match `align`); use `oxo-flow graph` to list all rule names (unknown `depends_on` references are caught by `oxo-flow validate`) |
-| `resource budget too small for N rule(s)` | A rule's request exceeds an explicit `--max-threads`/`--max-memory` budget | Increase the budget, lower the rule's declaration, or drop the flag (auto-detected capacity is soft — over-capacity rules are clamped and run alone) |
+| `resource budget too small for N rules` | A rule's request exceeds an explicit `--max-threads`/`--max-memory` budget | Increase the budget, lower the rule's declaration, or drop the flag (auto-detected capacity is soft — over-capacity rules are clamped and run alone) |
 | `resource exhausted: rule 'x' requires N of resource group 'g' (declared capacity: M)` | A rule's group requirement exceeds the declared `[resource_groups]` capacity | Raise the declared capacity or lower the rule's group requirement |
 
 ---

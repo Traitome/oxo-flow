@@ -555,9 +555,13 @@ impl WorkflowConfig {
                     })
                     .collect();
                 Some(format!(
-                    "{} colliding output path(s) from samples declared by more than one \
+                    "{} from samples declared by more than one \
                      owner (cross-owner instance overlap):\n{}",
-                    lines.len(),
+                    crate::plural(
+                        lines.len(),
+                        "colliding output path",
+                        "colliding output paths"
+                    ),
                     lines.join("\n")
                 ))
             }

@@ -380,7 +380,7 @@ fn detect_aggregation_races(config: &WorkflowConfig) -> Vec<ScientificWarning> {
             message: format!(
                 "rule fans out per {dims}, but its declared outputs are not keyed by that \
                  dimension: expansion creates one instance per element and every instance bakes \
-                 the SAME concrete output path(s) — run concurrently they race \
+                 the SAME concrete output paths — run concurrently they race \
                  (FileExistsError/missing-file crashes), sequentially they duplicate work N−1 \
                  times and the surviving result depends on scheduling order."
             ),
@@ -438,10 +438,11 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
                 code: "SCI-VQSR-COHORT".into(),
                 rule: rule.name.clone(),
                 message: format!(
-                    "VariantRecalibrator trains on the cohort, but only {sample_count} sample(s) \
+                    "VariantRecalibrator trains on the cohort, but only {} \
                      are in this run — GATK recommends a minimum of ~{MIN_VQSR_SAMPLES} \
                      (and considerably more, on the order of 100, for targeted/exome data). \
-                     The pilot will fail at this step for scientific reasons, not technical ones."
+                     The pilot will fail at this step for scientific reasons, not technical ones.",
+                    crate::plural(sample_count, "sample", "samples")
                 ),
                 suggestion: "stop the pilot before VQSR (-t <rule>) or use hard filtering \
                              (VariantFiltration with QD/FS/MQ) for small cohorts"
@@ -545,7 +546,7 @@ mod tests {
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "SCI-VQSR-COHORT");
-        assert!(warnings[0].message.contains("2 sample(s)"));
+        assert!(warnings[0].message.contains("2 samples"));
     }
 
     #[test]
@@ -771,7 +772,7 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         let config = WorkflowConfig::parse(toml).unwrap();
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("2 sample(s)"));
+        assert!(warnings[0].message.contains("2 samples"));
     }
 
     // ── Issue #443: aggregation-rule fan-out race (SCI-AGG-RACE) ─────────

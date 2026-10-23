@@ -2234,13 +2234,15 @@ impl WorkflowDag {
 
         // Calculate content widths for proper alignment
         let line1 = format!(
-            "Workflow DAG: {} rules, {} dependencies",
-            self.node_count(),
-            self.edge_count()
+            "Workflow DAG: {}, {}",
+            crate::plural(self.node_count(), "rule", "rules"),
+            crate::plural(self.edge_count(), "dependency", "dependencies")
         );
         let line2 = format!(
-            "Depth: {}, Width: {}, Critical path: {} steps",
-            metrics.max_depth, metrics.max_width, metrics.critical_path_length
+            "Depth: {}, Width: {}, Critical path: {}",
+            metrics.max_depth,
+            metrics.max_width,
+            crate::plural(metrics.critical_path_length, "step", "steps")
         );
         let max_content_width = std::cmp::max(line1.len(), line2.len());
         let box_width = max_content_width + 4; // 2 spaces on each side

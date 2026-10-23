@@ -61,7 +61,7 @@ fn template_rule_name_resolves_to_all_instances() {
         "template name must resolve after wildcard expansion:\n{stdout}\n{stderr}"
     );
     assert!(
-        stderr.contains("template 'align' expanded to 1 instance(s)"),
+        stderr.contains("template 'align' expanded to 1 instance"),
         "the template-note line is missing:\n{stderr}"
     );
     assert!(

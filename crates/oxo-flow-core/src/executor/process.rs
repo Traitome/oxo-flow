@@ -28,8 +28,8 @@ pub fn rule_report_caption(rule: &Rule, workdir: &Path) -> Option<String> {
 
 use super::checkpoint::{cleanup_temp_outputs, validate_outputs};
 use super::security::{
-    sanitize_shell_command, validate_path_safety, validate_shell_safety_in_workdir,
-    validate_wildcard_injection,
+    sanitize_shell_command, sanitize_shell_command_detailed, validate_path_safety,
+    validate_shell_safety_in_workdir, validate_wildcard_injection,
 };
 
 /// Default interpreter mapping for script file extensions.
@@ -1918,8 +1918,18 @@ impl LocalExecutor {
             // absolute {config.out_dir} is a legitimate output cleanup idiom;
             // deletions outside the workdir stay hard errors.
             validate_shell_safety_in_workdir(cmd, &self.config.workdir)?;
-            for warning in sanitize_shell_command(cmd) {
-                tracing::info!(rule = %rule.name, "{warning}");
+            // #890 string batch: every wildcard instance of the same rule
+            // shares the template's idioms, so the identical warning would
+            // re-print once per instance (hundreds of lines for a fan-out
+            // rule). Emit each distinct pattern once per rule instead —
+            // keyed on the pattern description, because the rendered
+            // warning embeds the instance's own command and would never
+            // collide. The rule's stderr still carries the first
+            // instance's copy.
+            for (pattern, warning) in sanitize_shell_command_detailed(cmd) {
+                emit_once_per_rule(&rule.name, &pattern, |_| {
+                    tracing::info!(rule = %rule.name, "{warning}");
+                });
             }
         }
 
@@ -2717,7 +2727,11 @@ impl LocalExecutor {
                 // Apply shell safety checks in dry-run mode so dangerous
                 // commands are visible to users before actual execution.
                 // Workdir-aware (issue #428) so absolute in-workdir cleanups
-                // don't produce spurious warnings.
+                // don't produce spurious warnings. `wrapped` is always Some
+                // when the rule has a command, and a wrapping failure falls
+                // back to the raw text inside it — so checking the wrapped
+                // form alone covers both, and a second raw pass would print
+                // every warning twice.
                 if let Some(ref cmd) = wrapped {
                     if let Err(e) =
                         validate_shell_safety_in_workdir(cmd, &self.config.workdir)
@@ -2725,17 +2739,6 @@ impl LocalExecutor {
                         tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
                     }
                     for warning in sanitize_shell_command(cmd) {
-                        tracing::info!(rule = %rule.name, "{warning}");
-                    }
-                }
-                // Also check the raw command if no wrapped version
-                if let Some(ref raw_cmd) = command {
-                    if let Err(e) =
-                        validate_shell_safety_in_workdir(raw_cmd, &self.config.workdir)
-                    {
-                        tracing::warn!(rule = %rule.name, error = %e, "dry-run: dangerous shell command detected");
-                    }
-                    for warning in sanitize_shell_command(raw_cmd) {
                         tracing::info!(rule = %rule.name, "{warning}");
                     }
                 }
@@ -3066,6 +3069,27 @@ fn warn_shell_fallback_once() {
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
         tracing::warn!("bash not found on PATH — falling back to sh -c for shell commands");
+    }
+}
+
+/// Print a shell-safety warning once per (rule, pattern description) pair
+/// instead of once per wildcard instance (#890 string batch): a 200-sample
+/// fan-out rule with a `$(...)` idiom used to log the same line 200 times
+/// (each instance's warning embeds its own rendered command, so keying on
+/// the full warning text would never dedupe). Different patterns in the
+/// same rule each still print once. The set lives for the process
+/// lifetime — a run is one process, and it is bounded by the pattern
+/// count times rule count, not by run length. A poisoned lock (a panic
+/// while holding it) is recovered from rather than silently suppressing
+/// every future warning.
+fn emit_once_per_rule(rule: &str, pattern: &str, emit: impl FnOnce(&str)) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: LazyLock<Mutex<HashSet<(String, String)>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert((rule.to_string(), pattern.to_string())) {
+        emit(pattern);
     }
 }
 

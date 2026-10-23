@@ -853,7 +853,7 @@ fn cli_validate_and_dry_run_preflight_pixi_manifest_against_workflow_dir() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "pixi manifest(s) declared by pending rule(s) do not exist",
+            "pixi manifest declared by pending rules do not exist",
         ));
 
     // Once the manifest exists, all three surfaces succeed.
@@ -6849,7 +6849,7 @@ shell = "cat {input} > {output}"
         "expected rebuild: {stderr3}"
     );
     assert!(
-        stderr3.contains("invalidated 1 rule(s): use_ref"),
+        stderr3.contains("invalidated 1 rule: use_ref"),
         "consumer must be invalidated: {stderr3}"
     );
     assert_eq!(
@@ -8977,7 +8977,7 @@ fn cli_glob_input_change_rebuilds_rule_and_downstream() {
     );
     let stderr3 = String::from_utf8_lossy(&run3.stderr);
     assert!(
-        stderr3.contains("input changes invalidated 2 rule(s)"),
+        stderr3.contains("input changes invalidated 2 rules"),
         "gather and downstream must be invalidated: {stderr3}"
     );
     assert!(
