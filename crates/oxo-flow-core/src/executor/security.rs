@@ -181,8 +181,8 @@ pub fn sanitize_shell_command(cmd: &str) -> Vec<String> {
 /// Like [`sanitize_shell_command`], but each element carries the matched
 /// pattern's short `description` alongside the rendered warning. The
 /// description is stable across wildcard instances of the same rule, which
-/// makes it the right key for per-rule warning dedupe
-/// ([`crate::executor::process::emit_once_per_rule`]).
+/// makes it the right key for per-rule warning dedupe in
+/// `executor::process::emit_once_per_rule`.
 pub fn sanitize_shell_command_detailed(cmd: &str) -> Vec<(String, String)> {
     let mut warnings = Vec::new();
     for (re, description) in WARNING_PATTERNS.iter() {
