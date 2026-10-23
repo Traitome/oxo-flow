@@ -5091,12 +5091,12 @@ pub async fn run_command(
         {
             let consumers = config.pending_output_pattern_consumers_of(&producer_template);
             if !consumers.is_empty() {
-                eprintln!(
+                narrate_console_line(format_args!(
                     "{} {} not instantiated — output_pattern producer '{}' failed",
                     "Warning:".bold().yellow(),
                     consumers.join(", "),
                     producer_template
-                );
+                ));
                 let mut f = failures.lock().await;
                 for c in consumers {
                     f.push((
@@ -5123,12 +5123,12 @@ pub async fn run_command(
         {
             let consumers = config.pending_output_pattern_consumers_of(&producer_template);
             if !consumers.is_empty() {
-                eprintln!(
+                narrate_console_line(format_args!(
                     "{} {} not instantiated — output_pattern producer '{}' was skipped",
                     "Warning:".bold().yellow(),
                     consumers.join(", "),
                     producer_template
-                );
+                ));
                 tracing::warn!(
                     producer = %producer_template,
                     consumers = ?consumers,
@@ -5352,9 +5352,9 @@ pub async fn run_command(
                             break;
                         }
                         if let Err(e) = &result {
-                            eprintln!(
+                            narrate_console_line(format_args!(
                                 "  AI diagnosis attempt {attempt}/{attempts} failed: {e} — retrying"
-                            );
+                            ));
                         }
                     }
                     match result {
@@ -5366,23 +5366,25 @@ pub async fn run_command(
                                 // content can carry injected instructions just like
                                 // any other model output.
                                 if !diag.safe_to_auto_apply {
-                                    eprintln!(
+                                    narrate_console_line(format_args!(
                                         "  AI fix not auto-applied: flagged unsafe by the \
                                          safety assessment. Review the suggestion manually."
-                                    );
+                                    ));
                                 } else if let Err(e) = oxo_flow_core::WorkflowConfig::parse(toml) {
-                                    eprintln!(
+                                    narrate_console_line(format_args!(
                                         "  AI fix not auto-applied: generated TOML failed \
                                          validation ({e}). Review the suggestion manually."
-                                    );
+                                    ));
                                 } else if let Err(e) = crate::commands::ai_recover::apply_fix(
                                     &workflow, toml, "recovery",
                                 ) {
-                                    eprintln!("  Failed to apply AI fix: {e}");
+                                    narrate_console_line(format_args!(
+                                        "  Failed to apply AI fix: {e}"
+                                    ));
                                 }
                             }
                         }
-                        Err(e) => eprintln!("  AI diagnosis failed: {e}"),
+                        Err(e) => narrate_console_line(format_args!("  AI diagnosis failed: {e}")),
                     }
                 }
             }
@@ -5486,7 +5488,11 @@ pub async fn run_command(
                 });
                 progress.inc(1);
                 if !is_tty {
-                    eprintln!("  {} {} (blocked by failed dependency)", "⊘".yellow(), name);
+                    narrate_console_line(format_args!(
+                        "  {} {} (blocked by failed dependency)",
+                        "⊘".yellow(),
+                        name
+                    ));
                 }
 
                 // Find transitive dependents of this newly-blocked rule.
