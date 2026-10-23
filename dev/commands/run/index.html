@@ -2837,6 +2837,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4615,6 +4632,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#module-grouped-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module-grouped output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5860,6 +5894,47 @@ the config surface.</p>
 <li>Estimated time remaining (ETA), plus the rule currently executing</li>
 <li>The final summary line reports succeeded / skipped / failed counts</li>
 </ul>
+<h3 id="module-grouped-output">Module-grouped output<a class="headerlink" href="#module-grouped-output" title="Permanent link">#</a></h3>
+<p>Workflows composed from <code>[[include]]</code> modules group the plan listing and the
+<code>--keep-going</code> failure summary under module headers, so a composed pipeline
+reads as module → rule instead of one long flat list (issue #887):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>DAG: 6 rules in execution order
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>  Preprocessing — 2 rules
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>    1. fastqc
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a>    2. trim_reads
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5" href="#__codelineno-41-5"></a>  Alignment — 3 rules
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6" href="#__codelineno-41-6"></a>    3. bwa_align
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7" href="#__codelineno-41-7"></a>    4. sort_bam
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a>    5. markdup
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9" href="#__codelineno-41-9"></a>  Main workflow — 1 rule
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10" href="#__codelineno-41-10"></a>    6. report_summary
+</span></code></pre></div>
+<ul>
+<li>Rules from a module file (<code>[[include]]</code>) collect under their module's
+  display title; rules declared in the main file land under <code>Main workflow</code></li>
+<li>Attribution is the same logic the metro graph export uses: a
+  <code>module::rule</code> namespace prefix wins, then member matching; host rules
+  that merely extend a member's name may land in that module's group (a
+  display-only quirk — edges and execution are unaffected)</li>
+<li>Group order follows first appearance in the execution order, and the
+  per-rule numbers stay a single global sequence so plan position remains
+  greppable</li>
+<li>Workflows without modules keep the flat listing above byte-for-byte —
+  grouping is opt-in by structure, not a flag</li>
+</ul>
+<p>The failure summary groups the same way:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>Failed rules:
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>  Germline (1):
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>    ✗ haplotype_caller — exit code 1
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a>Blocked rules (did not run):
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6" href="#__codelineno-42-6"></a>  Germline (1):
+</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7" href="#__codelineno-42-7"></a>    ⊘ joint_genotyper — depends on 'haplotype_caller'
+</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8" href="#__codelineno-42-8"></a>  Main workflow (1):
+</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9" href="#__codelineno-42-9"></a>    ⊘ qc_report — depends on 'joint_genotyper'
+</span></code></pre></div>
+<p>Per-line shapes (<code>✗ name — reason</code>, <code>⊘ name — depends on 'dep'</code>) are
+unchanged, so tooling that parses run logs keeps working.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
