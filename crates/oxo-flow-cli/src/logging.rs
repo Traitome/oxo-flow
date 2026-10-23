@@ -170,7 +170,11 @@ impl Write for Tee<'_> {
                 Ok(()) => Ok(buf.len()),
                 Err(e) => {
                     if !FILE_WRITE_ERROR_REPORTED.swap(true, Ordering::Relaxed) {
-                        eprintln!(
+                        // Inside the Tee writer: a tracing macro would re-enter
+                        // `write`, and `eprintln!` panics on a dead stderr —
+                        // mirror the tolerant stderr write above instead.
+                        let _ = writeln!(
+                            self.stderr,
                             "warning: run log write failed ({e}); file logging disabled for this run"
                         );
                         *slot = None;
