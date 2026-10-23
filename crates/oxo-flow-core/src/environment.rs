@@ -282,7 +282,11 @@ pub fn diagnose_skipped_conda_env(kind: &str, spec: &str) {
         return;
     };
     if let Some(advice) = missing_env_advice(&base, &full, spec, envs) {
-        eprintln!("⚠ env setup skipped: {advice}");
+        // `tracing::warn!`, not `eprintln!`: this runs inside spawned rule tasks,
+        // where a raw stderr write panics on a closed pipe (broken-pipe reader)
+        // and the panic poisons the checkpoint with a Failed entry for a healthy
+        // rule. The tracing `Tee` writer already tolerates stderr errors.
+        tracing::warn!("env setup skipped: {advice}");
     }
 }
 
