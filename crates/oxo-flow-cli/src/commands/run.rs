@@ -136,15 +136,6 @@ pub(crate) fn config_placeholder_values(
 /// the guard cannot move into a spawned task while the loop still needs it.
 type SharedRunLog = Arc<std::sync::Mutex<Option<crate::logging::RunLogGuard>>>;
 
-/// Emit one progress narrative line exactly TWICE in total — once on stderr
-/// (the console surface) and once in the archived run log (issue #194 B1).
-/// The historical form routed the log copy through the tracing stream, whose
-/// writer also targets stderr, so every line printed twice and a leading
-/// blank line in the message surfaced as an empty INFO row (audit P4-11).
-/// Colors live in the console form; the log side gets plain text.
-///
-/// Background runs hold no run log (their stderr already lands in it), so
-/// only the console copy is written.
 /// Append one plain-text line to the active run log (the shared guard slot).
 /// Failures degrade to a debug trace — the log is best-effort and the console
 /// copy has already gone out.
@@ -160,13 +151,44 @@ fn write_run_log_line(run_log: &SharedRunLog, text: &str) {
     }
 }
 
+/// Write one console line WITHOUT panicking on failure. The historical
+/// `eprintln!` aborts its task on any write error — with stderr piped to a
+/// reader that exits early (`| head`, `| grep -q`, a closed CI fd) that is
+/// "failed printing to stderr: Broken pipe (os error 32)", and inside a
+/// spawned rule task the panic surfaced through `JoinSet::join_next` as an
+/// engine fault: the HEALTHY rule got recorded as Failed in the checkpoint
+/// with the panic text as its stderr tail. The console surface is
+/// best-effort — a failed write is traced and dropped; the run-log copy
+/// still lands because [`write_run_log_line`] has always been tolerant.
+fn narrate_line_to<W: std::io::Write>(sink: &mut W, msg: std::fmt::Arguments<'_>) {
+    if let Err(e) = writeln!(sink, "{msg}") {
+        tracing::trace!(error = %e, "console narrate line dropped (stderr unavailable)");
+    }
+}
+
+/// Emit one progress narrative line exactly TWICE in total — once on stderr
+/// (the console surface) and once in the archived run log (issue #194 B1).
+/// The historical form routed the log copy through the tracing stream, whose
+/// writer also targets stderr, so every line printed twice and a leading
+/// blank line in the message surfaced as an empty INFO row (audit P4-11).
+/// Colors live in the console form; the log side gets plain text.
+///
+/// Background runs hold no run log (their stderr already lands in it), so
+/// only the console copy is written.
 fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
     // --quiet silences the console copy only: the run log is an artifact the
     // report/web UI reads, not terminal noise.
     if !crate::commands::is_quiet() {
-        eprintln!("{msg}");
+        narrate_console_line(msg);
     }
     write_run_log_line(run_log, &strip_ansi(&msg.to_string()));
+}
+
+/// Console-side half of the narrate helpers: targets the process stderr via
+/// the tolerant writer, so a closed/early-exiting pipe reader can never panic
+/// a rule task mid-flight.
+fn narrate_console_line(msg: std::fmt::Arguments<'_>) {
+    narrate_line_to(&mut std::io::stderr(), msg);
 }
 
 /// Emit one audit-trail diagnostic line to stderr AND the run log: adoption
@@ -178,7 +200,7 @@ fn progress_narrate(msg: std::fmt::Arguments<'_>, run_log: &SharedRunLog) {
 /// historic stderr-only behavior; background runs also pass a file-less slot
 /// (their stderr already lands in the log), so nothing is written twice.
 fn diagnostic_narrate(msg: std::fmt::Arguments<'_>, run_log: Option<&SharedRunLog>) {
-    eprintln!("{msg}");
+    narrate_console_line(msg);
     if let Some(run_log) = run_log {
         write_run_log_line(run_log, &strip_ansi(&msg.to_string()));
     }
@@ -3887,12 +3909,12 @@ pub async fn run_command(
                     }),
                 });
                 if !is_tty {
-                    eprintln!(
+                    narrate_console_line(format_args!(
                         "  {} {} (blocked by {} dependency)",
                         "⊘".yellow(),
                         rule_name,
                         if dep_skipped { "skipped" } else { "failed" }
-                    );
+                    ));
                 }
                 progress.inc(1);
                 continue;
@@ -4344,7 +4366,11 @@ pub async fn run_command(
                                     .skip_reason
                                     .as_deref()
                                     .unwrap_or("skipped");
-                                eprintln!("  {} {} ({reason})", "⊝".dimmed(), rule_name);
+                                narrate_console_line(format_args!(
+                                    "  {} {} ({reason})",
+                                    "⊝".dimmed(),
+                                    rule_name
+                                ));
                             }
                             (rule_name, oxo_flow_core::executor::JobStatus::Skipped, record)
                         } else {
@@ -8577,6 +8603,51 @@ fn backend_preflight_failures(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod sigpipe_narrate_tests {
+    //! Regression coverage for the A#1 persona finding: a rule task printing
+    //! progress to stderr whose reader exited early must NOT panic (broken
+    //! pipe) — the panic surfaced via `JoinSet` and poisoned the checkpoint
+    //! with a Failed entry for a healthy rule. The tolerant writer is the
+    //! whole fix; these tests pin it in place.
+
+    use super::{diagnostic_narrate, narrate_line_to, progress_narrate, write_run_log_line};
+
+    /// A sink that is always full/dead: every write fails with EPIPE.
+    struct DeadSink;
+
+    impl std::io::Write for DeadSink {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from_raw_os_error(32))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn slot() -> super::SharedRunLog {
+        std::sync::Arc::new(std::sync::Mutex::new(None))
+    }
+
+    #[test]
+    fn narrate_line_to_survives_dead_sink() {
+        let mut sink = DeadSink;
+        // Must not panic — the write error is traced and swallowed.
+        narrate_line_to(&mut sink, format_args!("  ✓ greet (0.1s)"));
+        narrate_line_to(&mut sink, format_args!("\nexit code: 1"));
+        narrate_line_to(&mut sink, format_args!(""));
+    }
+
+    #[test]
+    fn narrate_helpers_survive_dead_console_with_log() {
+        let run_log = slot();
+        progress_narrate(format_args!("  ✓ greet (0.1s)"), &run_log);
+        diagnostic_narrate(format_args!("  ⚠ adoption note"), Some(&run_log));
+        diagnostic_narrate(format_args!("  ⚠ operator hint"), None);
+        write_run_log_line(&run_log, "plain line");
+    }
 }
 
 #[cfg(test)]
