@@ -5064,9 +5064,9 @@ templates fan out one spec across N samples, so the spec set is tiny even
 for large cohorts). When a required backend binary is missing
 (<code>conda</code>/<code>mamba</code>/<code>pixi</code>/<code>docker</code>/<code>singularity</code>/<code>modules</code>), the run aborts
 before anything executes:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>2 environment backend(s) required by pending rules are unavailable; no rules were run:
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  - pixi: pixi is not installed or not in PATH — required by 1 pending rule(s), e.g. `report` (environment: pixi.toml); install pixi (https://pixi.sh) and ensure it is on PATH
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>2 environment backends required by pending rules are unavailable; no rules were run:
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rules, e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  - pixi: pixi is not installed or not in PATH — required by 1 pending rule, e.g. `report` (environment: pixi.toml); install pixi (https://pixi.sh) and ensure it is on PATH
 </span></code></pre></div>
 <p>Rules sharing one broken spec, and distinct specs failing with the
 identical backend-missing message, collapse into a single entry — one root
@@ -5708,7 +5708,7 @@ path, size, and modification time — plus a content hash for files up to
   <code>workflow is missing required source input(s) — no rule produces them</code>,
   naming each affected rule and pattern (exit non-zero). Previously a
   fully-completed checkpoint plus a deleted raw data file could exit 0
-  from stale checkpoint credit ("re-running 0 producer rule(s)"); that
+  from stale checkpoint credit ("re-running 0 producer rules"); that
   silent-success hole is closed. The gate never fires for generated
   intermediates (they have producers and are governed by the manifest
   cascade below), <code>[[references]]</code> outputs (built later in the same run),
@@ -5719,7 +5719,7 @@ path, size, and modification time — plus a content hash for files up to
 <div class="language-console highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
 </span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>
 </span></code></pre></div>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="go">  ↻ input changes invalidated 2 rule(s): gather, report</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="go">  ↻ input changes invalidated 2 rules: gather, report</span>
 </span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="go">  Running: gather</span>
 </span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="go">  Running: report</span>
 </span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="go">  …</span>
@@ -5792,9 +5792,9 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
 <li>Leaf rules (no dependents) keep their outputs — there is no downstream
   work for them to enable.</li>
 </ul>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule(s): trim_S1</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1</span>
 </span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="go">  …</span>
-</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file(s), regenerated on demand)</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)</span>
 </span></code></pre></div>
 <p>Dry-run predicts exactly when a tombstoned rule will regenerate
 (<code>[rerun: upstream of X]</code>) — see

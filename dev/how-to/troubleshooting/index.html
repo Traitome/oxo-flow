@@ -4815,8 +4815,8 @@ your workflow. Check that your input filenames follow the expected naming
 convention.</p>
 <h2 id="environment-issues">Environment Issues<a class="headerlink" href="#environment-issues" title="Permanent link">#</a></h2>
 <h3 id="run-aborts-before-any-rule-environment-backend-unavailable">Run aborts before any rule: environment backend unavailable<a class="headerlink" href="#run-aborts-before-any-rule-environment-backend-unavailable" title="Permanent link">#</a></h3>
-<p><strong>Symptom</strong>: <code>N environment backend(s) required by pending rules are unavailable; no rules were run:</code> followed by one entry per root cause, e.g.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rule(s), e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
+<p><strong>Symptom</strong>: <code>N environment backends required by pending rules are unavailable; no rules were run:</code> followed by one entry per root cause, e.g.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  - conda: conda is not installed or not in PATH — required by 3 pending rules, e.g. `bwa_align` (environment: envs/alignment.yaml); install conda and ensure it is on PATH
 </span></code></pre></div>
 <p><strong>Cause</strong>: a fail-fast preflight runs after DAG construction and before any
 rule executes — every unique environment spec of the pending rules is
@@ -4919,7 +4919,7 @@ Companion index files that tools auto-derive from a linked file's path
 <p><strong>Symptom</strong>: Two rules declare outputs that resolve to the same file — e.g. both write <code>variants/sample.vcf</code> (possibly via differently-named wildcards like <code>{smp}</code> and <code>{sample}</code> over the same directory). <code>validate</code>, <code>graph</code>, and <code>run</code> all pass — the run reports success, but <strong>the second rule to finish overwrote the first rule's output</strong>, and downstream rules consumed the wrong file.</p>
 <p><strong>Detection</strong>: The engine treats multi-producer outputs as legitimate (shared staging directories, multi-tool fan-ins), so it does not refuse to run. <code>oxo-flow lint</code> flags every colliding pair instead:</p>
 <div class="language-console highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="gp">$ </span>oxo-flow<span class="w"> </span>lint<span class="w"> </span>pipeline.oxoflow
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="go">  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path(s)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="go">  warning [W033]: output collision: rules 'caller_a' ('variants/{smp}.vcf') and 'caller_b' ('variants/{sample}.vcf') write the same path</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="go">    hint: if both rules must stay, gate one with `when` (the intended-writer idiom) or route one to a distinct output directory</span>
 </span></code></pre></div>
 <p><strong>Solution</strong>: Give each rule distinct output directories — or, when the two rules are alternative writers that must never both run (e.g. WGS vs WES mode), gate them with mutually exclusive <code>when</code> conditions:</p>
@@ -4991,7 +4991,7 @@ hash for files up to 64 MiB). When a glob or directory input gained or lost
 files, or a plain input file was edited — including same-size rewrites that
 preserve the mtime — the rule and its downstream re-execute, even though
 their outputs still exist, and the console prints
-<code>input changes invalidated N rule(s)</code>. See
+<code>input changes invalidated N rules</code>. See
 <a href="../../commands/run/#input-changes-and-manifest-invalidation">Input changes and manifest invalidation</a>.</p>
 <p>To see the blast radius <em>before</em> spending compute,
 <a href="../../commands/dry-run/#checkpoint-aware-rerun-preview"><code>dry-run</code></a> predicts

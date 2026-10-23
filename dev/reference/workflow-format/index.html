@@ -9020,9 +9020,9 @@ warns at parse time only when ownership overlap is <strong>real</strong>: after
 expansion, two differently-owned instances of the duplicated sample id
 resolve some rule to the <strong>same concrete output path</strong> — then one is
 skipped as up-to-date while consuming the other's data. The warning names
-the duplicated sample, both owners, the colliding rule(s), and the exact
+the duplicated sample, both owners, the colliding rules, and the exact
 path:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>WARN oxo_flow_core::config::parse: 1 colliding output path(s) from samples declared by more than one owner (cross-owner instance overlap):
+<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>WARN oxo_flow_core::config::parse: 1 colliding output path from samples declared by more than one owner (cross-owner instance overlap):
 </span><span id="__span-73-2"><a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a>  sample 'S1' (declared by group 'case' and pair 'P1'): rule 'report' writes 'report/S1.html' for both instances — one is skipped as up-to-date while consuming the other's data
 </span></code></pre></div>
 <p>A cross-domain collision (a group rule such as <code>report/{sample}.html</code> and a

@@ -4475,7 +4475,7 @@
 <code>oxo-flow run --profile &lt;name&gt;</code> with a <code>[cluster]</code> profile present. A
 rule whose declared <code>memory</code>/<code>threads</code> exceeds the cap aborts the run
 <strong>before anything is submitted</strong>, naming every offender:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Error: 1 rule(s) exceed the workflow's [resource_budget] — nothing was submitted:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Error: [resource_budget] exceeded by 1 rule — nothing was submitted:
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  rule 'big_mem' requests 64G but [resource_budget] max_memory = 32G
 </span></code></pre></div>
 <p>Two consequences worth knowing:</p>
