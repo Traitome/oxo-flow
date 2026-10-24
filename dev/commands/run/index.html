@@ -2565,6 +2565,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shared-environment-store-pixivenv-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (pixi/venv, opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backend-preflight-fail-fast-on-a-missing-environment-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4371,6 +4382,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shared-environment-store-pixivenv-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared environment store (pixi/venv, opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backend-preflight-fail-fast-on-a-missing-environment-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5079,6 +5101,17 @@ aging entirely, or any other value to change the window:</p>
 <h3 id="skip-environment-setup-when-environments-are-pre-built">Skip environment setup (when environments are pre-built)<a class="headerlink" href="#skip-environment-setup-when-environments-are-pre-built" title="Permanent link">#</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>oxo-flow<span class="w"> </span>run<span class="w"> </span>pipeline.oxoflow<span class="w"> </span>--skip-env-setup
 </span></code></pre></div>
+<h3 id="shared-environment-store-pixivenv-opt-in">Shared environment store (pixi/venv, opt-in)<a class="headerlink" href="#shared-environment-store-pixivenv-opt-in" title="Permanent link">#</a></h3>
+<p>Pixi and venv environments can be materialized <strong>once per content key</strong> in a
+shared store (opt-in: set <code>$OXO_FLOW_ENV_STORE</code> to a non-empty path —
+location IS activation; unset keeps envs self-contained inside each workflow
+tree, exactly like pre-#904). When enabled, the workflow tree only holds a
+symlink into the store: ten checkouts of the same pipeline share one
+environment instead of re-downloading it ten times, and a deleted store dir
+heals itself — the next run detects the broken link and rebuilds. Clean up
+unreferenced environments with <a href="../env/#env-gc"><code>oxo-flow env gc</code></a>. Conda,
+Docker, and Singularity environments keep their native cache layouts and are
+unaffected.</p>
 <h3 id="backend-preflight-fail-fast-on-a-missing-environment-backend">Backend preflight: fail fast on a missing environment backend<a class="headerlink" href="#backend-preflight-fail-fast-on-a-missing-environment-backend" title="Permanent link">#</a></h3>
 <p>After DAG construction and before any rule executes, <code>run</code> validates every
 unique environment spec among the pending rules — once per spec (rule

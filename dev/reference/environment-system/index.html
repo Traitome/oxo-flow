@@ -4430,6 +4430,19 @@ environment (relative file specs — <code>conda</code>/<code>mamba</code>/<code
 a pixi spec must point at a <code>pixi.toml</code> manifest). It does not
 re-check spec files or image reference syntax — <code>validate</code> and <code>lint</code> cover
 declaration-level checks.</p>
+<h2 id="shared-environment-store-opt-in-904">Shared environment store (opt-in, #904)<a class="headerlink" href="#shared-environment-store-opt-in-904" title="Permanent link">#</a></h2>
+<p>By default every workflow is <strong>self-contained</strong>: pixi and venv environments
+materialize inside the workflow tree (<code>.pixi</code> next to the manifest, the venv
+dir) like any other artifact. Setting <code>OXO_FLOW_ENV_STORE</code> to a non-empty
+path <strong>activates</strong> the shared store (location IS activation): the env then
+materializes once per content key under the store root and the in-tree
+location becomes a symlink, so <code>pixi run --manifest-path</code> and
+<code>source .venv/bin/activate</code> keep working unchanged. The variable is
+per-process — on a multi-user server each user who opts in gets their own
+store unless an operator deliberately points everyone at a shared path.
+Maintenance is <code>oxo-flow env gc</code> (checkpoint-reference + age gated,
+<code>--dry-run</code> first); a broken link is detected on the next run and the env
+is rebuilt automatically. Details: <a href="../../commands/env/#env-gc"><code>env</code> command</a>.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">#</a></h2>
 <ul>
@@ -4437,6 +4450,7 @@ declaration-level checks.</p>
 <li><a href="../../how-to/use-environments/">Use Environments how-to</a> — practical recipes</li>
 <li><a href="../../commands/env/"><code>env</code> command</a> — CLI reference</li>
 <li><a href="../../commands/run/"><code>run</code> command</a> — <code>--skip-env-setup</code> and <code>--cache-dir</code> options</li>
+<li><a href="#shared-environment-store-opt-in-904">Shared env store (opt-in)</a> — <code>OXO_FLOW_ENV_STORE</code> semantics and GC</li>
 <li><a href="../china-mirrors/">China Network Mirrors</a> — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable

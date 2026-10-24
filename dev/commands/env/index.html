@@ -2068,6 +2068,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#env-gc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        env gc
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3830,6 +3841,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#env-gc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        env gc
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3894,7 +3916,7 @@
 
 
 <h1 id="oxo-flow-env"><code>oxo-flow env</code><a class="headerlink" href="#oxo-flow-env" title="Permanent link">#</a></h1>
-<p>Manage software environments. Provides subcommands for listing available backends and checking workflow environment requirements.</p>
+<p>Manage software environments. Provides subcommands for listing available backends, checking workflow environment requirements, and maintaining the shared environment store.</p>
 <hr />
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">#</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>oxo-flow env &lt;SUBCOMMAND&gt;
@@ -3997,6 +4019,77 @@ actually gets invoked:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>  ✓ align (conda)
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  ✗ call_variants — environment error (docker): docker is not installed or not in PATH
 </span></code></pre></div>
+<h3 id="env-gc"><code>env gc</code><a class="headerlink" href="#env-gc" title="Permanent link">#</a></h3>
+<p>Inspect and clean up the <strong>opt-in</strong> shared environment store (issue #904).</p>
+<p>The store is <strong>disabled by default</strong>: a workflow is self-contained and its
+pixi/venv environments materialize inside the workflow tree exactly like any
+other artifact — the tree stays copyable, movable, and deletable on its own.</p>
+<p>Setting <code>OXO_FLOW_ENV_STORE</code> to a non-empty path <strong>activates</strong> the store
+(location IS activation). When enabled, pixi and venv environments
+materialize <strong>once per content key</strong> under the store root; the in-tree
+location the engine already uses (<code>.pixi</code> next to the manifest, the venv
+dir) becomes a symlink into the store, so wraps like
+<code>pixi run --manifest-path</code> and <code>source .venv/bin/activate</code> keep working
+unchanged. Repeated runs across many pipeline checkouts reuse the same
+environment instead of re-downloading and re-building it per tree. A broken
+link (e.g. the store dir was deleted) is detected automatically on the next
+run: the cached entry is invalidated and the environment is rebuilt, no
+manual intervention needed.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span><span class="o">[</span>--min-age-days<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--min-age-days</code></td>
+<td><code>14</code></td>
+<td>Minimum age (mtime) before an unreferenced store dir may be deleted</td>
+</tr>
+<tr>
+<td><code>--dry-run</code></td>
+<td>off</td>
+<td>Report what would be deleted without touching anything</td>
+</tr>
+</tbody>
+</table>
+<p>With the store disabled (<code>OXO_FLOW_ENV_STORE</code> unset), <code>env gc</code> prints a note
+and exits — there is nothing to collect.</p>
+<p><strong>Where environments live (store enabled):</strong></p>
+<ul>
+<li>Store root: exactly the path <code>OXO_FLOW_ENV_STORE</code> points at — there is no implicit default; the environment variable is per-process, so on a multi-user server each user who opts in gets their own store unless an operator deliberately points everyone at a shared filesystem path</li>
+<li>Each environment: <code>&lt;root&gt;/&lt;backend&gt;-&lt;sha256-16hex of its content key&gt;</code> (e.g. <code>pixi-3f2a…</code>)</li>
+<li>Workflow trees: a symlink (<code>.pixi</code> for pixi rules, the venv path for venv rules) pointing into the store</li>
+</ul>
+<p><strong>What <code>env gc</code> deletes:</strong></p>
+<ul>
+<li>Only store dirs <strong>not referenced</strong> by any discovered run checkpoint (<code>env_store_refs</code> in <code>.oxo-flow/checkpoint.json</code>), AND older than <code>--min-age-days</code></li>
+<li>Referenced dirs are always kept — a running or resumable run keeps its environments (the #893 lesson)</li>
+<li>Young dirs are kept even when torn/incomplete: a fresh torn dir may be a concurrent run mid-setup, so the age gate protects those too</li>
+<li>Deleting a still-needed env is recoverable: the next run detects the broken link and rebuilds</li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Preview</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs<span class="w"> </span>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>Shared<span class="w"> </span>environment<span class="w"> </span>store:<span class="w"> </span>/home/user/.cache/oxo-flow/envs<span class="w"> </span><span class="o">(</span><span class="m">3</span><span class="w"> </span>env<span class="w"> </span><span class="nb">dirs</span><span class="o">)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>pixi-3f2a91b0c4d5e6f7<span class="w"> </span><span class="o">[</span>pixi<span class="o">]</span><span class="w"> </span>referenced<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>checkpoint<span class="w"> </span>—<span class="w"> </span>kept
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">      </span><span class="m">1</span>.2<span class="w"> </span>GiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/pixi-3f2a91b0c4d5e6f7
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>venv-8b7c6d5e4f3a2b1c<span class="w"> </span><span class="o">[</span>venv<span class="o">]</span><span class="w"> </span>unreferenced<span class="w"> </span>and<span class="w"> </span>old<span class="w"> </span>enough<span class="w"> </span>—<span class="w"> </span>eligible
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="m">310</span>.4<span class="w"> </span>MiB<span class="w"> </span>/home/user/.cache/oxo-flow/envs/venv-8b7c6d5e4f3a2b1c
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>Summary:<span class="w"> </span><span class="m">1</span><span class="w"> </span>store<span class="w"> </span>dir<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>would<span class="w"> </span>be<span class="w"> </span>deleted,<span class="w"> </span>freeing<span class="w"> </span>~310.4<span class="w"> </span>MiB<span class="w"> </span><span class="o">(</span>dry<span class="w"> </span>run<span class="w"> </span>—<span class="w"> </span>nothing<span class="w"> </span>touched<span class="o">)</span>
+</span></code></pre></div>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>GC discovery covers the checkpoint of the workdir you run it from (<code>.oxo-flow/checkpoint.json</code>); runs in other trees are protected by the age gate. Check <code>--dry-run</code> output before a real run when multiple worktrees share one store</li>
+<li><code>oxo-flow env gc</code> only ever deletes inside the store root — workflow-tree symlinks are never followed or removed, and store contents are never modified, only whole dirs deleted</li>
+<li>Store re-homing is best-effort and non-destructive: if the env cannot be moved into the store (cross-device, permissions), the run keeps the plain in-tree environment and simply misses the dedup</li>
+</ul>
 <hr />
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
 <table>
@@ -4017,11 +4110,15 @@ actually gets invoked:</p>
 </table>
 <hr />
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">#</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># List available backends</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Check a specific workflow</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># List available backends</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>list
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Check a specific workflow</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>check<span class="w"> </span>pipeline.oxoflow
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Opt into the shared env store for this shell session, then preview GC</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OXO_FLOW_ENV_STORE</span><span class="o">=</span>~/.cache/oxo-flow/envs
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>oxo-flow<span class="w"> </span>env<span class="w"> </span>gc<span class="w"> </span>--dry-run
 </span></code></pre></div>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
@@ -4032,6 +4129,7 @@ actually gets invoked:</p>
 <li>To check that environment <strong>definition files</strong> exist (conda YAML, venv
   directories, <code>pixi.toml</code>), use
   <a href="../test/#deep-checks-deep"><code>oxo-flow test --deep</code></a> (finding <code>D002</code>)</li>
+<li>Only <strong>pixi</strong> and <strong>venv</strong> environments participate in the shared store today; conda/docker/singularity keep their native cache layouts. See <a href="#env-gc"><code>env gc</code></a> for store maintenance</li>
 </ul>
 
 
