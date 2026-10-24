@@ -2736,6 +2736,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#include-resolutions-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Include resolutions in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4531,6 +4542,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#include-resolutions-in-the-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Include resolutions in the checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#run-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5552,6 +5574,18 @@ report snapshots carry it through the checkpoint they embed.</p>
 <p>The lookup is best-effort — running outside a git repository simply omits
 the field and never fails the run. Commit your workflow before running to
 get fully version-audited results. See
+<a href="../../reference/versioning/">Workflow Versioning</a> for the full model.</p>
+<h3 id="include-resolutions-in-the-checkpoint">Include resolutions in the checkpoint<a class="headerlink" href="#include-resolutions-in-the-checkpoint" title="Permanent link">#</a></h3>
+<p>Every <code>[[include]]</code> that pins a git repository (<code>repo</code> + <code>ref</code>) records
+<strong>the exact commit SHA its checkout resolved to</strong> at parse time, in the
+checkpoint (<code>include_resolutions</code>, keyed <code>repo@ref path</code> → SHA). Branch
+and tag pins re-fetch on every activation — the workflow file alone cannot
+prove which module content a past run actually used — so this per-include
+SHA is the evidence a run/resume pair needs that the modules did not drift
+between the two. The field is absent for workflows without repo includes,
+and recording it is best-effort (an unreadable checkout logs a warning and
+records nothing, never failing the run). The run report's Provenance
+section lists one row per include. See
 <a href="../../reference/versioning/">Workflow Versioning</a> for the full model.</p>
 <h3 id="run-logs">Run logs<a class="headerlink" href="#run-logs" title="Permanent link">#</a></h3>
 <p>Every run — and <code>resume</code>, which re-enters the same path — archives its own

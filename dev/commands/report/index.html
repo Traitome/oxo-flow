@@ -4860,7 +4860,11 @@ OOM-kill, exit 124 timeout, disk-full, …).</p>
 <h3 id="provenance">Provenance<a class="headerlink" href="#provenance" title="Permanent link">#</a></h3>
 <p>Every report records the oxo-flow version, the workflow file and its
 <code>sha256</code> checksum, and the checkpoint path it was built from — the report
-itself is an audit-trail anchor.</p>
+itself is an audit-trail anchor. When the workflow lives in a git
+repository the report also names its HEAD SHA, and each pinned git
+<code>[[include]]</code> gets its own row (<code>Include &lt;repo&gt;@&lt;ref&gt; &lt;path&gt;</code> → the
+checkout's resolved HEAD SHA at parse time) — comparable across a
+run/resume pair to prove module content did not drift (issue #899).</p>
 <hr />
 <h2 id="clinical-reporting">Clinical Reporting<a class="headerlink" href="#clinical-reporting" title="Permanent link">#</a></h2>
 <h3 id="honest-scope">Honest scope<a class="headerlink" href="#honest-scope" title="Permanent link">#</a></h3>

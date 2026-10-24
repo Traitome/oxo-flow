@@ -4065,9 +4065,12 @@ the workflow <strong>declares</strong> and diff it in CI:</p>
 <p>Each rule records its declared backend — docker <code>image:tag</code>, module
 <code>(tool, version)</code>, conda/mamba/pixi env files and <code>venv_requirements</code>
 files with sha256 content hashes (a bare <code>venv</code> directory path is
-recorded as declared, without a hash). This is a static declaration (the
-engine never executes
-anything to collect it), so resolved runtime package versions are not
+recorded as declared, without a hash). When the workflow uses pinned git
+<code>[[include]]</code>s, the YAML also lists each one's resolved commit SHA under
+<code>workflow.includes</code> (issue #899) — diffing the file in CI therefore also
+catches module drift, not just engine/workflow changes. This is a static
+declaration (the engine never executes anything to collect it), so
+resolved runtime package versions are not
 included; every entry carries that caveat. <code>-</code> writes the YAML to
 stdout.</p>
 <hr />
@@ -4127,7 +4130,7 @@ stdout.</p>
 </tr>
 <tr>
 <td><strong>Provenance</strong></td>
-<td>Engine version, workflow file sha256, checkpoint location</td>
+<td>Engine version, workflow file sha256, checkpoint location; plus the workflow git HEAD and one row per pinned git <code>[[include]]</code> with its resolved commit SHA (<code>Include &lt;repo&gt;@&lt;ref&gt; &lt;path&gt;</code>)</td>
 </tr>
 <tr>
 <td><strong>Software Versions</strong></td>
