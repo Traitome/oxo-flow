@@ -925,6 +925,25 @@ pub enum EnvAction {
         )]
         backend: Option<String>,
     },
+    /// Inspect and clean up the shared environment store (issue #904).
+    ///
+    /// OPT-IN: set OXO_FLOW_ENV_STORE to a non-empty path to activate the
+    /// store. When enabled, pixi/venv environments materialize once per
+    /// content key under the store root and workflow trees hold symlinks
+    /// into it. GC never deletes a store dir that a checkpoint in the
+    /// CURRENT workflow directory still references (the #893 lesson) —
+    /// runs in other worktrees are protected only by the age gate, so
+    /// check --dry-run output before a real run when several worktrees
+    /// share one store.
+    Gc {
+        /// Only delete unreferenced store dirs untouched for at least this
+        /// many days (default: 14).
+        #[arg(long, value_name = "DAYS", default_value_t = 14)]
+        min_age_days: u64,
+        /// Show what would be deleted without touching anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

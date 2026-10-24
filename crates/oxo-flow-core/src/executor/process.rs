@@ -439,6 +439,12 @@ pub struct LocalExecutor {
     /// their tasks (`abort_all()` alone orphans them). `std::sync::Mutex`
     /// because the registry is only ever touched for instant insert/remove.
     active_pids: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    /// Opt-in content-addressed env store (issue #904): when
+    /// `OXO_FLOW_ENV_STORE` is set, pixi/venv envs materialize once per
+    /// content key here and the in-tree path becomes a symlink into the
+    /// store; unset, this is an inert sentinel and every env stays
+    /// self-contained in-tree.
+    env_store: super::env_store::EnvStore,
 }
 
 /// Detect total system memory in MB using the most reliable method available
@@ -643,6 +649,9 @@ impl LocalExecutor {
             system_memory_mb: max_memory_mb,
             rss_sampler: Arc::new(super::rss::RssSampler::new()),
             active_pids: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            env_store: super::env_store::EnvStore::from_env().unwrap_or_else(|| {
+                super::env_store::EnvStore::from_root(std::path::PathBuf::new())
+            }),
         }
     }
 
@@ -877,6 +886,19 @@ impl LocalExecutor {
             return Ok(());
         }
         let key = self.env_resolver.cache_key(env_spec);
+        // Issue #904: pixi/venv envs are store-managed — a content-addressed
+        // machine-level store holds the materialized env once per key and the
+        // in-tree path becomes a symlink into it. Everything below is
+        // best-effort: a store failure falls back to the plain in-tree env.
+        let store_kind = super::env_store::StoreKind::from_spec(env_spec);
+        // In-tree base for the store-managed kinds: pixi specs are already
+        // absolute (anchored at the workflow root above), venv specs stay
+        // relative by design (`resolve_relative_paths` does not touch them)
+        // and resolve against the setup cwd — the workdir.
+        let store_base: Option<&std::path::Path> = match store_kind {
+            Some(super::env_store::StoreKind::Venv) => Some(self.config.workdir.as_path()),
+            _ => None,
+        };
         if self.env_resolver.cache_is_ready(&key).await {
             // A cache HIT is a promise, not a proof: the env may have
             // vanished since it was recorded (box migration, manual rm,
@@ -898,8 +920,46 @@ impl LocalExecutor {
                     self.env_resolver.cache_invalidate(&key).await;
                 }
                 // Backends without a filesystem env (system) or unverifiable
-                // specs: nothing to check — keep the cache hit.
-                Ok(None) => return Ok(()),
+                // specs: nothing to check — keep the cache hit. Store-managed
+                // backends (pixi/venv, verify = None) are the exception: a
+                // dangling in-tree symlink (store dir removed by `env gc` of
+                // a stale checkpoint or manual cleanup) would pass every
+                // check here and fail at rule time, so probe the link.
+                Ok(None) => {
+                    if let Some(kind) = store_kind {
+                        match self.env_store.in_tree_state(
+                            kind,
+                            &Self::store_spec(kind, env_spec),
+                            store_base,
+                        ) {
+                            super::env_store::InTreeState::Fine => return Ok(()),
+                            super::env_store::InTreeState::BrokenLink => {
+                                tracing::warn!(
+                                    rule = %rule.name,
+                                    env = %key,
+                                    "cached environment link is broken (target missing); \
+                                     invalidating the cache entry and rebuilding"
+                                );
+                                self.env_resolver.cache_invalidate(&key).await;
+                            }
+                            // Env dir missing entirely: normally keep the
+                            // cache hit, but a ready store copy can still
+                            // satisfy it — fall through to the fast path
+                            // below, which links it in.
+                            super::env_store::InTreeState::Absent => {
+                                let ready = self.env_store.is_enabled()
+                                    && self
+                                        .env_store
+                                        .store_is_ready(&self.env_store.store_dir(kind, &key));
+                                if !ready {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    } else {
+                        return Ok(());
+                    }
+                }
                 Err(_) => {
                     // Unparseable spec: let the setup path produce the
                     // proper error instead of failing here.
@@ -917,6 +977,37 @@ impl LocalExecutor {
         {
             self.env_resolver.cache_mark_ready(&key).await;
             return Ok(());
+        }
+        // Issue #904 store fast path: with the store enabled and a ready
+        // store dir for this key, some prior run already materialized the
+        // env — link it in-tree and skip setup entirely. A link failure
+        // falls through to normal setup (non-fatal; the store just misses
+        // the dedup).
+        if let Some(kind) = store_kind
+            && self.env_store.is_enabled()
+        {
+            let store_dir = self.env_store.store_dir(kind, &key);
+            if self.env_store.store_is_ready(&store_dir) {
+                let spec_str = Self::store_spec(kind, env_spec);
+                match self
+                    .env_store
+                    .link_in_tree(kind, &spec_str, store_base, &store_dir)
+                {
+                    Ok(()) => {
+                        self.env_resolver.cache_mark_ready(&key).await;
+                        self.record_env_store_ref(rule, kind, &key, &store_dir)
+                            .await;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            rule = %rule.name,
+                            error = %e,
+                            "env store link failed — falling back to in-tree setup"
+                        );
+                    }
+                }
+            }
         }
         // Serialize setup per environment: concurrent rule instances sharing
         // an env (e.g. S1 + S2 instances of the same rule) used to run two
@@ -1036,6 +1127,11 @@ impl LocalExecutor {
                 // down and retry setup once before reporting an error.
                 match self.env_resolver.verify_command(env_spec)? {
                     None => {
+                        // Store-managed envs (verify = None): re-home the
+                        // freshly materialized dir into the store, then link
+                        // back. Failure = plain in-tree env (pre-#904 path).
+                        self.rehome_store_managed_env(rule, env_spec, store_kind, store_base, &key)
+                            .await;
                         self.env_resolver.cache_mark_ready(&key).await;
                         Ok(())
                     }
@@ -1068,6 +1164,10 @@ impl LocalExecutor {
                             }
                         }
                         if verified {
+                            self.rehome_store_managed_env(
+                                rule, env_spec, store_kind, store_base, &key,
+                            )
+                            .await;
                             self.env_resolver.cache_mark_ready(&key).await;
                             Ok(())
                         } else {
@@ -1120,6 +1220,97 @@ impl LocalExecutor {
             .output()
             .await
             .is_ok_and(|o| o.status.success())
+    }
+
+    /// Spec string the store operations should use for `kind`.
+    ///
+    /// Pixi stores the manifest path (the `.pixi` dir derives from it);
+    /// venv stores the target dir itself.
+    fn store_spec(
+        kind: super::env_store::StoreKind,
+        env_spec: &crate::rule::EnvironmentSpec,
+    ) -> String {
+        match kind {
+            super::env_store::StoreKind::Pixi => env_spec.pixi.clone().unwrap_or_default(),
+            super::env_store::StoreKind::Venv => env_spec.venv.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Issue #904: after a successful setup, move the materialized in-tree
+    /// env into the shared store and symlink back. Best-effort — any failure
+    /// just keeps the plain in-tree env (the store misses the dedup).
+    async fn rehome_store_managed_env(
+        &self,
+        rule: &Rule,
+        env_spec: &crate::rule::EnvironmentSpec,
+        store_kind: Option<super::env_store::StoreKind>,
+        store_base: Option<&std::path::Path>,
+        key: &str,
+    ) {
+        let Some(kind) = store_kind else {
+            return;
+        };
+        // Disabled store (OXO_FLOW_ENV_STORE unset): the sentinel has an
+        // empty root, so re-homing would rename the freshly built env onto
+        // a relative path resolved against the process CWD and leave a
+        // dangling in-tree symlink. Store-managed kinds keep their plain
+        // in-tree env, byte-for-byte like pre-#904.
+        if !self.env_store.is_enabled() {
+            return;
+        }
+        let spec_str = Self::store_spec(kind, env_spec);
+        let result =
+            super::env_store::rehome_into_store(&self.env_store, kind, &spec_str, store_base, key);
+        match result {
+            Ok(record) => {
+                // Insert under the CURRENT checkpoint map (never
+                // take + wholesale write-back: that races any concurrent
+                // record_env_store_ref on another rule task and drops its
+                // reference). Recorded before cache_mark_ready so `env gc`
+                // can see the reference even if the process dies right
+                // after linking.
+                if let Some(ck) = &self.config.checkpoint {
+                    ck.lock()
+                        .await
+                        .env_store_refs
+                        .insert(rule.name.clone(), record);
+                }
+                tracing::debug!(rule = %rule.name, "environment re-homed into the shared env store");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    rule = %rule.name,
+                    error = %e,
+                    "env store re-home failed — keeping the plain in-tree environment"
+                );
+            }
+        }
+    }
+
+    /// Record a store reference for `rule` after linking a ready store dir
+    /// in-tree (fast path). Best-effort: no checkpoint = nothing to update.
+    async fn record_env_store_ref(
+        &self,
+        rule: &Rule,
+        kind: super::env_store::StoreKind,
+        key: &str,
+        store_dir: &std::path::Path,
+    ) {
+        if let Some(ck) = &self.config.checkpoint {
+            let record = super::env_store::EnvStoreRecord {
+                store_dir: store_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                kind: kind.prefix().to_string(),
+                cache_key: key.to_string(),
+            };
+            ck.lock()
+                .await
+                .env_store_refs
+                .insert(rule.name.clone(), record);
+        }
     }
 
     /// Render a rule's command through its environment wrapper.

@@ -46,6 +46,10 @@ services:
       - GITHUB_CLIENT_SECRET
       - OXO_FLOW_LICENSE
       - OXO_FLOW_OUTPUT_TAIL_BYTES
+      # Shared env store (#904): set OXO_FLOW_ENV_STORE on the host to a
+      # non-empty path (plus a matching volume mount) to opt in — unset
+      # keeps envs self-contained inside each workflow tree.
+      - OXO_FLOW_ENV_STORE
       # PostgreSQL (optional): the published image builds WITHOUT the
       # `postgres` compile feature, so uncommenting this line crash-loops
       # the container at startup (it refuses a postgres:// URL and

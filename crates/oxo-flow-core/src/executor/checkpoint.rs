@@ -303,6 +303,15 @@ pub struct CheckpointState {
     /// legacy checkpoints and workflows without repo includes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub include_resolutions: BTreeMap<String, String>,
+    /// Shared env-store bookkeeping (issue #904): per rule name, the
+    /// content-addressed store directory backing its environment. `env gc`
+    /// counts references across checkpoints instead of parsing workflow
+    /// files, so a store dir referenced here is never deleted by GC
+    /// regardless of age (the #893 lesson — no auto-delete of anything a
+    /// run may still resume against). Rule names as keys for stable JSON
+    /// ordering. Absent in legacy checkpoints and store-unmanaged envs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env_store_refs: BTreeMap<String, super::env_store::EnvStoreRecord>,
     /// Working directory the rules executed in (issue #68). `resume` re-runs
     /// from this directory so completed rules' outputs resolve the same way;
     /// absent in legacy checkpoints, which fall back to the workflow's
@@ -522,6 +531,7 @@ impl CheckpointState {
             workflow_path: None,
             workflow_git_sha: None,
             include_resolutions: BTreeMap::new(),
+            env_store_refs: BTreeMap::new(),
             workdir: None,
             checksums: BTreeMap::new(),
             cleaned_checksums: BTreeMap::new(),
