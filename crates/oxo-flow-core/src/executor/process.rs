@@ -1250,6 +1250,14 @@ impl LocalExecutor {
         let Some(kind) = store_kind else {
             return;
         };
+        // Disabled store (OXO_FLOW_ENV_STORE unset): the sentinel has an
+        // empty root, so re-homing would rename the freshly built env onto
+        // a relative path resolved against the process CWD and leave a
+        // dangling in-tree symlink. Store-managed kinds keep their plain
+        // in-tree env, byte-for-byte like pre-#904.
+        if !self.env_store.is_enabled() {
+            return;
+        }
         let spec_str = Self::store_spec(kind, env_spec);
         let result =
             super::env_store::rehome_into_store(&self.env_store, kind, &spec_str, store_base, key);

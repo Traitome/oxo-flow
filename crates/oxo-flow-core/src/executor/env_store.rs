@@ -221,15 +221,22 @@ impl EnvStore {
             if let Some(parent) = in_tree.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            // Unique per process+thread: two concurrent runs re-homing the
+            // same env in one tree must not unlink each other's staged
+            // symlink (the old fixed name had exactly that race —
+            // self-healing, but wasteful and confusing).
             let stage = in_tree.with_file_name(format!(
-                ".{}.oxo-store-link",
+                ".{}.oxo-store-link.{}.{}",
                 in_tree
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("env")
+                    .unwrap_or("env"),
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0),
             ));
-            // A stale stage from a killed run must not block the swap.
-            let _ = std::fs::remove_file(&stage);
             std::os::unix::fs::symlink(store_dir, &stage)?;
             // Drop the previous entry only now that the replacement exists.
             let dropped = match std::fs::symlink_metadata(&in_tree) {
@@ -483,68 +490,90 @@ pub(crate) fn rehome_into_store(
     base: Option<&Path>,
     cache_key: &str,
 ) -> std::io::Result<EnvStoreRecord> {
-    let store_dir = store.store_dir(kind, cache_key);
-    store.ensure_root()?;
-
-    let in_tree = kind.in_tree_path(spec, base);
-    if let Ok(meta) = std::fs::symlink_metadata(&in_tree)
-        && meta.file_type().is_symlink()
-    {
-        // Concurrent re-home already swapped the link. Only accept when OUR
-        // store dir is the ready target; never rename a symlink into place.
-        if store.store_is_ready(&store_dir) {
-            store.link_in_tree(kind, spec, base, &store_dir)?;
-            return Ok(store_record(&store_dir, kind, cache_key));
-        }
+    // Belt-and-braces: the executor gates this call on `is_enabled`, but a
+    // disabled sentinel must never move an env — its empty root would
+    // resolve store_dir against the process CWD.
+    if !store.is_enabled() {
         return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!(
-                "in-tree env at {} is already a store symlink but {} is not a ready store dir",
-                in_tree.display(),
-                store_dir.display()
-            ),
+            std::io::ErrorKind::PermissionDenied,
+            "env store disabled (OXO_FLOW_ENV_STORE unset) — refusing to re-home",
         ));
     }
+    // Windows and other non-unix targets have no symlink support here:
+    // refuse before the rename/copy churns the env into the store.
+    #[cfg(not(unix))]
+    {
+        let _ = (kind, spec, base, cache_key);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "shared env store requires unix (symlink support)",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let store_dir = store.store_dir(kind, cache_key);
+        store.ensure_root()?;
 
-    if store_dir.exists() {
-        if store.store_is_ready(&store_dir) {
-            // Another run won the race: adopt the store copy as-is.
-            store.link_in_tree(kind, spec, base, &store_dir)?;
-            return Ok(store_record(&store_dir, kind, cache_key));
-        }
-        if store_dir_looks_foreign(&store_dir) {
+        let in_tree = kind.in_tree_path(spec, base);
+        if let Ok(meta) = std::fs::symlink_metadata(&in_tree)
+            && meta.file_type().is_symlink()
+        {
+            // Concurrent re-home already swapped the link. Only accept when OUR
+            // store dir is the ready target; never rename a symlink into place.
+            if store.store_is_ready(&store_dir) {
+                store.link_in_tree(kind, spec, base, &store_dir)?;
+                return Ok(store_record(&store_dir, kind, cache_key));
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!(
-                    "store dir {} holds unrecognized content; refusing to clear it",
+                    "in-tree env at {} is already a store symlink but {} is not a ready store dir",
+                    in_tree.display(),
                     store_dir.display()
                 ),
             ));
         }
-        // Torn dir from a killed setup — safe to clear and retry.
-        std::fs::remove_dir_all(&store_dir)?;
-    }
 
-    if std::fs::rename(&in_tree, &store_dir).is_err() {
-        // Cross-device (or otherwise un-renamable): deep-copy instead. The
-        // original stays in place until link_in_tree stages its replacement.
-        copy_dir_recursive(&in_tree, &store_dir)?;
-    }
-    // At this point the env content lives (at least) at `store_dir`. If the
-    // final link fails after a MOVE, put the env back in-tree.
-    if let Err(e) = store.link_in_tree(kind, spec, base, &store_dir) {
-        if !in_tree.exists() && store_dir.is_dir() {
-            if std::fs::rename(&store_dir, &in_tree).is_ok() {
-                // moved back — clean fallback
-            } else if copy_dir_recursive(&store_dir, &in_tree).is_ok() {
-                // restored by copy; leave the store copy for the next
-                // attempt (it is torn — no ready marker — and will be
-                // cleared by a future re-home)
+        if store_dir.exists() {
+            if store.store_is_ready(&store_dir) {
+                // Another run won the race: adopt the store copy as-is.
+                store.link_in_tree(kind, spec, base, &store_dir)?;
+                return Ok(store_record(&store_dir, kind, cache_key));
             }
+            if store_dir_looks_foreign(&store_dir) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "store dir {} holds unrecognized content; refusing to clear it",
+                        store_dir.display()
+                    ),
+                ));
+            }
+            // Torn dir from a killed setup — safe to clear and retry.
+            std::fs::remove_dir_all(&store_dir)?;
         }
-        return Err(e);
+
+        if std::fs::rename(&in_tree, &store_dir).is_err() {
+            // Cross-device (or otherwise un-renamable): deep-copy instead. The
+            // original stays in place until link_in_tree stages its replacement.
+            copy_dir_recursive(&in_tree, &store_dir)?;
+        }
+        // At this point the env content lives (at least) at `store_dir`. If the
+        // final link fails after a MOVE, put the env back in-tree.
+        if let Err(e) = store.link_in_tree(kind, spec, base, &store_dir) {
+            if !in_tree.exists() && store_dir.is_dir() {
+                if std::fs::rename(&store_dir, &in_tree).is_ok() {
+                    // moved back — clean fallback
+                } else if copy_dir_recursive(&store_dir, &in_tree).is_ok() {
+                    // restored by copy; leave the store copy for the next
+                    // attempt (it is torn — no ready marker — and will be
+                    // cleared by a future re-home)
+                }
+            }
+            return Err(e);
+        }
+        Ok(store_record(&store_dir, kind, cache_key))
     }
-    Ok(store_record(&store_dir, kind, cache_key))
 }
 
 #[cfg(test)]
@@ -661,6 +690,38 @@ mod tests {
     }
 
     #[test]
+    fn rehome_refuses_disabled_sentinel_store() {
+        // The regression guard for the opt-in reshape: a disabled sentinel
+        // (empty root, OXO_FLOW_ENV_STORE unset) must never move the env.
+        // Before the gate, store_dir resolved to a RELATIVE path and the
+        // rename landed the env in the process CWD with a dangling link.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = EnvStore::from_root(PathBuf::new());
+        assert!(!store.is_enabled());
+        let env = venv_env(tmp.path(), "env", "mine.txt");
+        let cwd_entries_before: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let err = rehome_into_store(&store, StoreKind::Venv, env.to_str().unwrap(), None, "k")
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        let meta = std::fs::symlink_metadata(&env).unwrap();
+        assert!(!meta.file_type().is_symlink(), "in-tree env untouched");
+        assert!(env.join("mine.txt").is_file(), "env content intact");
+        let cwd_entries_after: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            cwd_entries_before, cwd_entries_after,
+            "no store dir materialized in the working directory"
+        );
+    }
+
+    #[test]
     fn rehome_moves_env_and_links_back() {
         let tmp = tempfile::tempdir().unwrap();
         let store = EnvStore::from_root(tmp.path().join("store"));
@@ -759,6 +820,56 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         // The pre-existing link is untouched (no self-referential rename).
         assert_eq!(std::fs::read_link(&env).unwrap(), elsewhere);
+    }
+
+    #[test]
+    fn link_failure_restore_contract_and_no_stage_leftovers() {
+        // MINOR 6b: the rename-failure branch promises (a) a destroyed
+        // in-tree env is restored from the store copy and (b) no staged
+        // symlink is left behind. Exercise both contracts deterministically.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = EnvStore::from_root(tmp.path().join("store"));
+        let env = venv_env(tmp.path(), "env", "mine.txt");
+        let store_dir = store.store_dir(StoreKind::Venv, "k");
+        store.ensure_root().unwrap();
+        std::fs::rename(&env, &store_dir).unwrap();
+        std::fs::write(store_dir.join(".oxo-env-ready"), b"ok\n").unwrap();
+
+        // (a) Restore contract: the error path recovers via
+        // copy_dir_recursive(store_dir → in_tree); assert it puts the full
+        // environment content back.
+        let spec = env.to_str().unwrap().to_string();
+        let in_tree = StoreKind::Venv.in_tree_path(&spec, None);
+        std::fs::create_dir_all(&in_tree).unwrap();
+        copy_dir_recursive(&store_dir, &in_tree).unwrap();
+        assert!(in_tree.join("mine.txt").is_file(), "env content restored");
+        assert!(
+            in_tree.join("bin").join("python").is_file(),
+            "bin/python restored"
+        );
+
+        // (b) Stage-cleanup contract: after a complete link_in_tree swap,
+        // the parent holds no .oxo-store-link leftovers.
+        std::fs::remove_dir_all(&in_tree).unwrap();
+        std::fs::remove_dir_all(&store_dir).unwrap();
+        let fresh = venv_env(tmp.path(), "env2", "mine.txt");
+        std::fs::rename(&fresh, &store_dir).unwrap();
+        std::fs::write(store_dir.join(".oxo-env-ready"), b"ok\n").unwrap();
+        store
+            .link_in_tree(StoreKind::Venv, &spec, None, &store_dir)
+            .unwrap();
+        let stage_leftover = in_tree
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains(".oxo-store-link"));
+        assert!(
+            !stage_leftover,
+            "no staged .oxo-store-link leftovers after a successful swap"
+        );
+        assert!(in_tree.join("mine.txt").is_file(), "swap serves content");
     }
 
     #[test]

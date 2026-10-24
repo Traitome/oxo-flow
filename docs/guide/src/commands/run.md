@@ -267,16 +267,18 @@ cache_max_age_days = 30   # prune after 30 days instead of the 90-day default
 oxo-flow run pipeline.oxoflow --skip-env-setup
 ```
 
-### Shared environment store (pixi/venv)
+### Shared environment store (pixi/venv, opt-in)
 
-Pixi and venv environments are materialized **once per content key** in a
-machine-wide store (`$OXO_FLOW_ENV_STORE`, default
-`~/.cache/oxo-flow/envs/`); the workflow tree only holds a symlink into the
-store. Ten checkouts of the same pipeline share one environment instead of
-re-downloading it ten times, and a deleted store dir heals itself — the
-next run detects the broken link and rebuilds. Clean up unreferenced
-environments with [`oxo-flow env gc`](env.md#env-gc). Conda, Docker, and
-Singularity environments keep their native cache layouts and are unaffected.
+Pixi and venv environments can be materialized **once per content key** in a
+shared store (opt-in: set `$OXO_FLOW_ENV_STORE` to a non-empty path —
+location IS activation; unset keeps envs self-contained inside each workflow
+tree, exactly like pre-#904). When enabled, the workflow tree only holds a
+symlink into the store: ten checkouts of the same pipeline share one
+environment instead of re-downloading it ten times, and a deleted store dir
+heals itself — the next run detects the broken link and rebuilds. Clean up
+unreferenced environments with [`oxo-flow env gc`](env.md#env-gc). Conda,
+Docker, and Singularity environments keep their native cache layouts and are
+unaffected.
 
 ### Backend preflight: fail fast on a missing environment backend
 

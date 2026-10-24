@@ -381,8 +381,13 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
                     }
                 }
                 Some(mtime) => {
-                    let days_left = (mtime.saturating_sub(cutoff)) / 86_400 + 1;
-                    format!("unreferenced but too new (~{days_left}d until eligible)")
+                    let days_left = mtime.saturating_sub(cutoff) / 86_400;
+                    let hint = if days_left == 0 {
+                        "eligible next gc run".to_string()
+                    } else {
+                        format!("~{days_left}d until eligible")
+                    };
+                    format!("unreferenced but too new ({hint})")
                 }
                 None => "unreferenced but mtime unknown — kept".to_string(),
             }

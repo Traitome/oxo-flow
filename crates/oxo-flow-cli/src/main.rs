@@ -930,8 +930,11 @@ pub enum EnvAction {
     /// OPT-IN: set OXO_FLOW_ENV_STORE to a non-empty path to activate the
     /// store. When enabled, pixi/venv environments materialize once per
     /// content key under the store root and workflow trees hold symlinks
-    /// into it. GC never deletes a store dir that any checkpoint still
-    /// references (the #893 lesson).
+    /// into it. GC never deletes a store dir that a checkpoint in the
+    /// CURRENT workflow directory still references (the #893 lesson) —
+    /// runs in other worktrees are protected only by the age gate, so
+    /// check --dry-run output before a real run when several worktrees
+    /// share one store.
     Gc {
         /// Only delete unreferenced store dirs untouched for at least this
         /// many days (default: 14).
