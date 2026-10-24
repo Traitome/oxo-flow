@@ -8,7 +8,25 @@
 # 0258 / 0346 / 0349, all matched the legacy stack only). If cargo audit
 # flags a new advisory, fix or justify it here instead of assuming it is
 # known.
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0387 (2026-10-23): crypto-bigint <0.7.6 has multiple
+    # timing-variability issues in operations intended to be constant-time.
+    # Patched only in >=0.7.6 — no 0.5.x release exists. crypto-bigint 0.5.5
+    # reaches us ONLY through aws-sigv4's `sigv4a` feature (ECDSA/P-256
+    # point arithmetic for SigV4a asymmetric signing; aws-sdk-s3 1.x still
+    # pins crypto-bigint 0.5.x there as of aws-sigv4 1.6.3, the newest
+    # release). The other historical consumer (elliptic-curve 0.13 via
+    # oxo-license's p256) already resolves to crypto-bigint 0.7.x. The
+    # advisory's attack model is a local side-channel on
+    # constant-time-primitive misuse; SigV4a signing happens in a network
+    # service on attacker-influenced but not attacker-controlled inputs,
+    # and leaking the SigV4a secret key requires thousands of precise
+    # per-op timings — impractical remotely. REMOVE THIS IGNORE as soon as
+    # an aws-sdk-s3/aws-sigv4 release moves sigv4a onto crypto-bigint
+    # 0.7.x (watch aws-sdk-rust releases; tracking issue covers the
+    # upgrade).
+    "RUSTSEC-2026-0387",
+]
 
 # Report unmaintained crate warnings as informational (not errors)
 informational_warnings = ["unmaintained"]

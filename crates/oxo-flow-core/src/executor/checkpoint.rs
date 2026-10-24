@@ -295,6 +295,14 @@ pub struct CheckpointState {
     /// git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_git_sha: Option<String>,
+    /// Resolved include provenance (issue #899): per repo-include, the
+    /// repo@ref and the checkout's HEAD SHA recorded at include resolution
+    /// time. Branch/tag pins re-fetch on every activation, so this is the
+    /// evidence a run/resume pair needs to prove module content did not
+    /// drift. Keyed `repo@ref path` for stable JSON ordering. Absent in
+    /// legacy checkpoints and workflows without repo includes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub include_resolutions: BTreeMap<String, String>,
     /// Working directory the rules executed in (issue #68). `resume` re-runs
     /// from this directory so completed rules' outputs resolve the same way;
     /// absent in legacy checkpoints, which fall back to the workflow's
@@ -513,6 +521,7 @@ impl CheckpointState {
             benchmarks: BTreeMap::new(),
             workflow_path: None,
             workflow_git_sha: None,
+            include_resolutions: BTreeMap::new(),
             workdir: None,
             checksums: BTreeMap::new(),
             cleaned_checksums: BTreeMap::new(),
@@ -623,6 +632,19 @@ impl CheckpointState {
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
     pub fn set_workflow_git_sha(&mut self, sha: String) {
         self.workflow_git_sha = Some(sha);
+    }
+
+    /// Record resolved include provenance (issue #899): one `repo@ref path`
+    /// → `resolved_sha` entry per repo-include, collected during include
+    /// resolution. Later entries for the same key overwrite earlier ones —
+    /// two includes resolving one repo@ref must agree (same pinned
+    /// checkout), so the map stays consistent either way.
+    pub fn set_include_resolutions(&mut self, provenance: &[crate::config::IncludeProvenance]) {
+        self.include_resolutions.clear();
+        for p in provenance {
+            let key = format!("{}@{} {}", p.repo, p.git_ref, p.path);
+            self.include_resolutions.insert(key, p.resolved_sha.clone());
+        }
     }
 
     /// Resolve the HEAD commit SHA of the git repository containing
@@ -3357,6 +3379,50 @@ mod tests {
         // (skip_serializing_if) — legacy consumers never see a null key.
         let json = CheckpointState::new().to_json().unwrap();
         assert!(!json.contains("workflow_git_sha"));
+    }
+
+    #[test]
+    fn include_resolutions_roundtrip_and_legacy_compat() {
+        // Roundtrip: set provenance, serialize, reload, compare.
+        let mut state = CheckpointState::new();
+        state.set_include_resolutions(&[
+            crate::config::IncludeProvenance {
+                repo: "https://github.com/org/modules.git".to_string(),
+                git_ref: "v1.2.0".to_string(),
+                path: "qc.oxoflow".to_string(),
+                resolved_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            },
+            crate::config::IncludeProvenance {
+                repo: "https://github.com/org/modules.git".to_string(),
+                git_ref: "v1.2.0".to_string(),
+                path: "align.oxoflow".to_string(),
+                resolved_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            },
+        ]);
+        let json = state.to_json().unwrap();
+        let loaded: CheckpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded
+                .include_resolutions
+                .get("https://github.com/org/modules.git@v1.2.0 align.oxoflow"),
+            Some(&"0123456789abcdef0123456789abcdef01234567".to_string())
+        );
+        // Order-independence: JSON keys are sorted (BTreeMap) regardless of
+        // insertion order (persisted-artifacts invariant).
+        assert!(json.find("align.oxoflow") < json.find("qc.oxoflow"));
+        // Older checkpoints without the field still load.
+        let legacy = r#"{"completed_rules":[],"failed_rules":[],"benchmarks":{}}"#;
+        let loaded: CheckpointState = serde_json::from_str(legacy).unwrap();
+        assert!(loaded.include_resolutions.is_empty());
+    }
+
+    #[test]
+    fn include_resolutions_absent_from_json_by_default() {
+        // Workflows without repo includes never carry the key
+        // (skip_serializing_if) — checkpoint JSON stays byte-identical to
+        // pre-#899 for them.
+        let json = CheckpointState::new().to_json().unwrap();
+        assert!(!json.contains("include_resolutions"));
     }
 
     #[test]

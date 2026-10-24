@@ -495,6 +495,24 @@ pub struct ResolvedIncludeContract {
     pub outputs: Vec<String>,
 }
 
+/// Resolved include provenance (issue #899): which repo@ref a module
+/// include resolved to and the exact commit SHA the checkout was at when
+/// the workflow loaded. Persisted in the checkpoint next to
+/// `workflow_git_sha` (issue #115) — branch/tag pins re-fetch on every
+/// activation, so without the recorded SHA a run/resume pair cannot prove
+/// the modules did not drift between the two.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, PartialOrd, Ord)]
+pub struct IncludeProvenance {
+    /// The include's `repo` URL.
+    pub repo: String,
+    /// The include's `ref` (tag/branch/commit SHA as declared).
+    pub git_ref: String,
+    /// Path inside the checkout the module file was resolved from.
+    pub path: String,
+    /// The checkout's HEAD SHA at resolution time.
+    pub resolved_sha: String,
+}
+
 /// Citation information for workflow reproducibility and publication.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CitationInfo {
@@ -1990,6 +2008,13 @@ pub struct WorkflowConfig {
     /// partial runs). Built at include resolution; never serialized.
     #[serde(skip)]
     pub module_rules: HashMap<String, Vec<String>>,
+    /// Repo-include provenance (issue #899): one entry per `[[include]]`
+    /// with `repo` set, recording the checkout's resolved HEAD SHA at
+    /// parse time. Collected during include resolution, persisted into the
+    /// checkpoint by the run command next to `workflow_git_sha`. Never
+    /// serialized from TOML — user TOML cannot set it.
+    #[serde(skip)]
+    pub include_provenance: Vec<IncludeProvenance>,
 
     /// Engine-internal: the sample names each expanded rule came from.
     ///

@@ -3614,6 +3614,13 @@ impl ReportSectionGenerator for ProvenanceGenerator {
         if let Some(sha) = ctx.checkpoint.and_then(|c| c.workflow_git_sha.as_deref()) {
             pairs.push(("Workflow git HEAD".into(), sha.into()));
         }
+        // Repo-include provenance (issue #899): one row per repo-include,
+        // pinned to the checkout's resolved HEAD SHA at parse time.
+        if let Some(resolutions) = ctx.checkpoint.map(|c| &c.include_resolutions) {
+            for (key, sha) in resolutions {
+                pairs.push((format!("Include {key}"), sha.clone()));
+            }
+        }
         vec![ReportSection {
             title: "Provenance".into(),
             id: "provenance".into(),

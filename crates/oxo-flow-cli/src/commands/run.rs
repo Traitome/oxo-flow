@@ -2371,6 +2371,10 @@ pub async fn run_command(
         if let Some(sha) = &workflow_git_sha {
             ck.set_workflow_git_sha(sha.clone());
         }
+        // Record resolved include provenance (issue #899): per repo-include,
+        // the repo@ref and the checkout's HEAD SHA at parse time. Empty for
+        // workflows without repo includes — a no-op in that case.
+        ck.set_include_resolutions(&config.include_provenance);
         ck.set_workdir(&absolutize(workdir.as_deref().unwrap_or(&workdir_default))?);
     }
     // Same absolutized run workdir, reused by the config-change replay below

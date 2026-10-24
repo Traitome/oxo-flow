@@ -43,6 +43,14 @@ at that ref until the workflow author moves it deliberately. See
 [Workflow Format](workflow-format.md#include-modular-workflow-composition)
 for the include syntax and interface contracts.
 
+Branch and tag pins re-fetch on every activation, so the workflow file
+alone cannot prove which module content a past run used. Every repo-include
+therefore also records **the checkout's resolved HEAD SHA** in the
+checkpoint (`include_resolutions`, issue #899) at parse time — one entry
+per include, shown per include in the run report's Provenance section.
+A run/resume pair (or any two runs) can be compared by these SHAs to prove
+the module content did not drift between them.
+
 ## Pillar 3 — Ecosystem: the catalog is versioned
 
 Published workflows are referenced by repo + version, never by an

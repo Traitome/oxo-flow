@@ -302,16 +302,28 @@ pub fn ensure_pinned(repo_url: &str, git_ref: &str, dest: &std::path::Path) -> s
     }
 }
 
+/// The checked-out HEAD SHA of a pinned checkout, for include provenance
+/// (issue #899): branch/tag pins re-fetch on every activation, so the
+/// resolved commit must be recorded at run time for run/resume provenance
+/// to be comparable. `None` when the checkout has no readable HEAD.
+pub fn pinned_head(dest: &std::path::Path) -> Option<String> {
+    let dir = dest.to_string_lossy();
+    let out = std::process::Command::new("git")
+        .args(["-C", dir.as_ref(), "rev-parse", "--verify", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() { None } else { Some(sha) }
+}
+
 /// Is the cache entry's checkout readable (`git rev-parse HEAD` succeeds)?
 /// Cheap guard against a SIGKILLed clone that left `.git` behind with a
 /// truncated checkout.
 fn has_valid_head(dest: &std::path::Path) -> bool {
-    let dir = dest.to_string_lossy();
-    std::process::Command::new("git")
-        .args(["-C", dir.as_ref(), "rev-parse", "--verify", "HEAD"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    pinned_head(dest).is_some()
 }
 
 /// Module cache root: `$OXO_FLOW_MODULE_CACHE` or `~/.cache/oxo-flow/modules`.
@@ -472,6 +484,42 @@ mod tests {
         );
         // Removing a missing dir is a no-op, not an error.
         assert!(remove_partial_clone(&clone).is_ok());
+    }
+
+    #[test]
+    fn pinned_head_reads_checkout_and_tolerates_missing_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // No .git → None (never panics).
+        assert_eq!(pinned_head(&repo), None);
+        // A real commit produces a 40-hex SHA.
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(repo.join("f.txt"), "x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        let sha = pinned_head(&repo).expect("fresh commit has a HEAD");
+        assert_eq!(sha.len(), 40, "rev-parse HEAD returns a full SHA");
+        // A fresh checkout with no commits yet → None.
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&empty)
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert_eq!(pinned_head(&empty), None);
     }
 
     #[test]
