@@ -55,17 +55,24 @@ async function toApiError(res: Response): Promise<ApiError> {
   return new ApiError(body.code || 'UNKNOWN', body.message || res.statusText, body.detail, body.suggestion);
 }
 
+// #549/#907 T3: a rejected session lands the user on the login page. The
+// reason distinguishes "had a token, now rejected" (expired) from "called a
+// protected endpoint with no token at all" (invalid) so the login page can
+// show an honest message instead of blaming an expiry that never happened.
+function redirectToLoginOn401(): never {
+  const hadToken = !!localStorage.getItem('oxo_token');
+  localStorage.removeItem('oxo_token');
+  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+  window.location.assign(`${base}/login?reason=${hadToken ? 'expired' : 'invalid'}`);
+  throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = authHeaders({ 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> || {}) });
 
   const res = await fetch(apiUrl(url), { ...options, headers });
-  // #549: an expired/invalid session must land the user on the login page
-  // instead of leaking raw statusText failures from every subsequent call.
   if (res.status === 401 && !url.startsWith('/api/auth/')) {
-    localStorage.removeItem('oxo_token');
-    const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
-    window.location.assign(`${base}/login?reason=expired`);
-    throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
+    redirectToLoginOn401();
   }
   if (!res.ok) throw await toApiError(res);
   return res.json();
@@ -80,14 +87,11 @@ async function postStream(url: string, body: unknown, signal?: AbortSignal): Pro
     body: JSON.stringify(body),
     signal,
   });
-  // Same expired-session handling as request() (#549): streaming chat kept
+  // Same session handling as request() (#549, #907 T3): streaming chat kept
   // appending a raw "Unauthorized" to the transcript instead of redirecting
   // (audit #654).
   if (res.status === 401 && !url.startsWith('/api/auth/')) {
-    localStorage.removeItem('oxo_token');
-    const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
-    window.location.assign(`${base}/login?reason=expired`);
-    throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
+    redirectToLoginOn401();
   }
   if (!res.ok) throw await toApiError(res);
   return res;

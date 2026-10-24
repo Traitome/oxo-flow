@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward } from 'lucide-react';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -35,6 +35,54 @@ function trendColor(trend: string): string {
 // button keeps the raw text. The ESC byte is built from its char code so the
 // regex stays clear of the no-control-regex lint.
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+// P1-7 (#907): the deterministic report narrative is a tiny markdown subset
+// (h1/h2, **bold**, "- " bullets, "---" hr — see report_agent.rs
+// build_narrative). Render that subset instead of showing raw glyphs; lines
+// outside the subset render as plain paragraphs. No markdown dependency —
+// everything is string-driven and built from React elements, so no HTML
+// injection surface exists.
+function ReportMarkdown({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const out: React.ReactNode[] = [];
+  let listItems: string[] = [];
+  const flushList = (key: string) => {
+    if (listItems.length === 0) return;
+    out.push(
+      <ul key={key} style={{ margin: '4px 0', paddingLeft: '1.2rem' }}>
+        {listItems.map((item, i) => <li key={i}>{renderBold(item, `${key}-${i}`)}</li>)}
+      </ul>,
+    );
+    listItems = [];
+  };
+  const renderBold = (s: string, key: string): React.ReactNode => {
+    // Split on **bold** spans; even indices are plain, odd are bold.
+    const parts = s.split('**');
+    return parts.map((part, i) => (i % 2 === 1 ? <strong key={`${key}-${i}`}>{part}</strong> : <span key={`${key}-${i}`}>{part}</span>));
+  };
+  lines.forEach((raw, idx) => {
+    const line = raw.trimEnd();
+    const key = `md-${idx}`;
+    if (line.startsWith('- ')) {
+      listItems.push(line.slice(2));
+      return;
+    }
+    flushList(`${key}-list`);
+    if (line === '---') {
+      out.push(<hr key={key} style={{ border: 'none', borderTop: '1px solid var(--color-border-light)', margin: '10px 0' }} />);
+    } else if (line.startsWith('## ')) {
+      out.push(<h3 key={key} style={{ fontSize: '0.9rem', margin: '10px 0 4px' }}>{renderBold(line.slice(3), key)}</h3>);
+    } else if (line.startsWith('# ')) {
+      out.push(<h2 key={key} style={{ fontSize: '1rem', margin: '10px 0 4px' }}>{renderBold(line.slice(2), key)}</h2>);
+    } else if (line.trim() === '') {
+      out.push(<div key={key} style={{ height: 6 }} />);
+    } else {
+      out.push(<div key={key}>{renderBold(line, key)}</div>);
+    }
+  });
+  flushList('md-tail');
+  return <>{out}</>;
+}
 
 export default function MonitorReport() {
   const session = usePipelineSession();
@@ -384,8 +432,12 @@ export default function MonitorReport() {
           <option value="">{t('monitor.logs.allRules')}</option>
           {ruleNames.map(r => <option key={r} value={r}>{r}</option>)}
         </select>
-        <button className="btn-sm" onClick={downloadLogs} title={t('monitor.logs.download')}>{t('monitor.logs.download')}</button>
-        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reload')}>{t('monitor.logs.reload')}</button>
+        <button className="btn-sm" onClick={downloadLogs} title={t('monitor.logs.download')}>
+          <Download size={13} /> {t('monitor.logs.download')}
+        </button>
+        <button className="btn-sm" onClick={() => setLogs(null)} title={t('monitor.logs.reload')} aria-label={t('monitor.logs.reload')}>
+          <RotateCcw size={13} />
+        </button>
       </div>
       {logs === null ? (
         <div className="empty-state">{t('monitor.logs.loading')}</div>
@@ -475,7 +527,9 @@ export default function MonitorReport() {
         {/* Overall Status */}
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <span className={`status-badge ${monitorStatus.overall}`} style={{ fontSize: '0.85rem', padding: '4px 12px' }}>
-            {monitorStatus.overall === 'normal' ? '🟢' : monitorStatus.overall === 'warning' ? '🟡' : monitorStatus.overall === 'alert' ? '🟠' : '🔴'} {monitorStatus.overall.toUpperCase()}
+            {/* SVG dot instead of emoji (#907 D2): theme-aware via currentColor. */}
+            <CircleDot size={12} style={{ verticalAlign: '-2px', marginRight: 5 }} />
+            {monitorStatus.overall.toUpperCase()}
           </span>
           {monitorStatus.estimated_completion && (
             <span style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)' }}>
@@ -526,7 +580,7 @@ export default function MonitorReport() {
                 critical: 'var(--color-error)',
               };
               const levelNames: Record<string, string> = {
-                info: '🟢 Info', warn: '🟡 Warning', alert: '🟠 Alert', critical: '🔴 Critical',
+                info: 'Info', warn: 'Warning', alert: 'Alert', critical: 'Critical',
               };
               return (
                 // Key on the alert's stable id, not the array index — the
@@ -548,7 +602,10 @@ export default function MonitorReport() {
                   </div>
                   <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
                     <div><strong>{t('monitor.prediction')}:</strong> {alert.prediction}</div>
-                    <div style={{ marginTop: '4px' }}>💡 {alert.suggestion}</div>
+                    <div style={{ marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                      <Lightbulb size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                      <span>{alert.suggestion}</span>
+                    </div>
                   </div>
                   {alert.auto_fixable && (
                     <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
@@ -556,7 +613,7 @@ export default function MonitorReport() {
                           now a real run, manual edit opens the snapshot in
                           the editor. */}
                       <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
-                        onClick={() => void handleRetry()}>🔧 Fix & Retry</button>
+                        onClick={() => void handleRetry()}><Wrench size={13} /> Fix & Retry</button>
                       <button className="btn-sm" onClick={async () => {
                         if (!selId) return;
                         try {
@@ -564,7 +621,7 @@ export default function MonitorReport() {
                           session.setPipelineToml(run.pipeline_snapshot ?? '');
                           navigate('/editor');
                         } catch { /* ignore */ }
-                      }}>📝 Manual Edit</button>
+                      }}><FileText size={13} /> Manual Edit</button>
                     </div>
                   )}
                 </div>
@@ -641,8 +698,12 @@ export default function MonitorReport() {
           <div style={{ fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Bot size={16} /> {t('monitor.aiNarrative')}
           </div>
-          <div style={{ fontSize: '0.85rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-            {reportData.narrative_md || t('monitor.noNarrative')}
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
+            {/* P1-7 (#907): the deterministic report emits a small markdown
+                subset (h1/h2, bold, bullets, hr) — render it instead of
+                showing raw `##` / `**` glyphs. */}
+            <ReportMarkdown text={reportData.narrative_md || ''} />
+            {!reportData.narrative_md && <span style={{ whiteSpace: 'pre-wrap' }}>{t('monitor.noNarrative')}</span>}
           </div>
         </div>
 
@@ -693,7 +754,9 @@ export default function MonitorReport() {
                 <tbody>
                   {reportData.file_tree.map((f, i) => (
                     <tr key={i}>
-                      <td style={{ fontFamily: 'var(--font-mono)' }}>{f.is_dir ? '📁' : '📄'} {f.name}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        {f.is_dir ? <Folder size={12} /> : <File size={12} />} {f.name}
+                      </td>
                       <td>{f.size_bytes > 1024 ? `${(f.size_bytes / 1024).toFixed(1)} KB` : `${f.size_bytes} B`}</td>
                       <td>{f.is_dir ? t('monitor.directory') : t('monitor.file')}</td>
                     </tr>
@@ -744,7 +807,9 @@ export default function MonitorReport() {
           const exp = explainState[fn.rule];
           return (
             <div key={i} className="dash-card" style={{ background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', marginBottom: '8px' }}>
-              <div style={{ fontWeight: 600, color: 'var(--color-error)' }}>❌ {fn.rule}</div>
+              <div style={{ fontWeight: 600, color: 'var(--color-error)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <CircleX size={14} /> {fn.rule}
+              </div>
               <div style={{ fontSize: '0.85rem' }}>{fn.likely_cause}</div>
               {fn.suggestions.length > 0 && (
                 <ul style={{ margin: '4px 0', paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
@@ -770,7 +835,7 @@ export default function MonitorReport() {
                     setExplainState((prev) => ({ ...prev, [fn.rule]: { text: t('monitor.aiExplainUnavailable') } }));
                   }
                 }}>
-                {exp?.loading ? t('run.explaining') : `🤖 ${t('run.aiExplain')}`}
+                {exp?.loading ? t('run.explaining') : <><Bot size={13} /> {t('run.aiExplain')}</>}
               </button>
               {exp?.text && (
                 <div style={{ marginTop: '6px', fontSize: '0.82rem', background: 'var(--color-bg-tertiary)', padding: '8px', borderRadius: 'var(--radius-sm)' }}>
@@ -782,7 +847,7 @@ export default function MonitorReport() {
         })}
         {diagnostics.warnings.map((w, i) => (
           <div key={i} className="dash-card" style={{ background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning)', marginBottom: '6px', fontSize: '0.85rem' }}>
-            ⚠️ <strong>{w.rule}</strong>: {w.pattern} — {w.suggestion}
+            <TriangleAlert size={14} style={{ verticalAlign: '-3px', marginRight: 5 }} /><strong>{w.rule}</strong>: {w.pattern} — {w.suggestion}
           </div>
         ))}
       </div>

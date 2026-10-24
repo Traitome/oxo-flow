@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Trash2, UserPlus } from 'lucide-react';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import type { UserInfo } from '../api/types';
 import { useI18n } from '../context/I18n';
 
@@ -11,6 +11,10 @@ export default function Users() {
   const { t } = useI18n();
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // #907 T4: a viewer hitting the admin-only listing gets a 403, which the
+  // generic empty state used to render as "No users" — a lie. Keep the empty
+  // state only when the fetch actually succeeded.
+  const [loadDenied, setLoadDenied] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('user');
@@ -35,8 +39,14 @@ export default function Users() {
   const reload = () => {
     api
       .listUsers()
-      .then(setUsers)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : t('users.loadFailed')));
+      .then((list) => { setUsers(list); setLoadDenied(false); setError(null); })
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && e.code === 'FORBIDDEN') {
+          setLoadDenied(true);
+        } else {
+          setError(e instanceof Error ? e.message : t('users.loadFailed'));
+        }
+      });
   };
   useEffect(reload, [t]);
 
@@ -141,7 +151,7 @@ export default function Users() {
                 </td>
               </tr>
             ))}
-            {users.length === 0 && (
+            {users.length === 0 && !loadDenied && (
               <tr>
                 <td colSpan={5} style={{ textAlign: 'center', opacity: 0.6 }}>
                   {t('users.noUsers')}
@@ -151,6 +161,13 @@ export default function Users() {
           </tbody>
         </table>
       </div>
+
+      {loadDenied && (
+        <div className="dash-card" style={{ borderLeft: '3px solid var(--color-warning)', marginTop: '0.5rem' }}>
+          <h3 style={{ fontSize: '0.95rem' }}>{t('users.denied.title')}</h3>
+          <p style={{ fontSize: '0.85rem', margin: '4px 0 0' }}>{t('users.denied.desc')}</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -1999,12 +1999,22 @@ async fn build_report_for_run(
     let files: Vec<ReportFile> = match run.workdir.as_ref() {
         Some(wd) => {
             let wd = wd.clone();
+            let workdir = std::path::PathBuf::from(&wd);
             tokio::task::spawn_blocking(move || {
                 service::list_files_recursive(std::path::Path::new(&wd))
             })
             .await
             .unwrap_or_default()
             .into_iter()
+            // P1-6 (#907): the engine's bookkeeping files sit at the workdir
+            // root next to real products — counting `execution.log` /
+            // `workflow.oxoflow` as outputs inflated "N output files" in the
+            // narrative. (The /results browser still lists them on purpose:
+            // users may want to open the log from there.)
+            .filter(move |f| {
+                let p = std::path::Path::new(&f.path);
+                p != workdir.join("execution.log") && p != workdir.join("workflow.oxoflow")
+            })
             .map(|f| ReportFile {
                 path: f.path,
                 name: f.name,
