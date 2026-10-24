@@ -135,6 +135,27 @@ async fn icons() -> impl IntoResponse {
     )
 }
 
+/// Serve the repo brand mark in the header (issue #907). Dedicated routes +
+/// public in `is_public`: `<img>` sends no Authorization header, and without
+/// a route these paths fell through to the SPA fallback (or 401'd in
+/// team/hpc mode), so the header logo silently broke in served deployments.
+async fn logo() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "image/svg+xml")],
+        include_str!("../static/logo.svg"),
+    )
+}
+
+/// Light-theme variant of the brand mark.
+async fn logo_light() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "image/svg+xml")],
+        include_str!("../static/logo-light.svg"),
+    )
+}
+
 /// SPA fallback: serve index.html for any non-API route.
 async fn spa_fallback() -> impl IntoResponse {
     spa_index().await
@@ -232,6 +253,8 @@ pub fn build_router(mode: &str) -> Router {
     let frontend_routes = Router::new()
         .route("/favicon.svg", get(favicon))
         .route("/icons.svg", get(icons))
+        .route("/logo.svg", get(logo))
+        .route("/logo-light.svg", get(logo_light))
         .nest_service("/assets", assets_service)
         .route("/", get(spa_index));
 
@@ -851,7 +874,9 @@ async fn require_auth(
         || path == "/"
         || path.starts_with("/assets/")
         || path == "/favicon.svg"
-        || path == "/icons.svg";
+        || path == "/icons.svg"
+        || path == "/logo.svg"
+        || path == "/logo-light.svg";
     if is_public {
         return next.run(request).await;
     }

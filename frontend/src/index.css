@@ -113,8 +113,9 @@ body{font-family:var(--font-sans);font-size:.9375rem;line-height:1.6;color:var(-
 
 /* ── Page ── */
 .page-title{font-size:1.5rem;font-weight:600;color:var(--color-text);margin-bottom:.25rem;letter-spacing:-.02em}
-/* Terminal vernacular: every page title is a shell prompt. */
-.page-title::before{content:"$ ";font-family:var(--font-mono);font-weight:500;font-size:.9em;color:var(--color-accent)}
+/* The terminal-prompt "$" prefix was dropped (#907 D2): it read as noise on
+   non-terminal pages (e.g. the sign-in card) and competed with the accent
+   color for attention on every heading. */
 .page-subtitle{font-size:.9375rem;color:var(--color-text-secondary);margin-bottom:1.5rem}
 .section{margin-bottom:1.5rem}
 .section-title{font-size:.72rem;font-weight:600;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.75rem;font-family:var(--font-mono)}

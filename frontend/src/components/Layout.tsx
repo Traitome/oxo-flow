@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, FlaskConical, Menu, X, MessageCircle, Users, ShieldCheck, Server } from 'lucide-react';
+import { LayoutDashboard, GitBranch, PlayCircle, Library, Settings, BookOpen, Menu, X, MessageCircle, Users, ShieldCheck, Server, Sun, Moon } from 'lucide-react';
 import ResultNotification from './ResultNotification';
 import { usePipelineSession } from '../context/PipelineSession';
 import { api, apiUrl } from '../api/client';
@@ -66,13 +66,21 @@ export default function Layout() {
   };
   const [userName, setUserName] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
-  useEffect(() => {
+  const refreshIdentity = () => {
     api.authMe()
       .then((me) => {
         setUserName(me.authenticated ? (me.username ?? null) : null);
         setUserRole(me.authenticated ? (me.role ?? 'user') : null);
       })
       .catch(() => { setUserName(null); setUserRole(null); });
+  };
+  useEffect(() => {
+    refreshIdentity();
+    // #907 T1: re-check on login/sign-out (client-side navigate() keeps this
+    // component mounted, so mount-only deps left the identity chip and the
+    // role-trimmed nav stale until a full reload).
+    window.addEventListener('oxo:auth-changed', refreshIdentity);
+    return () => window.removeEventListener('oxo:auth-changed', refreshIdentity);
   }, []);
 
   // Role-trimmed navigation (issue #82 P1-15): authenticated viewers see
@@ -130,7 +138,13 @@ export default function Layout() {
           <button className="mobile-menu-btn" onClick={() => setMenuOpen(!menuOpen)} aria-label={t('layout.toggleMenu')}>
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <FlaskConical size={20} />
+          {/* Repo logo (issue #907: replace the generic flask glyph with the
+              project's own hexagon-metro mark; theme-switched variant). */}
+          <img
+            src={theme === 'dark' ? `${apiUrl('/logo.svg')}` : `${apiUrl('/logo-light.svg')}`}
+            alt="" aria-hidden="true"
+            style={{ width: 22, height: 25 }}
+          />
           <span className="header-brand">oxo-flow</span>
           <span className="header-ver">{version ? `v${version}` : ''}</span>
         </div>
@@ -147,8 +161,11 @@ export default function Layout() {
             {t('lang.toggle')}
           </button>
           <button className="btn-sm" onClick={toggleTheme}
-            title={theme === 'dark' ? t('theme.light') : t('theme.dark')}>
-            {theme === 'dark' ? '☀️' : '🌙'}
+            title={theme === 'dark' ? t('theme.light') : t('theme.dark')}
+            aria-label={theme === 'dark' ? t('theme.light') : t('theme.dark')}>
+            {/* SVG icons instead of emoji (#907 D2): inherits currentColor,
+                renders identically on every platform. */}
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <span id="header-status" role="status" aria-label={STATUS_TITLES[serverStatus]} className={`status-dot ${serverStatus}`} title={STATUS_TITLES[serverStatus]} />
           {userName ? (
@@ -160,9 +177,11 @@ export default function Layout() {
                 title={t('nav.signOut')}
                 onClick={() => {
                   // Revoke server-side (#520) before dropping the local copy.
+                  // #907 T3: land on /login with an explicit signed-out reason
+                  // so the message differs from a session expiry.
                   api.logout().catch(() => {}).finally(() => {
                     localStorage.removeItem('oxo_token');
-                    window.location.assign(apiUrl('/'));
+                    window.location.assign(apiUrl('/login?reason=signed-out'));
                   });
                 }}
               >

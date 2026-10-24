@@ -6,25 +6,26 @@ import { useI18n } from '../context/I18n';
 
 export default function Login() {
   const location = useLocation();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const { t } = useI18n();
   // A redirect here can carry the reason (e.g. a share import that needs a
   // session) — show it instead of landing on a blank form. The #549
-  // expired-session redirect arrives as ?reason=expired: a full page
-  // reload discards location.state, so the reason must also be read from
-  // the URL (audit #654).
+  // expired-session redirect arrives as ?reason=…: a full page reload
+  // discards location.state, so the reason must also be read from the URL
+  // (audit #654, #907 T3: expired vs signed-out vs no-token are distinct).
   const [error, setError] = useState<string | null>(() => {
     const notice = (location.state as { notice?: string } | null)?.notice;
     if (notice) return notice;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('reason') === 'expired') {
-      return 'Session expired — sign in again.';
-    }
+    const reason = params.get('reason');
+    if (reason === 'expired') return t('login.expired');
+    if (reason === 'signed-out') return t('login.signedOut');
+    if (reason === 'invalid') return t('login.invalidToken');
     return null;
   });
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { t } = useI18n();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,6 +37,9 @@ export default function Login() {
       // The username is the SSE stream's identity in personal-mode fallback
       // (server-side filtering needs no client state in team mode).
       localStorage.setItem('oxo_user_id', username.trim());
+      // #907 T1: Layout stays mounted across this client-side navigate(), so
+      // its mount-time authMe would leave the identity chip stale. Notify it.
+      window.dispatchEvent(new Event('oxo:auth-changed'));
       navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('login.failed'));

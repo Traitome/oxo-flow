@@ -65,7 +65,7 @@ export default function Dashboard() {
       {showOnboardingNow && (
         <div className="dash-card" style={{ marginBottom: '1rem', borderLeft: '3px solid var(--color-primary)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <h3 style={{ fontSize: '0.95rem' }}>👋 {t('dashboard.onboarding')}</h3>
+            <h3 style={{ fontSize: '0.95rem' }}>{t('dashboard.onboarding')}</h3>
             <button className="btn-sm" onClick={dismissOnboarding}>{t('dashboard.onboarding.dismiss')}</button>
           </div>
           <ol style={{ margin: '8px 0 0 1.2rem', fontSize: '0.85rem', lineHeight: 1.7 }}>
