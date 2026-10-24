@@ -96,7 +96,7 @@ async fn test_data_reference_status() {
     let installed = body["installed"].as_array().unwrap();
     for entry in installed {
         assert!(
-            entry["found"].as_array().map_or(false, |f| !f.is_empty()),
+            entry["found"].as_array().is_some_and(|f| !f.is_empty()),
             "installed entry must have non-empty found: {entry}"
         );
         assert!(
