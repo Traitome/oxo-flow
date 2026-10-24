@@ -1615,7 +1615,7 @@
         },
         "temporary": {
           "type": "boolean",
-          "description": "Declare outputs temporary (deleted after the workflow completes)"
+          "description": "Delete the rule's outputs after a fully successful run once every dependent rule has completed, recording a checkpoint tombstone so a future run regenerates them on demand. Leaf rules (no dependents) keep their outputs; with [engine] disk thresholds configured, deletion only fires when free space is below reclaim_free_disk at run end (issue #893)"
         },
         "output_pattern": {
           "type": [
