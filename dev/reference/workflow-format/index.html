@@ -6463,7 +6463,7 @@
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907)</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -10115,6 +10115,7 @@ measures free space mid-run and behavior is unchanged.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-107-1"><a id="__codelineno-107-1" name="__codelineno-107-1" href="#__codelineno-107-1"></a><span class="k">[engine]</span>
 </span><span id="__span-107-2"><a id="__codelineno-107-2" name="__codelineno-107-2" href="#__codelineno-107-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
 </span><span id="__span-107-3"><a id="__codelineno-107-3" name="__codelineno-107-3" href="#__codelineno-107-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
+</span><span id="__span-107-4"><a id="__codelineno-107-4" name="__codelineno-107-4" href="#__codelineno-107-4"></a><span class="c1"># tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -10137,6 +10138,12 @@ measures free space mid-run and behavior is unchanged.</p>
 <td>String</td>
 <td><code>min_free_disk</code></td>
 <td>Reclaim trigger level; must be ≥ <code>min_free_disk</code> (validation error otherwise)</td>
+</tr>
+<tr>
+<td><code>tmp_dir</code></td>
+<td>String</td>
+<td>—</td>
+<td>Global scratch directory (issue #907). Injected as <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> into every rule shell and into rule-level (<code>pre_exec</code>, <code>on_success</code>, <code>on_failure</code>) and workflow-level (<code>on_complete</code>, <code>on_error</code>) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable <code>OXO_FLOW_TMPDIR</code> overrides this value per invocation (set it to redirect temp traffic without editing the workflow)</td>
 </tr>
 </tbody>
 </table>
@@ -10210,8 +10217,22 @@ that needs the outputs regenerates them first (lazy cascade-up). See
 <li>Free space is measured at the working directory's filesystem (statvfs),
   which is volume-level: thresholds apply to the whole volume, not to a
   per-directory quota. Tools that spill large scratch outside the
-  workdir (honor <code>TMPDIR</code> deliberately if needed) are invisible to the
-  monitor.</li>
+  workdir are invisible to the monitor unless you point <code>tmp_dir</code> (below)
+  at the same volume and the tool honors <code>TMPDIR</code>.</li>
+<li><code>tmp_dir</code> routing is shell-environment-level: it covers every rule shell
+  and any tool inside it that honors <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code>. Tools with a
+  hardcoded temp path ignore it — set the tool's own flag for those.
+  Rule-level hooks (<code>pre_exec</code>, <code>on_success</code>, <code>on_failure</code>) and the
+  workflow-level <code>on_complete</code>/<code>on_error</code> hooks get the same injection.
+  Container backends (docker/singularity) do not see host environment
+  variables by default; point the container image's temp setting at a
+  mounted path, or wait for explicit <code>-e</code> pass-through support. Cluster
+  submissions (<code>run --profile</code> with <code>[cluster]</code>) do not yet honor
+  <code>tmp_dir</code>/<code>OXO_FLOW_TMPDIR</code> — the same gap as output-tail bytes there.
+  The <code>OXO_FLOW_TMPDIR</code> override is used verbatim: it must already be
+  absolute, <code>~</code> and <code>..</code> are not expanded, and a relative value anchors to
+  the process working directory — unlike the config value, which anchors
+  to the workflow file's directory.</li>
 <li><em>Mid-run</em> reclaim of fan-out producers (<code>output_pattern</code> with
   per-instance values) fires only with full instance attribution
   (issue #846): the recorded instance combos from
