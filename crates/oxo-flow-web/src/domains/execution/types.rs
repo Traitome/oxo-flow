@@ -200,6 +200,14 @@ pub struct DagNode {
     pub color: String,
     pub duration_ms: Option<u64>,
     pub exit_code: Option<i32>,
+    /// Bounded stderr tail of a failed rule (issue #758) — the DAG canvas
+    /// uses it to show WHY a node failed without opening the raw log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tail: Option<String>,
+    /// Bounded stdout tail of a failed rule (issue #765) — some tools print
+    /// their root cause on stdout; surfaced alongside stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -219,6 +227,10 @@ pub struct DagMetrics {
     pub failed_nodes: usize,
     pub running_nodes: usize,
     pub pending_nodes: usize,
+    /// when-gated-off / abort-cancelled nodes — counted separately so
+    /// `completed + failed + running + pending + skipped == total` partitions
+    /// exactly (issue #907 P1-2).
+    pub skipped_nodes: usize,
     pub eta_ms: Option<u64>,
 }
 

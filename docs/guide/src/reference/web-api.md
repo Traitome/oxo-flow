@@ -386,7 +386,7 @@ Real-time status: `{ status, phase, nodes: [{ rule, status, started_at, duration
 ```
 GET /api/runs/{id}/dag-status
 ```
-DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics.pending_nodes` and the ETA count only rules that can still run — skipped rules (when-gated off or abort-cancelled) are `skipped`, not pending (issues #739, #767).
+DAG JSON with per-node live status. Color-coded: green=completed, blue=running, red=failed, gray=skipped. `metrics` partitions the node set exactly: `completed_nodes` counts successful rules only, and `skipped_nodes` (when-gated off or abort-cancelled, issues #739/#767, surfaced in the metric since #907) keeps `completed + failed + running + pending + skipped == total_nodes` true at every instant. The ETA average is computed over successful nodes' durations — failures and skips never inflate it (#907 P1-2).
 
 ### Diagnostics
 ```
@@ -428,7 +428,7 @@ Content-Type: application/json
 Answers from the deterministic report (pattern matching over failed nodes, durations, file tree) — not an LLM call. Returns the answer string. On a failed run, EVERY question answers from the failure data (rule, exit code, bounded stderr excerpt — falling back to the stdout tail when stderr is empty) — never a completion claim (issues #759, #765).
 
 ### Run Status exit codes and failure tails
-`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (issue #765; some tools print their root cause on stdout). The AI chat `get_run_status` tool carries the same fields.
+`GET /api/runs/{id}/status`, `/dag-status`, and `/instances` populate `exit_code` from the checkpoint's `rule_runs` records (issue #758): completed rules report `0`, failed rules their recorded code — plus bounded `stderr_tail` and `stdout_tail` on failed nodes (issue #765; some tools print their root cause on stdout). The AI monitor (`/ai-status`) receives the same tails and classifies failures through the shared `DiagnosticsEngine` pattern table before falling back to exit-code-only signatures (#907 P1-3); its alerts carry a stable `alert_id` for cross-poll dedup (#907 P1-8). The AI chat `get_run_status` tool carries the same fields.
 
 ### Report Visualization
 ```

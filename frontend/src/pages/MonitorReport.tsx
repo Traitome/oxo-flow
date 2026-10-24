@@ -227,10 +227,16 @@ export default function MonitorReport() {
             // panes in place — same tab, QA answer and scroll untouched.
             // Clearing logs/instances re-arms their null-guarded loaders so
             // an open tab refetches instead of showing the old content.
+            // run_paused/run_resumed are non-terminal but change the run's
+            // status/phase (backend emits them on pause/resume, #907 N3) —
+            // without them the header badge and controls went stale until
+            // the user manually reselected the run.
             if (
               event.type === 'run_completed' ||
               event.type === 'run_failed' ||
-              event.type === 'run_cancelled'
+              event.type === 'run_cancelled' ||
+              event.type === 'run_paused' ||
+              event.type === 'run_resumed'
             ) {
               void refreshRuns();
               setLogs(null);
@@ -512,7 +518,7 @@ export default function MonitorReport() {
         {/* AI Alert Cards */}
         {hasAlerts && (
           <div style={{ marginBottom: '1rem' }}>
-            {monitorStatus.alerts.map((alert, i) => {
+            {monitorStatus.alerts.map((alert) => {
               const levelColors: Record<string, string> = {
                 info: 'var(--color-info)',
                 warn: 'var(--color-warning)',
@@ -523,7 +529,11 @@ export default function MonitorReport() {
                 info: '🟢 Info', warn: '🟡 Warning', alert: '🟠 Alert', critical: '🔴 Critical',
               };
               return (
-                <div key={i} style={{
+                // Key on the alert's stable id, not the array index — the
+                // ai-status endpoint is polled every 5s and re-emits the same
+                // alerts; index keys made React remount (and flicker) every
+                // poll (issue #907 P1-8).
+                <div key={alert.alert_id || `${alert.rule_name}-${alert.prediction}`} style={{
                   border: `1px solid ${levelColors[alert.level] || 'var(--color-text-tertiary)'}`,
                   background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
                   borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
@@ -537,7 +547,7 @@ export default function MonitorReport() {
                     </div>
                   </div>
                   <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
-                    <div><strong>Prediction:</strong> {alert.prediction}</div>
+                    <div><strong>{t('monitor.prediction')}:</strong> {alert.prediction}</div>
                     <div style={{ marginTop: '4px' }}>💡 {alert.suggestion}</div>
                   </div>
                   {alert.auto_fixable && (
@@ -594,8 +604,10 @@ export default function MonitorReport() {
             <table className="run-table">
               <thead><tr><th>{t('monitor.time')}</th><th>{t('monitor.rule')}</th><th>{t('monitor.level')}</th><th>{t('monitor.prediction')}</th></tr></thead>
               <tbody>
-                {monitorStatus.alerts.slice(0, 10).map((a, i) => (
-                  <tr key={i}>
+                {monitorStatus.alerts.slice(0, 10).map((a) => (
+                  // Stable identity key (issue #907 P1-8) — see the alert
+                  // cards above; index keys remounted the table every poll.
+                  <tr key={a.alert_id || `${a.rule_name}-${a.prediction}`}>
                     <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString(locale)}</td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{a.rule_name || '-'}</td>
                     <td><span className={`status-badge ${a.level}`}>{a.level}</span></td>
@@ -804,11 +816,16 @@ export default function MonitorReport() {
     return (
       <div>
         <div className="row" style={{ gap: '1rem', marginBottom: '0.75rem', fontSize: '0.82rem' }}>
-          <span>{t('monitor.total').replace('{{n}}', String(dagStatus.metrics.total_nodes))} <strong>{dagStatus.metrics.total_nodes}</strong></span>
-          <span style={{ color: 'var(--color-success)' }}>{t('monitor.done').replace('{{n}}', String(dagStatus.metrics.completed_nodes))} <strong>{dagStatus.metrics.completed_nodes}</strong></span>
-          <span style={{ color: 'var(--color-info)' }}>{t('monitor.running').replace('{{n}}', String(dagStatus.metrics.running_nodes))} <strong>{dagStatus.metrics.running_nodes}</strong></span>
-          <span style={{ color: 'var(--color-error)' }}>{t('monitor.failed').replace('{{n}}', String(dagStatus.metrics.failed_nodes))} <strong>{dagStatus.metrics.failed_nodes}</strong></span>
-          <span>{t('monitor.pending').replace('{{n}}', String(dagStatus.metrics.pending_nodes))} <strong>{dagStatus.metrics.pending_nodes}</strong></span>
+          {/* issue #907 P1-2: counters partition the total (completed is
+              success-only, skipped listed separately); each chip renders the
+              label once — the previous `{{n}}` replace + <strong> pattern
+              showed every number twice. */}
+          <span>{t('monitor.total').replace('{{n}}', String(dagStatus.metrics.total_nodes))}</span>
+          <span style={{ color: 'var(--color-success)' }}>{t('monitor.done').replace('{{n}}', String(dagStatus.metrics.completed_nodes))}</span>
+          <span style={{ color: 'var(--color-info)' }}>{t('monitor.running').replace('{{n}}', String(dagStatus.metrics.running_nodes))}</span>
+          <span style={{ color: 'var(--color-error)' }}>{t('monitor.failed').replace('{{n}}', String(dagStatus.metrics.failed_nodes))}</span>
+          <span style={{ color: 'var(--color-text-tertiary)' }}>{t('monitor.skipped').replace('{{n}}', String(dagStatus.metrics.skipped_nodes))}</span>
+          <span>{t('monitor.pending').replace('{{n}}', String(dagStatus.metrics.pending_nodes))}</span>
           {dagStatus.metrics.eta_ms != null && dagStatus.metrics.eta_ms > 0 && (
             <span style={{ color: 'var(--color-text-secondary)' }}>{t('monitor.eta').replace('{{eta}}', `${(dagStatus.metrics.eta_ms / 60000).toFixed(0)}min`)}</span>
           )}
