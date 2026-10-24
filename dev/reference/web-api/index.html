@@ -4371,55 +4371,66 @@ Finds installed reference genome components and reports missing ones with downlo
 <h3 id="reference-status">Reference Status<a class="headerlink" href="#reference-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>GET /api/data/reference/status
 </span></code></pre></div>
-Which common reference genomes (hg38, mm10, …) have their expected components (fasta, STAR index, GTF) installed at the standard <code>/data/references/</code> locations. Returns <code>{ genome: { components: { component: present } } }</code> per entry — the deterministic counterpart to the POST discovery above.</p>
+Which common reference genomes (hg38, mm10, mm39) have their expected components (genome.fa, STAR index, genes.gtf) present at the standard <code>/data/references/</code> locations — the deterministic counterpart to the POST discovery above. A genome counts as <code>installed</code> only when at least one expected component exists; builds with nothing on disk are reported under <code>missing_genomes</code>. Response shape:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>{
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>  "installed": [
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a>    { "genome": "hg38", "components": ["/data/references/hg38/genome.fa", "..."],
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a>      "found": ["..."], "missing_components": ["..."] }
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5" href="#__codelineno-47-5"></a>  ],
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6" href="#__codelineno-47-6"></a>  "missing_genomes": ["mm39"],
+</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7" href="#__codelineno-47-7"></a>  "missing": ["/data/references/mm39/genome.fa"],
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a>  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 ..."]
+</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9" href="#__codelineno-47-9"></a>}
+</span></code></pre></div>
+<p><code>download_commands</code> carries staging <em>guidance</em>, not fetchable URLs: oxo-flow hosts no reference mirror. Point users at <code>reference_dir</code> + <code>[[references]]</code> auto-build in the workflow format for index construction.</p>
 <h3 id="data-perception">Data Perception<a class="headerlink" href="#data-perception" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>POST /api/data/perceive
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>Content-Type: application/json
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a>{"paths": ["/data/"], "description": "RNA-seq paired-end human samples"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>POST /api/data/perceive
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a>Content-Type: application/json
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a>{"paths": ["/data/"], "description": "RNA-seq paired-end human samples"}
 </span></code></pre></div>
 Data-profiling report built from paths (the same scanner as <code>/api/data/analyze</code>) or from a natural-language description. Powers the "what data do I have" panel.</p>
 <h3 id="samplesheet-parsing">Samplesheet Parsing<a class="headerlink" href="#samplesheet-parsing" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>POST /api/data/samplesheet/parse
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a>Content-Type: application/json
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a>{"content": "sample,fastq_r1,fastq_r2,condition\nS1,a_R1.fastq.gz,a_R2.fastq.gz,ctrl"}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>POST /api/data/samplesheet/parse
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>Content-Type: application/json
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4" href="#__codelineno-49-4"></a>{"content": "sample,fastq_r1,fastq_r2,condition\nS1,a_R1.fastq.gz,a_R2.fastq.gz,ctrl"}
 </span></code></pre></div>
 Parses pasted CSV/TSV samplesheet content into the standard column structure (<code>sample</code>, <code>fastq_r1</code>, <code>fastq_r2</code>, <code>condition</code>). Returns <code>{ format, samples: [...] }</code> — the bridge from a spreadsheet to <code>[[sample_groups]]</code>.</p>
 <hr />
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>GET    /api/templates
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>POST   /api/templates
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a>GET    /api/templates/{id}
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4" href="#__codelineno-49-4"></a>DELETE /api/templates/{id}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>GET    /api/templates
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>POST   /api/templates
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>GET    /api/templates/{id}
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a>DELETE /api/templates/{id}
 </span></code></pre></div>
 Built-in and user-created pipeline templates. System templates are read-only. The list endpoint does not accept filter query parameters.</p>
 <hr />
 <h2 id="plugins">Plugins<a class="headerlink" href="#plugins" title="Permanent link">#</a></h2>
 <h3 id="validate-plugin">Validate Plugin<a class="headerlink" href="#validate-plugin" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>POST /api/plugins/validate
-</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>Content-Type: application/json
-</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>
-</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a>{"manifest": {"name": "...", "version": "1.0", "plugin_type": "rule"}, "trusted_keys": {"key1": "hex..."}}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>POST /api/plugins/validate
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>Content-Type: application/json
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>{"manifest": {"name": "...", "version": "1.0", "plugin_type": "rule"}, "trusted_keys": {"key1": "hex..."}}
 </span></code></pre></div>
 Validates a plugin manifest and optionally verifies its HMAC signature against trusted keys. Returns <code>{ valid, name, version, plugin_type, signature_valid, errors }</code>.</p>
 <hr />
 <h2 id="ai-phase-2-calls-deterministic-apis-above">AI (Phase 2 — calls deterministic APIs above)<a class="headerlink" href="#ai-phase-2-calls-deterministic-apis-above" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
-</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
-</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
-</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
-</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5" href="#__codelineno-51-5"></a>POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
-</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6" href="#__codelineno-51-6"></a>GET  /api/ai/config             # Get AI provider configuration (public)
-</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7" href="#__codelineno-51-7"></a>POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
-</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8" href="#__codelineno-51-8"></a>POST /api/ai/test               # Test the provider (admin-only outside personal mode)
-</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9" href="#__codelineno-51-9"></a>GET  /api/ai/config/user        # The acting user's private provider config
-</span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10" href="#__codelineno-51-10"></a>PUT  /api/ai/config/user        # Set the acting user's private provider config
-</span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11" href="#__codelineno-51-11"></a>GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
-</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12" href="#__codelineno-51-12"></a>PUT  /api/ai/config/server      # Set the server-level provider config
-</span><span id="__span-51-13"><a id="__codelineno-51-13" name="__codelineno-51-13" href="#__codelineno-51-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
-</span><span id="__span-51-14"><a id="__codelineno-51-14" name="__codelineno-51-14" href="#__codelineno-51-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
-</span><span id="__span-51-15"><a id="__codelineno-51-15" name="__codelineno-51-15" href="#__codelineno-51-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
+<div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>POST /api/ai/translate          # NL intent → validated .oxoflow (JSON response)
+</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a>POST /api/ai/translate/stream   # Same, streamed over SSE (progress → done events)
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a>POST /api/ai/explain            # Explain run failure + suggest fix (run owner or admin)
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a>POST /api/ai/interpret          # Interpret results with caveats (run owner or admin)
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a>POST /api/ai/optimize           # Optimize pipeline parameters (pipeline reader via id; owner-supplied TOML unaffected)
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6" href="#__codelineno-52-6"></a>GET  /api/ai/config             # Get AI provider configuration (public)
+</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7" href="#__codelineno-52-7"></a>POST /api/ai/config             # Update the shared provider (admin-only outside personal mode)
+</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8" href="#__codelineno-52-8"></a>POST /api/ai/test               # Test the provider (admin-only outside personal mode)
+</span><span id="__span-52-9"><a id="__codelineno-52-9" name="__codelineno-52-9" href="#__codelineno-52-9"></a>GET  /api/ai/config/user        # The acting user's private provider config
+</span><span id="__span-52-10"><a id="__codelineno-52-10" name="__codelineno-52-10" href="#__codelineno-52-10"></a>PUT  /api/ai/config/user        # Set the acting user's private provider config
+</span><span id="__span-52-11"><a id="__codelineno-52-11" name="__codelineno-52-11" href="#__codelineno-52-11"></a>GET  /api/ai/config/server      # Server-level provider config (admin-only outside personal mode)
+</span><span id="__span-52-12"><a id="__codelineno-52-12" name="__codelineno-52-12" href="#__codelineno-52-12"></a>PUT  /api/ai/config/server      # Set the server-level provider config
+</span><span id="__span-52-13"><a id="__codelineno-52-13" name="__codelineno-52-13" href="#__codelineno-52-13"></a>GET  /api/ai/config/effective   # The config a run would use: user → server → env fallback chain
+</span><span id="__span-52-14"><a id="__codelineno-52-14" name="__codelineno-52-14" href="#__codelineno-52-14"></a>GET  /api/knowledge/tools       # Tool catalog the AI can call
+</span><span id="__span-52-15"><a id="__codelineno-52-15" name="__codelineno-52-15" href="#__codelineno-52-15"></a>GET  /api/knowledge/skills      # Skill catalog the AI can follow
 </span></code></pre></div>
 <p>Both knowledge endpoints accept <code>?q=&lt;query&gt;&amp;limit=&lt;1-50&gt;</code> (default 20).
 <code>/api/knowledge/tools</code> treats an empty <code>q</code> as a browse: it returns the
@@ -4438,46 +4449,46 @@ which level supplied each field. API keys are stored encrypted at rest
 <p>See <a href="../ai-translation/">AI Translation Layer</a> for details.</p>
 <hr />
 <h2 id="chat-v08-ai-companion">Chat (v0.8 AI Companion)<a class="headerlink" href="#chat-v08-ai-companion" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>POST /api/chat/send        # Streamed chat over SSE
-</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a>POST /api/chat/send/json   # Same, single JSON response
-</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
+<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>POST /api/chat/send        # Streamed chat over SSE
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>POST /api/chat/send/json   # Same, single JSON response
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>GET  /api/chat/sessions    # The acting user's chat sessions
 </span></code></pre></div>
 <hr />
 <h2 id="oauth">OAuth<a class="headerlink" href="#oauth" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
-</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
+<div class="language-text highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>POST /api/auth/oauth/authorize   # Begin the OAuth flow → provider authorize URL
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>POST /api/auth/oauth/callback    # Provider callback → session token
 </span></code></pre></div>
 <p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
 fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
 environment table in <code>AGENTS.md</code>).</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
-</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>POST /api/pipelines/{id}/share   # Share (link or workspace; URL uses the bound port)
-</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a>POST /api/pipelines/import       # Import from oxo+https:// URL
-</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>POST /api/pipelines/{id}/share   # Share (link or workspace; URL uses the bound port)
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>POST /api/pipelines/import       # Import from oxo+https:// URL
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 </span></code></pre></div>
 <code>GET /api/share/{token}</code> powers the share landing page: pipeline identity,
 DAG rule order, TOML, owner, expiry, and the most recent terminal run —
 the token itself is the authorization. Expired links return <code>410</code>.</p>
 <p>See <a href="../../how-to/collaboration/">Collaboration</a> for details.</p>
 <h3 id="version-history">Version History<a class="headerlink" href="#version-history" title="Permanent link">#</a></h3>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
-</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
-</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a>GET  /api/pipelines/{id}/revisions/{rev}  # One snapshot's full TOML
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a>POST /api/pipelines/{id}/rollback         # {"revision_id": ...} — restore
 </span></code></pre></div>
 Every save/update snapshots the previous content; rollback preserves the
 current version as a new revision (nothing is lost).</p>
 <h2 id="run-administration">Run Administration<a class="headerlink" href="#run-administration" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
-</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>POST /api/runs/{id}/clean              # CLI clean on the run's workdir
+</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>POST /api/runs/{id}/resume-checkpoint  # CLI resume from .oxo-flow/checkpoint.json
 </span></code></pre></div>
 <code>resume-checkpoint</code> continues an unfinished run in place as a NEW run row
 (<code>{"max_jobs": 2}</code> optional). Both are ownership-checked like every other
 run endpoint.</p>
 <h2 id="webhooks">Webhooks<a class="headerlink" href="#webhooks" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>GET /api/webhook   # admin-only outside personal mode (#519) — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
-</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>GET /api/webhook   # admin-only outside personal mode (#519) — { enabled, url, secret_set, events, signature_scheme }, secret never echoed
+</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>PUT /api/webhook   # admin-only outside personal mode — {"enabled": true, "url": "https://...", "secret": "...", "events": [...], "signature_scheme": "..."}
 </span></code></pre></div>
 Runs POST a signed payload to the configured URL on terminal states. The
 signature scheme is configurable:</p>
@@ -4496,9 +4507,9 @@ URL is a bearer credential, and unsigned delivery lets anyone who learns
 the URL forge events. Disabling (<code>enabled: false</code>) never demands a secret.</p>
 <p>Admin-only outside personal mode — the endpoint is shared infrastructure.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
-</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
-</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
+</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>GET    /api/auth/keys       # The acting user's keys (hashes only)
+</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a>DELETE /api/auth/keys/{id}  # Revoke immediately
 </span></code></pre></div>
 Machine credentials: send <code>X-API-Key: oxo_...</code> instead of a Bearer session.
 Keys resolve to the same ownership context (a key's requests see exactly
@@ -4508,16 +4519,16 @@ immediate.</p>
 <p>Runs pre-flight the quota tracker with the workflow's declared threads and
 memory; over-limit requests get <code>429 QUOTA_EXCEEDED</code> with the violation
 list.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>GET  /api/quota           # current limits and usage
-</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>GET  /api/quota           # current limits and usage
+</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a>PUT  /api/quota           # update limits (admin-only; personal mode bypasses admin checks)
 </span></code></pre></div>
 <p><code>PUT /api/quota</code> accepts <code>{ max_concurrent_runs, max_total_threads, max_total_memory_mb, max_runs_per_day }</code> — all four fields are required (no defaults applied server-side).
 Usage is visible at <code>GET /api/quota</code> (<code>{ enabled, limits: {…}, usage: { active_runs, used_threads, used_memory_mb, runs_today } }</code>).</p>
 <h2 id="cluster-connections-remote-execution">Cluster Connections &amp; Remote Execution<a class="headerlink" href="#cluster-connections-remote-execution" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>GET    /api/clusters                  # configured SSH connections
-</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2" href="#__codelineno-60-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
-</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3" href="#__codelineno-60-3"></a>DELETE /api/clusters/{id}
-</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4" href="#__codelineno-60-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>GET    /api/clusters                  # configured SSH connections
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a>POST   /api/clusters                  # upsert (admin-only outside personal mode)
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3" href="#__codelineno-61-3"></a>DELETE /api/clusters/{id}
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4" href="#__codelineno-61-4"></a>POST   /api/clusters/{id}/probe       # SSH connectivity + scheduler detection (admin-only outside personal mode)
 </span></code></pre></div>
 The stored <code>ssh_key</code> is a secret (#517): it is never returned by any
 response (including the upsert echo) — clients see <code>ssh_key_set: true |
@@ -4530,14 +4541,14 @@ downstream endpoint (logs, files, report) works unchanged. See
 <a href="../../how-to/run-on-cluster/">Run on a cluster</a>.</p>
 <hr />
 <h2 id="hpc">HPC<a class="headerlink" href="#hpc" title="Permanent link">#</a></h2>
-<p><div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>GET /api/hpc
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>GET /api/hpc
 </span></code></pre></div>
 Returns scheduler status (SLURM, PBS/Torque, LSF, SGE), available queues, and node count. This route is only mounted when the server runs in <code>hpc</code> mode.</p>
 <hr />
 <h2 id="dag-editing">DAG Editing<a class="headerlink" href="#dag-editing" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2" href="#__codelineno-62-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3" href="#__codelineno-62-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
+<div class="language-text highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a>POST /api/pipeline/{id}/command   # Apply an edit command (add/remove rule, connect, ...)
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2" href="#__codelineno-63-2"></a>POST /api/pipeline/{id}/undo      # Revert the last edit (JSON body: {"toml_content": ...})
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3" href="#__codelineno-63-3"></a>POST /api/pipeline/{id}/redo      # Re-apply the last undone edit (JSON body: {"toml_content": ...})
 </span></code></pre></div>
 <p><code>undo</code>/<code>redo</code> require a JSON body carrying the caller's current TOML; the
 stacked edit is applied only when it matches that state (otherwise <code>404</code>).
