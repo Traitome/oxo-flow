@@ -329,6 +329,10 @@ jobs:
               - 'Cargo.lock'
             eval:
               - 'eval/**'
+              # Knowledge refreshes move tool versions / drop entries the gold
+              # set pins — #880 drifted bbmap+tw and dropped 4 gold tools
+              # without this gate firing (#902).
+              - 'crates/oxo-flow-ai/src/knowledge/**'
 
   # ─── Quality gate: fmt + clippy + tests ────────────────────────────────────
   test:
