@@ -2836,6 +2836,103 @@ shell = "true"
     .trim()
     .to_string();
     assert_eq!(prov.resolved_sha, expected);
+
+    // Issue #899 (review MAJOR): a module that itself pulls a repo-include
+    // must have that nested include's provenance merged into the host's
+    // list — not silently dropped with the consumed inc_config.
+    let nested_mods = dir.path().join("nested");
+    std::fs::create_dir_all(&nested_mods).unwrap();
+    std::fs::write(
+        nested_mods.join("inner.oxoflow"),
+        r#"[workflow]
+name = "inner"
+version = "1.0.0"
+
+[[rules]]
+name = "inner_stat"
+output = ["inner.txt"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let git2 = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&nested_mods)
+            .output()
+            .unwrap();
+    };
+    git2(&["init"]);
+    git2(&["config", "user.email", "t@t"]);
+    git2(&["config", "user.name", "t"]);
+    git2(&["add", "inner.oxoflow"]);
+    git2(&["commit", "-m", "inner"]);
+    git2(&["tag", "v0.1.0"]);
+    std::fs::write(
+        repo.join("wrapper.oxoflow"),
+        format!(
+            r#"[workflow]
+name = "wrapper"
+version = "1.0.0"
+
+[[include]]
+repo = "file://{}"
+ref = "v0.1.0"
+path = "inner.oxoflow"
+
+[[rules]]
+name = "wrap"
+input = ["inner.txt"]
+output = ["wrap.txt"]
+shell = "true"
+"#,
+            nested_mods.display()
+        ),
+    )
+    .unwrap();
+    git(&["add", "wrapper.oxoflow"]);
+    git(&["commit", "-m", "wrapper"]);
+    git(&["tag", "-f", "v1.0.0"]);
+    git(&["rev-parse", "v1.0.0^{commit}"]);
+
+    let host2 = format!(
+        r#"[workflow]
+name = "host2"
+version = "1.0.0"
+
+[[include]]
+repo = "file://{}"
+ref = "v1.0.0"
+path = "wrapper.oxoflow"
+
+[[rules]]
+name = "use2"
+input = ["wrap.txt"]
+output = ["u2.txt"]
+shell = "true"
+"#,
+        repo.display()
+    );
+    let wf2 = dir.path().join("host2.oxoflow");
+    std::fs::write(&wf2, host2).unwrap();
+    let config2 = WorkflowConfig::from_file(&wf2).unwrap();
+    assert!(
+        config2.rules.iter().any(|r| r.name == "inner_stat"),
+        "the nested module's rule must resolve transitively"
+    );
+    assert_eq!(
+        config2.include_provenance.len(),
+        2,
+        "both the direct and the nested repo-include must be recorded"
+    );
+    let nested = config2
+        .include_provenance
+        .iter()
+        .find(|p| p.repo == format!("file://{}", nested_mods.display()))
+        .expect("nested include provenance merged");
+    assert_eq!(nested.git_ref, "v0.1.0");
+    assert_eq!(nested.path, "inner.oxoflow");
+    assert_eq!(nested.resolved_sha.len(), 40);
 }
 
 #[test]

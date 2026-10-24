@@ -650,6 +650,11 @@ impl WorkflowConfig {
             let offset = self.include_contracts.len();
             self.include_contracts
                 .extend(std::mem::take(&mut inc_config.include_contracts));
+            // Nested repo-includes recorded their own provenance inside
+            // inc_config (issue #899); merge it or it is silently dropped
+            // with the consumed inc_config.
+            self.include_provenance
+                .extend(std::mem::take(&mut inc_config.include_provenance));
             for (rule, idx) in std::mem::take(&mut inc_config.module_of) {
                 self.module_of.insert(rule, idx + offset);
             }
