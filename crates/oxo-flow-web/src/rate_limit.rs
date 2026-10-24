@@ -300,3 +300,207 @@ mod tests {
         assert!(retry_after >= 1);
     }
 }
+
+/// Brute-force guard for `POST /api/auth/login` (issue #907 T5: 23
+/// consecutive bad logins answered plain 401s with no throttle at all).
+///
+/// Separate from the global per-IP [`RateLimiter`]: that one allows 100
+/// requests/min per IP, far more than a credential-stuffing run needs, and
+/// it cannot see the username (the middleware runs before the body is
+/// parsed). This limiter is keyed **per account + per IP** inside the login
+/// handler, so an attacker hammering one account is throttled even when
+/// rotating source IPs is impossible to detect, and a victim account is not
+/// locked out by other users' traffic.
+#[derive(Debug, Clone)]
+pub struct LoginRateLimiter {
+    /// Failed-attempt timestamps per bucket key.
+    attempts: Arc<DashMap<String, Vec<Instant>>>,
+    /// Number of lockout checks since the last idle-bucket purge.
+    checks_since_purge: Arc<AtomicU64>,
+    max_attempts: u32,
+    window: Duration,
+}
+
+impl Default for LoginRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoginRateLimiter {
+    /// Window and attempt budget: 10 failed attempts per 5 minutes per
+    /// (account, IP) bucket — well above any human's typo rate, far below
+    /// an online guessing run (~50k/5min).
+    const MAX_ATTEMPTS: u32 = 10;
+    const WINDOW: Duration = Duration::from_secs(300);
+
+    pub fn new() -> Self {
+        Self {
+            attempts: Arc::new(DashMap::new()),
+            checks_since_purge: Arc::new(AtomicU64::new(0)),
+            max_attempts: Self::MAX_ATTEMPTS,
+            window: Self::WINDOW,
+        }
+    }
+
+    /// Constructor with explicit tuning (tests).
+    #[cfg(test)]
+    fn with_config(max_attempts: u32, window: Duration) -> Self {
+        Self {
+            attempts: Arc::new(DashMap::new()),
+            checks_since_purge: Arc::new(AtomicU64::new(0)),
+            max_attempts,
+            window,
+        }
+    }
+
+    /// Record a failed login for `bucket` and report whether further
+    /// attempts are now blocked (`Some(retry_after_secs)`).
+    fn record_failure(&self, bucket: &str) -> Option<u64> {
+        let now = Instant::now();
+        let window_start = now - self.window;
+        let mut timestamps = self.attempts.entry(bucket.to_owned()).or_default();
+        timestamps.retain(|t| *t > window_start);
+        timestamps.push(now);
+        if timestamps.len() as u32 >= self.max_attempts {
+            let retry_after = timestamps
+                .first()
+                .map(|t| self.window.saturating_sub(now.duration_since(*t)).as_secs() + 1)
+                .unwrap_or(1);
+            Some(retry_after)
+        } else {
+            None
+        }
+    }
+
+    /// Whether `bucket` is currently locked out, and for how long.
+    fn is_blocked(&self, bucket: &str) -> Option<u64> {
+        let now = Instant::now();
+        let window_start = now - self.window;
+        let mut timestamps = self.attempts.entry(bucket.to_owned()).or_default();
+        timestamps.retain(|t| *t > window_start);
+        if (timestamps.len() as u32) < self.max_attempts {
+            return None;
+        }
+        Some(
+            timestamps
+                .first()
+                .map(|t| self.window.saturating_sub(now.duration_since(*t)).as_secs() + 1)
+                .unwrap_or(1),
+        )
+    }
+
+    /// Drop the failure history for `bucket` (successful login).
+    fn clear(&self, bucket: &str) {
+        self.attempts.remove(bucket);
+    }
+
+    /// Opportunistic eviction of fully-expired buckets, mirroring the global
+    /// limiter's purge: attacker-controlled usernames would otherwise grow
+    /// the map one key per sprayed name, forever.
+    fn maybe_purge(&self) {
+        if self.checks_since_purge.fetch_add(1, Ordering::Relaxed) >= PURGE_EVERY_CHECKS {
+            self.checks_since_purge.store(0, Ordering::Relaxed);
+            let window_start = Instant::now() - self.window;
+            self.attempts
+                .retain(|_, timestamps| timestamps.last().is_some_and(|t| *t > window_start));
+        }
+    }
+}
+
+/// The process-wide login limiter. A single static instance is deliberate:
+/// the throttle must be shared by every request the server answers,
+/// including concurrent ones.
+fn login_limiter() -> &'static LoginRateLimiter {
+    static LIMITER: std::sync::OnceLock<LoginRateLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(LoginRateLimiter::new)
+}
+
+/// Longest username prefix kept in a bucket key. The check runs before the
+/// username is validated, so the raw body text becomes a map key — a giant
+/// string must not be retained verbatim.
+const LOGIN_BUCKET_PREFIX_CHARS: usize = 128;
+
+fn login_bucket(account: &str, ip: &str) -> String {
+    let account: String = account.chars().take(LOGIN_BUCKET_PREFIX_CHARS).collect();
+    format!("login:{account}@{ip}")
+}
+
+fn rate_limit_disabled() -> bool {
+    std::env::var("OXO_FLOW_DISABLE_RATE_LIMIT").as_deref() == Ok("1")
+}
+
+/// Throttle check for one login attempt. Returns `Err(retry_after_secs)` if
+/// the (account, ip) bucket is locked out. Successful logins clear the
+/// account's failure history; failures are recorded by the handler.
+///
+/// The global `OXO_FLOW_DISABLE_RATE_LIMIT=1` escape hatch (Playwright)
+/// disables this too — brute-force protection off means off.
+pub fn check_login_attempt(account: &str, ip: &str) -> Result<(), u64> {
+    if rate_limit_disabled() {
+        return Ok(());
+    }
+    let limiter = login_limiter();
+    limiter.maybe_purge();
+    limiter
+        .is_blocked(&login_bucket(account, ip))
+        .map_or(Ok(()), Err)
+}
+
+/// Record a failed login against the (account, ip) bucket.
+pub fn record_login_failure(account: &str, ip: &str) {
+    if rate_limit_disabled() {
+        return;
+    }
+    let bucket = login_bucket(account, ip);
+    if let Some(retry_after) = login_limiter().record_failure(&bucket) {
+        tracing::warn!(
+            "login lockout engaged for account '{}' from {ip}: retry in {retry_after}s",
+            account
+                .chars()
+                .take(LOGIN_BUCKET_PREFIX_CHARS)
+                .collect::<String>()
+        );
+    }
+}
+
+/// Clear the (account, ip) failure history after a successful login.
+pub fn clear_login_failures(account: &str, ip: &str) {
+    login_limiter().clear(&login_bucket(account, ip));
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+
+    #[test]
+    fn lockout_after_budget_of_failures() {
+        let limiter = LoginRateLimiter::with_config(3, Duration::from_secs(60));
+        assert!(limiter.record_failure("a@ip").is_none());
+        assert!(limiter.record_failure("a@ip").is_none());
+        assert!(
+            limiter.record_failure("a@ip").is_some(),
+            "3rd failure locks"
+        );
+        assert!(limiter.is_blocked("a@ip").is_some());
+        // A different bucket is unaffected.
+        assert!(limiter.is_blocked("a@other").is_none());
+    }
+
+    #[test]
+    fn success_clears_history() {
+        let limiter = LoginRateLimiter::with_config(2, Duration::from_secs(60));
+        let _ = limiter.record_failure("u@ip");
+        limiter.clear("u@ip");
+        assert!(limiter.is_blocked("u@ip").is_none());
+    }
+
+    #[test]
+    fn failed_attempts_expire_with_the_window() {
+        let limiter = LoginRateLimiter::with_config(1, Duration::from_millis(5));
+        let _ = limiter.record_failure("u@ip");
+        assert!(limiter.is_blocked("u@ip").is_some());
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(limiter.is_blocked("u@ip").is_none());
+    }
+}

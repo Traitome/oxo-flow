@@ -3,6 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use crate::extract::ApiJson;
 use axum::{Extension, Json, http::StatusCode};
 
 use super::service;
@@ -167,11 +168,43 @@ async fn resolve_admin(
     )
 )]
 /// POST /api/auth/login
-pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
+///
+/// Brute-force guard (issue #907 T5): failed attempts are throttled per
+/// (account, source IP) before any credential check runs. The peer address
+/// comes from `ConnectInfo` when the transport supplies one (the real
+/// server does); in-process routers (tests) fall back to a shared
+/// `"unknown"` bucket — mirroring `rate_limit::client_key` — which headers
+/// cannot rotate.
+pub async fn login(
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    ApiJson(req): ApiJson<LoginRequest>,
+) -> ApiResult<LoginResponse> {
+    use crate::rate_limit::{check_login_attempt, clear_login_failures, record_login_failure};
+
+    let ip = peer
+        .as_ref()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    check_login_attempt(&req.username, &ip).map_err(|retry_after| {
+        // Mirrors rate_limit_middleware's 429 shape: the countdown lives in
+        // `detail` (the ApiResult tuple cannot carry a Retry-After header).
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                code: "RATE_LIMITED".into(),
+                message: "Too many failed login attempts".into(),
+                detail: Some(format!("retry in {retry_after}s")),
+                suggestion: Some("Wait for the lockout to expire before retrying".into()),
+            }),
+        )
+    })?;
+
     // The username is persisted as the users row id and becomes a workspace
     // path component — reject unsafe usernames before any lookup or
     // auto-provisioning (issue: traversal usernames escaped the user tree).
     crate::workspace::validate_username(&req.username).map_err(|e| {
+        record_login_failure(&req.username, &ip);
         err(
             StatusCode::UNAUTHORIZED,
             "INVALID_USERNAME",
@@ -255,6 +288,7 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
                 let (id, role) = row.ok_or_else(|| {
                     // The name belongs to a UUID-keyed managed account —
                     // the shared env password must not adopt it (#516).
+                    record_login_failure(&req.username, &ip);
                     err(
                         StatusCode::UNAUTHORIZED,
                         "AUTH_FAILED",
@@ -287,7 +321,10 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
                     let response = service::login_response_for(req.username.clone(), role);
                     (id, response)
                 }
-                _ => return Err(err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", env_err)),
+                _ => {
+                    record_login_failure(&req.username, &ip);
+                    return Err(err(StatusCode::UNAUTHORIZED, "AUTH_FAILED", env_err));
+                }
             }
         }
     };
@@ -318,6 +355,10 @@ pub async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
             result.username
         );
     }
+
+    // A successful login resets the brute-force counter for this
+    // (account, ip) bucket — one typo must not poison the next attempt.
+    clear_login_failures(&req.username, &ip);
 
     Ok(Json(result))
 }
@@ -485,7 +526,7 @@ pub async fn list_users(headers: axum::http::HeaderMap) -> ApiResult<Vec<UserRes
 /// POST /api/users — admin only
 pub async fn create_user(
     headers: axum::http::HeaderMap,
-    Json(req): Json<CreateUserRequest>,
+    ApiJson(req): ApiJson<CreateUserRequest>,
 ) -> ApiResult<UserResponse> {
     let _admin = require_admin(&headers).await?;
     // The username becomes the workspace path component — same rule as
@@ -652,7 +693,7 @@ pub async fn license_status() -> ApiResult<LicenseResponse> {
 /// Initiates an OAuth2 authorization flow. Returns the provider's
 /// authorization URL that the user should be redirected to.
 pub async fn oauth_authorize(
-    Json(req): Json<OAuthAuthorizeRequest>,
+    ApiJson(req): ApiJson<OAuthAuthorizeRequest>,
 ) -> ApiResult<OAuthAuthorizeResponse> {
     let redirect_uri = req
         .redirect_uri
@@ -679,7 +720,7 @@ pub async fn oauth_authorize(
 /// Handles the OAuth2 callback after the user authorizes the application.
 /// Exchanges the authorization code for an access token and creates a session.
 pub async fn oauth_callback(
-    Json(req): Json<OAuthCallbackRequest>,
+    ApiJson(req): ApiJson<OAuthCallbackRequest>,
 ) -> ApiResult<OAuthCallbackResponse> {
     let provider = req.provider.as_deref().unwrap_or("orcid");
     let redirect_uri = std::env::var("OXO_FLOW_OAUTH_REDIRECT_URI")
@@ -774,7 +815,7 @@ pub async fn oauth_callback(
 /// strings in audit metadata was pure liability.
 pub async fn upload_license(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<LicenseResponse> {
     let user = resolve(authenticated.as_ref());
     if crate::server::running_mode() != "personal" && !user.is_admin() {
@@ -860,7 +901,7 @@ fn hash_api_key(key: &str) -> String {
 /// POST /api/auth/keys — create a key; the plaintext is returned ONCE.
 pub async fn create_api_key(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
     let name = req

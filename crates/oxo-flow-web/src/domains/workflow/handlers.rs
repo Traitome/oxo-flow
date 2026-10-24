@@ -3,6 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use crate::extract::ApiJson;
 use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use super::service;
@@ -143,7 +144,7 @@ pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiErro
     )
 )]
 /// POST /api/pipelines/parse
-pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseResponse> {
+pub async fn parse_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<ParseResponse> {
     service::parse_pipeline(&req.toml_content, req.format_version.as_deref())
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "PARSE_ERROR", e))
@@ -163,7 +164,7 @@ pub async fn parse_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ParseRes
 /// Accepts TOML content directly so the endpoint is self-contained.
 pub async fn validate_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<ValidateResponse> {
     let user = resolve(authenticated.as_ref());
     let toml = req
@@ -203,7 +204,9 @@ pub async fn validate_pipeline(
     )
 )]
 /// POST /api/pipelines/prepare
-pub async fn prepare_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<PrepareResponse> {
+pub async fn prepare_pipeline(
+    ApiJson(req): ApiJson<serde_json::Value>,
+) -> ApiResult<PrepareResponse> {
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -237,7 +240,7 @@ pub async fn prepare_pipeline(Json(req): Json<serde_json::Value>) -> ApiResult<P
     )
 )]
 /// POST /api/pipelines/dag
-pub async fn build_dag(Json(req): Json<serde_json::Value>) -> ApiResult<DagJsonResponse> {
+pub async fn build_dag(ApiJson(req): ApiJson<serde_json::Value>) -> ApiResult<DagJsonResponse> {
     let toml = req
         .get("toml_content")
         .and_then(|v| v.as_str())
@@ -263,7 +266,7 @@ pub async fn build_dag(Json(req): Json<serde_json::Value>) -> ApiResult<DagJsonR
     )
 )]
 /// POST /api/pipelines/format
-pub async fn format_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<FormatResponse> {
+pub async fn format_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<FormatResponse> {
     service::format_workflow(&req.toml_content)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "FORMAT_ERROR", e))
@@ -279,7 +282,7 @@ pub async fn format_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<FormatR
     )
 )]
 /// POST /api/pipelines/lint
-pub async fn lint_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ValidateResponse> {
+pub async fn lint_pipeline(ApiJson(req): ApiJson<ParseRequest>) -> ApiResult<ValidateResponse> {
     service::lint_workflow(&req.toml_content)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "LINT_ERROR", e))
@@ -295,7 +298,9 @@ pub async fn lint_pipeline(Json(req): Json<ParseRequest>) -> ApiResult<ValidateR
     )
 )]
 /// POST /api/pipelines/stats
-pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<WorkflowStatsResponse> {
+pub async fn pipeline_stats(
+    ApiJson(req): ApiJson<ParseRequest>,
+) -> ApiResult<WorkflowStatsResponse> {
     service::workflow_stats(&req.toml_content)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "STATS_ERROR", e))
@@ -317,7 +322,7 @@ pub async fn pipeline_stats(Json(req): Json<ParseRequest>) -> ApiResult<Workflow
 /// contract the client always assumed (issue #82 P1-10).
 pub async fn diff_pipelines(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<DiffRequest>,
+    ApiJson(req): ApiJson<DiffRequest>,
 ) -> ApiResult<DiffResponse> {
     let user = resolve(authenticated.as_ref());
     let resolve_side = async |inline: &Option<String>,
@@ -381,7 +386,7 @@ pub async fn diff_pipelines(
 /// when only `pipeline_id` is given — scoped by read permission.
 pub async fn export_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<ExportRequest>,
+    ApiJson(req): ApiJson<ExportRequest>,
 ) -> ApiResult<ExportResponse> {
     let user = resolve(authenticated.as_ref());
     let toml_content = if !req.toml_content.trim().is_empty() {
@@ -434,7 +439,7 @@ pub async fn export_pipeline(
 /// POST /api/pipelines/search
 pub async fn search_pipelines(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<SearchRequest>,
+    ApiJson(req): ApiJson<SearchRequest>,
 ) -> ApiResult<SearchResponse> {
     let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
@@ -545,7 +550,7 @@ pub async fn search_pipelines(
 /// POST /api/pipelines — create a new pipeline from TOML
 pub async fn save_pipeline(
     authenticated: Option<axum::Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let pool = get_pool()?;
     let toml_content = req
@@ -762,7 +767,7 @@ pub async fn get_pipeline(
 pub async fn update_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
@@ -1059,7 +1064,7 @@ pub async fn get_template(Path(id): Path<String>) -> ApiResult<Template> {
 /// POST /api/templates
 pub async fn save_template(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Template> {
     let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;
@@ -1281,7 +1286,7 @@ pub async fn delete_template(
 /// probe previously stat-ed any client-supplied path on the server.
 pub async fn analyze_data(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<DataAnalysisRequest>,
+    ApiJson(req): ApiJson<DataAnalysisRequest>,
 ) -> ApiResult<DataAnalysisResponse> {
     let user = resolve(authenticated.as_ref());
     let scope = crate::workspace::user_root(&user.id)
@@ -1301,7 +1306,9 @@ pub async fn analyze_data(
     )
 )]
 /// POST /api/data/reference
-pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<ReferenceResponse> {
+pub async fn discover_reference(
+    ApiJson(req): ApiJson<ReferenceRequest>,
+) -> ApiResult<ReferenceResponse> {
     super::data::discover_reference(&req.genome, &req.components)
         .map(Json)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "REF_ERROR", e))
@@ -1322,7 +1329,7 @@ pub async fn discover_reference(Json(req): Json<ReferenceRequest>) -> ApiResult<
 )]
 /// POST /api/plugins/validate
 pub async fn validate_plugin(
-    Json(req): Json<ValidatePluginRequest>,
+    ApiJson(req): ApiJson<ValidatePluginRequest>,
 ) -> ApiResult<ValidatePluginResponse> {
     service::validate_plugin_manifest(&req.manifest, req.trusted_keys.as_ref())
         .map(Json)
@@ -1345,7 +1352,7 @@ pub async fn validate_plugin(
 /// POST /api/data/perceive
 pub async fn perceive_data(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     use crate::domains::ai::agents::data_agent;
 
@@ -1466,7 +1473,9 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
     )
 )]
 /// POST /api/data/samplesheet/parse
-pub async fn parse_samplesheet(Json(req): Json<serde_json::Value>) -> ApiResult<serde_json::Value> {
+pub async fn parse_samplesheet(
+    ApiJson(req): ApiJson<serde_json::Value>,
+) -> ApiResult<serde_json::Value> {
     let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
     let mut samples = Vec::new();
     let mut format = "unknown";
@@ -1675,7 +1684,7 @@ pub async fn get_revision(
 pub async fn rollback_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<Pipeline> {
     let user = resolve(authenticated.as_ref());
     let pool = get_pool()?;

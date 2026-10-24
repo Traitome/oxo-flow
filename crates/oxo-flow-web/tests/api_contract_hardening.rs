@@ -460,3 +460,143 @@ async fn list_runs_cursor_and_total_contract() {
     );
     assert_eq!(body["total"].as_i64(), Some(3), "{body}");
 }
+
+// ---------------------------------------------------------------------------
+// Issue #907 — webhook config validation (N5) and structured body rejections
+// (P2-9, via the ApiJson extractor every POST/PUT handler now uses).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn webhook_rejects_a_url_without_a_parseable_host() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // The old prefix check ("starts_with https://") accepted these. Note
+    // `https:///path` is deliberately absent: url's special-scheme rules
+    // normalize it to host "path", so it is genuinely valid.
+    for url in [
+        "https://",
+        "http:// ",
+        "not-a-url",
+        "ftp://x.example",
+        "https://",
+    ] {
+        let (status, body) = put(
+            &app,
+            "/api/webhook",
+            json!({"enabled": true, "url": url, "secret": "s"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "url {url:?}: {body}");
+        assert_eq!(body["code"], "INVALID_URL", "url {url:?}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn webhook_enable_without_any_secret_is_refused() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // Fresh config, no secret stored, none supplied: enabling must fail with
+    // a dedicated code (a webhook URL is a bearer credential; unsigned
+    // delivery lets anyone who guesses the URL forge events).
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({"enabled": true, "url": "https://hooks.example/alive"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "WEBHOOK_SECRET_REQUIRED", "{body}");
+
+    // Supplying a secret makes the same request succeed.
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({"enabled": true, "url": "https://hooks.example/alive", "secret": "k"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "saved", "{body}");
+}
+
+#[tokio::test]
+async fn webhook_disable_allows_clearing_the_secret() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // Seeded with a secret by the previous test's shared DB row; disabling
+    // must never demand one (the gate only guards going live).
+    let (status, body) = put(&app, "/api/webhook", json!({"enabled": false, "url": ""})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn malformed_json_body_answers_in_the_error_envelope() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // P2-9: a body that does not deserialize used to surface as axum's
+    // plain-text 422; through ApiJson it must arrive in the house envelope.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/pipelines")
+        .header("content-type", "application/json")
+        .body(Body::from("{not json"))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).expect("rejection must be JSON");
+    assert_eq!(body["code"], "INVALID_BODY", "{body}");
+    assert!(body["suggestion"].is_string(), "{body}");
+}
+
+#[tokio::test]
+async fn login_bruteforce_lockout_answers_429() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // T5: 10 consecutive bad logins for one account must trip the
+    // (account, ip) brute-force limiter; the 11th is refused with the
+    // structured 429 before any credential work. In-process requests carry
+    // no ConnectInfo, so every attempt lands in the shared "unknown"
+    // bucket — exactly the path a test can exercise without socket setup.
+    let mut last = (StatusCode::UNAUTHORIZED, json!({}));
+    for i in 0..10 {
+        last = post(
+            &app,
+            "/api/auth/login",
+            json!({"username": "bruteforce_probe_user", "password": "wrong"}),
+        )
+        .await;
+        assert_eq!(last.0, StatusCode::UNAUTHORIZED, "attempt {i}: {last:?}");
+    }
+    let (last_status, _) = last;
+    assert_eq!(last_status, StatusCode::UNAUTHORIZED);
+
+    let (status, body) = post(
+        &app,
+        "/api/auth/login",
+        json!({"username": "bruteforce_probe_user", "password": "wrong"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["code"], "RATE_LIMITED", "{body}");
+    assert!(
+        body["detail"].as_str().unwrap_or("").contains("retry"),
+        "{body}"
+    );
+
+    // A different account from the same bucket is unaffected (per-account
+    // keying, so one sprayed name cannot lock out the rest).
+    let (status, body) = post(
+        &app,
+        "/api/auth/login",
+        json!({"username": "other_probe_user", "password": "wrong"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
