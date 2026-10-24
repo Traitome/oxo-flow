@@ -980,25 +980,6 @@ pub async fn get_dag_status(
         })
         .unwrap_or_default();
 
-    // ETA based on SUCCESSFUL node durations only (issue #907 P1-2): failed
-    // and skipped nodes must not inflate the average — previously they were
-    // both counted as "completed", so metrics did not partition the total
-    // and the ETA averaged in failures that never produce useful timings.
-    let completed_duration: u64 = dag_nodes
-        .iter()
-        .filter(|n| n.status == "success")
-        .filter_map(|n| n.duration_ms)
-        .sum();
-    let completed_count = dag_nodes.iter().filter(|n| n.status == "success").count();
-    let total_count = dag_nodes.len();
-    let eta_ms = if completed_count > 0 {
-        let avg_per_node = completed_duration / completed_count as u64;
-        let remaining = total_count.saturating_sub(completed_count) as u64;
-        Some(avg_per_node * remaining)
-    } else {
-        None
-    };
-
     // Compute metrics before moving dag_nodes into the response (no clone of
     // the full node vec). The counters partition `total_nodes`: every node
     // lands in exactly one bucket.
@@ -1006,6 +987,25 @@ pub async fn get_dag_status(
     let running_nodes = dag_nodes.iter().filter(|n| n.status == "running").count();
     let pending_nodes = dag_nodes.iter().filter(|n| n.status == "pending").count();
     let skipped_nodes = dag_nodes.iter().filter(|n| n.status == "skipped").count();
+
+    // ETA based on SUCCESSFUL node durations only (issue #907 P1-2): failed
+    // and skipped nodes must not inflate the average, and the remaining-work
+    // count must be the nodes still to do (pending + running) — counting
+    // failed/skipped as remaining pinned a positive ETA on terminal-failed
+    // runs (review finding on #908).
+    let completed_duration: u64 = dag_nodes
+        .iter()
+        .filter(|n| n.status == "success")
+        .filter_map(|n| n.duration_ms)
+        .sum();
+    let completed_count = dag_nodes.iter().filter(|n| n.status == "success").count();
+    let eta_ms = if completed_count > 0 {
+        let avg_per_node = completed_duration / completed_count as u64;
+        let remaining = (pending_nodes + running_nodes) as u64;
+        Some(avg_per_node * remaining)
+    } else {
+        None
+    };
 
     Ok(Json(DagStatusResponse {
         nodes: dag_nodes,
@@ -1019,7 +1019,11 @@ pub async fn get_dag_status(
             .and_then(|d| d.critical_path().ok())
             .unwrap_or_default(),
         metrics: DagMetrics {
-            total_nodes: total_count,
+            total_nodes: failed_nodes
+                + running_nodes
+                + pending_nodes
+                + skipped_nodes
+                + completed_count,
             completed_nodes: completed_count,
             failed_nodes,
             running_nodes,

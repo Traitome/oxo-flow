@@ -155,16 +155,22 @@ pub fn analyze_run_status(
         }
     }
 
-    // ETA computation
+    // ETA computation. Only nodes still to do (running + pending) count as
+    // remaining — failed/skipped nodes are not pending work, so a
+    // terminal-failed run reports no ETA instead of a permanently positive
+    // one (review finding on #908).
     let completed: Vec<&NodeExecutionStatus> =
         nodes.iter().filter(|n| n.status == "success").collect();
-    let estimated_completion = if !completed.is_empty() && completed.len() < nodes.len() {
+    let remaining_count = nodes
+        .iter()
+        .filter(|n| n.status == "running" || n.status == "pending")
+        .count();
+    let estimated_completion = if !completed.is_empty() && remaining_count > 0 {
         let total_done: i64 = completed.iter().filter_map(|n| n.duration_ms).sum();
         let avg_per_step = total_done as f64 / completed.len() as f64;
-        let remaining = (nodes.len() - completed.len()) as f64;
-        let eta_secs = (avg_per_step * remaining / 1000.0) as u64;
+        let eta_secs = (avg_per_step * remaining_count as f64 / 1000.0) as u64;
         Some(format!("~{}m {}s remaining", eta_secs / 60, eta_secs % 60))
-    } else if completed.len() == nodes.len() {
+    } else if !nodes.is_empty() && completed.len() == nodes.len() {
         Some("Complete".into())
     } else {
         None
@@ -236,6 +242,7 @@ fn classify_failure(
     {
         let pattern = result
             .error_pattern
+            .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let pattern_id: &'static str = match pattern.as_str() {
             "oom_killed" => "oom_killed",
@@ -247,10 +254,25 @@ fn classify_failure(
             "network_error" => "network_error",
             "conda_env_fail" => "conda_env_fail",
             "shell_syntax" => "shell_syntax",
-            _ => "exit_code",
+            // The engine's full table is the identity, not just the 9 most
+            // common signatures — an unmapped id is used verbatim so
+            // alert ids stay specific and dedup consumers can tell causes
+            // apart (issue #908 review). Runtime ids are bounded by the
+            // static pattern table, so the &'static leak is fixed at size.
+            other => Box::leak(other.to_string().into_boxed_str()),
         };
         let level = match result.category {
+            // Resource exhaustion escalates the run regardless of whether the
+            // evidence came from a tail or only the exit code — the no-tail
+            // fallbacks below rate OOM/segfault Critical, so a tail-classified
+            // match of the same failure must not downgrade it (#908 review).
             ErrorCategory::Resource => AlertLevel::Critical,
+            ErrorCategory::Tool
+                if matches!(node.exit_code, Some(139) | Some(11))
+                    && result.error_pattern.as_deref() == Some("segfault") =>
+            {
+                AlertLevel::Critical
+            }
             _ => AlertLevel::Alert,
         };
         let prediction = format!(
@@ -430,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_tail_classification_uses_diagnostics_engine() {
-        // Issue #907 P1-3: exit 1 used to collapse into "generic error" even
+        // Issue #907 P1-3: exit 127 used to collapse into "generic error" even
         // when the persisted stderr named the real cause. With a tail, the
         // classification comes from the shared DiagnosticsEngine table.
         let nodes = vec![NodeExecutionStatus {
@@ -451,6 +473,79 @@ mod tests {
         assert_eq!(alert.alert_id, "failed:qc:command_not_found");
         assert!(alert.prediction.contains("not installed or not in PATH"));
         assert!(alert.auto_fixable);
+    }
+
+    #[test]
+    fn test_tail_classified_segfault_stays_critical() {
+        // Issue #908 review: the no-tail exit-139 fallback is Critical, so a
+        // tail-classified segfault must not downgrade to Alert.
+        let nodes = vec![NodeExecutionStatus {
+            rule: "align".into(),
+            status: "failed".into(),
+            duration_ms: Some(8_000),
+            exit_code: Some(139),
+            started_at: None,
+            stderr_tail: Some("segmentation fault (core dumped)".into()),
+            stdout_tail: None,
+        }];
+        let status = analyze_run_status(&nodes, &ResourceUsage::default());
+        let alert = status
+            .alerts
+            .iter()
+            .find(|a| a.rule_name.as_deref() == Some("align"))
+            .expect("failed rule must raise an alert");
+        assert_eq!(alert.alert_id, "failed:align:segfault");
+        assert!(matches!(alert.level, AlertLevel::Critical));
+    }
+
+    #[test]
+    fn test_unmapped_engine_pattern_keeps_specific_alert_id() {
+        // Issue #908 review: ids outside the 10 static arms must keep the
+        // engine's own identity instead of collapsing to "exit_code".
+        let nodes = vec![NodeExecutionStatus {
+            rule: "fetch".into(),
+            status: "failed".into(),
+            duration_ms: Some(2_000),
+            exit_code: Some(1),
+            started_at: None,
+            stderr_tail: Some("curl: (6) could not resolve host: example.org".into()),
+            stdout_tail: None,
+        }];
+        let status = analyze_run_status(&nodes, &ResourceUsage::default());
+        let alert = status
+            .alerts
+            .iter()
+            .find(|a| a.rule_name.as_deref() == Some("fetch"))
+            .expect("failed rule must raise an alert");
+        assert_ne!(alert.alert_id, "failed:fetch:exit_code");
+    }
+
+    #[test]
+    fn test_eta_is_none_when_only_failures_remain() {
+        // Issue #908 review: failed/skipped nodes are not pending work, so a
+        // terminal-failed run must not report a permanently positive ETA.
+        let nodes = vec![
+            NodeExecutionStatus {
+                rule: "a".into(),
+                status: "success".into(),
+                duration_ms: Some(10_000),
+                exit_code: Some(0),
+                started_at: None,
+                stderr_tail: None,
+                stdout_tail: None,
+            },
+            NodeExecutionStatus {
+                rule: "b".into(),
+                status: "failed".into(),
+                duration_ms: Some(5_000),
+                exit_code: Some(1),
+                started_at: None,
+                stderr_tail: None,
+                stdout_tail: None,
+            },
+        ];
+        let status = analyze_run_status(&nodes, &ResourceUsage::default());
+        assert_eq!(status.estimated_completion, None);
     }
 
     #[test]
