@@ -3952,6 +3952,19 @@
 <code>429 {"code":"RATE_LIMITED", "message":"Rate limit exceeded", "detail":"retry in Ns", ...}</code>
 with a <code>Retry-After</code> header (sliding window, 100 requests / 60 s per
 client IP by default).</p>
+<p><code>POST /api/auth/login</code> adds a dedicated brute-force guard: <strong>10 failed
+attempts per 5 minutes per (account, source IP)</strong> trip a lockout that
+answers the same structured <code>429 RATE_LIMITED</code> (the countdown is in
+<code>detail</code>; the login handler's error tuple cannot attach a <code>Retry-After</code>
+header) before any credential check runs. Per-account keying means a
+sprayed username cannot lock out other accounts; a successful login
+resets the counter; <code>OXO_FLOW_DISABLE_RATE_LIMIT=1</code> disables both
+limiters (tests/dev only).</p>
+<p>Malformed input is answered in the same envelope, never axum's bare-text
+rejection: a query string that does not fit the endpoint's parameters gets
+<code>400 INVALID_QUERY</code>, and a JSON body that does not deserialize against the
+endpoint's schema gets <code>400 INVALID_BODY</code> — both carry axum's parse message
+in <code>detail</code> and a pointer to <code>GET /api/openapi.json</code> in <code>suggestion</code>.</p>
 <hr />
 <h2 id="starting-the-server">Starting the Server<a class="headerlink" href="#starting-the-server" title="Permanent link">#</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Mode 1: Personal (default) — SQLite, no auth, localhost</span>
@@ -4474,6 +4487,13 @@ signature scheme is configurable:</p>
 <li><code>hmac-sha256</code> — RFC 2104 HMAC (<code>X-OxoFlow-Signature: hmac-sha256=&lt;hex&gt;</code>),
   the recommended opt-in for new deployments.</li>
 </ul>
+<p>Validation on <code>PUT</code> (issue #907 N5): <code>url</code> must parse as an absolute
+<code>http://</code> or <code>https://</code> URL with a host (<code>400 INVALID_URL</code> otherwise — a
+bare <code>https://</code> prefix no longer passes). Enabling delivery requires a
+signing secret: either supply <code>secret</code> in the request or leave a previously
+stored one in place (<code>400 WEBHOOK_SECRET_REQUIRED</code> otherwise) — a webhook
+URL is a bearer credential, and unsigned delivery lets anyone who learns
+the URL forge events. Disabling (<code>enabled: false</code>) never demands a secret.</p>
 <p>Admin-only outside personal mode — the endpoint is shared infrastructure.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>POST   /api/auth/keys       # {"name": "ci-bot"} → { id, name, key } (shown once)
