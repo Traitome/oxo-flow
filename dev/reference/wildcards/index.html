@@ -4192,7 +4192,7 @@
 <h2 id="expansion-sources">Expansion Sources<a class="headerlink" href="#expansion-sources" title="Permanent link">#</a></h2>
 <p>oxo-flow determines the values for wildcards from three primary sources:</p>
 <h3 id="1-file-discovery-automatic">1. File Discovery (Automatic)<a class="headerlink" href="#1-file-discovery-automatic" title="Permanent link">#</a></h3>
-<p>Set <a href="../workflow-format/#auto-discovery-with-sample_pattern"><code>[workflow] sample_pattern</code></a> to scan the filesystem at load time. oxo-flow collects the discovered samples into an <code>auto-discovered</code> sample group, and rules referencing <code>{sample}</code> expand once per discovered sample.</p>
+<p>Set <a href="../workflow-format/#auto-discovery-with-sample_pattern"><code>[workflow] sample_pattern</code></a> to scan the filesystem at load time. oxo-flow collects the discovered samples into an <code>auto-discovered</code> sample group, and rules referencing <code>{sample}</code> expand once per discovered sample. That group name is reserved for the engine — user-declared groups cannot use it (see <a href="../workflow-format/#sample_groups-multi-sample-cohorts-wc-02">sample_groups</a>).</p>
 <ul>
 <li><strong>Example</strong>: If <code>raw/</code> contains <code>S1.fastq.gz</code> and <code>S2.fastq.gz</code>.</li>
 <li><strong>Pattern</strong>: <code>sample_pattern = "raw/{sample}.fastq.gz"</code></li>

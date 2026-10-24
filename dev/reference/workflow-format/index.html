@@ -8961,7 +8961,7 @@ plan-time warning naming the offending key.</p>
 <td><code>name</code></td>
 <td>String</td>
 <td><strong>Yes</strong></td>
-<td>Group name</td>
+<td>Group name. The name <code>auto-discovered</code> is <strong>reserved</strong> — see below</td>
 </tr>
 <tr>
 <td><code>samples</code></td>
@@ -8977,6 +8977,14 @@ plan-time warning naming the offending key.</p>
 </tr>
 </tbody>
 </table>
+<p><strong>Reserved group name:</strong> <code>auto-discovered</code> cannot be used in any user
+declaration (inline <code>[[sample_groups]]</code>, <code>sample_groups_file</code> sheets, or the
+CLI <code>@</code>/<code>+@</code> sample sheets) — the engine uses it internally for
+<a href="#auto-discovery-with-sample_pattern"><code>sample_pattern</code></a> discovery results,
+and a user group with the same name would be indistinguishable from it in
+duplicate-ownership analysis and instance naming
+(<code>{rule}_{group}_{sample}</code>). Declaring it is a config error; rename your
+group.</p>
 <p>Any rule that references <code>{sample}</code> or <code>{group}</code> is expanded once per <code>(group, sample)</code> pair across all groups.</p>
 <p><strong>Expanded rule naming:</strong> <code>{rule_name}_{group}_{sample}</code> (e.g., <code>align_control_CTRL_001</code>).</p>
 <p>When groups are loaded from a TSV/CSV sheet, extra columns become metadata
@@ -9091,7 +9099,10 @@ wildcard constraint regex, an unresolvable <code>values_from</code>), the engine
 back to the ownership census naming all duplicates so validate/plan surface
 the underlying error right after. Auto-discovered samples (<code>sample_pattern</code>)
 feeding <code>[[pairs]]</code> are the documented pairing workflow, not a competing
-owner — only user-declared groups are compared against pair membership. Fix
+owner — only user-declared groups are compared against pair membership
+(the <code>auto-discovered</code> group name itself is
+<a href="#sample_groups-multi-sample-cohorts-wc-02">reserved</a>, so an ownership
+comparison can never be defeated by reusing the engine's group name). Fix
 a real collision by adding a <code>{group}</code>/<code>{pair_id}</code> component to the
 affected rules' output paths, or by keeping the domains disjoint.</p>
 <h3 id="auto-discovery-with-sample_pattern">Auto-Discovery with <code>sample_pattern</code><a class="headerlink" href="#auto-discovery-with-sample_pattern" title="Permanent link">#</a></h3>
