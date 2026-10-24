@@ -32,7 +32,7 @@ oxo-flow determines the values for wildcards from three primary sources:
 
 ### 1. File Discovery (Automatic)
 
-Set [`[workflow] sample_pattern`](./workflow-format.md#auto-discovery-with-sample_pattern) to scan the filesystem at load time. oxo-flow collects the discovered samples into an `auto-discovered` sample group, and rules referencing `{sample}` expand once per discovered sample.
+Set [`[workflow] sample_pattern`](./workflow-format.md#auto-discovery-with-sample_pattern) to scan the filesystem at load time. oxo-flow collects the discovered samples into an `auto-discovered` sample group, and rules referencing `{sample}` expand once per discovered sample. That group name is reserved for the engine — user-declared groups cannot use it (see [sample_groups](./workflow-format.md#sample_groups-multi-sample-cohorts-wc-02)).
 
 - **Example**: If `raw/` contains `S1.fastq.gz` and `S2.fastq.gz`.
 - **Pattern**: `sample_pattern = "raw/{sample}.fastq.gz"`

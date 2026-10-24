@@ -373,7 +373,11 @@
         ],
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Group name; 'auto-discovered' is reserved for the engine's sample_pattern discovery group and rejected as a config error",
+            "not": {
+              "const": "auto-discovered"
+            }
           },
           "samples": {
             "type": "array",

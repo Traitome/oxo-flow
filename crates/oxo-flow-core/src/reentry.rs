@@ -119,7 +119,7 @@ pub fn apply_reentry(
     pairs: &[ExperimentControlPair],
 ) -> Result<Vec<String>> {
     let prev: HashSet<String> = config.rules.iter().map(|r| r.name.clone()).collect();
-    let group_name = resolve_group_name(config, group);
+    let group_name = resolve_group_name(config, group)?;
     let mut staged = config.clone();
     let added_samples = merge_samples(&mut staged, &group_name, samples);
     let added_pairs = merge_pairs(&mut staged, pairs)?;
@@ -161,7 +161,7 @@ pub fn replay_valid_reentries(
     let mut replayed = Vec::new();
     for rec in records {
         if valid_rules.contains(&rec.rule) {
-            let group_name = resolve_group_name(&staged, rec.group.as_deref());
+            let group_name = resolve_group_name(&staged, rec.group.as_deref())?;
             merge_samples(&mut staged, &group_name, &rec.samples);
             merge_pairs(&mut staged, &rec.pairs)?;
             replayed.push(rec.clone());
@@ -203,11 +203,36 @@ fn merge_pairs(
 
 /// The target group for a re-entry: the manifest's explicit group, else the
 /// workflow's first (primary) sample group, else "auto-discovered".
-fn resolve_group_name(config: &WorkflowConfig, group: Option<&str>) -> String {
-    group
-        .map(str::to_string)
-        .or_else(|| config.sample_groups.first().map(|g| g.name.clone()))
-        .unwrap_or_else(|| "auto-discovered".to_string())
+///
+/// Only the explicit group is user-controlled input (a checkpoint manifest's
+/// `[reentry] group = "..."` or a re-entry record) — a group named like the
+/// engine's discovery group would reopen the #895 hole (pair-exemption
+/// bypass + instance-name collisions). The fallbacks cannot collide: the
+/// declaration gates (#895) already reject reserved names at parse time, and
+/// the "auto-discovered" fallback is the engine's own.
+fn resolve_group_name(config: &WorkflowConfig, group: Option<&str>) -> Result<String> {
+    match group {
+        Some(g) if g == crate::config::AUTO_DISCOVERED_GROUP_NAME => {
+            Err(OxoFlowError::Validation {
+                message: format!(
+                    "re-entry group name '{g}' is reserved — the engine uses it for \
+                 sample_pattern discovery results"
+                ),
+                rule: None,
+                suggestion: Some(
+                    "use a different group name in the re-entry manifest \
+                 (e.g. a cohort- or condition-specific name)"
+                        .to_string(),
+                ),
+            })
+        }
+        Some(g) => Ok(g.to_string()),
+        None => Ok(config
+            .sample_groups
+            .first()
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| crate::config::AUTO_DISCOVERED_GROUP_NAME.to_string())),
+    }
 }
 
 /// Re-expand from the preserved rule templates. The expansion is
@@ -450,6 +475,48 @@ mod tests {
         let mut config = wf_config(dir.path(), &["S1"]);
         let new = apply_reentry(&mut config, Some("late"), &["S9".to_string()], &[]).unwrap();
         assert_eq!(new, vec!["analyze_late_S9".to_string()]);
+    }
+
+    #[test]
+    fn apply_reentry_rejects_explicit_reserved_group_but_keeps_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // An explicit "auto-discovered" group (user-controlled manifest /
+        // record input) reopens the #895 hole — rejected outright.
+        let mut config = wf_config(dir.path(), &["S1"]);
+        let err = apply_reentry(
+            &mut config,
+            Some(crate::config::AUTO_DISCOVERED_GROUP_NAME),
+            &["S9".to_string()],
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("reserved"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !config
+                .sample_groups
+                .iter()
+                .any(|g| g.name == crate::config::AUTO_DISCOVERED_GROUP_NAME),
+            "reserved group must not be created"
+        );
+
+        // A groups-less workflow's re-entry still lands in the engine's
+        // fallback group — that name is engine-chosen, not user-smuggled.
+        // (The pairs-only `call` rule fans out over {pair_id}, so no
+        // instances are created; the group itself is the observable.)
+        let mut config = pairs_config(dir.path());
+        apply_reentry(&mut config, None, &["S2".to_string()], &[]).unwrap();
+        assert!(
+            config.sample_groups.iter().any(|g| {
+                g.name == crate::config::AUTO_DISCOVERED_GROUP_NAME
+                    && g.samples.contains(&"S2".to_string())
+            }),
+            "fallback group must still be created: {:?}",
+            config.sample_groups
+        );
     }
 
     #[test]

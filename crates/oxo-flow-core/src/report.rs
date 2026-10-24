@@ -3343,9 +3343,13 @@ impl ReportSectionGenerator for SampleMatrixGenerator {
                             && cp.when_verdicts.get(&name) != Some(&false);
                     }
                 }
-                // sample_pattern discovery uses the engine's "auto-discovered"
-                // group name (config.rs sample discovery).
-                let auto = format!("{}_auto-discovered_{}", rule.name, sample);
+                // sample_pattern discovery uses the engine's auto group.
+                let auto = format!(
+                    "{}_{}_{}",
+                    rule.name,
+                    crate::config::AUTO_DISCOVERED_GROUP_NAME,
+                    sample
+                );
                 completed |= cp.completed_rules.contains(&auto);
                 failed |=
                     cp.failed_rules.contains(&auto) && cp.when_verdicts.get(&auto) != Some(&false);
