@@ -283,8 +283,168 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
                 }
             }
         }
+        EnvAction::Gc {
+            min_age_days,
+            dry_run,
+        } => env_gc(min_age_days, dry_run)?,
     }
     Ok(())
+}
+
+/// `oxo-flow env gc` — delete unreferenced, age-eligible store dirs.
+///
+/// A store dir is protected when ANY discovered checkpoint's `env_store_refs`
+/// names it. Discovery starts small: the current workdir's
+/// `.oxo-flow/checkpoint.json` (the run a user is most plausibly standing
+/// inside); the contract is extendable without changing GC semantics.
+/// Everything else — torn or ready — is deletable once its mtime is older
+/// than `min_age_days`: the age gate keeps a just-created env from vanishing
+/// under a concurrent first run whose checkpoint has not recorded the
+/// reference yet, and a torn dir may equally be a run mid-re-home.
+fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
+    let store = oxo_flow_core::executor::env_store::EnvStore::from_env();
+    let entries = store
+        .entries()
+        .with_context(|| format!("failed to scan env store at {}", store.root().display()))?;
+
+    eprintln!(
+        "{} {} ({} env dirs)",
+        "Shared environment store:".bold(),
+        store.root().display().to_string().dimmed(),
+        entries.len()
+    );
+    if entries.is_empty() {
+        eprintln!("  (nothing to collect)");
+        return Ok(());
+    }
+
+    // Protect referenced store dirs: any checkpoint the CLI can discover
+    // from the CURRENT directory (workdir `.oxo-flow/checkpoint.json`) is
+    // honored; runs in other workdirs/trees are the user's responsibility
+    // (the age gate bounds the blast radius).
+    let mut referenced = std::collections::BTreeSet::new();
+    for ck_path in discover_checkpoints() {
+        match oxo_flow_core::executor::CheckpointState::load_from_file(&ck_path) {
+            Ok(state) => {
+                for dir in oxo_flow_core::executor::env_store::referenced_store_dirs([
+                    &state.env_store_refs
+                ]) {
+                    referenced.insert(dir);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} unreadable checkpoint {}: {} (its references are ignored)",
+                    "Warning:".yellow(),
+                    ck_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_sub(min_age_days * 86_400);
+
+    let mut total_freed: u64 = 0;
+    let mut deleted = 0usize;
+    for entry in &entries {
+        let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+        // Torn or not, an unreferenced dir waits out the age gate: a freshly
+        // created torn dir may be a concurrent run mid-re-home (the
+        // checkpoint ref only lands after the ready marker does), so young
+        // dirs are never collected.
+        let eligible =
+            !referenced.contains(name.as_ref()) && entry.mtime.is_some_and(|mtime| mtime <= cutoff);
+        let status = if referenced.contains(name.as_ref()) {
+            "referenced by a checkpoint — kept".to_string()
+        } else {
+            match entry.mtime {
+                Some(mtime) if mtime <= cutoff => {
+                    if entry.ready {
+                        "unreferenced and old enough — eligible".to_string()
+                    } else {
+                        "unreferenced (torn/incomplete) and old enough — eligible".to_string()
+                    }
+                }
+                Some(mtime) => {
+                    let days_left =
+                        (mtime + min_age_days * 86_400).saturating_sub(cutoff) / 86_400 + 1;
+                    format!("unreferenced but too new (~{days_left}d until eligible)")
+                }
+                None => "unreferenced but mtime unknown — kept".to_string(),
+            }
+        };
+        let size = format_bytes(entry.size);
+        eprintln!("  {} [{}] {}", name, entry.kind.prefix(), status);
+        eprintln!(
+            "      {} {}",
+            size,
+            entry.path.display().to_string().dimmed()
+        );
+
+        if eligible {
+            if !dry_run && let Err(e) = std::fs::remove_dir_all(&entry.path) {
+                eprintln!("    {} failed to delete: {}", "✗".red(), e);
+                continue;
+            }
+            deleted += 1;
+            total_freed += entry.size;
+        }
+    }
+
+    if dry_run {
+        eprintln!(
+            "\n{} {} store dir(s) would be deleted, freeing ~{} (dry run — nothing touched)",
+            "Summary:".bold(),
+            deleted,
+            format_bytes(total_freed)
+        );
+    } else {
+        eprintln!(
+            "\n{} {} store dir(s) deleted, ~{} freed",
+            "Summary:".bold(),
+            deleted,
+            format_bytes(total_freed)
+        );
+    }
+    if !dry_run && deleted > 0 {
+        eprintln!(
+            "  Workflow trees keep their symlinks; a deleted env is re-created on the next run."
+        );
+    }
+    Ok(())
+}
+
+/// Checkpoint paths `env gc` honors when computing protected references:
+/// the current workdir's `.oxo-flow/checkpoint.json` (the run a user is
+/// most plausibly standing inside) — explicitly listed locations can be
+/// added later without changing the GC contract.
+fn discover_checkpoints() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let ck = std::path::Path::new(".oxo-flow").join("checkpoint.json");
+    if ck.is_file() {
+        out.push(ck);
+    }
+    out
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 pub fn handle_config(action: ConfigAction) -> Result<()> {

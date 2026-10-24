@@ -152,6 +152,7 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OXO_FLOW_OUTPUT_TAIL_BYTES` | No | `65536` (64 KiB) | Per-rule stdout/stderr tail persisted in checkpoint.json (`stdout_tail`/`stderr_tail`); the in-RAM capture window widens to match when set above its 1 MiB floor. Invalid/zero values fall back to the default with a warning |
 | `OXO_FLOW_DISK_TICK_SECS` | No | `60` | Seconds between disk-pressure measurements while a run parks under Hold (#843). Invalid or `0` values fall back to the default silently |
 | `OXO_FLOW_DISK_HOLD_ROUNDS` | No | `2` | Grace park rounds under Hold before the run aborts (#843); the abort message lists the exact count. Invalid or `0` values fall back to the default so a typo can never disable the abort |
+| `OXO_FLOW_ENV_STORE` | No | `~/.cache/oxo-flow/envs` | Root of the shared pixi/venv environment store (#904): each env materializes once per content key, workflow trees hold symlinks. GC via `oxo-flow env gc` (checkpoint-ref + age gated, `--dry-run` first); broken links auto-rebuild on the next run |
 | `OXO_FLOW_AI_FETCH_ALLOW` | No | — | Comma-separated hostnames/IP literals exempted from the AI fetch/MCP SSRF guard (#204, #518); use only for trusted internal endpoints |
 | `OXO_FLOW_UNSAFE_WILDCARDS` | No | unset | Set to `"1"` to relax the wildcard safe-default charset check (#203); command-substitution values stay blocked and a warning is logged once |
 | `OXO_FLOW_RUNS_RATE_LIMIT` | No | `5` | Run-creation allowance per identity per minute on POST /api/runs (#213); `0` disables the dedicated limiter |
