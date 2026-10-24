@@ -565,7 +565,21 @@ Finds installed reference genome components and reports missing ones with downlo
 ```
 GET /api/data/reference/status
 ```
-Which common reference genomes (hg38, mm10, …) have their expected components (fasta, STAR index, GTF) installed at the standard `/data/references/` locations. Returns `{ genome: { components: { component: present } } }` per entry — the deterministic counterpart to the POST discovery above.
+Which common reference genomes (hg38, mm10, mm39) have their expected components (genome.fa, STAR index, genes.gtf) present at the standard `/data/references/` locations — the deterministic counterpart to the POST discovery above. A genome counts as `installed` only when at least one expected component exists; builds with nothing on disk are reported under `missing_genomes`. Response shape:
+
+```
+{
+  "installed": [
+    { "genome": "hg38", "components": ["/data/references/hg38/genome.fa", "..."],
+      "found": ["..."], "missing_components": ["..."] }
+  ],
+  "missing_genomes": ["mm39"],
+  "missing": ["/data/references/mm39/genome.fa"],
+  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 ..."]
+}
+```
+
+`download_commands` carries staging *guidance*, not fetchable URLs: oxo-flow hosts no reference mirror. Point users at `reference_dir` + `[[references]]` auto-build in the workflow format for index construction.
 
 ### Data Perception
 ```

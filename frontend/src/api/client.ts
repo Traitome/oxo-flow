@@ -5,7 +5,7 @@ import type {
   RunItem, RunList, RunStatus, Diagnostics, RetryPlan, RunResponse,
   AiConfig, AiTranslateResponse, AiExplainResponse, AiInterpretResponse, AiOptimizeResponse,
   Template, ForkResponse, ShareResponse, ImportResponse, ShareLanding,
-  DataAnalysis, ReferenceResult, AuditLogResponse, SearchResponse,
+  DataAnalysis, ReferenceResult, ReferenceStatus, AuditLogResponse, SearchResponse,
   DagEditResponse, DataPerceptionReport, MonitorStatus, RunInstance,
   ReportData, AiConfigFull, ServerAiConfig, UserAiConfig, AiConfigUpdate,
   KnowledgeToolsResponse, KnowledgeSkillsResponse,
@@ -176,7 +176,7 @@ export const api = {
   analyzeData: (paths: string[], maxDepth = 2) => post<DataAnalysis>('/api/data/analyze', { paths, max_depth: maxDepth }),
   perceiveData: (paths?: string[], description?: string) => post<DataPerceptionReport>('/api/data/perceive', { paths, description }),
   discoverReference: (genome: string, components: string[]) => post<ReferenceResult>('/api/data/reference', { genome, components }),
-  referenceStatus: () => get<{ installed: Array<Record<string, unknown>>; missing: string[] }>('/api/data/reference/status'),
+  referenceStatus: () => get<ReferenceStatus>('/api/data/reference/status'),
 
   // ── Execution ──
   createRun: (

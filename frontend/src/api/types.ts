@@ -184,6 +184,12 @@ export interface DataAnalysis {
   suggested_workflow: { template: string; confidence: number; reason: string } | null;
 }
 export interface ReferenceResult { found: string[]; missing: string[]; download_commands: string[]; }
+// GET /api/data/reference/status — a genome is `installed` only when at
+// least one expected component exists on disk; `components` lists what was
+// found, `missing_components` what is absent. Guidance lines (no fetchable
+// URLs — oxo-flow hosts no reference mirror) land in `download_commands`.
+export interface ReferenceStatusEntry { genome: string; components: string[]; found: string[]; missing_components: string[]; }
+export interface ReferenceStatus { installed: ReferenceStatusEntry[]; missing_genomes: string[]; missing: string[]; download_commands: string[]; }
 
 // ── Audit ──
 export interface AuditLogResponse {

@@ -86,6 +86,24 @@ async fn test_data_reference_status() {
     let body: Value = json_body(resp.into_body()).await;
     assert!(body.get("installed").is_some(), "should have installed key");
     assert!(body.get("missing").is_some(), "should have missing key");
+    assert!(
+        body.get("missing_genomes").is_some(),
+        "should have missing_genomes key"
+    );
+    // #907 P1-4: a genome may only appear under `installed` when at least
+    // one expected component was found — never report all-missing builds as
+    // installed-and-Complete. Don't assume which genomes exist on this host.
+    let installed = body["installed"].as_array().unwrap();
+    for entry in installed {
+        assert!(
+            entry["found"].as_array().is_some_and(|f| !f.is_empty()),
+            "installed entry must have non-empty found: {entry}"
+        );
+        assert!(
+            entry.get("missing_components").is_some(),
+            "installed entry must carry missing_components: {entry}"
+        );
+    }
 }
 
 #[tokio::test]
