@@ -6,7 +6,7 @@
 //! Decision engine: info -> warn -> alert -> critical with escalation
 
 use super::types::*;
-use crate::domains::execution::diagnostics::DiagnosticsEngine;
+use crate::domains::execution::diagnostics::{DiagnosticsEngine, ErrorCategory};
 use chrono::Utc;
 
 /// Execution status of a single rule/node.
@@ -17,6 +17,15 @@ pub struct NodeExecutionStatus {
     pub duration_ms: Option<i64>,
     pub exit_code: Option<i32>,
     pub started_at: Option<String>,
+    /// Bounded stderr tail of a failed rule (checkpoint `rule_runs`) — lets
+    /// the monitor classify the failure via the shared DiagnosticsEngine
+    /// instead of guessing from the exit code alone (issue #907 P1-3).
+    #[serde(default)]
+    pub stderr_tail: Option<String>,
+    /// Bounded stdout tail of a failed rule — some tools print their root
+    /// cause on stdout (issue #765); analyzed alongside stderr.
+    #[serde(default)]
+    pub stdout_tail: Option<String>,
 }
 
 /// Current resource usage.
@@ -61,6 +70,7 @@ pub fn analyze_run_status(
             AlertLevel::Warn
         };
         alerts.push(MonitorAlert {
+            alert_id: "resource:memory".into(),
             level: level.clone(),
             rule_name: None,
             prediction: format!("Memory at {:.1}% -- risk of OOM", resources.memory_pct),
@@ -84,6 +94,7 @@ pub fn analyze_run_status(
             AlertLevel::Warn
         };
         alerts.push(MonitorAlert {
+            alert_id: "resource:disk".into(),
             level: level.clone(),
             rule_name: None,
             prediction: format!("Disk at {:.1}% -- may run out of space", resources.disk_pct),
@@ -114,6 +125,7 @@ pub fn analyze_run_status(
             && dur as f64 > avg * 3.0
         {
             alerts.push(MonitorAlert {
+                alert_id: format!("slow:{}", node.rule),
                 level: AlertLevel::Warn,
                 rule_name: Some(node.rule.clone()),
                 prediction: format!(
@@ -129,42 +141,9 @@ pub fn analyze_run_status(
         }
 
         if node.status == "failed" {
-            let (prediction, suggestion, auto_fixable, level) = match node.exit_code {
-                Some(137) | Some(9) => (
-                    format!(
-                        "Rule '{}' killed by OOM (exit {})",
-                        node.rule,
-                        node.exit_code.unwrap()
-                    ),
-                    "Increase memory allocation and retry from checkpoint.".into(),
-                    true,
-                    AlertLevel::Critical,
-                ),
-                Some(1) => (
-                    format!("Rule '{}' failed with generic error (exit 1)", node.rule),
-                    "Check log output for specific error details.".into(),
-                    false,
-                    AlertLevel::Alert,
-                ),
-                Some(139) => (
-                    format!("Rule '{}' segfaulted (exit 139)", node.rule),
-                    "Possible memory corruption -- reduce threads or check input data integrity."
-                        .into(),
-                    false,
-                    AlertLevel::Critical,
-                ),
-                _ => (
-                    format!(
-                        "Rule '{}' failed with exit code {}",
-                        node.rule,
-                        node.exit_code.unwrap_or(-1)
-                    ),
-                    "Review logs and adjust parameters.".into(),
-                    false,
-                    AlertLevel::Alert,
-                ),
-            };
+            let (prediction, suggestion, auto_fixable, level, pattern_id) = classify_failure(node);
             alerts.push(MonitorAlert {
+                alert_id: format!("failed:{}:{}", node.rule, pattern_id),
                 level,
                 rule_name: Some(node.rule.clone()),
                 prediction,
@@ -229,6 +208,105 @@ pub fn analyze_run_status(
             },
         },
         estimated_completion,
+    }
+}
+
+/// Classify a failed node into an alert. Prefers the shared
+/// [`DiagnosticsEngine`] pattern table run over the persisted stderr/stdout
+/// tails (issue #907 P1-3) — the engine knows 30+ concrete signatures, so
+/// exit 1 no longer collapses every failure into "generic error". Falls
+/// back to the classic exit-code signatures (OOM 137/9, segfault 139) when
+/// no tail survived, and to the generic message when neither matches.
+/// Returns `(prediction, suggestion, auto_fixable, level, pattern_id)`.
+fn classify_failure(
+    node: &NodeExecutionStatus,
+) -> (String, String, bool, AlertLevel, &'static str) {
+    let tail = [node.stderr_tail.as_deref(), node.stdout_tail.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<&str>>()
+        .join("\n");
+
+    if tail.trim().is_empty() {
+        // No tail: fall through to the exit-code-only signatures below.
+    } else if let Some(result) = DiagnosticsEngine::global()
+        .analyze(&node.rule, &tail, node.exit_code)
+        .into_iter()
+        .find(|r| r.error_pattern.as_deref() != Some("unknown_error"))
+    {
+        let pattern = result
+            .error_pattern
+            .unwrap_or_else(|| "unknown".to_string());
+        let pattern_id: &'static str = match pattern.as_str() {
+            "oom_killed" => "oom_killed",
+            "segfault" => "segfault",
+            "command_not_found" => "command_not_found",
+            "timeout" => "timeout",
+            "disk_full" => "disk_full",
+            "permission_denied" => "permission_denied",
+            "network_error" => "network_error",
+            "conda_env_fail" => "conda_env_fail",
+            "shell_syntax" => "shell_syntax",
+            _ => "exit_code",
+        };
+        let level = match result.category {
+            ErrorCategory::Resource => AlertLevel::Critical,
+            _ => AlertLevel::Alert,
+        };
+        let prediction = format!(
+            "Rule '{}' failed: {} (exit {})",
+            node.rule,
+            result.likely_cause,
+            node.exit_code.unwrap_or(-1)
+        );
+        let mut suggestion = result
+            .suggestions
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Review logs and adjust parameters.".into());
+        if result.auto_fixable {
+            suggestion.push_str(" (auto-fix available via Retry)");
+        }
+        return (
+            prediction,
+            suggestion,
+            result.auto_fixable,
+            level,
+            pattern_id,
+        );
+    }
+
+    // No tail (or no match): fall back to the exit-code-only signatures.
+    match node.exit_code {
+        Some(137) | Some(9) => (
+            format!(
+                "Rule '{}' killed by OOM (exit {})",
+                node.rule,
+                node.exit_code.unwrap()
+            ),
+            "Increase memory allocation and retry from checkpoint.".into(),
+            true,
+            AlertLevel::Critical,
+            "oom_killed",
+        ),
+        Some(139) => (
+            format!("Rule '{}' segfaulted (exit 139)", node.rule),
+            "Possible memory corruption -- reduce threads or check input data integrity.".into(),
+            false,
+            AlertLevel::Critical,
+            "segfault",
+        ),
+        _ => (
+            format!(
+                "Rule '{}' failed with exit code {}",
+                node.rule,
+                node.exit_code.unwrap_or(-1)
+            ),
+            "Review logs and adjust parameters.".into(),
+            false,
+            AlertLevel::Alert,
+            "exit_code",
+        ),
     }
 }
 
@@ -299,6 +377,8 @@ mod tests {
                 duration_ms: Some(10_000),
                 exit_code: Some(0),
                 started_at: None,
+                stderr_tail: None,
+                stdout_tail: None,
             },
             NodeExecutionStatus {
                 rule: "step2".into(),
@@ -306,6 +386,8 @@ mod tests {
                 duration_ms: Some(5_000),
                 exit_code: None,
                 started_at: None,
+                stderr_tail: None,
+                stdout_tail: None,
             },
         ];
         let resources = ResourceUsage::default();
@@ -322,6 +404,8 @@ mod tests {
             duration_ms: Some(30_000),
             exit_code: Some(137),
             started_at: None,
+            stderr_tail: None,
+            stdout_tail: None,
         }];
         let resources = ResourceUsage {
             memory_pct: 95.0,
@@ -342,6 +426,53 @@ mod tests {
         let (known, pattern) = is_known_error_pattern(Some(137), "");
         assert!(known);
         assert_eq!(pattern, "oom_killed");
+    }
+
+    #[test]
+    fn test_tail_classification_uses_diagnostics_engine() {
+        // Issue #907 P1-3: exit 1 used to collapse into "generic error" even
+        // when the persisted stderr named the real cause. With a tail, the
+        // classification comes from the shared DiagnosticsEngine table.
+        let nodes = vec![NodeExecutionStatus {
+            rule: "qc".into(),
+            status: "failed".into(),
+            duration_ms: Some(5_000),
+            exit_code: Some(127),
+            started_at: None,
+            stderr_tail: Some("sh: fastqc: command not found".into()),
+            stdout_tail: None,
+        }];
+        let status = analyze_run_status(&nodes, &ResourceUsage::default());
+        let alert = status
+            .alerts
+            .iter()
+            .find(|a| a.rule_name.as_deref() == Some("qc"))
+            .expect("failed rule must raise an alert");
+        assert_eq!(alert.alert_id, "failed:qc:command_not_found");
+        assert!(alert.prediction.contains("not installed or not in PATH"));
+        assert!(alert.auto_fixable);
+    }
+
+    #[test]
+    fn test_alert_ids_are_stable_across_polls() {
+        // Issue #907 P1-8: the ai-status endpoint is polled every 5s; alert
+        // identities (not timestamps) must be stable so consumers can dedup.
+        let nodes = vec![NodeExecutionStatus {
+            rule: "star_align".into(),
+            status: "failed".into(),
+            duration_ms: Some(30_000),
+            exit_code: Some(137),
+            started_at: None,
+            stderr_tail: None,
+            stdout_tail: None,
+        }];
+        let mk = || analyze_run_status(&nodes, &ResourceUsage::default());
+        let a = mk();
+        let b = mk();
+        let ids_a: Vec<&str> = a.alerts.iter().map(|x| x.alert_id.as_str()).collect();
+        let ids_b: Vec<&str> = b.alerts.iter().map(|x| x.alert_id.as_str()).collect();
+        assert_eq!(ids_a, ids_b);
+        assert!(ids_a.iter().any(|id| id.starts_with("failed:star_align:")));
     }
 
     #[test]
