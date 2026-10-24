@@ -867,7 +867,12 @@ fn tmp_dir_resolved(configured: Option<String>, workflow_dir: &Path) -> Result<O
     if let Ok(raw) = std::env::var("OXO_FLOW_TMPDIR") {
         let raw = raw.trim().to_string();
         if !raw.is_empty() {
-            return Ok(Some(absolutize(Path::new(&raw))?));
+            let resolved = absolutize(Path::new(&raw))?;
+            // Same fail-fast mkdir as the config path below — the docs
+            // promise "created on demand at run start" for both routes.
+            std::fs::create_dir_all(&resolved)
+                .with_context(|| format!("creating OXO_FLOW_TMPDIR dir {}", resolved.display()))?;
+            return Ok(Some(resolved));
         }
         tracing::warn!("OXO_FLOW_TMPDIR is empty, ignoring it in favor of [engine] tmp_dir");
     }
@@ -2489,6 +2494,12 @@ pub async fn run_command(
         Arc::new(config_placeholder_values(&config.config));
     let workdir_actual = Arc::new(workdir.as_ref().unwrap_or(&workdir_default).clone());
 
+    // `[engine] tmp_dir` resolved once here so both the executor config and
+    // the workflow-level terminal hooks route scratch identically (issue #907).
+    let tmp_dir_resolved = tmp_dir_resolved(
+        config.engine.as_ref().and_then(|e| e.tmp_dir.clone()),
+        &workflow_dir,
+    )?;
     // ── Pre-flight disk check (issue #75, wired 2026-08-23) ────────────────
     // ENOSPC mid-run is the classic silent-loss incident (live: TMPDIR full
     // killed a scatter campaign half-way). Warn when either the workdir or
@@ -2894,10 +2905,9 @@ pub async fn run_command(
         // paths anchor to the workflow directory (same root as file-backed
         // env specs), absolute paths pass through. OXO_FLOW_TMPDIR wins when
         // set, matching the env-override pattern of OXO_FLOW_OUTPUT_TAIL_BYTES.
-        tmp_dir: tmp_dir_resolved(
-            config.engine.as_ref().and_then(|e| e.tmp_dir.clone()),
-            &workflow_dir,
-        )?,
+        // Hoisted so the workflow-level terminal hooks route their scratch
+        // through the same directory.
+        tmp_dir: tmp_dir_resolved.clone(),
     };
 
     // Fail fast if any rule's declared request can never fit an explicit
@@ -5530,6 +5540,7 @@ pub async fn run_command(
             run_terminal_hook(
                 &config,
                 &workdir_actual,
+                tmp_dir_resolved.as_deref(),
                 success_count.load(std::sync::atomic::Ordering::Relaxed),
                 fail_count.load(std::sync::atomic::Ordering::Relaxed),
                 skipped_count.load(std::sync::atomic::Ordering::Relaxed),
@@ -5761,6 +5772,7 @@ pub async fn run_command(
     run_terminal_hook(
         &config,
         &workdir_actual,
+        tmp_dir_resolved.as_deref(),
         success_count,
         fail_count,
         skipped_count,
@@ -6375,6 +6387,7 @@ pub async fn run_command(
 async fn run_terminal_hook(
     config: &WorkflowConfig,
     workdir: &std::path::Path,
+    tmp_dir: Option<&std::path::Path>,
     succeeded: usize,
     failed: usize,
     skipped: usize,
@@ -6401,6 +6414,7 @@ async fn run_terminal_hook(
         &rendered,
         workdir,
         config.defaults.shell_prelude.as_deref(),
+        tmp_dir,
     )
     .await;
 }

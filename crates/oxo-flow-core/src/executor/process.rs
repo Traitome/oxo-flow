@@ -2381,6 +2381,14 @@ impl LocalExecutor {
             for (var, value) in &pre_sensitive_envs {
                 pre_envs.insert(var.clone(), value.clone());
             }
+            // pre_exec runs with the same scratch routing as the rule shell
+            // itself (issue #907): a hook that stages temp files must land
+            // on the configured volume, not the system default.
+            if let Some(tmp) = self.config.tmp_dir.as_deref() {
+                for var in ["TMPDIR", "TMP", "TEMP"] {
+                    pre_envs.insert(var.to_string(), tmp.display().to_string());
+                }
+            }
             let pre_child = spawn_rule_shell(&rendered_pre, rule_cwd, &pre_envs);
             let pre_result = match pre_child {
                 Ok(child) => child.wait_with_output().await,
@@ -2688,6 +2696,7 @@ impl LocalExecutor {
                         &rule,
                         &self.config.workdir,
                         self.config.shell_prelude.as_deref(),
+                        self.config.tmp_dir.as_deref(),
                     )
                     .await;
                 }
@@ -2725,6 +2734,7 @@ impl LocalExecutor {
                                 &rule,
                                 &self.config.workdir,
                                 self.config.shell_prelude.as_deref(),
+                                self.config.tmp_dir.as_deref(),
                             )
                             .await;
                         }
@@ -2744,6 +2754,7 @@ impl LocalExecutor {
                                 &rule,
                                 &self.config.workdir,
                                 self.config.shell_prelude.as_deref(),
+                                self.config.tmp_dir.as_deref(),
                             )
                             .await;
                         }
@@ -2820,6 +2831,7 @@ impl LocalExecutor {
                         &rule,
                         &self.config.workdir,
                         self.config.shell_prelude.as_deref(),
+                        self.config.tmp_dir.as_deref(),
                     )
                     .await;
                 }
@@ -2845,6 +2857,7 @@ impl LocalExecutor {
                     &rule,
                     &self.config.workdir,
                     self.config.shell_prelude.as_deref(),
+                    self.config.tmp_dir.as_deref(),
                 )
                 .await;
             }
@@ -3768,10 +3781,25 @@ async fn discard_scratch(scratch: Option<&Path>) {
 /// Execute a rendered rule hook (on_success / on_failure) in the rule's
 /// environment. Hooks are best-effort: their failure never changes the
 /// rule's own status (pre_exec is the exception and aborts the rule).
-async fn run_hook(cmd: &str, rule: &Rule, workdir: &std::path::Path, shell_prelude: Option<&str>) {
+/// `tmp_dir` is the run's global scratch dir (issue #907) — hooks get the
+/// same TMPDIR/TMP/TEMP routing as the rule shell so tools they invoke
+/// spill to the configured volume too.
+async fn run_hook(
+    cmd: &str,
+    rule: &Rule,
+    workdir: &std::path::Path,
+    shell_prelude: Option<&str>,
+    tmp_dir: Option<&std::path::Path>,
+) {
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
-    let child = match spawn_rule_shell(&cmd, workdir, &rule.envvars) {
+    let mut envs = rule.envvars.clone();
+    if let Some(tmp) = tmp_dir {
+        for var in ["TMPDIR", "TMP", "TEMP"] {
+            envs.insert(var.to_string(), tmp.display().to_string());
+        }
+    }
+    let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(rule = %rule.name, error = %e, "failed to spawn rule hook");
@@ -3804,11 +3832,24 @@ pub fn expand_placeholders(cmd: &str, values: &HashMap<String, String>) -> Strin
 
 /// Execute a workflow-level terminal hook (`on_complete` / `on_error`) in
 /// the workflow root. Best-effort like rule hooks: a failing hook is a
-/// warning, never a run-status change.
-pub async fn run_workflow_hook(cmd: &str, workdir: &std::path::Path, shell_prelude: Option<&str>) {
+/// warning, never a run-status change. `tmp_dir` routes the hook's scratch
+/// the same way as rule shells (issue #907) — pass `None` to leave the
+/// ambient environment untouched.
+pub async fn run_workflow_hook(
+    cmd: &str,
+    workdir: &std::path::Path,
+    shell_prelude: Option<&str>,
+    tmp_dir: Option<&std::path::Path>,
+) {
     // Hooks take the same prelude as rule commands (issue #92).
     let cmd = crate::config::prepend_shell_prelude(cmd, shell_prelude);
-    let child = match spawn_rule_shell(&cmd, workdir, &HashMap::new()) {
+    let mut envs = HashMap::new();
+    if let Some(tmp) = tmp_dir {
+        for var in ["TMPDIR", "TMP", "TEMP"] {
+            envs.insert(var.to_string(), tmp.display().to_string());
+        }
+    }
+    let child = match spawn_rule_shell(&cmd, workdir, &envs) {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(error = %e, "failed to spawn workflow hook");
@@ -5560,7 +5601,7 @@ mod tests {
     #[tokio::test]
     async fn run_workflow_hook_executes_in_workdir() {
         let dir = tempfile::tempdir().expect("tempdir");
-        run_workflow_hook("touch hooked.marker", dir.path(), None).await;
+        run_workflow_hook("touch hooked.marker", dir.path(), None, None).await;
         assert!(
             dir.path().join("hooked.marker").exists(),
             "workflow hook ran in the workflow root"
