@@ -98,15 +98,23 @@ oxo-flow env create [OPTIONS] <SPEC>
 
 ### `env gc`
 
-Inspect and clean up the shared environment store (issue #904).
+Inspect and clean up the **opt-in** shared environment store (issue #904).
 
-Pixi and venv environments are materialized **once per content key** under a
-machine-wide store directory instead of inside each workflow tree; workflow
-trees hold symlinks into the store. Repeated runs across many pipeline
-checkouts reuse the same environment instead of re-downloading and
-re-building it per tree. A broken link (e.g. the store dir was deleted) is
-detected automatically on the next run: the cached entry is invalidated and
-the environment is rebuilt, no manual intervention needed.
+The store is **disabled by default**: a workflow is self-contained and its
+pixi/venv environments materialize inside the workflow tree exactly like any
+other artifact — the tree stays copyable, movable, and deletable on its own.
+
+Setting `OXO_FLOW_ENV_STORE` to a non-empty path **activates** the store
+(location IS activation). When enabled, pixi and venv environments
+materialize **once per content key** under the store root; the in-tree
+location the engine already uses (`.pixi` next to the manifest, the venv
+dir) becomes a symlink into the store, so wraps like
+`pixi run --manifest-path` and `source .venv/bin/activate` keep working
+unchanged. Repeated runs across many pipeline checkouts reuse the same
+environment instead of re-downloading and re-building it per tree. A broken
+link (e.g. the store dir was deleted) is detected automatically on the next
+run: the cached entry is invalidated and the environment is rebuilt, no
+manual intervention needed.
 
 ```bash
 oxo-flow env gc [--min-age-days N] [--dry-run]
@@ -117,9 +125,12 @@ oxo-flow env gc [--min-age-days N] [--dry-run]
 | `--min-age-days` | `14` | Minimum age (mtime) before an unreferenced store dir may be deleted |
 | `--dry-run` | off | Report what would be deleted without touching anything |
 
-**Where environments live:**
+With the store disabled (`OXO_FLOW_ENV_STORE` unset), `env gc` prints a note
+and exits — there is nothing to collect.
 
-- Store root: `$OXO_FLOW_ENV_STORE`, default `~/.cache/oxo-flow/envs/`
+**Where environments live (store enabled):**
+
+- Store root: exactly the path `OXO_FLOW_ENV_STORE` points at — there is no implicit default; the environment variable is per-process, so on a multi-user server each user who opts in gets their own store unless an operator deliberately points everyone at a shared filesystem path
 - Each environment: `<root>/<backend>-<sha256-16hex of its content key>` (e.g. `pixi-3f2a…`)
 - Workflow trees: a symlink (`.pixi` for pixi rules, the venv path for venv rules) pointing into the store
 
@@ -132,7 +143,7 @@ oxo-flow env gc [--min-age-days N] [--dry-run]
 
 ```bash
 # Preview
-oxo-flow env gc --dry-run
+OXO_FLOW_ENV_STORE=~/.cache/oxo-flow/envs oxo-flow env gc --dry-run
 
 Shared environment store: /home/user/.cache/oxo-flow/envs (3 env dirs)
   pixi-3f2a91b0c4d5e6f7 [pixi] referenced by a checkpoint — kept
@@ -147,6 +158,7 @@ Summary: 1 store dir(s) would be deleted, freeing ~310.4 MiB (dry run — nothin
 
 - GC discovery covers the checkpoint of the workdir you run it from (`.oxo-flow/checkpoint.json`); runs in other trees are protected by the age gate. Check `--dry-run` output before a real run when multiple worktrees share one store
 - `oxo-flow env gc` only ever deletes inside the store root — workflow-tree symlinks are never followed or removed, and store contents are never modified, only whole dirs deleted
+- Store re-homing is best-effort and non-destructive: if the env cannot be moved into the store (cross-device, permissions), the run keeps the plain in-tree environment and simply misses the dedup
 
 ---
 
@@ -166,6 +178,10 @@ oxo-flow env list
 
 # Check a specific workflow
 oxo-flow env check pipeline.oxoflow
+
+# Opt into the shared env store for this shell session, then preview GC
+export OXO_FLOW_ENV_STORE=~/.cache/oxo-flow/envs
+oxo-flow env gc --dry-run
 ```
 
 ---

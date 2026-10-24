@@ -302,7 +302,17 @@ pub async fn env_command(action: EnvAction) -> Result<()> {
 /// under a concurrent first run whose checkpoint has not recorded the
 /// reference yet, and a torn dir may equally be a run mid-re-home.
 fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
-    let store = oxo_flow_core::executor::env_store::EnvStore::from_env();
+    let store = oxo_flow_core::executor::env_store::EnvStore::from_env().unwrap_or_else(|| {
+        oxo_flow_core::executor::env_store::EnvStore::from_root(std::path::PathBuf::new())
+    });
+    if !store.is_enabled() {
+        eprintln!(
+            "{} OXO_FLOW_ENV_STORE is not set — the shared env store is disabled \
+             (envs are self-contained inside each workflow tree, nothing to collect).",
+            "Note:".yellow()
+        );
+        return Ok(());
+    }
     let entries = store
         .entries()
         .with_context(|| format!("failed to scan env store at {}", store.root().display()))?;
@@ -371,8 +381,7 @@ fn env_gc(min_age_days: u64, dry_run: bool) -> Result<()> {
                     }
                 }
                 Some(mtime) => {
-                    let days_left =
-                        (mtime + min_age_days * 86_400).saturating_sub(cutoff) / 86_400 + 1;
+                    let days_left = (mtime.saturating_sub(cutoff)) / 86_400 + 1;
                     format!("unreferenced but too new (~{days_left}d until eligible)")
                 }
                 None => "unreferenced but mtime unknown — kept".to_string(),

@@ -266,6 +266,21 @@ a pixi spec must point at a `pixi.toml` manifest). It does not
 re-check spec files or image reference syntax — `validate` and `lint` cover
 declaration-level checks.
 
+## Shared environment store (opt-in, #904)
+
+By default every workflow is **self-contained**: pixi and venv environments
+materialize inside the workflow tree (`.pixi` next to the manifest, the venv
+dir) like any other artifact. Setting `OXO_FLOW_ENV_STORE` to a non-empty
+path **activates** the shared store (location IS activation): the env then
+materializes once per content key under the store root and the in-tree
+location becomes a symlink, so `pixi run --manifest-path` and
+`source .venv/bin/activate` keep working unchanged. The variable is
+per-process — on a multi-user server each user who opts in gets their own
+store unless an operator deliberately points everyone at a shared path.
+Maintenance is `oxo-flow env gc` (checkpoint-reference + age gated,
+`--dry-run` first); a broken link is detected on the next run and the env
+is rebuilt automatically. Details: [`env` command](../commands/env.md#env-gc).
+
 ---
 
 ## See Also
@@ -274,6 +289,7 @@ declaration-level checks.
 - [Use Environments how-to](../how-to/use-environments.md) — practical recipes
 - [`env` command](../commands/env.md) — CLI reference
 - [`run` command](../commands/run.md) — `--skip-env-setup` and `--cache-dir` options
+- [Shared env store (opt-in)](#shared-environment-store-opt-in-904) — `OXO_FLOW_ENV_STORE` semantics and GC
 - [China Network Mirrors](china-mirrors.md) — measured reachability of the
   conda/bioconda, PyPI, Rust, and Docker mirrors users on mainland-China
   networks configure for environment provisioning (includes a re-runnable
