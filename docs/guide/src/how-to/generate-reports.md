@@ -55,9 +55,12 @@ oxo-flow report pipeline.oxoflow --versions-yml versions.yml
 Each rule records its declared backend — docker `image:tag`, module
 `(tool, version)`, conda/mamba/pixi env files and `venv_requirements`
 files with sha256 content hashes (a bare `venv` directory path is
-recorded as declared, without a hash). This is a static declaration (the
-engine never executes
-anything to collect it), so resolved runtime package versions are not
+recorded as declared, without a hash). When the workflow uses pinned git
+`[[include]]`s, the YAML also lists each one's resolved commit SHA under
+`workflow.includes` (issue #899) — diffing the file in CI therefore also
+catches module drift, not just engine/workflow changes. This is a static
+declaration (the engine never executes anything to collect it), so
+resolved runtime package versions are not
 included; every entry carries that caveat. `-` writes the YAML to
 stdout.
 
@@ -80,7 +83,7 @@ A generated report includes:
 | **Sample Matrix** | Rule × sample status grid from the checkpoint's expanded instance names — hidden without a checkpoint or sample definitions |
 | **Resource Accounting** | Cluster accounting imported from an sacct CSV via `--acct` (Rule/State/Elapsed/CPU Time/Max RSS) |
 | **Environment** | Engine version, platform, and the environments the workflow's rules declare |
-| **Provenance** | Engine version, workflow file sha256, checkpoint location |
+| **Provenance** | Engine version, workflow file sha256, checkpoint location; plus the workflow git HEAD and one row per pinned git `[[include]]` with its resolved commit SHA (`Include <repo>@<ref> <path>`) |
 | **Software Versions** | Declared software per rule, nf-core-style: docker `image:tag`, module `tool/version`, env files with sha256 hashes — static declaration, runtime package versions deliberately not recorded |
 | **Task Summary** | Per-rule table of tasks, types, inputs, outputs, environments, and resources |
 | **Rule Captions** | Per-rule `report` annotations rendered as markdown (one subsection per executed instance) — set `report = "caption"` or `report = { file = "notes/qc.md", caption = "…" }` on a rule |

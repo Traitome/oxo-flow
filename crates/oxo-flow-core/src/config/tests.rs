@@ -2815,6 +2815,27 @@ shell = "true"
         config.rules.iter().any(|r| r.name == "fastqc"),
         "the module's rule must resolve from the pinned repo"
     );
+    // Issue #899: the resolution must record provenance — repo@ref plus the
+    // checkout's exact HEAD SHA — so run/resume pairs can prove the module
+    // did not drift between activations.
+    assert_eq!(config.include_provenance.len(), 1, "one repo-include");
+    let prov = &config.include_provenance[0];
+    assert_eq!(prov.repo, format!("file://{}", repo.display()));
+    assert_eq!(prov.git_ref, "v1.0.0");
+    assert_eq!(prov.path, "qc.oxoflow");
+    assert_eq!(prov.resolved_sha.len(), 40, "full SHA recorded");
+    // The recorded SHA must be the tag's commit.
+    let expected = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["-C", repo.to_str().unwrap(), "rev-parse", "v1.0.0^{commit}"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert_eq!(prov.resolved_sha, expected);
 }
 
 #[test]

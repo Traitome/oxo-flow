@@ -853,6 +853,20 @@ the field and never fails the run. Commit your workflow before running to
 get fully version-audited results. See
 [Workflow Versioning](../reference/versioning.md) for the full model.
 
+### Include resolutions in the checkpoint
+
+Every `[[include]]` that pins a git repository (`repo` + `ref`) records
+**the exact commit SHA its checkout resolved to** at parse time, in the
+checkpoint (`include_resolutions`, keyed `repo@ref path` → SHA). Branch
+and tag pins re-fetch on every activation — the workflow file alone cannot
+prove which module content a past run actually used — so this per-include
+SHA is the evidence a run/resume pair needs that the modules did not drift
+between the two. The field is absent for workflows without repo includes,
+and recording it is best-effort (an unreadable checkout logs a warning and
+records nothing, never failing the run). The run report's Provenance
+section lists one row per include. See
+[Workflow Versioning](../reference/versioning.md) for the full model.
+
 ### Run logs
 
 Every run — and `resume`, which re-enters the same path — archives its own

@@ -42,6 +42,9 @@ pub struct SoftwareVersionsDoc {
     pub workflow_version: String,
     pub engine_version: String,
     pub workflow_git_sha: Option<String>,
+    /// Per pinned git include, `repo@ref path` → resolved HEAD SHA
+    /// (issue #899) — absent when the workflow has no repo includes.
+    pub include_resolutions: Vec<(String, String)>,
     pub entries: Vec<SoftwareVersionEntry>,
     /// Declared reference databases: `(name, version, checksum)`.
     pub references: Vec<(String, Option<String>, Option<String>)>,
@@ -74,6 +77,13 @@ impl SoftwareVersionsDoc {
         ));
         if let Some(sha) = &self.workflow_git_sha {
             out.push_str(&format!("  git_sha: {}\n", yaml_scalar(sha)));
+        }
+        if !self.include_resolutions.is_empty() {
+            out.push_str("  includes:\n");
+            for (key, sha) in &self.include_resolutions {
+                out.push_str(&format!("    - include: {}\n", yaml_scalar(key)));
+                out.push_str(&format!("      resolved_sha: {}\n", yaml_scalar(sha)));
+            }
         }
         out.push_str(&format!("note: {}\n", yaml_scalar(self.note())));
 
@@ -226,6 +236,14 @@ pub fn collect_software_versions(
         workflow_version: config.workflow.version.clone(),
         engine_version: env!("CARGO_PKG_VERSION").to_string(),
         workflow_git_sha: checkpoint.and_then(|c| c.workflow_git_sha.clone()),
+        include_resolutions: checkpoint
+            .map(|c| {
+                c.include_resolutions
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
         entries,
         references,
     }
@@ -687,6 +705,33 @@ mod tests {
         let doc = collect_software_versions(&config, Some(&cp), Some(&path));
         assert_eq!(doc.workflow_git_sha.as_deref(), Some("abc123"));
         assert!(doc.to_yaml().contains("git_sha: abc123"));
+    }
+
+    #[test]
+    fn include_resolutions_flow_from_checkpoint() {
+        // Issue #899: per repo-include resolved SHAs surface in the
+        // versions YAML under `workflow.includes` — diffable in CI like
+        // git_sha itself.
+        let (config, path) = config_from("[[rules]]\nname = \"t\"\nshell = \"x\"\n");
+        let mut cp = CheckpointState::default();
+        cp.set_include_resolutions(&[crate::config::IncludeProvenance {
+            repo: "https://github.com/org/modules.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+            path: "qc.oxoflow".to_string(),
+            resolved_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        }]);
+        let doc = collect_software_versions(&config, Some(&cp), Some(&path));
+        assert_eq!(doc.include_resolutions.len(), 1);
+        let yaml = doc.to_yaml();
+        assert!(yaml.contains("includes:"));
+        assert!(
+            yaml.contains("include: 'https://github.com/org/modules.git@v1.0.0 qc.oxoflow'"),
+            "keyed repo@ref path: {yaml}"
+        );
+        assert!(yaml.contains("resolved_sha: 0123456789abcdef0123456789abcdef01234567"));
+        // No repo includes → the key block is absent.
+        let doc2 = collect_software_versions(&config, None, Some(&path));
+        assert!(!doc2.to_yaml().contains("includes:"));
     }
 
     #[test]

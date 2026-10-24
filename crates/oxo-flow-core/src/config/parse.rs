@@ -568,6 +568,25 @@ impl WorkflowConfig {
                         inc.path
                     ),
                 })?;
+                // Include provenance (issue #899): the resolved commit SHA
+                // is read right after ensure_pinned pins the checkout, so
+                // run/resume provenance can prove the module content.
+                // Best-effort — an unreadable HEAD records `None` and never
+                // fails the run (same policy as workflow_git_sha).
+                if let Some(sha) = crate::git::pinned_head(&cache_dir) {
+                    self.include_provenance.push(IncludeProvenance {
+                        repo: repo.clone(),
+                        git_ref: git_ref.to_string(),
+                        path: inc.path.clone(),
+                        resolved_sha: sha,
+                    });
+                } else {
+                    tracing::warn!(
+                        "include '{}' from repo '{repo}': could not read checkout HEAD — \
+                         skipping include provenance recording",
+                        inc.path
+                    );
+                }
                 let next_base = inc_path.parent().unwrap_or(&cache_dir).to_path_buf();
                 (text, next_base)
             } else if inc.path.starts_with("http://") || inc.path.starts_with("https://") {

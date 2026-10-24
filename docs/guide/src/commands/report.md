@@ -269,7 +269,11 @@ OOM-kill, exit 124 timeout, disk-full, …).
 
 Every report records the oxo-flow version, the workflow file and its
 `sha256` checksum, and the checkpoint path it was built from — the report
-itself is an audit-trail anchor.
+itself is an audit-trail anchor. When the workflow lives in a git
+repository the report also names its HEAD SHA, and each pinned git
+`[[include]]` gets its own row (`Include <repo>@<ref> <path>` → the
+checkout's resolved HEAD SHA at parse time) — comparable across a
+run/resume pair to prove module content did not drift (issue #899).
 
 ---
 
