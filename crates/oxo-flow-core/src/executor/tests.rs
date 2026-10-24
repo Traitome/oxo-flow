@@ -4045,3 +4045,78 @@ fn copy_tree_atomic_replaces_existing_non_empty_directory() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `[engine] tmp_dir` (issue #907): the configured scratch directory is
+/// injected as TMPDIR/TMP/TEMP into the rule shell, so a tool reading the
+/// POSIX/legacy temp convention writes there instead of the system default.
+#[tokio::test]
+async fn tmp_dir_env_reaches_rule_shell() {
+    let workdir = std::env::temp_dir().join(format!("oxo-tmpdir-test-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    std::fs::create_dir_all(&workdir).unwrap();
+    let scratch = workdir.join("scratch");
+    let config = ExecutorConfig {
+        dry_run: false,
+        workdir: workdir.clone(),
+        tmp_dir: Some(scratch.clone()),
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = make_rule(
+        "tmpdir_probe",
+        "echo \"TMPDIR=$TMPDIR TMP=$TMP TEMP=$TEMP\" > envdump.txt",
+    );
+
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let dump = std::fs::read_to_string(workdir.join("envdump.txt")).unwrap();
+    let expected = scratch.display().to_string();
+    for var in ["TMPDIR", "TMP", "TEMP"] {
+        assert!(
+            dump.contains(&format!("{var}={expected}")),
+            "{var} must point at the configured scratch dir: {dump}"
+        );
+    }
+
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}
+
+/// Without `[engine] tmp_dir` the ambient environment passes through
+/// untouched — no TMPDIR/TMP/TEMP keys are injected (issue #907).
+#[tokio::test]
+async fn tmp_dir_absent_leaves_env_untouched() {
+    let workdir = std::env::temp_dir().join(format!("oxo-tmpdir-off-{}", std::process::id()));
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    std::fs::create_dir_all(&workdir).unwrap();
+    let config = ExecutorConfig {
+        dry_run: false,
+        workdir: workdir.clone(),
+        tmp_dir: None,
+        ..Default::default()
+    };
+    let executor = LocalExecutor::new(config);
+    let rule = make_rule(
+        "tmpdir_absent",
+        "echo \"TMPDIR=${TMPDIR-unset} TMP=${TMP-unset} TEMP=${TEMP-unset}\" > envdump.txt",
+    );
+
+    let record = executor.execute_rule(&rule, &HashMap::new()).await.unwrap();
+    assert_eq!(record.status, JobStatus::Success);
+    let dump = std::fs::read_to_string(workdir.join("envdump.txt")).unwrap();
+    for var in ["TMP", "TEMP"] {
+        assert!(
+            dump.contains(&format!("{var}=unset")),
+            "{var} must not be injected when tmp_dir is unset: {dump}"
+        );
+    }
+    // TMPDIR may legitimately inherit the ambient value (macOS/libc sets
+    // it); the assertion is that the engine did not OVERWRITE it — the
+    // inherited value is whatever the test process itself sees.
+    let ambient = std::env::var("TMPDIR").unwrap_or_default();
+    assert!(
+        dump.contains(&format!("TMPDIR={ambient}")),
+        "TMPDIR must pass through ambient value untouched: {dump}"
+    );
+
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+}

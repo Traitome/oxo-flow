@@ -57,7 +57,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications (issue #227)
-[engine]            # Optional: runtime disk-pressure guard (issue #843)
+[engine]            # Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907)
 ```
 
 `reference_dir` is a bare top-level key, so it must appear before the first
@@ -3092,12 +3092,14 @@ measures free space mid-run and behavior is unchanged.
 [engine]
 min_free_disk = "50G"        # required to enable: abort/park floor
 # reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk
+# tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `min_free_disk` | String | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
 | `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
+| `tmp_dir` | String | — | Global scratch directory (issue #907). Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
 
 ### Response ladder
 
@@ -3151,8 +3153,22 @@ Notes:
 - Free space is measured at the working directory's filesystem (statvfs),
   which is volume-level: thresholds apply to the whole volume, not to a
   per-directory quota. Tools that spill large scratch outside the
-  workdir (honor `TMPDIR` deliberately if needed) are invisible to the
-  monitor.
+  workdir are invisible to the monitor unless you point `tmp_dir` (below)
+  at the same volume and the tool honors `TMPDIR`.
+- `tmp_dir` routing is shell-environment-level: it covers every rule shell
+  and any tool inside it that honors `TMPDIR`/`TMP`/`TEMP`. Tools with a
+  hardcoded temp path ignore it — set the tool's own flag for those.
+  Rule-level hooks (`pre_exec`, `on_success`, `on_failure`) and the
+  workflow-level `on_complete`/`on_error` hooks get the same injection.
+  Container backends (docker/singularity) do not see host environment
+  variables by default; point the container image's temp setting at a
+  mounted path, or wait for explicit `-e` pass-through support. Cluster
+  submissions (`run --profile` with `[cluster]`) do not yet honor
+  `tmp_dir`/`OXO_FLOW_TMPDIR` — the same gap as output-tail bytes there.
+  The `OXO_FLOW_TMPDIR` override is used verbatim: it must already be
+  absolute, `~` and `..` are not expanded, and a relative value anchors to
+  the process working directory — unlike the config value, which anchors
+  to the workflow file's directory.
 - *Mid-run* reclaim of fan-out producers (`output_pattern` with
   per-instance values) fires only with full instance attribution
   (issue #846): the recorded instance combos from
