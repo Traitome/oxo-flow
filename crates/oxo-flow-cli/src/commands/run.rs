@@ -855,6 +855,43 @@ fn absolutize(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Resolve the run's global scratch directory (`[engine] tmp_dir`, issue
+/// #907). `OXO_FLOW_TMPDIR` overrides the workflow value — the same
+/// env-beats-config pattern as `OXO_FLOW_OUTPUT_TAIL_BYTES` — so operators
+/// can redirect temp traffic per invocation without touching the file.
+/// A relative workflow value anchors to the workflow directory (the same
+/// root as file-backed env specs, issue #427); the configured directory is
+/// created on demand so the first rule doesn't race on mkdir. `None`
+/// (unset everywhere) keeps the ambient environment untouched.
+fn tmp_dir_resolved(configured: Option<String>, workflow_dir: &Path) -> Result<Option<PathBuf>> {
+    if let Ok(raw) = std::env::var("OXO_FLOW_TMPDIR") {
+        let raw = raw.trim().to_string();
+        if !raw.is_empty() {
+            return Ok(Some(absolutize(Path::new(&raw))?));
+        }
+        tracing::warn!("OXO_FLOW_TMPDIR is empty, ignoring it in favor of [engine] tmp_dir");
+    }
+    let Some(raw) = configured else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        tracing::warn!("[engine] tmp_dir is empty, ignoring it");
+        return Ok(None);
+    }
+    let raw_path = Path::new(trimmed);
+    // Anchor on the RAW value — absolutizing first would join the process
+    // cwd and silently turn every relative config into a cwd-relative path.
+    let anchored = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        workflow_dir.join(raw_path)
+    };
+    std::fs::create_dir_all(&anchored)
+        .with_context(|| format!("creating [engine] tmp_dir {}", anchored.display()))?;
+    Ok(Some(anchored))
+}
+
 /// Lexically collapse `.`/`..` segments from an absolutized path
 /// (`/wf/./data` → `/wf/data`) without touching the filesystem. The
 /// workflow-dir join in `parent_dir` leaves a `.` segment for bare
@@ -2853,6 +2890,14 @@ pub async fn run_command(
         // The freshness gate reads recorded provenance checksums from the
         // live checkpoint (issue #194 B2).
         checkpoint: Some(checkpoint.clone()),
+        // `[engine] tmp_dir` → global scratch routing (issue #907): relative
+        // paths anchor to the workflow directory (same root as file-backed
+        // env specs), absolute paths pass through. OXO_FLOW_TMPDIR wins when
+        // set, matching the env-override pattern of OXO_FLOW_OUTPUT_TAIL_BYTES.
+        tmp_dir: tmp_dir_resolved(
+            config.engine.as_ref().and_then(|e| e.tmp_dir.clone()),
+            &workflow_dir,
+        )?,
     };
 
     // Fail fast if any rule's declared request can never fit an explicit
@@ -10085,5 +10130,55 @@ shell = "cp stage1.txt stage2.txt"
                 "binary mode must keep the install advice: {rendered}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tmp_dir_tests {
+    //! `[engine] tmp_dir` resolution (issue #907): env override wins,
+    //! relative values anchor to the workflow dir, unset stays unset.
+
+    use super::tmp_dir_resolved;
+
+    #[test]
+    fn unset_everywhere_is_none() {
+        // OXO_FLOW_TMPDIR is unset in CI and normal dev shells; if a developer
+        // exports it, skip rather than fail — the test asserts the CONFIGURED
+        // path, not the operator's machine.
+        if std::env::var("OXO_FLOW_TMPDIR").is_ok() {
+            return;
+        }
+        let resolved = tmp_dir_resolved(None, std::path::Path::new("/wf")).unwrap();
+        assert!(resolved.is_none(), "no config + no env = None");
+    }
+
+    #[test]
+    fn relative_config_anchors_to_workflow_dir() {
+        let dir = std::env::temp_dir().join(format!("oxo-tmpdircfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let workflow_dir = dir.join("wf");
+        std::fs::create_dir_all(&workflow_dir).unwrap();
+
+        let resolved = tmp_dir_resolved(Some("scratch".to_string()), &workflow_dir).unwrap();
+        assert_eq!(
+            resolved.as_deref(),
+            Some(workflow_dir.join("scratch").as_path()),
+            "relative tmp_dir must anchor to the workflow directory"
+        );
+        // Created on demand so the first rule doesn't race on mkdir.
+        assert!(workflow_dir.join("scratch").is_dir());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_config_value_is_ignored() {
+        if std::env::var("OXO_FLOW_TMPDIR").is_ok() {
+            return;
+        }
+        let resolved =
+            tmp_dir_resolved(Some("   ".to_string()), std::path::Path::new("/wf")).unwrap();
+        assert!(resolved.is_none(), "empty/whitespace tmp_dir = None");
     }
 }

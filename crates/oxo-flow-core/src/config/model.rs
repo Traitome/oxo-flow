@@ -826,6 +826,18 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reclaim_free_disk: Option<String>,
+    /// Workflow-global scratch directory injected as `TMPDIR`/`TMP`/`TEMP`
+    /// into every rule shell (issue #907, mirroring Nextflow's `NXF_TEMP`
+    /// and Snakemake's `tmpdir` resource). Many bioinformatics tools cache
+    /// heavily in the system temp directory and fail mid-run when it is
+    /// small (common on servers where `/tmp` is a small tmpfs); pointing
+    /// `tmp_dir` at a large data volume routes that traffic somewhere with
+    /// room. Relative paths resolve against the workflow file's directory
+    /// (the same anchor as file-backed environment specs); the directory is
+    /// created on demand. Unset = rules inherit the ambient environment.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmp_dir: Option<String>,
 }
 
 impl EngineConfig {

@@ -209,8 +209,9 @@ const REFERENCE_KEYS: &[&str] = &[
 /// Keys of the `[resource_budget]` table.
 const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"];
 
-/// Keys of the `[engine]` table (issue #843 disk-pressure monitoring).
-const ENGINE_KEYS: &[&str] = &["min_free_disk", "reclaim_free_disk"];
+/// Keys of the `[engine]` table (issue #843 disk-pressure monitoring;
+/// issue #907 global temp-directory routing).
+const ENGINE_KEYS: &[&str] = &["min_free_disk", "reclaim_free_disk", "tmp_dir"];
 
 /// Keys of one `[resource_groups]` entry.
 const RESOURCE_GROUP_KEYS: &[&str] = &["max", "wait"];

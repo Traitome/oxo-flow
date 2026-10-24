@@ -376,6 +376,12 @@ pub struct ExecutorConfig {
     /// CLI run path; values above the 1 MiB capture tail window widen that
     /// window so the requested tail is actually captured.
     pub output_tail_bytes: usize,
+    /// Workflow-global scratch directory (`[engine] tmp_dir`, issue #907):
+    /// injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell so tools
+    /// that honor the POSIX/C_RUNTIME temp convention write their caches
+    /// somewhere with room instead of the system default. `None` keeps the
+    /// ambient environment untouched.
+    pub tmp_dir: Option<PathBuf>,
 }
 
 impl Default for ExecutorConfig {
@@ -403,6 +409,7 @@ impl Default for ExecutorConfig {
             base_dir: None,
             workflow_root: None,
             output_tail_bytes: super::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
+            tmp_dir: None,
         }
     }
 }
@@ -1985,6 +1992,16 @@ impl LocalExecutor {
         let mut rule_envs = rule.envvars.clone();
         for (var, value) in &sensitive_envs {
             rule_envs.insert(var.clone(), value.clone());
+        }
+        // Global temp-directory routing (`[engine] tmp_dir`, issue #907):
+        // mirrored into TMPDIR/TMP/TEMP like Snakemake's tmpdir resource, so
+        // both POSIX (TMPDIR) and legacy (TEMP/TMP) readers land on the same
+        // scratch volume. Applied to rule.envvars before spawn, which covers
+        // reference builds too — they execute as ordinary DAG rules.
+        if let Some(tmp) = self.config.tmp_dir.as_deref() {
+            for var in ["TMPDIR", "TMP", "TEMP"] {
+                rule_envs.insert(var.to_string(), tmp.display().to_string());
+            }
         }
 
         // Optional rules skip (no error) when their declared inputs are

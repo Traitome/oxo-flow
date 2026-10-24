@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "504e74cca2684ca70f84437aaf2ea02fb307746c4fffa9016855c62a147d9774",
+  "schemaSha256": "ad7896f2b58666e062a402181bc5e075b62d8191f9c7002aa56a5f680a851719",
   "contexts": {
     "root": {
       "keys": [
@@ -32,7 +32,7 @@
         },
         {
           "key": "engine",
-          "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843). Values use T/G/M/K suffixes; a bare number means MiB.",
+          "description": "Runtime engine policies: disk-pressure monitoring thresholds (issue #843) and the global scratch directory (issue #907). Sizes use T/G/M/K suffixes; a bare number means MiB.",
           "type": "object"
         },
         {
@@ -278,6 +278,11 @@
         {
           "key": "reclaim_free_disk",
           "description": "Reclaim threshold (>= min_free_disk). Below it new submissions hold while regenerable outputs of completed temporary rules are tombstoned and deleted; the run aborts if space stays below min_free_disk afterward.",
+          "type": "string"
+        },
+        {
+          "key": "tmp_dir",
+          "description": "Global scratch directory injected as TMPDIR/TMP/TEMP into every rule shell so tools that spill caches into the system temp directory write to a volume with room. Relative paths resolve against the workflow file's directory; created on demand. OXO_FLOW_TMPDIR overrides it per invocation.",
           "type": "string"
         }
       ]
