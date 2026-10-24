@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
-import type { AiConfig, HealthResponse, QuotaInfo } from '../api/types';
+import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useI18n, getLocale } from '../context/I18n';
@@ -65,7 +65,7 @@ export default function Settings() {
   const [model, setModel] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [refs, setRefs] = useState<{ installed: Array<Record<string, unknown>>; missing: string[] } | null>(null);
+  const [refs, setRefs] = useState<ReferenceStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [adv, setAdv] = useState({ search_enabled: true, monitor_enabled: true, auto_retry_enabled: false, max_correction_rounds: 3 });
   const [webhook, setWebhook] = useState<{ enabled: boolean; url: string; secret_set: boolean; events: string[] }>({ enabled: false, url: '', secret_set: false, events: [] });
@@ -239,40 +239,46 @@ export default function Settings() {
             {t('settings.refs.basePath')}: <code>/data/references</code>
           </div>
           <div style={{ display: 'grid', gap: '2px' }}>
-            {refs?.installed?.map((ref: Record<string, unknown>, idx: number) => (
-              <div key={idx} className="ref-row">
-                <div>
-                  <strong>{String(ref.genome || 'unknown')}</strong>
-                  <span className="muted" style={{ marginLeft: '8px' }}>{Array.isArray(ref.components) ? ref.components.join(', ') : ''}</span>
+            {refs?.installed?.map((ref, idx) => {
+              // Badge derives from the row's own found/missing data — a
+              // partial build must not inherit the "Complete" badge (#907
+              // P1-4: the badge used to be hard-coded success).
+              const foundCount = ref.found?.length ?? 0;
+              const missingCount = ref.missing_components?.length ?? 0;
+              const badge = missingCount === 0
+                ? { cls: 'status-badge success', key: 'settings.refs.complete' }
+                : foundCount === 0
+                  ? { cls: 'status-badge warning', key: 'settings.refs.notBuilt' }
+                  : { cls: 'status-badge warning', key: 'settings.refs.partial' };
+              return (
+                <div key={idx} className="ref-row">
+                  <div>
+                    <strong>{ref.genome}</strong>
+                    <span className="muted" style={{ marginLeft: '8px' }}>{ref.components?.join(', ')}</span>
+                  </div>
+                  <div className="row">
+                    <span className={badge.cls}>{t(badge.key)}</span>
+                  </div>
                 </div>
-                <div className="row">
-                  <span className="status-badge success">{t('settings.refs.complete')}</span>
-                </div>
-              </div>
-            ))}
-            {refs?.missing?.map((missingName: string, idx: number) => (
+              );
+            })}
+            {refs?.missing_genomes?.map((genomeName: string, idx: number) => (
               <div key={`missing-${idx}`} className="ref-row">
                 <div>
-                  <strong>{missingName}</strong>
+                  <strong>{genomeName}</strong>
                 </div>
                 <div className="row">
                   <span className="status-badge warning">{t('settings.refs.missing')}</span>
-                  <button className="btn-sm" style={{ fontSize: '0.7rem' }}
-                    onClick={() => { api.discoverReference(missingName, []).then(() => api.referenceStatus().then(setRefs)).catch(() => setNotice(t('settings.refs.downloadFailed').replace('{{name}}', missingName))); }}>
-                    {t('settings.refs.download')}
-                  </button>
                 </div>
               </div>
             ))}
             {!refs && <div style={{ color: 'var(--color-text-secondary)' }}>{t('settings.refs.loading')}</div>}
           </div>
-          <div style={{ marginTop: '0.75rem' }}>
-            <button className="btn-sm" onClick={() => {
-              const name = window.prompt(t('settings.refs.prompt'));
-              if (!name) return;
-              api.discoverReference(name.trim(), []).then(() => api.referenceStatus().then(setRefs)).catch(() => setNotice(t('settings.refs.addFailed').replace('{{name}}', name.trim())));
-            }}>{t('settings.refs.add')}</button>
-          </div>
+          {refs && refs.download_commands.length > 0 && (
+            <div className="settings-note" style={{ marginTop: '0.5rem' }}>
+              {t('settings.refs.stagingHint')}
+            </div>
+          )}
         </div>
       </Section>
 

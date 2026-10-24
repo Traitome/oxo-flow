@@ -1396,6 +1396,18 @@ pub async fn perceive_data(
     )
 )]
 /// GET /api/data/reference/status
+///
+/// Deterministic filesystem probe of the standard `/data/references/`
+/// layout for a few common genome builds (issue #907 P1-4). A genome only
+/// counts as `installed` when at least one expected component actually
+/// exists — a build with zero files on disk is reported under `missing`
+/// genomes, never as installed-and-Complete.
+///
+/// `download_commands` carries *guidance*, not fetchable URLs: oxo-flow
+/// ships no reference mirror, so each entry states where to stage the files
+/// (or to use a workflow's `reference_dir` + `[[references]]` auto-build).
+/// The per-genome `components` lists what was probed, so clients can render
+/// partial state honestly.
 pub async fn reference_status() -> ApiResult<serde_json::Value> {
     let common_refs: Vec<(&str, Vec<&str>)> = vec![
         (
@@ -1424,6 +1436,7 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
     ];
 
     let mut installed = Vec::new();
+    let mut missing_genomes = Vec::new();
     let mut missing = Vec::new();
     let mut download_commands = Vec::new();
 
@@ -1439,25 +1452,34 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
             }
         }
 
-        if !found.is_empty() || !not_found.is_empty() {
+        if !found.is_empty() {
             installed.push(serde_json::json!({
                 "genome": genome,
+                "components": found.iter().map(String::as_str).collect::<Vec<_>>(),
                 "found": found,
-                "missing": not_found,
+                "missing_components": not_found,
             }));
+        } else {
+            missing_genomes.push(genome);
         }
         for m in &not_found {
             missing.push(m.clone());
         }
         if !not_found.is_empty() {
+            // No fetchable URL exists — oxo-flow does not host or mirror
+            // reference data. Point operators at the staging layout and the
+            // workflow-level auto-build instead of a placeholder host.
             download_commands.push(format!(
-                "wget -P /data/references/{genome} https://genome-idx.example.com/{genome}.tar.gz"
+                "# {genome}: stage the expected files under /data/references/{genome} \
+                 (genome.fa, genes.gtf, star index) — or set reference_dir in a \
+                 workflow and let [[references]] auto-build the indexes"
             ));
         }
     }
 
     Ok(Json(serde_json::json!({
         "installed": installed,
+        "missing_genomes": missing_genomes,
         "missing": missing,
         "download_commands": download_commands,
     })))
