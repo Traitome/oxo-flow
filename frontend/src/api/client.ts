@@ -104,6 +104,11 @@ async function postStream(url: string, body: unknown, signal?: AbortSignal): Pro
 // renderer downstream (audit #654).
 async function getText(url: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch(apiUrl(url), { headers: authHeaders(), signal });
+  // Same session handling as request() (#907 T3): the logs tab used to show
+  // a raw error instead of landing on the login page.
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    redirectToLoginOn401();
+  }
   if (!res.ok) throw await toApiError(res);
   const text = await res.text();
   try {

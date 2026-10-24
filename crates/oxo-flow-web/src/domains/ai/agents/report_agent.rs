@@ -76,9 +76,9 @@ pub fn generate_report(
         suggested_next.push("Validate candidate variants with Sanger sequencing".into());
     } else {
         // P1-6 (#907): generic next-steps only make sense once something
-        // actually ran to completion — a failed run gets triage pointers
-        // instead of "compare results with benchmarks".
-        if run_status == "failed" {
+        // actually ran to completion — a failed or cancelled run gets triage
+        // pointers instead of "compare results with benchmarks".
+        if run_status == "failed" || run_status == "cancelled" {
             suggested_next
                 .push("Review the diagnostics tab for the failing rule's likely cause".into());
             suggested_next
