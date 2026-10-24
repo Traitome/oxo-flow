@@ -1,5 +1,6 @@
 //! HTTP handlers for cluster connections (SSH endpoints).
 
+use crate::extract::ApiJson;
 use axum::extract::Path;
 use axum::{Extension, Json, http::StatusCode};
 
@@ -65,7 +66,7 @@ pub async fn list_clusters() -> ApiResult<Vec<ClusterInfo>> {
 /// POST /api/clusters — create or update a cluster connection (upsert by id).
 pub async fn upsert_cluster(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<ClusterUpsertRequest>,
+    ApiJson(req): ApiJson<ClusterUpsertRequest>,
 ) -> ApiResult<ClusterInfo> {
     let user = resolve(authenticated.as_ref());
     require_cluster_admin(&user)?;

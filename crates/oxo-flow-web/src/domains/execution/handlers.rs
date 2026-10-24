@@ -7,6 +7,7 @@ use crate::domains::ai::agents::monitor_agent::{self, NodeExecutionStatus, Resou
 use crate::domains::ai::agents::report_agent;
 use crate::domains::ai::agents::types::ReportFile;
 use crate::domains::auth::current_user::{self, CurrentUser};
+use crate::extract::ApiJson;
 use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::extract::ApiQuery;
@@ -290,7 +291,7 @@ mod run_rate_limit {
 /// POST /api/runs
 pub async fn create_run(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(body): Json<serde_json::Value>,
+    ApiJson(body): ApiJson<serde_json::Value>,
 ) -> ApiResult<CreateRunResponse> {
     // Parse through the typed contract (issue #324 F-4) so the type is the
     // single source of truth — but keep the stable MISSING error for a
@@ -1294,7 +1295,7 @@ pub async fn get_run_results(
 pub async fn retry_run(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<RetryResponse> {
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -2145,7 +2146,7 @@ pub async fn get_run_report(
 pub async fn ask_report_question(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<String> {
     let question = req
         .get("question")
@@ -2181,7 +2182,7 @@ pub async fn ask_report_question(
 pub async fn visualize_report(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let chart_type = req
         .get("type")
@@ -2409,7 +2410,7 @@ async fn run_bounded(
 pub async fn resume_checkpoint(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = current_user::resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {

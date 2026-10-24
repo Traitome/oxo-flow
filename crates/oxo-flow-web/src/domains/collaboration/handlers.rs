@@ -2,6 +2,7 @@
 //!
 //! Thin adapters: parse HTTP request → call service → serialize response.
 
+use crate::extract::ApiJson;
 use axum::{Extension, Json, extract::Path, http::StatusCode};
 
 use crate::domains::auth::current_user::{CurrentUser, resolve};
@@ -134,7 +135,7 @@ pub async fn fork_pipeline(
 pub async fn share_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
-    Json(body): Json<ShareRequest>,
+    ApiJson(body): ApiJson<ShareRequest>,
 ) -> ApiResult<ShareResponse> {
     let pool = get_pool()?;
     let user = resolve(authenticated.as_ref());
@@ -261,7 +262,7 @@ pub async fn share_pipeline(
 /// POST /api/pipelines/import
 pub async fn import_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(body): Json<ImportRequest>,
+    ApiJson(body): ApiJson<ImportRequest>,
 ) -> ApiResult<ImportResponse> {
     // Validate URL format
     if !body.url.starts_with("oxo+https://") && !body.url.starts_with("oxo+http://") {

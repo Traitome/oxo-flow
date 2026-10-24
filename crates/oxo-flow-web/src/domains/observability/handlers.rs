@@ -3,6 +3,7 @@
 //! Thin adapters: parse HTTP request → call service → serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use crate::extract::ApiJson;
 use axum::{Json, http::StatusCode};
 
 use super::service;
@@ -204,7 +205,7 @@ pub async fn quota_status(
 /// PUT /api/quota — update resource quota limits (admin only).
 pub async fn update_quota_status(
     headers: axum::http::HeaderMap,
-    Json(body): Json<crate::infra::quota::QuotaConfig>,
+    ApiJson(body): ApiJson<crate::infra::quota::QuotaConfig>,
 ) -> ApiResult<serde_json::Value> {
     crate::domains::auth::handlers::require_admin(&headers).await?;
     crate::infra::quota::global_quota_tracker().update_config(body.clone());
@@ -384,7 +385,7 @@ pub async fn get_webhook_config(
 /// infrastructure).
 pub async fn put_webhook_config(
     authenticated: Option<axum::Extension<crate::domains::auth::current_user::CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = crate::domains::auth::current_user::resolve(authenticated.as_ref());
     if crate::server::running_mode() != "personal" && !user.is_admin() {
@@ -412,12 +413,28 @@ pub async fn put_webhook_config(
         .unwrap_or("")
         .trim()
         .to_string();
-    if enabled && !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "INVALID_URL",
-            "url must start with http:// or https://".into(),
-        ));
+    if enabled {
+        // Parse, don't prefix-match: "https://" alone passed the old
+        // starts_with check (issue #907 N5). reqwest re-exports `url::Url`,
+        // the same parser core's webhook delivery redaction uses. Note
+        // url's special-scheme rules squash `https:///path` to host "path",
+        // so requiring a non-empty host_str — not just has_host — is the
+        // meaningful bar here.
+        let parsed = reqwest::Url::parse(&url).ok();
+        let scheme_ok = parsed
+            .as_ref()
+            .is_some_and(|u| matches!(u.scheme(), "http" | "https"));
+        let host_ok = parsed
+            .as_ref()
+            .and_then(|u| u.host_str())
+            .is_some_and(|h| !h.is_empty());
+        if !scheme_ok || !host_ok {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_URL",
+                "url must be an absolute http:// or https:// URL with a host".into(),
+            ));
+        }
     }
     // An empty secret field means "keep the existing one"; the caller
     // cannot read it back, only replace it.
@@ -426,6 +443,24 @@ pub async fn put_webhook_config(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from);
+    // A webhook URL is a bearer credential — anyone who learns it can POST
+    // forged delivery events to the receiver. Enabling delivery without a
+    // signing secret (new or previously stored) is therefore refused; the
+    // response body says so instead of silently shipping unsigned events.
+    if enabled && secret.is_none() {
+        let has_stored_secret = crate::domains::observability::webhook::load_settings()
+            .await
+            .map(|s| s.secret.is_some())
+            .unwrap_or(false);
+        if !has_stored_secret {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "WEBHOOK_SECRET_REQUIRED",
+                "enabling a webhook requires a signing secret (provide 'secret', or keep the previously stored one by omitting it)"
+                    .into(),
+            ));
+        }
+    }
     let events: Vec<String> = req
         .get("events")
         .and_then(|v| v.as_array())

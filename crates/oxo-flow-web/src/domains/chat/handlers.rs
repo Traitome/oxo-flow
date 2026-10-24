@@ -2,6 +2,7 @@
 //!
 //! Thin adapters: parse HTTP request → call service → stream SSE response.
 
+use crate::extract::ApiJson;
 use axum::Extension;
 use axum::Json;
 use axum::http::StatusCode;
@@ -119,7 +120,7 @@ async fn persist_assistant_message(
 /// `status` → `tool_call` → `tool_result` → `text` → `action` → `done` | `error`.
 pub async fn chat_send(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<ChatRequest>,
+    ApiJson(req): ApiJson<ChatRequest>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let user = resolve(authenticated.as_ref());
     let message = req.message.clone();
@@ -275,7 +276,7 @@ pub async fn chat_send(
 /// POST /api/chat/send/json — non-streaming JSON response.
 pub async fn chat_send_json(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<ChatRequest>,
+    ApiJson(req): ApiJson<ChatRequest>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     // Boundary check before any I/O: an empty message must fail cheaply

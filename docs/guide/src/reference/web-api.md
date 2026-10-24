@@ -31,6 +31,21 @@ Rate limiting follows the same contract: over-limit requests get
 with a `Retry-After` header (sliding window, 100 requests / 60 s per
 client IP by default).
 
+`POST /api/auth/login` adds a dedicated brute-force guard: **10 failed
+attempts per 5 minutes per (account, source IP)** trip a lockout that
+answers the same structured `429 RATE_LIMITED` (the countdown is in
+`detail`; the login handler's error tuple cannot attach a `Retry-After`
+header) before any credential check runs. Per-account keying means a
+sprayed username cannot lock out other accounts; a successful login
+resets the counter; `OXO_FLOW_DISABLE_RATE_LIMIT=1` disables both
+limiters (tests/dev only).
+
+Malformed input is answered in the same envelope, never axum's bare-text
+rejection: a query string that does not fit the endpoint's parameters gets
+`400 INVALID_QUERY`, and a JSON body that does not deserialize against the
+endpoint's schema gets `400 INVALID_BODY` — both carry axum's parse message
+in `detail` and a pointer to `GET /api/openapi.json` in `suggestion`.
+
 ---
 
 ## Starting the Server
@@ -707,6 +722,14 @@ signature scheme is configurable:
   The default keeps existing webhook consumers working across upgrades.
 - `hmac-sha256` — RFC 2104 HMAC (`X-OxoFlow-Signature: hmac-sha256=<hex>`),
   the recommended opt-in for new deployments.
+
+Validation on `PUT` (issue #907 N5): `url` must parse as an absolute
+`http://` or `https://` URL with a host (`400 INVALID_URL` otherwise — a
+bare `https://` prefix no longer passes). Enabling delivery requires a
+signing secret: either supply `secret` in the request or leave a previously
+stored one in place (`400 WEBHOOK_SECRET_REQUIRED` otherwise) — a webhook
+URL is a bearer credential, and unsigned delivery lets anyone who learns
+the URL forge events. Disabling (`enabled: false`) never demands a secret.
 
 Admin-only outside personal mode — the endpoint is shared infrastructure.
 

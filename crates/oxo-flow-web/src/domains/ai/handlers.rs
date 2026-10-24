@@ -3,6 +3,7 @@
 //! Thin adapters: parse HTTP request -> call service -> serialize response.
 //! Zero business logic here — all logic lives in `service.rs`.
 
+use crate::extract::ApiJson;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json, http::StatusCode};
 
@@ -42,7 +43,7 @@ fn require_ai_admin(user: &CurrentUser) -> Result<(), (StatusCode, Json<ApiError
 /// POST /api/ai/translate — standard JSON response.
 pub async fn translate(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<TranslateRequest>,
+    ApiJson(req): ApiJson<TranslateRequest>,
 ) -> ApiResult<TranslateResponse> {
     let user = resolve(authenticated.as_ref());
     // Boundary checks before any I/O: an empty intent would otherwise come
@@ -100,7 +101,7 @@ pub async fn translate(
 /// TranslateResponse as JSON.
 pub async fn translate_sse(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<TranslateRequest>,
+    ApiJson(req): ApiJson<TranslateRequest>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
     use std::convert::Infallible;
 
@@ -211,7 +212,7 @@ pub async fn translate_sse(
 /// Looks up the run from the database to get real diagnostics data.
 pub async fn explain(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<ExplainRequest>,
+    ApiJson(req): ApiJson<ExplainRequest>,
 ) -> ApiResult<ExplainResponse> {
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
@@ -300,7 +301,7 @@ fn blocking_dir_walk<T>(op: impl FnOnce() -> T) -> T {
 /// Looks up run results from DB and workdir for real data.
 pub async fn interpret(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<InterpretRequest>,
+    ApiJson(req): ApiJson<InterpretRequest>,
 ) -> ApiResult<InterpretResponse> {
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
@@ -367,7 +368,7 @@ pub async fn interpret(
 /// Accepts TOML directly or loads from DB by pipeline_id.
 pub async fn optimize(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<OptimizeRequest>,
+    ApiJson(req): ApiJson<OptimizeRequest>,
 ) -> ApiResult<OptimizeResponse> {
     let user = resolve(authenticated.as_ref());
     let provider = crate::ai_provider::provider_for(&user.id).await;
@@ -437,7 +438,7 @@ pub async fn get_ai_config() -> ApiResult<AiConfigResponse> {
 /// POST /api/ai/config
 pub async fn update_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<AiConfigRequest>,
+    ApiJson(req): ApiJson<AiConfigRequest>,
 ) -> ApiResult<AiConfigResponse> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
@@ -472,7 +473,7 @@ pub async fn update_ai_config(
 /// POST /api/ai/test
 pub async fn test_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(_req): Json<AiConfigRequest>,
+    ApiJson(_req): ApiJson<AiConfigRequest>,
 ) -> ApiResult<AiTestResponse> {
     let user = resolve(authenticated.as_ref());
     // Testing hits the real provider (costs money; also a DoS vector) —
@@ -695,7 +696,7 @@ pub async fn get_server_ai_config() -> ApiResult<serde_json::Value> {
 /// PUT /api/ai/config/server
 pub async fn update_server_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     require_ai_admin(&user)?;
@@ -852,7 +853,7 @@ pub async fn get_user_ai_config(
 /// PUT /api/ai/config/user
 pub async fn update_user_ai_config(
     authenticated: Option<Extension<CurrentUser>>,
-    Json(req): Json<serde_json::Value>,
+    ApiJson(req): ApiJson<serde_json::Value>,
 ) -> ApiResult<serde_json::Value> {
     let user = resolve(authenticated.as_ref());
     let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {

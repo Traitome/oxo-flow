@@ -1,6 +1,7 @@
 //! HTTP handlers for DAG Edit domain.
 
 use crate::domains::workflow::handlers::{ApiError, err};
+use crate::extract::ApiJson;
 use axum::{Json, extract::Path, http::StatusCode};
 
 type AR<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -24,7 +25,7 @@ pub struct EditPayload {
 /// POST /api/pipeline/{id}/command
 pub async fn edit_command(
     Path(id): Path<String>,
-    Json(payload): Json<EditPayload>,
+    ApiJson(payload): ApiJson<EditPayload>,
 ) -> AR<super::service::DagEditResponse> {
     super::service::execute_edit(&payload.toml_content, &id, &payload.cmd)
         .map(Json)
@@ -48,7 +49,7 @@ pub struct CurrentToml {
 /// POST /api/pipeline/{id}/undo
 pub async fn undo_command(
     Path(id): Path<String>,
-    Json(body): Json<CurrentToml>,
+    ApiJson(body): ApiJson<CurrentToml>,
 ) -> AR<serde_json::Value> {
     match super::service::undo(&id, &body.toml_content) {
         Ok(Some(toml)) => Ok(Json(serde_json::json!({"toml_content": toml}))),
@@ -73,7 +74,7 @@ pub async fn undo_command(
 /// POST /api/pipeline/{id}/redo
 pub async fn redo_command(
     Path(id): Path<String>,
-    Json(body): Json<CurrentToml>,
+    ApiJson(body): ApiJson<CurrentToml>,
 ) -> AR<serde_json::Value> {
     match super::service::redo(&id, &body.toml_content) {
         Ok(Some(toml)) => Ok(Json(serde_json::json!({"toml_content": toml}))),
