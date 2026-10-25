@@ -476,6 +476,39 @@ mod tests {
     }
 
     #[test]
+    fn test_tail_unbound_wildcard_alert_path_end_to_end() {
+        // Issue #917 NIT-2: the pattern table has a unbound_wildcard entry,
+        // but nothing proved the alert path (analyze_run_status ->
+        // classify_failure -> DiagnosticsEngine) maps the short-form tail
+        // P1-3 checkpoints into stderr_tail to the specific alert id. The
+        // tail is the exact engine wording from the residual-wildcard gate
+        // (executor/process.rs), persisted with exit code -1.
+        let nodes = vec![NodeExecutionStatus {
+            rule: "call_variants".into(),
+            status: "failed".into(),
+            duration_ms: Some(1_000),
+            exit_code: Some(-1),
+            started_at: None,
+            stderr_tail: Some(
+                "output pattern 'results/{sample}/out.bam' contains unbound wildcard {sample} for this instance — declare a value source (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it"
+                    .into(),
+            ),
+            stdout_tail: None,
+        }];
+        let status = analyze_run_status(&nodes, &ResourceUsage::default());
+        let alert = status
+            .alerts
+            .iter()
+            .find(|a| a.rule_name.as_deref() == Some("call_variants"))
+            .expect("failed rule must raise an alert");
+        assert_eq!(alert.alert_id, "failed:call_variants:unbound_wildcard");
+        assert!(!alert.auto_fixable);
+        // The Config category must not escalate to Critical (only Resource
+        // failures do) and must not collapse to the generic exit_code id.
+        assert_ne!(alert.alert_id, "failed:call_variants:exit_code");
+    }
+
+    #[test]
     fn test_tail_classified_segfault_stays_critical() {
         // Issue #908 review: the no-tail exit-139 fallback is Critical, so a
         // tail-classified segfault must not downgrade to Alert.
