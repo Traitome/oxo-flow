@@ -162,7 +162,7 @@ pub fn broadcast_event_for(event_type: &str, data: &Value, user: Option<&str>) {
     get,
     path = "/api/events",
     tag = "observability",
-    params(("token" = Option<String>, Query, description = "Session token (team/hpc modes — EventSource cannot set Authorization headers)")),
+    params(("ticket" = Option<String>, Query, description = "One-time event-stream ticket minted at POST /api/events/ticket (team/hpc modes — EventSource cannot set Authorization headers; single-use, 30 s TTL)")),
     responses(
         (status = 200, description = "Success", content_type = "text/event-stream"),
         (status = 401, description = "Error", body = crate::domains::workflow::handlers::ApiError),
