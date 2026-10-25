@@ -1412,8 +1412,9 @@ pub async fn perceive_data(
 /// `download_commands` carries *guidance*, not fetchable URLs: oxo-flow
 /// ships no reference mirror, so each entry states where to stage the files
 /// (or to use a workflow's `reference_dir` + `[[references]]` auto-build).
-/// The per-genome `components` lists what was probed, so clients can render
-/// partial state honestly.
+/// The per-genome `found`/`components` lists what exists on disk (absolute
+/// paths), so clients can render partial state honestly; `missing_components`
+/// carries the probed-but-absent paths.
 pub async fn reference_status() -> ApiResult<serde_json::Value> {
     let common_refs: Vec<(&str, Vec<&str>)> = vec![
         (
@@ -1432,6 +1433,9 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
                 "/data/references/mm10/genes.gtf",
             ],
         ),
+        // mm39 deliberately probes only genome.fa + star: the auto-build
+        // ([[references]]) does not need a gene annotation for index
+        // construction. Keep docs/guide/src/reference/web-api.md in sync.
         (
             "mm39",
             vec![
@@ -1461,6 +1465,10 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
         if !found.is_empty() {
             installed.push(serde_json::json!({
                 "genome": genome,
+                // Legacy alias of `found` kept for API stability — frontend
+                // Settings.tsx renders `components`, while its badge logic
+                // reads `missing_components`. Always identical to `found`;
+                // do not diverge them.
                 "components": found.iter().map(String::as_str).collect::<Vec<_>>(),
                 "found": found,
                 "missing_components": not_found,
@@ -1474,11 +1482,28 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
         if !not_found.is_empty() {
             // No fetchable URL exists — oxo-flow does not host or mirror
             // reference data. Point operators at the staging layout and the
-            // workflow-level auto-build instead of a placeholder host.
+            // workflow-level auto-build instead of a placeholder host. Name
+            // only the components this genome actually probes (mm39 has no
+            // genes.gtf entry).
+            let expected: Vec<String> = not_found
+                .iter()
+                .map(|p| {
+                    let base = std::path::Path::new(p)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(p);
+                    if base == "star" {
+                        "STAR index".to_string()
+                    } else {
+                        base.to_string()
+                    }
+                })
+                .collect();
             download_commands.push(format!(
                 "# {genome}: stage the expected files under /data/references/{genome} \
-                 (genome.fa, genes.gtf, star index) — or set reference_dir in a \
-                 workflow and let [[references]] auto-build the indexes"
+                 ({}) — or set reference_dir in a workflow and let [[references]] \
+                 auto-build the indexes",
+                expected.join(", ")
             ));
         }
     }

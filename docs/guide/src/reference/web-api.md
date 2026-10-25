@@ -573,7 +573,7 @@ Finds installed reference genome components and reports missing ones with downlo
 ```
 GET /api/data/reference/status
 ```
-Which common reference genomes (hg38, mm10, mm39) have their expected components (genome.fa, STAR index, genes.gtf) present at the standard `/data/references/` locations — the deterministic counterpart to the POST discovery above. A genome counts as `installed` only when at least one expected component exists; builds with nothing on disk are reported under `missing_genomes`. Response shape:
+Which common reference genomes have their expected components present at the standard `/data/references/` locations — the deterministic counterpart to the POST discovery above. Probed components per genome: `hg38` and `mm10` check `genome.fa`, `star` (STAR index directory) and `genes.gtf`; `mm39` checks only `genome.fa` and `star` (the `[[references]]` auto-build needs no annotation to construct an index). A genome counts as `installed` only when at least one probed component exists; builds with nothing on disk are reported under `missing_genomes`. Response shape (`components` is a legacy alias of `found` — both carry the absolute paths that exist on disk):
 
 ```
 {
@@ -583,7 +583,7 @@ Which common reference genomes (hg38, mm10, mm39) have their expected components
   ],
   "missing_genomes": ["mm39"],
   "missing": ["/data/references/mm39/genome.fa"],
-  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 ..."]
+  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 (genome.fa, STAR index) ..."]
 }
 ```
 

@@ -104,6 +104,79 @@ async fn test_data_reference_status() {
             "installed entry must carry missing_components: {entry}"
         );
     }
+    // #922 review NIT-2: the staging hint derives its component list from
+    // the paths actually missing for that genome — mm39 probes no genes.gtf,
+    // so its hint must render "STAR index" only, never genes.gtf.
+    let cmds: Vec<String> = body["download_commands"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // A genome missing at least one component must have a hint naming each
+    // probed-but-absent component (basenames, with star → "STAR index").
+    let mut genomes_with_missing: Vec<(String, Vec<String>)> = Vec::new();
+    for entry in installed {
+        let missing_paths: Vec<&str> = entry["missing_components"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        if missing_paths.is_empty() {
+            continue;
+        }
+        let genome = entry["genome"].as_str().unwrap_or_default();
+        let names: Vec<String> = missing_paths
+            .iter()
+            .map(|p| {
+                let base = std::path::Path::new(p)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(p);
+                if base == "star" {
+                    "STAR index".to_string()
+                } else {
+                    base.to_string()
+                }
+            })
+            .collect();
+        genomes_with_missing.push((genome.to_string(), names));
+    }
+    // All-missing genomes sit in missing_genomes (bare strings); every probe
+    // of theirs is absent, so the expected list is the full probe list.
+    for g in body["missing_genomes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        let genome = g.as_str().unwrap_or_default().to_string();
+        let names: Vec<String> = if genome == "mm39" {
+            vec!["genome.fa".into(), "STAR index".into()]
+        } else {
+            vec!["genome.fa".into(), "STAR index".into(), "genes.gtf".into()]
+        };
+        genomes_with_missing.push((genome, names));
+    }
+    for (genome, expected) in &genomes_with_missing {
+        let hint = cmds
+            .iter()
+            .find(|c| c.starts_with(&format!("# {genome}:")))
+            .unwrap_or_else(|| panic!("missing staging hint for {genome}"));
+        for comp in expected {
+            assert!(
+                hint.contains(comp.as_str()),
+                "hint for {genome} must name {comp}: {hint}"
+            );
+        }
+    }
+    for hint in cmds.iter().filter(|c| c.starts_with("# mm39:")) {
+        assert!(
+            !hint.contains("genes.gtf"),
+            "mm39 probes no genes.gtf; hint must not mention it: {hint}"
+        );
+    }
 }
 
 #[tokio::test]
