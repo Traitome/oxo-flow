@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Save, X } from 'lucide-react';
+import { ChevronDown, Save, X } from 'lucide-react';
 import Modal from './Modal';
 import { useI18n } from '../context/I18n';
 
@@ -122,10 +122,12 @@ type StringFieldKey = {
 export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleInspectorProps) {
   const { t } = useI18n();
   // The inspector remounts per rule via the `key` prop on the parent, so the
-  // form initializes from props once — no effect-sync needed.
+  // form initializes from props once — no effect-sync needed. The originals
+  // are kept so handleSave can send a minimal diff (#907 P2-10).
   const [form, setForm] = useState<RuleFormState>(() =>
     rule ? formFromRule(ruleName, rule) : emptyForm(ruleName),
   );
+  const original = useState(() => (rule ? formFromRule(ruleName, rule) : emptyForm(ruleName)))[0];
 
   const set = <K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -159,45 +161,107 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
     // key for null patches): omitting it — or sending "" — left the old value
     // in place, so clearing a field silently did nothing.
     const cleared = (value: string) => (value.trim() === '' ? null : value);
-    const patch: Record<string, unknown> = {
-      description: cleared(form.description),
-      shell: cleared(form.shell),
-      script: cleared(form.script),
-      input: form.input.filter((v) => v.trim() !== ''),
-      output: form.output.filter((v) => v.trim() !== ''),
-      when: cleared(form.when),
-      retries: form.retries === '' ? null : Number(form.retries),
-      tags: form.tags.split(',').map((t) => t.trim()).filter((t) => t !== ''),
-      optional: form.optional,
-      required: form.required,
-      log: cleared(form.log),
-      benchmark: cleared(form.benchmark),
+    // #907 P2-10: only include keys that actually differ from the original
+    // rule. The patch replaces whole keys, so resending an untouched field
+    // re-serialized it (normalizing away formatting/comments in that key's
+    // TOML); a diff-form patch touches only what the user edited. New rules
+    // (rule === null → empty originals) keep the full patch.
+    const formIs = (key: keyof RuleFormState) => {
+      const o = original[key];
+      const v = form[key];
+      if (Array.isArray(o) || Array.isArray(v)) {
+        return JSON.stringify(o) === JSON.stringify(v);
+      }
+      return o === v;
     };
-    if (form.environment !== 'system') {
-      patch.environment = { [form.environment]: form.environmentSpec };
-    } else if (form.environmentSpec === '') {
-      // Removing the environment: the patch replaces the table wholesale.
-      patch.environment = null;
+    const envPair = (f: RuleFormState): string | null => {
+      if (f.environment === 'system') return f.environmentSpec === '' ? null : `system`;
+      return `${f.environment}::${f.environmentSpec}`;
+    };
+    const resourcesOf = (f: RuleFormState): Record<string, unknown> | null => {
+      const r: Record<string, unknown> = {};
+      if (f.threads !== '') r.threads = Number(f.threads);
+      if (f.memory !== '') r.memory = f.memory;
+      if (f.gpu !== '') r.gpu = Number(f.gpu);
+      if (f.disk !== '') r.disk = f.disk;
+      if (f.timeLimit !== '') r.time_limit = f.timeLimit;
+      return Object.keys(r).length > 0 ? r : null;
+    };
+    const envvarsOf = (f: RuleFormState): Record<string, string> | null => {
+      const e: Record<string, string> = {};
+      for (const { key, value } of f.envvars) {
+        if (key.trim() !== '') e[key.trim()] = value;
+      }
+      return Object.keys(e).length > 0 ? e : null;
+    };
+    const tagsOf = (f: RuleFormState): string[] =>
+      f.tags.split(',').map((s) => s.trim()).filter((s) => s !== '');
+
+    const patch: Record<string, unknown> = {};
+    const put = (key: string, value: unknown) => {
+      patch[key] = value;
+    };
+    if (!formIs('description')) put('description', cleared(form.description));
+    if (!formIs('shell')) put('shell', cleared(form.shell));
+    if (!formIs('script')) put('script', cleared(form.script));
+    if (!formIs('input')) put('input', form.input.filter((v) => v.trim() !== ''));
+    if (!formIs('output')) put('output', form.output.filter((v) => v.trim() !== ''));
+    if (!formIs('when')) put('when', cleared(form.when));
+    if (!formIs('retries')) put('retries', form.retries === '' ? null : Number(form.retries));
+    if (JSON.stringify(tagsOf(form)) !== JSON.stringify(tagsOf(original))) {
+      put('tags', tagsOf(form));
     }
-    const resources: Record<string, unknown> = {};
-    if (form.threads !== '') resources.threads = Number(form.threads);
-    if (form.memory !== '') resources.memory = form.memory;
-    if (form.gpu !== '') resources.gpu = Number(form.gpu);
-    if (form.disk !== '') resources.disk = form.disk;
-    if (form.timeLimit !== '') resources.time_limit = form.timeLimit;
-    // `resources` is replaced wholesale, so an emptied form must null the
-    // table — omitting it kept every old resource value.
-    patch.resources = Object.keys(resources).length > 0 ? resources : null;
-    const envvars: Record<string, string> = {};
-    for (const { key, value } of form.envvars) {
-      if (key.trim() !== '') envvars[key.trim()] = value;
+    if (form.optional !== original.optional) put('optional', form.optional);
+    if (form.required !== original.required) put('required', form.required);
+    if (!formIs('log')) put('log', cleared(form.log));
+    if (!formIs('benchmark')) put('benchmark', cleared(form.benchmark));
+    if (envPair(form) !== envPair(original)) {
+      // The environment patch replaces the table wholesale — either the
+      // { backend: spec } form or explicit null to remove it.
+      if (form.environment !== 'system') {
+        put('environment', { [form.environment]: form.environmentSpec });
+      } else if (form.environmentSpec === '') {
+        put('environment', null);
+      } else {
+        put('environment', { system: form.environmentSpec });
+      }
     }
-    patch.envvars = Object.keys(envvars).length > 0 ? envvars : null;
+    if (JSON.stringify(resourcesOf(form)) !== JSON.stringify(resourcesOf(original))) {
+      // `resources` is replaced wholesale, so an emptied form must null the
+      // table — omitting it kept every old resource value.
+      put('resources', resourcesOf(form));
+    }
+    if (JSON.stringify(envvarsOf(form)) !== JSON.stringify(envvarsOf(original))) {
+      put('envvars', envvarsOf(form));
+    }
+    // Renaming is a separate edit op; the patch never carries `name`.
+    if (Object.keys(patch).length === 0) return;
     onSave(patch);
   };
 
-  const stringList = (key: 'input' | 'output') => (
-    <div className="inspector-list">
+  // #907 P3-16: collapsible field groups. All start open (same behavior as
+  // before); local state per group is safe because the groups live inside
+  // this remounting dialog and collapse only hides inputs — form state
+  // itself lives in the parent `form` useState, so nothing is lost.
+  const [openGroups, setOpenGroups] = useState({ io: true, envRes: true, adv: true });
+  const toggleGroup = (g: keyof typeof openGroups) =>
+    setOpenGroups((prev) => ({ ...prev, [g]: !prev[g] }));
+  const groupHeader = (g: keyof typeof openGroups, label: string) => (
+    <div
+      className="inspector-section"
+      role="button"
+      tabIndex={0}
+      aria-expanded={openGroups[g]}
+      onClick={() => toggleGroup(g)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(g); } }}
+      style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '6px' }}
+    >
+      <ChevronDown size={12} style={{ transition: 'transform 0.15s', transform: openGroups[g] ? 'none' : 'rotate(-90deg)' }} />
+      {label}
+    </div>
+  );
+
+  const stringList = (key: 'input' | 'output') => (    <div className="inspector-list">
       {form[key].map((item, i) => (
         <div className="inspector-list-row" key={i}>
           <input
@@ -256,11 +320,12 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
         </label>
         {textInput(t('inspector.script'), 'script', t('inspector.scriptPlaceholder'))}
 
-        <div className="inspector-section">{t('inspector.inputs')}</div>
-        {stringList('input')}
-        <div className="inspector-section">{t('inspector.outputs')}</div>
-        {stringList('output')}
+        {groupHeader('io', t('inspector.inputs'))}
+        {openGroups.io && stringList('input')}
+        {groupHeader('io', t('inspector.outputs'))}
+        {openGroups.io && stringList('output')}
 
+        <div className="inspector-section" style={{ cursor: 'default' }}>{t('inspector.environment')}</div>
         <div className="inspector-grid">
           <label className="inspector-field">
             <span>{t('inspector.environment')}</span>
@@ -275,17 +340,21 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
           {textInput(t('inspector.environmentSpec'), 'environmentSpec', t('inspector.environmentSpecPlaceholder'))}
         </div>
 
-        <div className="inspector-section">{t('inspector.resources')}</div>
-        <div className="inspector-grid">
-          {textInput(t('inspector.threads'), 'threads', t('inspector.threadsPlaceholder'), 'number')}
-          {textInput(t('inspector.memory'), 'memory', t('inspector.memoryPlaceholder'))}
-          {textInput(t('inspector.gpu'), 'gpu', t('inspector.gpuPlaceholder'), 'number')}
-          {textInput(t('inspector.disk'), 'disk', t('inspector.diskPlaceholder'))}
-          {textInput(t('inspector.timeLimit'), 'timeLimit', t('inspector.timeLimitPlaceholder'))}
-        </div>
+        {groupHeader('envRes', t('inspector.resources'))}
+        {openGroups.envRes && (
+          <div className="inspector-grid">
+            {textInput(t('inspector.threads'), 'threads', t('inspector.threadsPlaceholder'), 'number')}
+            {textInput(t('inspector.memory'), 'memory', t('inspector.memoryPlaceholder'))}
+            {textInput(t('inspector.gpu'), 'gpu', t('inspector.gpuPlaceholder'), 'number')}
+            {textInput(t('inspector.disk'), 'disk', t('inspector.diskPlaceholder'))}
+            {textInput(t('inspector.timeLimit'), 'timeLimit', t('inspector.timeLimitPlaceholder'))}
+          </div>
+        )}
 
-        <div className="inspector-section">{t('inspector.envvars')}</div>
-        {form.envvars.map((ev, i) => (
+        {groupHeader('adv', t('inspector.envvars'))}
+        {openGroups.adv && (
+          <>
+            {form.envvars.map((ev, i) => (
           <div className="inspector-list-row" key={i}>
             <input
               placeholder={t('inspector.envvarNamePlaceholder')}
@@ -345,6 +414,8 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
             <span>{t('inspector.required')}</span>
           </label>
         </div>
+          </>
+        )}
       </div>
 
       <div className="modal-actions">

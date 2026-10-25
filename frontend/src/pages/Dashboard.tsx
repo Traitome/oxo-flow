@@ -88,7 +88,7 @@ export default function Dashboard() {
             <h3>{t('dashboard.ai')}</h3>
             <p>{t('dashboard.ai.disabledDesc')}</p>
             <div style={{ marginTop: '0.75rem' }}>
-              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+              <Link to="/settings" className="btn-run" style={{ textDecoration: 'none' }}>
                 {t('dashboard.ai.disabledCta')}
               </Link>
             </div>

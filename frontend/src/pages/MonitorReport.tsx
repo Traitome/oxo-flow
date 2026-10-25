@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, createEventSource } from '../api/client';
 import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot } from 'lucide-react';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot, ChevronDown } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
@@ -115,6 +115,11 @@ export default function MonitorReport() {
   const detailRef = useRef<HTMLDivElement>(null);
   const [qaInput, setQaInput] = useState('');
   const [qaAnswer, setQaAnswer] = useState<string | null>(null);
+  // #907 P3-16: alert cards default to a one-line summary (level + rule +
+  // time) so a burst of alerts doesn't bury the monitor; expand on click.
+  // The Recent Events table under a finished run starts collapsed too.
+  const [collapsedAlerts, setCollapsedAlerts] = useState<Set<string>>(new Set());
+  const [eventsOpen, setEventsOpen] = useState(false);
 
   const { id: routeId } = useParams();
   const navigate = useNavigate();
@@ -587,44 +592,71 @@ export default function MonitorReport() {
                 // ai-status endpoint is polled every 5s and re-emits the same
                 // alerts; index keys made React remount (and flicker) every
                 // poll (issue #907 P1-8).
-                <div key={alert.alert_id || `${alert.rule_name}-${alert.prediction}`} style={{
-                  border: `1px solid ${levelColors[alert.level] || 'var(--color-text-tertiary)'}`,
-                  background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
-                  borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>
-                      {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
+                (() => {
+                  const alertKey = alert.alert_id || `${alert.rule_name}-${alert.prediction}`;
+                  const collapsed = collapsedAlerts.has(alertKey);
+                  return (
+                    <div key={alertKey} style={{
+                      border: `1px solid ${levelColors[alert.level] || 'var(--color-text-tertiary)'}`,
+                      background: `${levelColors[alert.level] || 'var(--color-text-tertiary)'}08`,
+                      borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px',
+                    }}>
+                      {/* One-line summary row — click toggles the body
+                          (#907 P3-16): a burst of alerts buries the monitor
+                          when every card renders full detail by default. */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={!collapsed}
+                        onClick={() => setCollapsedAlerts((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(alertKey)) next.delete(alertKey); else next.add(alertKey);
+                          return next;
+                        })}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsedAlerts((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(alertKey)) next.delete(alertKey); else next.add(alertKey);
+                          return next;
+                        }); } }}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none', gap: '8px' }}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <ChevronDown size={13} style={{ transition: 'transform 0.15s', transform: collapsed ? 'rotate(-90deg)' : 'none', flexShrink: 0 }} />
+                          {levelNames[alert.level] || alert.level}: {alert.rule_name || 'System'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
+                          {new Date(alert.timestamp).toLocaleTimeString(locale)}
+                        </div>
+                      </div>
+                      {!collapsed && (
+                        <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
+                          <div><strong>{t('monitor.prediction')}:</strong> {alert.prediction}</div>
+                          <div style={{ marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                            <Lightbulb size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                            <span>{alert.suggestion}</span>
+                          </div>
+                        </div>
+                      )}
+                      {!collapsed && alert.auto_fixable && (
+                        <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
+                          {/* issue #82 P1-4: these were dead buttons — retry is
+                              now a real run, manual edit opens the snapshot in
+                              the editor. */}
+                          <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
+                            onClick={() => void handleRetry()}><Wrench size={13} /> Fix & Retry</button>
+                          <button className="btn-sm" onClick={async () => {
+                            if (!selId) return;
+                            try {
+                              const run = await api.getRun(selId);
+                              session.setPipelineToml(run.pipeline_snapshot ?? '');
+                              navigate('/editor');
+                            } catch { /* ignore */ }
+                          }}><FileText size={13} /> Manual Edit</button>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
-                      {new Date(alert.timestamp).toLocaleTimeString(locale)}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: '0.82rem', marginTop: '6px' }}>
-                    <div><strong>{t('monitor.prediction')}:</strong> {alert.prediction}</div>
-                    <div style={{ marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                      <Lightbulb size={13} style={{ flexShrink: 0, marginTop: 2 }} />
-                      <span>{alert.suggestion}</span>
-                    </div>
-                  </div>
-                  {alert.auto_fixable && (
-                    <div style={{ marginTop: '8px', display: 'flex', gap: '6px' }}>
-                      {/* issue #82 P1-4: these were dead buttons — retry is
-                          now a real run, manual edit opens the snapshot in
-                          the editor. */}
-                      <button className="btn-sm" style={{ background: 'var(--color-success)', color: '#fff' }}
-                        onClick={() => void handleRetry()}><Wrench size={13} /> Fix & Retry</button>
-                      <button className="btn-sm" onClick={async () => {
-                        if (!selId) return;
-                        try {
-                          const run = await api.getRun(selId);
-                          session.setPipelineToml(run.pipeline_snapshot ?? '');
-                          navigate('/editor');
-                        } catch { /* ignore */ }
-                      }}><FileText size={13} /> Manual Edit</button>
-                    </div>
-                  )}
-                </div>
+                  );
+                })()
               );
             })}
           </div>
@@ -657,22 +689,36 @@ export default function MonitorReport() {
         {/* Node status table */}
         {monitorStatus.alerts.length > 0 && (
           <div style={{ marginTop: '0.5rem', fontSize: '0.82rem' }}>
-            <h4 style={{ marginBottom: '6px' }}>{t('monitor.recentEvents')}</h4>
-            <table className="run-table">
-              <thead><tr><th>{t('monitor.time')}</th><th>{t('monitor.rule')}</th><th>{t('monitor.level')}</th><th>{t('monitor.prediction')}</th></tr></thead>
-              <tbody>
-                {monitorStatus.alerts.slice(0, 10).map((a) => (
-                  // Stable identity key (issue #907 P1-8) — see the alert
-                  // cards above; index keys remounted the table every poll.
-                  <tr key={a.alert_id || `${a.rule_name}-${a.prediction}`}>
-                    <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString(locale)}</td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{a.rule_name || '-'}</td>
-                    <td><span className={`status-badge ${a.level}`}>{a.level}</span></td>
-                    <td style={{ fontSize: '0.78rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.prediction}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {/* Default-collapsed (#907 P3-16): on a finished run these rows
+                duplicate the alert cards above — one click opens them. */}
+            <h4
+              role="button"
+              tabIndex={0}
+              aria-expanded={eventsOpen}
+              onClick={() => setEventsOpen((o) => !o)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setEventsOpen((o) => !o); } }}
+              style={{ marginBottom: '6px', cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <ChevronDown size={13} style={{ transition: 'transform 0.15s', transform: eventsOpen ? 'none' : 'rotate(-90deg)' }} />
+              {t('monitor.recentEvents')}
+            </h4>
+            {eventsOpen && (
+              <table className="run-table">
+                <thead><tr><th>{t('monitor.time')}</th><th>{t('monitor.rule')}</th><th>{t('monitor.level')}</th><th>{t('monitor.prediction')}</th></tr></thead>
+                <tbody>
+                  {monitorStatus.alerts.slice(0, 10).map((a) => (
+                    // Stable identity key (issue #907 P1-8) — see the alert
+                    // cards above; index keys remounted the table every poll.
+                    <tr key={a.alert_id || `${a.rule_name}-${a.prediction}`}>
+                      <td style={{ fontSize: '0.75rem' }}>{new Date(a.timestamp).toLocaleTimeString(locale)}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{a.rule_name || '-'}</td>
+                      <td><span className={`status-badge ${a.level}`}>{a.level}</span></td>
+                      <td style={{ fontSize: '0.78rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.prediction}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
       </div>
@@ -1035,7 +1081,11 @@ export default function MonitorReport() {
                 · Phase: {selectedRun?.phase || '-'}
               </div>
             </div>
-            <div className="row" style={{ gap: '4px' }} role="tablist">
+            <div
+              className="row"
+              role="tablist"
+              style={{ gap: '4px', position: 'sticky', top: 0, zIndex: 5, background: 'var(--color-bg)', paddingBottom: '6px' }}
+            >
               {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((tabKey) => (
                 <button
                   key={tabKey}
