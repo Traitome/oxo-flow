@@ -524,8 +524,11 @@ async fn webhook_enable_without_any_secret_is_refused() {
     // delivery lets anyone who guesses the URL forge events). The row is
     // seeded here — cargo runs this binary's tests in parallel against one
     // shared DB row, so another test's leftover secret must not leak in.
-    seed_webhook_row(None).await;
+    // seeded under the row lock: cargo runs this binary's tests in parallel
+    // against one shared DB row, so the seed itself must not interleave
+    // with another webhook test's request.
     let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(None).await;
     let (status, body) = put(
         &app,
         "/api/webhook",
@@ -554,8 +557,8 @@ async fn webhook_disable_allows_clearing_the_secret() {
     // Seed our own stored secret instead of depending on a previous test's
     // shared-DB leftovers; disabling must never demand one (the gate only
     // guards going live).
-    seed_webhook_row(Some("leftover-key")).await;
     let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(Some("leftover-key")).await;
     let (status, body) = put(&app, "/api/webhook", json!({"enabled": false, "url": ""})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
@@ -694,12 +697,10 @@ async fn webhook_enable_refuses_a_stored_secret_that_does_not_decrypt() {
     // open (the test binary never sets OXO_FLOW_MASTER_KEY, so crypto::open
     // degrades it to "") — the state a rotated master key leaves behind.
     // The old `secret.is_some()` gate accepted this row and enabled
-    // unsigned, forgeable deliveries.
-    seed_webhook_row(Some("v1:bm90LWE6cmVhbGtleQ")).await;
+    // unsigned, forgeable deliveries. Seed under the row lock (parallel
+    // tests share the row); the stored value is present but NOT usable.
     let _guard = WEBHOOK_ROW.lock().await;
-
-    // Enabling without a new secret must be refused: the stored value is
-    // present in the row but NOT usable.
+    seed_webhook_row(Some("v1:bm90LWE6cmVhbGtleQ")).await;
     let (status, body) = put(
         &app,
         "/api/webhook",

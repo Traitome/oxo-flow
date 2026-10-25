@@ -111,15 +111,6 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// Rule count of a workflow definition, or the parse error. A definition the
-/// engine cannot read must never reach the database: it would be stored as an
-/// unrunnable `rules_count = 0` row while the API reports success.
-fn count_rules(toml: &str) -> Result<i64, String> {
-    oxo_flow_core::WorkflowConfig::parse(toml)
-        .map(|wf| wf.rules.len() as i64)
-        .map_err(|e| e.to_string())
-}
-
 pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -1788,14 +1779,19 @@ pub async fn rollback_pipeline(
     // The restored content must parse — the same contract as save/update. A
     // stale rules_count kept from the current pipeline would mask an
     // unrunnable revision, and the snapshot below must not be written for a
-    // rollback that is about to be rejected.
-    let rules_count = count_rules(&toml_content).map_err(|e| {
+    // rollback that is about to be rejected. rules_count AND version are both
+    // derived from the revision's TOML (TOML-is-truth, #907 P2-5): writing the
+    // old TOML back under the pre-rollback version would recreate exactly the
+    // divergence P2-5 removed.
+    let parsed = oxo_flow_core::WorkflowConfig::parse(&toml_content).map_err(|e| {
         err(
             StatusCode::BAD_REQUEST,
             "PARSE_ERROR",
             format!("revision {revision_id} is not a valid workflow: {e}"),
         )
     })?;
+    let rules_count = parsed.rules.len() as i64;
+    let version = parsed.workflow.version.clone();
 
     // Restore = snapshot current + write the old content back.
     record_revision(
@@ -1808,9 +1804,10 @@ pub async fn rollback_pipeline(
     .await;
     let now = now_iso();
     sqlx::query(
-        "UPDATE pipelines SET toml_content = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+        "UPDATE pipelines SET toml_content = ?, version = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&toml_content)
+    .bind(&version)
     .bind(rules_count)
     .bind(&now)
     .bind(&id)
@@ -1829,7 +1826,7 @@ pub async fn rollback_pipeline(
         id,
         user_id: pipeline.user_id,
         name: pipeline.name,
-        version: pipeline.version,
+        version,
         toml_content,
         rules_count: rules_count as usize,
         forked_from: pipeline.forked_from,

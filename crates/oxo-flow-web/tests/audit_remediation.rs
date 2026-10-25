@@ -195,3 +195,54 @@ async fn rollback_rejects_an_unparsable_revision() {
         "a rejected rollback must not rewrite the TOML"
     );
 }
+
+/// Rolling back must restore the revision's OWN version alongside its TOML
+/// (#907 M-1): writing the old TOML back under the pre-rollback version
+/// recreates exactly the TOML-vs-stored-version divergence the P2-5 fix
+/// removed from save/update.
+#[tokio::test]
+async fn rollback_restores_the_revision_version_not_the_current_one() {
+    common::ensure_db().await;
+    const NEWER: &str = "[workflow]\nname = \"p\"\nversion = \"2.0.0\"\n\n[[rules]]\nname = \"a\"\noutput = [\"a.txt\"]\nshell = \"echo a > a.txt\"\n";
+    const OLDER: &str = "[workflow]\nname = \"p\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"a\"\noutput = [\"a.txt\"]\nshell = \"echo a > a.txt\"\n";
+    sqlx::query(
+        "INSERT OR REPLACE INTO pipelines (id, user_id, name, version, toml_content, \
+         rules_count, visibility, created_at, updated_at) \
+         VALUES ('pl-roll-v', 'default', 'p', '2.0.0', ?, 1, 'private', \
+         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(NEWER)
+    .execute(pool())
+    .await
+    .expect("seed pipeline");
+    sqlx::query(
+        "INSERT OR REPLACE INTO pipeline_revisions (id, pipeline_id, user_id, version, \
+         toml_content, created_at) VALUES ('rev-old', 'pl-roll-v', 'default', '1.0.0', \
+         ?, '2026-01-01T00:00:00Z')",
+    )
+    .bind(OLDER)
+    .execute(pool())
+    .await
+    .expect("seed revision");
+
+    let (status, body) = post(
+        "/api/pipelines/pl-roll-v/rollback",
+        json!({"revision_id": "rev-old"}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["version"], "1.0.0", "{body}");
+    let (version, rules_count, content): (String, i64, String) = sqlx::query_as(
+        "SELECT version, rules_count, toml_content FROM pipelines WHERE id = 'pl-roll-v'",
+    )
+    .fetch_one(pool())
+    .await
+    .expect("pipeline row");
+    assert_eq!(
+        version, "1.0.0",
+        "stored version must track the restored TOML"
+    );
+    assert_eq!(rules_count, 1);
+    assert_eq!(content, OLDER, "{content}");
+}
