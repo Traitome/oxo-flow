@@ -4378,7 +4378,7 @@ Finds installed reference genome components and reports missing ones with downlo
 <h3 id="reference-status">Reference Status<a class="headerlink" href="#reference-status" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>GET /api/data/reference/status
 </span></code></pre></div>
-Which common reference genomes (hg38, mm10, mm39) have their expected components (genome.fa, STAR index, genes.gtf) present at the standard <code>/data/references/</code> locations — the deterministic counterpart to the POST discovery above. A genome counts as <code>installed</code> only when at least one expected component exists; builds with nothing on disk are reported under <code>missing_genomes</code>. Response shape:</p>
+Which common reference genomes have their expected components present at the standard <code>/data/references/</code> locations — the deterministic counterpart to the POST discovery above. Probed components per genome: <code>hg38</code> and <code>mm10</code> check <code>genome.fa</code>, <code>star</code> (STAR index directory) and <code>genes.gtf</code>; <code>mm39</code> checks only <code>genome.fa</code> and <code>star</code> (the <code>[[references]]</code> auto-build needs no annotation to construct an index). A genome counts as <code>installed</code> only when at least one probed component exists; builds with nothing on disk are reported under <code>missing_genomes</code>. Response shape (<code>components</code> is a legacy alias of <code>found</code> — both carry the absolute paths that exist on disk):</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>{
 </span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>  "installed": [
 </span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a>    { "genome": "hg38", "components": ["/data/references/hg38/genome.fa", "..."],
@@ -4386,7 +4386,7 @@ Which common reference genomes (hg38, mm10, mm39) have their expected components
 </span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5" href="#__codelineno-47-5"></a>  ],
 </span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6" href="#__codelineno-47-6"></a>  "missing_genomes": ["mm39"],
 </span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7" href="#__codelineno-47-7"></a>  "missing": ["/data/references/mm39/genome.fa"],
-</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a>  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 ..."]
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a>  "download_commands": ["# mm39: stage the expected files under /data/references/mm39 (genome.fa, STAR index) ..."]
 </span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9" href="#__codelineno-47-9"></a>}
 </span></code></pre></div>
 <p><code>download_commands</code> carries staging <em>guidance</em>, not fetchable URLs: oxo-flow hosts no reference mirror. Point users at <code>reference_dir</code> + <code>[[references]]</code> auto-build in the workflow format for index construction.</p>
