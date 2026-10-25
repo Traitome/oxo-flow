@@ -147,9 +147,11 @@ Share URL truth (#907 R16):
   also carries the mount path (`https://flows.example.com/oxo-flow`, the
   sub-path deploy recipe) replaces the local `--base-path` prefix
   instead of being appended to it; a scheme-less value still mints
-  `oxo+http://` but logs a warning; a value without any host is ignored
-  with a warning. Import accepts both schemes, so older `oxo+https://`
-  links keep working.
+  `oxo+http://` but logs a warning; an empty value warns and is treated
+  as unset; a value without any host (including port-only `:8080`) is
+  ignored with a warning and a local URL is minted instead; IPv6
+  literals on the override path are bracketed. Import accepts both
+  schemes, so older `oxo+https://` links keep working.
 
 ---
 

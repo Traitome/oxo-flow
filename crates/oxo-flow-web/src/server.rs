@@ -813,11 +813,13 @@ pub fn bound_port() -> Option<u16> {
 /// - When `OXO_FLOW_PUBLIC_URL` declares a public origin (reverse-proxy
 ///   deployments), its scheme and authority replace the local guess. A
 ///   scheme-less value is still accepted as plain HTTP but logged as a
-///   warning; a value with no host at all is ignored with a warning.
+///   warning; an empty value or one with no host at all is ignored with a
+///   warning.
 /// - An override that carries its own mount path (`https://host/oxo-flow`)
 ///   names the complete public origin and replaces the local `--base-path`
 ///   prefix — appending both would double the mount segment. A host-only
-///   override keeps the local prefix.
+///   override keeps the local prefix. IPv6 literals are bracketed on both
+///   paths.
 ///
 /// Import accepts both schemes, so URLs minted before this change keep
 /// working.
@@ -825,7 +827,14 @@ pub fn share_url_for(token: &str) -> String {
     let prefix = base_path().trim_end_matches('/');
     if let Ok(public) = std::env::var("OXO_FLOW_PUBLIC_URL") {
         let public = public.trim();
-        if !public.is_empty() {
+        if public.is_empty() {
+            // Set but empty/whitespace — usually a quoting slip in the env
+            // file. Say so instead of silently behaving as unset (review N5).
+            tracing::warn!(
+                "OXO_FLOW_PUBLIC_URL is set but empty; treating it as unset — \
+                 declare the full public origin (e.g. https://host[/mount]) or remove the variable"
+            );
+        } else {
             let (scheme, authority) = if let Some(rest) = public.strip_prefix("https://") {
                 ("https", rest)
             } else if let Some(rest) = public.strip_prefix("http://") {
@@ -841,7 +850,16 @@ pub fn share_url_for(token: &str) -> String {
                 ("http", public)
             };
             let authority = authority.trim_end_matches('/');
-            if authority.is_empty() || authority.starts_with('/') {
+            // Port-only garbage (":8080" — no host before the colon) carries
+            // no registrable host; treat it like the no-host case so a
+            // malformed override never mints an unparseable URL (review N4).
+            // A leading colon with ≥2 colons is a bare IPv6 literal ("::1")
+            // and is kept (bracketed below). "[:…]" is malformed too.
+            let host_empty = authority.is_empty()
+                || authority.starts_with('/')
+                || (authority.starts_with(':') && authority.matches(':').count() < 2)
+                || authority.starts_with("[:");
+            if host_empty {
                 tracing::warn!(
                     "OXO_FLOW_PUBLIC_URL={public:?} carries no host; ignoring it and minting \
                      a local share URL instead"
@@ -852,6 +870,9 @@ pub fn share_url_for(token: &str) -> String {
                 // --base-path /oxo-flow with PUBLIC_URL=…/oxo-flow).
                 return format!("oxo+{scheme}://{authority}/share/{token}");
             } else {
+                // Bracket an IPv6 literal in a host-only override the same way
+                // the default branch does (::1 alone parses nowhere).
+                let authority = bracket_ipv6_host(authority);
                 return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
             }
         }
@@ -861,13 +882,22 @@ pub fn share_url_for(token: &str) -> String {
         host = "localhost".into();
     }
     // Bracket IPv6 literals (::1) so the minted URL stays parseable.
-    if host.contains(':') && !host.starts_with('[') {
-        host = format!("[{host}]");
-    }
+    let host = bracket_ipv6_host(&host);
     // Use the port the server actually bound (issue #82 P0-6: the URL was
     // hardcoded to 3000 even when serving on 8080 or any -p value).
     let port = bound_port().unwrap_or(3000);
     format!("oxo+http://{host}:{port}{prefix}/share/{token}")
+}
+
+/// Bracket a bare IPv6 literal (`::1`, `2001:db8::1`) so the authority stays
+/// parseable. `host:port` (exactly one colon) and already-bracketed values
+/// pass through untouched.
+fn bracket_ipv6_host(host: &str) -> String {
+    if host.starts_with('[') || host.matches(':').count() < 2 {
+        host.to_string()
+    } else {
+        format!("[{host}]")
+    }
 }
 
 /// Add standard security headers to every response.

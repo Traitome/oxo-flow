@@ -167,6 +167,45 @@ fn share_url_scheme_follows_actual_transport() {
         );
         std::env::remove_var("OXO_FLOW_PUBLIC_URL");
 
+        // An override that carries its own mount path also wins over a
+        // DIFFERENT local base path — the override is the whole origin
+        // (guards against a regression to double-prefixing).
+        server::set_base_path("/other");
+        std::env::set_var(
+            "OXO_FLOW_PUBLIC_URL",
+            "https://flows.lab.example.edu/oxo-flow",
+        );
+        assert_eq!(
+            server::share_url_for("tok-mount2"),
+            "oxo+https://flows.lab.example.edu/oxo-flow/share/tok-mount2"
+        );
+        server::set_base_path("/oxo-flow");
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Malformed overrides fall back to the local mint (review N4):
+        // port-only authority, bare IPv6 literal.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://:8080");
+        let url = server::share_url_for("tok-porthost");
+        assert!(
+            url.starts_with("oxo+http://localhost:18080/oxo-flow/share/tok-porthost"),
+            "port-only override must be ignored for a local mint (got {url})"
+        );
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "::1");
+        let url = server::share_url_for("tok-v6-override");
+        assert_eq!(
+            url, "oxo+http://[::1]/oxo-flow/share/tok-v6-override",
+            "scheme-less IPv6 override must be bracketed, no local port injected (got {url})"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Host-only IPv6 override keeps the bracketing too.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "http://[2001:db8::1]:8443");
+        assert_eq!(
+            server::share_url_for("tok-v6-br"),
+            "oxo+http://[2001:db8::1]:8443/oxo-flow/share/tok-v6-br"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
         // Default branch with a base path + bound port: prefix and port flow
         // through, and an IPv6 host literal gets bracketed (review N2).
         std::env::set_var("OXO_FLOW_HOST", "::1");
@@ -176,6 +215,16 @@ fn share_url_scheme_follows_actual_transport() {
             "IPv6 literal must be bracketed in the default mint (got {url})"
         );
         std::env::remove_var("OXO_FLOW_HOST");
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // A whitespace-only override behaves as unset — with a warning in
+        // the logs (review N5) — and the default mint still applies.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "   ");
+        let url = server::share_url_for("tok-ws");
+        assert!(
+            url.starts_with("oxo+http://") && url.ends_with("/oxo-flow/share/tok-ws"),
+            "whitespace-only override must fall through to the local mint (got {url})"
+        );
         std::env::remove_var("OXO_FLOW_PUBLIC_URL");
     }
 }
