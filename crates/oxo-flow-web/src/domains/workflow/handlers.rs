@@ -1466,8 +1466,9 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
             installed.push(serde_json::json!({
                 "genome": genome,
                 // Legacy alias of `found` kept for API stability — frontend
-                // Settings.tsx renders `components`, badge logic reads
-                // `found`. Always identical; do not diverge them.
+                // Settings.tsx renders `components`, while its badge logic
+                // reads `missing_components`. Always identical to `found`;
+                // do not diverge them.
                 "components": found.iter().map(String::as_str).collect::<Vec<_>>(),
                 "found": found,
                 "missing_components": not_found,
@@ -1487,7 +1488,10 @@ pub async fn reference_status() -> ApiResult<serde_json::Value> {
             let expected: Vec<String> = not_found
                 .iter()
                 .map(|p| {
-                    let base = p.rsplit('/').next().unwrap_or(p);
+                    let base = std::path::Path::new(p)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(p);
                     if base == "star" {
                         "STAR index".to_string()
                     } else {
