@@ -83,9 +83,12 @@ fn consume_ticket(ticket: &str) -> Option<String> {
     }
 }
 
-/// Response body of `POST /api/events/ticket` (#914 review NIT: the
-/// annotation previously declared a 200 JSON response with no body schema,
-/// forcing consumers to read the source).
+// Body-schema context (#914 review NIT): the annotation previously
+// declared a 200 JSON response with no body schema, forcing consumers to
+// read the source. This doc comment IS the public schema description —
+// keep it free of internal review references.
+/// Response body of `POST /api/events/ticket`: a one-time ticket and its
+/// TTL in seconds.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct TicketResponse {
     /// The one-time ticket — pass it as `GET /api/events?ticket=...`.
