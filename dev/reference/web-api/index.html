@@ -4471,13 +4471,19 @@ environment table in <code>AGENTS.md</code>).</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
-</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>POST /api/pipelines/{id}/share   # Share (link or workspace; URL uses the bound port)
-</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>POST /api/pipelines/import       # Import from oxo+https:// URL
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>POST /api/pipelines/import       # Import from oxo+http(s):// share URL
 </span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 </span></code></pre></div>
 <code>GET /api/share/{token}</code> powers the share landing page: pipeline identity,
 DAG rule order, TOML, owner, expiry, and the most recent terminal run —
 the token itself is the authorization. Expired links return <code>410</code>.</p>
+<p>Share URLs minted by <code>POST .../share</code> use <code>oxo+http://</code> by default (the
+server has no native TLS) and <code>oxo+https://</code> only when <code>OXO_FLOW_PUBLIC_URL</code>
+declares a public HTTPS origin; the import endpoint accepts both schemes.
+An override that carries its own mount path (e.g.
+<code>https://flows.example.com/oxo-flow</code> behind a sub-path proxy) replaces the
+local <code>--base-path</code> prefix instead of being appended to it.</p>
 <p>See <a href="../../how-to/collaboration/">Collaboration</a> for details.</p>
 <h3 id="version-history">Version History<a class="headerlink" href="#version-history" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>GET  /api/pipelines/{id}/revisions        # Snapshot list (newest first, ≤ 50)

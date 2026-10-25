@@ -4463,6 +4463,16 @@ and bypass the limiter.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># /etc/oxo-flow/server.env (append)</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nv">OXO_FLOW_TRUSTED_PROXY</span><span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
+<p>For TLS-terminating proxies (the common public deployment), also declare
+the public origin so minted share URLs tell the truth about the transport
+(#907 R16) — by default they carry <code>oxo+http://</code> with the local bind
+host/port, which is unreachable from outside the proxy:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># /etc/oxo-flow/server.env (append) — public HTTPS entry point</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nv">OXO_FLOW_PUBLIC_URL</span><span class="o">=</span>https://flows.lab.example.edu/oxo-flow
+</span></code></pre></div>
+<p>Share URLs then become <code>oxo+https://flows.lab.example.edu/oxo-flow/share/&lt;token&gt;</code>
+(see <a href="../collaboration/">Collaboration</a>); the import API accepts both
+schemes, so previously minted links keep working.</p>
 <h2 id="performance">Performance<a class="headerlink" href="#performance" title="Permanent link">#</a></h2>
 <table>
 <thead>
@@ -4540,13 +4550,13 @@ asserts against the live server, and cleans up after itself:</p>
 </tr>
 </tbody>
 </table>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Against the local debug build</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>scripts/deploy-smoke.sh
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Against a release build / packaged app</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="nv">OXO_BIN</span><span class="o">=</span>target/release/oxo-flow<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="nv">OXO_APP</span><span class="o">=</span>target/release/bundle/osx/oxo-flow.app<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>scripts/deploy-smoke.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Against the local debug build</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>scripts/deploy-smoke.sh
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># Against a release build / packaged app</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="nv">OXO_BIN</span><span class="o">=</span>target/release/oxo-flow<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="nv">OXO_APP</span><span class="o">=</span>target/release/bundle/osx/oxo-flow.app<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>scripts/deploy-smoke.sh
 </span></code></pre></div>
 <p>Run it on every machine you deploy to — it exits non-zero on any failed
 assertion, so it doubles as a CI gate for packaging.</p>

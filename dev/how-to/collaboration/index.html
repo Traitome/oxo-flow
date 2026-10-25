@@ -3977,11 +3977,23 @@ copy — changes to the original do not affect the fork, and vice versa.</p>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Response</span>
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="o">{</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="s2">"share_url"</span>:<span class="w"> </span><span class="s2">"oxo+https://lab.example.com:8080/share/abc123"</span>,
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="s2">"share_url"</span>:<span class="w"> </span><span class="s2">"oxo+http://lab.example.com:8080/share/abc123"</span>,
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="s2">"access_token"</span>:<span class="w"> </span><span class="s2">"abc123"</span>,
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="s2">"expires_at"</span>:<span class="w"> </span><span class="s2">"2024-02-12T00:00:00+00:00"</span>
 </span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="o">}</span>
 </span></code></pre></div>
+<p><strong>Share URL scheme</strong>: the web server has no native TLS — it speaks plain
+HTTP, with TLS terminating at a reverse proxy when one is present. The
+minted URL therefore reflects the actual transport: <code>oxo+http://</code> by
+default, and <code>oxo+https://</code> only when you declare a public HTTPS origin:</p>
+<ul>
+<li>Set <code>OXO_FLOW_PUBLIC_URL=https://flows.example.com</code> and share URLs become
+  <code>oxo+https://flows.example.com/share/&lt;token&gt;</code> (the declared authority
+  replaces the local host/port guess). This is the setting for
+  reverse-proxy deployments.</li>
+<li>URLs minted before this change (<code>oxo+https://…</code>) keep working — the
+  import API accepts both schemes.</li>
+</ul>
 <p><strong>Visibility levels</strong> (<code>link</code> / <code>public</code> — <code>public</code> is an alias of <code>link</code>)
 are stored on the share record; other values (e.g. <code>workspace</code>) are
 rejected with <code>UNSUPPORTED_VISIBILITY</code>.
@@ -3989,19 +4001,22 @@ The share URL opens a public read-only landing page (see
 <a href="#share-landing-pages">Share Landing Pages</a> below); programmatic consumption
 goes through the <a href="#import">import API</a> below.</p>
 <h2 id="import">Import<a class="headerlink" href="#import" title="Permanent link">#</a></h2>
-<p>Import a pipeline from an <code>oxo+https://</code> share link (<code>oxo+http://</code> is
-accepted too — the token, not the scheme, is what the import validates):</p>
+<p>Import a pipeline from an <code>oxo+http://</code> or <code>oxo+https://</code> share link
+(the token, not the scheme, is what the import validates):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/api/pipelines/import<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"url": "oxo+https://lab.example.com:8080/share/abc123"}'</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"url": "oxo+http://lab.example.com:8080/share/abc123"}'</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Response</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="o">{</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="s2">"pipeline_id"</span>:<span class="w"> </span><span class="s2">"pipeline-xyz"</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="o">}</span>
 </span></code></pre></div>
-<p>The <code>oxo+https://</code> protocol prefix makes share links explicit and unambiguous —
-you can paste them into any tool and the intent is clear.</p>
+<p>The <code>oxo+</code> protocol prefix makes share links explicit and unambiguous —
+you can paste them into any tool and the intent is clear. The scheme after
+it mirrors how the share was actually served (<code>oxo+http://</code> by default,
+<code>oxo+https://</code> behind a declared public HTTPS origin), and both are
+accepted on import.</p>
 <p><strong>Import behavior</strong>:</p>
 <ul>
 <li>Creates a full copy of the shared pipeline</li>
@@ -4035,7 +4050,7 @@ you can paste them into any tool and the intent is clear.</p>
 </table>
 <p>No nested RBAC. No group hierarchies. Simple and transparent.</p>
 <h2 id="share-landing-pages">Share Landing Pages<a class="headerlink" href="#share-landing-pages" title="Permanent link">#</a></h2>
-<p>A share link (<code>oxo+https://host:port/share/&lt;token&gt;</code>) opens a public
+<p>A share link (<code>oxo+http(s)://host:port/share/&lt;token&gt;</code>) opens a public
 read-only landing page — pipeline name/version, DAG shape, the full TOML,
 the owner, expiry, and the most recent terminal run as provenance. <strong>No
 session is required to view it</strong> (the token is the authorization). The

@@ -4288,6 +4288,24 @@
   event so the client can refetch instead of silently missing run state
   transitions.</li>
 </ul>
+<p>Share URL truth (#907 R16):</p>
+<ul>
+<li>The server has no native TLS, so minted share URLs use <code>oxo+http://</code>
+  with the actual bind host/port (plus the <code>--base-path</code> prefix) by
+  default — a hardcoded <code>oxo+https://</code> advertised TLS the process never
+  spoke. IPv6 host literals are bracketed so the URL stays parseable.</li>
+<li><code>OXO_FLOW_PUBLIC_URL</code> (e.g. <code>https://flows.example.com</code>) lets a
+  reverse-proxy deployment declare its public origin; scheme and
+  authority of minted URLs then come from that override. A value that
+  also carries the mount path (<code>https://flows.example.com/oxo-flow</code>, the
+  sub-path deploy recipe) replaces the local <code>--base-path</code> prefix
+  instead of being appended to it; a scheme-less value still mints
+  <code>oxo+http://</code> but logs a warning; an empty value warns and is treated
+  as unset; a value without any host (including port-only <code>:8080</code>) is
+  ignored with a warning and a local URL is minted instead; IPv6
+  literals on the override path are bracketed. Import accepts both
+  schemes, so older <code>oxo+https://</code> links keep working.</li>
+</ul>
 <hr />
 <h2 id="domain-driven-module-structure">Domain-Driven Module Structure<a class="headerlink" href="#domain-driven-module-structure" title="Permanent link">#</a></h2>
 <table>
@@ -4404,7 +4422,7 @@
 </span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>│   ├── /{id}/fork          # Fork into user workspace (v0.8 collab)
 </span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>│   └── /{id}/share         # Share pipeline (v0.8 collab)
 </span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>│
-</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>├── /pipelines/import       # Import from oxo+https:// URL (v0.8 collab)
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>├── /pipelines/import       # Import from oxo+http(s):// share URL (v0.8 collab)
 </span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>│
 </span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>├── /runs
 </span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>│   ├── /                   # POST: create run; GET: list runs
