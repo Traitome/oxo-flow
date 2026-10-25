@@ -83,6 +83,15 @@ fn consume_ticket(ticket: &str) -> Option<String> {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/events/ticket",
+    tag = "observability",
+    responses(
+        (status = 200, description = "Ticket minted", content_type = "application/json"),
+        (status = 401, description = "Error", body = crate::domains::workflow::handlers::ApiError),
+    )
+)]
 /// POST /api/events/ticket — mint a one-time SSE connection ticket.
 ///
 /// Requires normal bearer authentication (the route is NOT on the

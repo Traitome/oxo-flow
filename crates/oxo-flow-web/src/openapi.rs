@@ -163,6 +163,7 @@ impl Modify for SecurityAddon {
         crate::domains::observability::handlers::put_webhook_config,
         crate::domains::observability::handlers::hpc_status,
         crate::sse::sse_events,
+        crate::sse::events_ticket,
         crate::server::openapi_json,
     ),
     components(schemas(crate::domains::workflow::handlers::ApiError))

@@ -109,6 +109,7 @@ const ALL_ROUTES: &[&str] = &[
     "/api/openapi.json",
     "/api/metrics",
     "/api/events",
+    "/api/events/ticket",
     "/api/audit",
     "/api/quota",
     "/api/webhook",
