@@ -463,6 +463,21 @@ impl DiagnosticsEngine {
                 fix_config_path: None,
             },
             Pattern {
+                id: "unbound_wildcard",
+                category: ErrorCategory::Config,
+                exit_codes: vec![],
+                stderr_patterns: compile(&[
+                    // The engine's residual-wildcard gate (executor/process.rs)
+                    // fails the rule before the shell runs; exit code is -1 or
+                    // None depending on path, so no exit-code filter.
+                    "contains unbound wildcard",
+                ]),
+                likely_cause: "An output pattern still contains a wildcard that has no value for this rule instance.",
+                auto_fixable: false,
+                fix_desc: Some("Declare a value source for the wildcard (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it from the output pattern."),
+                fix_config_path: None,
+            },
+            Pattern {
                 id: "conda_env_fail",
                 category: ErrorCategory::Config,
                 exit_codes: vec![1],
@@ -710,6 +725,10 @@ mod tests {
             "No files found matching pattern: data/{sample}.fastq",
         ),
         (
+            "unbound_wildcard",
+            "output pattern 'results/{sample}/out.bam' contains unbound wildcard {sample} for this instance — declare a value source (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it",
+        ),
+        (
             "conda_env_fail",
             "CondaError: Cannot link an item that already exists",
         ),
@@ -838,6 +857,25 @@ mod tests {
         let results = engine.analyze("star_align", log, Some(137));
         assert_eq!(results[0].error_pattern.as_deref(), Some("oom_killed"));
         assert!(results[0].auto_fixable);
+    }
+
+    #[test]
+    fn test_unbound_wildcard_detection() {
+        let engine = DiagnosticsEngine::new();
+        // Exact engine wording from the residual-wildcard gate
+        // (executor/process.rs); the checkpoint persists it in stderr_tail
+        // with exit code -1 (#907 P1-3).
+        let log = "output pattern 'results/{sample}/out.bam' contains unbound wildcard {sample} for this instance — declare a value source (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it";
+        for exit in [None, Some(-1)] {
+            let results = engine.analyze("call_variants", log, exit);
+            assert_eq!(
+                results[0].error_pattern.as_deref(),
+                Some("unbound_wildcard"),
+                "exit {exit:?}"
+            );
+            assert_eq!(results[0].category, ErrorCategory::Config);
+            assert!(!results[0].auto_fixable);
+        }
     }
 
     #[test]
