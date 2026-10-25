@@ -440,6 +440,12 @@ pub fn spawn_background_run_with_args(
 
         // Broadcast run start event, scoped to the run owner (issue #82
         // P0-5: SSE subscribers only receive their own runs' events).
+        //
+        // Wire-shape note (#914 review NIT): the `data.username` field
+        // predates the canonical user model and actually carries the
+        // canonical users.id — identical to the envelope-level `user`
+        // field. It is kept for wire compatibility; new consumers should
+        // read the envelope `user` instead.
         broadcast_event_for(
             "run_started",
             &serde_json::json!({

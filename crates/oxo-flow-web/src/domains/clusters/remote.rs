@@ -214,6 +214,9 @@ pub fn spawn_remote_run(
             }
             Ok(_) => {}
         }
+        // Wire-shape note (#914 review NIT): `data.username` carries the
+        // canonical users.id (kept for wire compatibility, mirroring
+        // executor.rs); new consumers should read the envelope `user`.
         broadcast_event_for(
             "run_started",
             &serde_json::json!({"run_id": run_id, "username": username, "status": "running", "started_at": started.to_rfc3339()}),

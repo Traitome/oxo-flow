@@ -83,12 +83,23 @@ fn consume_ticket(ticket: &str) -> Option<String> {
     }
 }
 
+/// Response body of `POST /api/events/ticket` (#914 review NIT: the
+/// annotation previously declared a 200 JSON response with no body schema,
+/// forcing consumers to read the source).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TicketResponse {
+    /// The one-time ticket — pass it as `GET /api/events?ticket=...`.
+    pub ticket: String,
+    /// Seconds until the ticket expires (fixed 30 s TTL).
+    pub expires_in_secs: u64,
+}
+
 #[utoipa::path(
     post,
     path = "/api/events/ticket",
     tag = "observability",
     responses(
-        (status = 200, description = "Ticket minted", content_type = "application/json"),
+        (status = 200, description = "Ticket minted", body = TicketResponse),
         (status = 401, description = "Error", body = crate::domains::workflow::handlers::ApiError),
     )
 )]
@@ -119,10 +130,10 @@ pub async fn events_ticket(
     (
         axum::http::StatusCode::OK,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
-        axum::Json(serde_json::json!({
-            "ticket": ticket,
-            "expires_in_secs": TICKET_TTL.as_secs(),
-        })),
+        axum::Json(TicketResponse {
+            ticket,
+            expires_in_secs: TICKET_TTL.as_secs(),
+        }),
     )
         .into_response()
 }

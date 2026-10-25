@@ -210,3 +210,30 @@ fn post_runs_documents_its_request_body() {
         "POST /api/runs requestBody must reference a schema, got {schema}"
     );
 }
+
+/// #914 review NIT: POST /api/events/ticket must document its response body
+/// (TicketResponse), not just an untyped 200 JSON blob.
+#[test]
+fn events_ticket_documents_its_response_body() {
+    let spec: serde_json::Value = serde_json::from_str(&oxo_flow_web::openapi::spec_json())
+        .expect("generated spec must parse as JSON");
+
+    let post = &spec["paths"]["/api/events/ticket"]["post"];
+    let schema = &post["responses"]["200"]["content"]["application/json"]["schema"];
+    let ref_name = schema["$ref"].as_str().unwrap_or_else(|| {
+        panic!("POST /api/events/ticket 200 must $ref TicketResponse, got {schema}")
+    });
+    assert!(
+        ref_name.ends_with("TicketResponse"),
+        "expected TicketResponse $ref, got {ref_name}"
+    );
+    let component = &spec["components"]["schemas"]["TicketResponse"];
+    assert_eq!(
+        component["properties"]["ticket"]["type"], "string",
+        "TicketResponse.ticket must be a string: {component}"
+    );
+    assert_eq!(
+        component["properties"]["expires_in_secs"]["type"], "integer",
+        "TicketResponse.expires_in_secs must be an integer: {component}"
+    );
+}

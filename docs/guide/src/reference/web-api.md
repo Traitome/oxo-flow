@@ -140,9 +140,13 @@ refetch run state when you see it.
 `POST /api/events/ticket` under normal bearer auth (EventSource cannot set
 an Authorization header; the ticket is single-use, expires in 30 s, and
 replaces the session token that used to travel — and leak — in the URL,
-#522). The stream is filtered to the subscriber's own
-runs — admins see everything. Events carry a `user` field (the owning user
-id, or `null` for system-wide events).
+#522). `POST /api/events/ticket` responds
+`{"ticket": "...", "expires_in_secs": 30}`. The stream is filtered to the
+subscriber's own runs — admins see everything. Events carry a `user` field
+(the owning user id, or `null` for system-wide events). The `run_started`
+event's `data.username` field predates the canonical user model and also
+carries the canonical user id (kept for wire compatibility — read the
+envelope `user` field instead).
 
 `run_completed` carries a `summary` field: the CLI's invalidation summary
 extracted from the execution log — config changes, edited rule definitions,
