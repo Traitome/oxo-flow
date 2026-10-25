@@ -721,7 +721,11 @@ async fn webhook_enable_refuses_a_stored_secret_that_does_not_decrypt() {
 
     // Cleanup: clear the row entirely, so no usable secret leaks from the
     // shared-file DB into the other webhook tests running in parallel.
+    // The seed itself is safe out-of-lock (every other webhook test seeds
+    // its own state under the lock first), but keep the write inside it
+    // anyway so no webhook-row write ever races.
     drop(_guard);
+    let _guard = WEBHOOK_ROW.lock().await;
     seed_webhook_row(None).await;
 }
 

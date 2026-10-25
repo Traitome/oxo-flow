@@ -1704,11 +1704,14 @@ pub async fn get_revision(
     tag = "workflow",
     responses(
         (status = 200, description = "Success", body = Pipeline),
+        (status = 400, description = "Unparsable revision", body = ApiError),
         (status = 404, description = "Error", body = ApiError),
     )
 )]
 /// POST /api/pipelines/{id}/rollback — restore a revision as the current
-/// pipeline (creating a new revision, so nothing is lost).
+/// pipeline (creating a new revision, so nothing is lost). The restored
+/// revision must parse; its version and rules_count are derived from the
+/// revision TOML itself (TOML-is-truth, #907 P2-5).
 pub async fn rollback_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
