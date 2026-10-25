@@ -88,7 +88,7 @@ export default function Dashboard() {
             <h3>{t('dashboard.ai')}</h3>
             <p>{t('dashboard.ai.disabledDesc')}</p>
             <div style={{ marginTop: '0.75rem' }}>
-              <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
+              <Link to="/settings" className="btn-run" style={{ textDecoration: 'none' }}>
                 {t('dashboard.ai.disabledCta')}
               </Link>
             </div>
@@ -146,7 +146,12 @@ export default function Dashboard() {
                 {runs.slice(0, 5).map((r) => (
                   <tr key={r.id}>
                     <td>{r.workflow_name ?? r.id.slice(0, 8)}</td>
-                    <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
+                    <td>
+                      <span className={`status-badge ${r.status}`}>{r.status}</span>
+                      {r.dry_run && (
+                        <span className="status-badge skipped" style={{ marginLeft: 4 }}>{t('monitor.dry')}</span>
+                      )}
+                    </td>
                     <td>{r.started_at ? new Date(r.started_at).toLocaleString(getLocale(lang)) : '-'}</td>
                     <td><Link to={`/runs/${r.id}`} className="view-link">{t('dashboard.view')}</Link></td>
                   </tr>

@@ -155,14 +155,19 @@ fn build_narrative(
                     .join(", ")
             ));
         }
+        let total = qc_summary["total_files"].as_u64().unwrap_or(0) as usize;
+        // plural() already embeds the count — adding a separate {total}
+        // argument double-printed it ("1 1 output file", CI-caught).
+        let verb = if total == 1 { "was" } else { "were" };
         md.push_str(&format!(
-            "The run stopped at the failure; **{}** output files were produced before it.\n\n",
-            qc_summary["total_files"]
+            "The run stopped at the failure; **{}** {verb} produced before it.\n\n",
+            oxo_flow_core::plural(total, "output file", "output files")
         ));
     } else {
+        let total = qc_summary["total_files"].as_u64().unwrap_or(0) as usize;
         md.push_str(&format!(
-            "Pipeline completed with **{}** output files.\n\n",
-            qc_summary["total_files"]
+            "Pipeline completed with **{}**.\n\n",
+            oxo_flow_core::plural(total, "output file", "output files")
         ));
     }
     md.push_str(&format!(
@@ -366,9 +371,11 @@ pub fn answer_question(report: &ReportData, question: &str) -> String {
     if lower.contains("file") || lower.contains("output") || lower.contains("result") {
         let total = report.file_tree.len();
         let total_size: i64 = report.file_tree.iter().map(|f| f.size_bytes).sum();
+        // plural() carries the count itself — see the narrative fix above.
         format!(
-            "The pipeline produced {total} output files totaling {:.1} MB. \
+            "The pipeline produced {} totaling {:.1} MB. \
              The most common file types are: {}.",
+            oxo_flow_core::plural(total, "output file", "output files"),
             total_size as f64 / 1048576.0,
             extract_file_types(&report.file_tree).join(", ")
         )
@@ -402,9 +409,9 @@ pub fn answer_question(report: &ReportData, question: &str) -> String {
         failure_answer(report)
     } else {
         format!(
-            "Based on the analysis report for this run: the pipeline completed with {} output files. \
+            "Based on the analysis report for this run: the pipeline completed with {}. \
              {}",
-            report.file_tree.len(),
+            oxo_flow_core::plural(report.file_tree.len(), "output file", "output files"),
             if report.key_findings.is_empty() {
                 "No unexpected findings reported.".to_string()
             } else {

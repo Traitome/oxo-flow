@@ -272,9 +272,13 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
               <Link to="/pipelines" className="btn-run" style={{ textDecoration: 'none' }}>
                 {t('chat.disabled.templates')}
               </Link>
-              <Link to="/editor" className="btn-sm" style={{ textDecoration: 'none' }}>
-                {t('chat.disabled.editor')}
-              </Link>
+              {/* In the editor context "Open editor" links to the page the
+                  user is already on (#907 P3-15) — show it everywhere else. */}
+              {context !== 'editor' && (
+                <Link to="/editor" className="btn-sm" style={{ textDecoration: 'none' }}>
+                  {t('chat.disabled.editor')}
+                </Link>
+              )}
             </div>
           </div>
         )}

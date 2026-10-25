@@ -168,8 +168,14 @@ async fn chat_agent_loop_emits_typed_events_and_registers_run_tools() {
             .unwrap();
         let answer = String::from_utf8_lossy(&answer);
         assert!(
-            answer.contains("1 output files"),
+            answer.contains("1 output file"),
             "the answer must reflect the real run's file tree (was an empty stub): {answer}"
+        );
+        // plural() regression guard: the count must not double-print
+        // ("1 1 output file", caught by CI on PR #918).
+        assert!(
+            !answer.contains("1 1 "),
+            "count must not be double-printed: {answer}"
         );
 
         let viz = server::build_router("personal")

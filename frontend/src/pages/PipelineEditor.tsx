@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, describeApiError } from '../api/client';
 import type { DagJson, KnowledgeTool } from '../api/types';
@@ -385,7 +385,7 @@ export default function PipelineEditor() {
       }
       const res = await api.createPipeline({ name, toml_content: toml });
       session.setRunResult({
-        message: t('editor.saved')
+        message: t('editor.created')
           .replace('{{name}}', name)
           .replace('{{id}}', res.id.slice(0, 8)),
         type: 'success',
@@ -421,6 +421,13 @@ export default function PipelineEditor() {
       {viewMode === 'guided' && (
         <div style={{ marginTop: '1rem' }}>
           <div className="action-row">
+            <button
+              className="btn-sm"
+              onClick={() => void handleSave()}
+              title={t('editor.save')}
+            >
+              <Save size={14} /> {t('editor.save')}
+            </button>
             <button
               className="btn-sm"
               onClick={openRunDialogFromGuided}
@@ -476,7 +483,7 @@ export default function PipelineEditor() {
                 setRevisions(null);
               }}
             >
-              🕘 {t('editor.history')}
+              <History size={14} /> {t('editor.history')}
             </button>
           </div>
           <div className="left-rail-body">

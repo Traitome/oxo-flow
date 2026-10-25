@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
-import { FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
+import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useI18n, getLocale } from '../context/I18n';
 
@@ -35,11 +35,26 @@ function fetchQuota(): Promise<QuotaInfo> {
 
 // Module-level components — defined outside the render function so React
 // preserves their identity across re-renders (prevents input focus loss).
+// Collapsible (#907 P3-16): every section starts open; the toggle is
+// title-row-wide. Form state lives in the parent component, so collapsing
+// (which unmounts children) never loses draft input.
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true);
   return (
     <div className="dash-card" style={{ marginBottom: '1rem' }}>
-      <h3 className="dash-card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>{icon} {title}</h3>
-      {children}
+      <h3
+        className="dash-card-title"
+        onClick={() => setOpen(o => !o)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); } }}
+        style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
+      >
+        <ChevronDown size={14} style={{ transition: 'transform 0.15s', transform: open ? 'none' : 'rotate(-90deg)', flexShrink: 0 }} />
+        {icon} {title}
+      </h3>
+      {open && children}
     </div>
   );
 }

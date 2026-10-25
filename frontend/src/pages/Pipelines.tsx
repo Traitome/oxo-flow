@@ -4,6 +4,7 @@ import { Download, GitFork, Pencil, Share2, Trash2 } from 'lucide-react';
 import { api, describeApiError } from '../api/client';
 import type { Pipeline, Template } from '../api/types';
 import { useI18n } from '../context/I18n';
+import Modal from '../components/Modal';
 
 type Tab = 'templates' | 'mine';
 
@@ -17,6 +18,9 @@ export default function Pipelines() {
   // A failed load used to render as an empty list — indistinguishable from
   // "you have no templates/pipelines".
   const [error, setError] = useState<string | null>(null);
+  // #907 D2: the styled delete confirm replaces window.confirm (which no
+  // dialog can style and which block event loops in embedded webviews).
+  const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null);
 
   useEffect(() => {
     api
@@ -39,7 +43,6 @@ export default function Pipelines() {
   const categories = [...new Set(templates.map((t) => t.category))];
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(t('pipelines.deleteConfirm').replace('{{name}}', name))) return;
     try {
       await api.deletePipeline(id);
       setPipelines((prev) => prev.filter((p) => p.id !== id));
@@ -207,7 +210,7 @@ export default function Pipelines() {
                         <button className="btn-sm" onClick={() => handleShare(p.id)} title={t('pipelines.share')} aria-label={t('pipelines.share')}>
                           <Share2 size={13} />
                         </button>
-                        <button className="btn-sm btn-error" onClick={() => handleDelete(p.id, p.name)} title={t('pipelines.delete')} aria-label={t('pipelines.delete')}>
+                        <button className="btn-sm btn-error" onClick={() => setDeleteTarget(p)} title={t('pipelines.delete')} aria-label={t('pipelines.delete')}>
                           <Trash2 size={13} />
                         </button>
                       </span>
@@ -218,6 +221,27 @@ export default function Pipelines() {
             </table>
           )}
         </>
+      )}
+
+      {deleteTarget && (
+        <Modal onClose={() => setDeleteTarget(null)} labelledBy="delete-confirm-title">
+          <h3 id="delete-confirm-title" style={{ marginTop: 0 }}>{t('pipelines.delete')}</h3>
+          <p>{t('pipelines.deleteConfirm').replace('{{name}}', deleteTarget.name)}</p>
+          <div className="modal-actions">
+            <button className="btn-sm" onClick={() => setDeleteTarget(null)}>
+              {t('inspector.cancel')}
+            </button>
+            <button
+              className="btn-sm btn-error"
+              onClick={() => {
+                void handleDelete(deleteTarget.id, deleteTarget.name);
+                setDeleteTarget(null);
+              }}
+            >
+              <Trash2 size={13} /> {t('pipelines.delete')}
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );

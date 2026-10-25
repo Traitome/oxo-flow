@@ -113,6 +113,8 @@ export interface RunItem {
   workflow_name?: string | null;
   /** The TOML the run executed (get_run only — powers Manual Edit). */
   pipeline_snapshot?: string;
+  /** True when the run was a --dry-run plan (persisted since #907 P3-14). */
+  dry_run?: boolean;
   status: string; phase: string; workdir: string | null;
   started_at: string | null; finished_at: string | null; created_at: string;
 }
