@@ -44,7 +44,7 @@ pub fn validate_pipeline_toml(toml_content: &str) -> ValidationReport {
                 check: "parse".into(),
                 passed: false,
                 severity: "error".into(),
-                message: format!("TOML parse error: {e}"),
+                message: format!("parse check failed: {e}"),
                 rule: None,
             });
             return ValidationReport {

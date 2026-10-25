@@ -459,6 +459,7 @@ pub async fn create_run(
             pipeline_snapshot: toml.to_string(),
             status: "queued".to_string(),
             phase: "parsing".to_string(),
+            dry_run: config.dry_run.unwrap_or(false),
             pid: None,
             workdir: Some(run_dir.to_string_lossy().to_string()),
             started_at: None,
@@ -467,7 +468,7 @@ pub async fn create_run(
             workflow_name: Some(workflow_name),
         };
         if let Err(e) = sqlx::query(
-            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, pid, workdir, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id)
         .bind(&run.user_id)
@@ -475,6 +476,7 @@ pub async fn create_run(
         .bind(&run.pipeline_snapshot)
         .bind(&run.status)
         .bind(&run.phase)
+        .bind(run.dry_run)
         .bind(run.pid)
         .bind(&run.workdir)
         .bind(&run.started_at)
@@ -747,6 +749,7 @@ pub async fn list_runs(
                 "workflow_name": r.workflow_name,
                 "status": r.status,
                 "phase": r.phase,
+                "dry_run": r.dry_run,
                 // No `pid`: the host process id is engine bookkeeping (cancel
                 // and liveness probes use it server-side) and discloses host
                 // internals to API consumers.
@@ -797,6 +800,7 @@ pub async fn get_run(
         "pipeline_snapshot": run.pipeline_snapshot,
         "status": run.status,
         "phase": run.phase,
+        "dry_run": run.dry_run,
         // No `pid` — same reason as the list endpoint: the host process id
         // stays engine-internal.
         "workdir": run.workdir,
@@ -1405,6 +1409,7 @@ pub async fn retry_run(
         workflow_name: run.workflow_name.clone(),
         status: "queued".to_string(),
         phase: "parsing".to_string(),
+        dry_run: run.dry_run,
         pid: None,
         workdir: run.workdir.clone(),
         started_at: None,
@@ -1412,7 +1417,7 @@ pub async fn retry_run(
         created_at: now.clone(),
     };
     sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&new_run.id)
     .bind(&new_run.user_id)
@@ -1421,6 +1426,7 @@ pub async fn retry_run(
     .bind(&new_run.workflow_name)
     .bind(&new_run.status)
     .bind(&new_run.phase)
+    .bind(new_run.dry_run)
     .bind(new_run.pid)
     .bind(&new_run.workdir)
     .bind(&new_run.started_at)
@@ -2484,6 +2490,7 @@ pub async fn resume_checkpoint(
         workflow_name: run.workflow_name.clone(),
         status: "queued".to_string(),
         phase: "resuming".to_string(),
+        dry_run: run.dry_run,
         pid: None,
         workdir: Some(workdir.clone()),
         started_at: None,
@@ -2491,7 +2498,7 @@ pub async fn resume_checkpoint(
         created_at: now.clone(),
     };
     sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&new_run.id)
     .bind(&new_run.user_id)
@@ -2500,6 +2507,7 @@ pub async fn resume_checkpoint(
     .bind(&new_run.workflow_name)
     .bind(&new_run.status)
     .bind(&new_run.phase)
+    .bind(new_run.dry_run)
     .bind(new_run.pid)
     .bind(&new_run.workdir)
     .bind(&new_run.started_at)

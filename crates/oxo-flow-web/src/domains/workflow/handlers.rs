@@ -567,10 +567,6 @@ pub async fn save_pipeline(
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("untitled");
-    let version = req
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.1.0");
     let visibility = req
         .get("visibility")
         .and_then(|v| v.as_str())
@@ -588,13 +584,19 @@ pub async fn save_pipeline(
     // never trusted (issue #82 P0-4).
     let user_id = crate::domains::auth::current_user::resolve(authenticated.as_ref()).id;
 
-    let rules_count = count_rules(toml_content).map_err(|e| {
+    // One parse drives both derived columns: the rule count and the version.
+    // TOML is the truth — an explicit `version` JSON field is no longer
+    // honored (issue #907 P2-5): a stored version that disagrees with the
+    // content silently poisons fork/import snapshots and provenance.
+    let parsed = oxo_flow_core::WorkflowConfig::parse(toml_content).map_err(|e| {
         err(
             StatusCode::BAD_REQUEST,
             "PARSE_ERROR",
             format!("toml_content is not a valid workflow: {e}"),
         )
     })?;
+    let rules_count = parsed.rules.len() as i64;
+    let version = parsed.workflow.version;
 
     let now = now_iso();
     let id = uuid::Uuid::new_v4().to_string();
@@ -602,7 +604,7 @@ pub async fn save_pipeline(
     sqlx::query(
         "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&id).bind(&user_id).bind(name).bind(version).bind(toml_content)
+    .bind(&id).bind(&user_id).bind(name).bind(&version).bind(toml_content)
     .bind(rules_count).bind(None::<String>).bind(visibility).bind(&now).bind(&now)
     .execute(pool).await
     .map_err(|e| {
@@ -615,7 +617,7 @@ pub async fn save_pipeline(
     })?;
 
     // The initial save is revision 1 of the pipeline's history.
-    record_revision(pool, &id, &user_id, version, toml_content).await;
+    record_revision(pool, &id, &user_id, &version, toml_content).await;
 
     Ok(Json(Pipeline {
         id,
@@ -829,16 +831,28 @@ pub async fn update_pipeline(
 
     // A name-only rename keeps the stored rule count; supplied content must
     // parse (same contract as POST /api/pipelines) or the stale count would
-    // mask an unrunnable definition.
-    let rules_count = match req.get("toml_content").and_then(|v| v.as_str()) {
-        Some(_) => count_rules(&toml_content).map_err(|e| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "PARSE_ERROR",
-                format!("toml_content is not a valid workflow: {e}"),
-            )
-        })?,
+    // mask an unrunnable definition. Content-bearing updates re-derive the
+    // version from the new TOML so the stored column tracks `[workflow]`
+    // version (issue #907 P2-5); renames keep the existing version.
+    let parsed = match req.get("toml_content").and_then(|v| v.as_str()) {
+        Some(_) => Some(
+            oxo_flow_core::WorkflowConfig::parse(&toml_content).map_err(|e| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "PARSE_ERROR",
+                    format!("toml_content is not a valid workflow: {e}"),
+                )
+            })?,
+        ),
+        None => None,
+    };
+    let rules_count = match &parsed {
+        Some(wf) => wf.rules.len() as i64,
         None => existing.rules_count,
+    };
+    let version = match &parsed {
+        Some(wf) => wf.workflow.version.clone(),
+        None => existing.version.clone(),
     };
 
     let now = now_iso();
@@ -852,9 +866,10 @@ pub async fn update_pipeline(
     )
     .await;
     sqlx::query(
-        "UPDATE pipelines SET name = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+        "UPDATE pipelines SET name = ?, version = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&name)
+    .bind(&version)
     .bind(&toml_content)
     .bind(&visibility)
     .bind(rules_count)
@@ -875,7 +890,7 @@ pub async fn update_pipeline(
         id,
         user_id: existing.user_id,
         name,
-        version: existing.version,
+        version,
         toml_content,
         rules_count: rules_count as usize,
         forked_from: existing.forked_from,

@@ -114,6 +114,7 @@ impl StorageBackend for PostgresBackend {
                 workflow_name TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 phase TEXT NOT NULL DEFAULT 'parsing',
+                dry_run BOOLEAN NOT NULL DEFAULT FALSE,
                 pid BIGINT,
                 workdir TEXT,
                 started_at TEXT,
@@ -412,6 +413,7 @@ impl StorageBackend for PostgresBackend {
             workflow_name: run.workflow_name.clone(),
             status: run.status.clone(),
             phase: run.phase.clone(),
+            dry_run: run.dry_run,
             pid: run.pid,
             workdir: run.workdir.clone(),
             started_at: run.started_at.clone(),
@@ -424,7 +426,7 @@ impl StorageBackend for PostgresBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -433,6 +435,7 @@ impl StorageBackend for PostgresBackend {
         .bind(&row.workflow_name)
         .bind(&row.status)
         .bind(&row.phase)
+        .bind(row.dry_run)
         .bind(row.pid)
         .bind(&row.workdir)
         .bind(&row.started_at)

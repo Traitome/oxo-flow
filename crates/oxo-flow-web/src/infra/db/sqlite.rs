@@ -119,6 +119,7 @@ impl SqliteBackend {
                 workflow_name TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 phase TEXT NOT NULL DEFAULT 'parsing',
+                dry_run INTEGER NOT NULL DEFAULT 0,
                 pid INTEGER,
                 workdir TEXT,
                 started_at TEXT,
@@ -132,8 +133,8 @@ impl SqliteBackend {
         .map_err(|e| e.to_string())?;
         sqlx::query(
             r#"INSERT INTO runs_migrated
-                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at)
-                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, pid, workdir, started_at, finished_at, created_at
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, started_at, finished_at, created_at
                 FROM runs"#,
         )
         .execute(&mut *conn)
@@ -203,6 +204,7 @@ impl StorageBackend for SqliteBackend {
                 workflow_name TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 phase TEXT NOT NULL DEFAULT 'parsing',
+                dry_run INTEGER NOT NULL DEFAULT 0,
                 pid INTEGER,
                 workdir TEXT,
                 started_at TEXT,
@@ -381,6 +383,13 @@ impl StorageBackend for SqliteBackend {
 
         // Migration: workflow_name for ad-hoc runs (nullable)
         sqlx::query("ALTER TABLE runs ADD COLUMN workflow_name TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Migration: dry_run flag for plan-only runs (issue #907 P3-14) —
+        // historical rows default to 0 (not a dry run).
+        sqlx::query("ALTER TABLE runs ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0")
             .execute(&self.pool)
             .await
             .ok();
@@ -679,6 +688,7 @@ impl StorageBackend for SqliteBackend {
             workflow_name: run.workflow_name.clone(),
             status: run.status.clone(),
             phase: run.phase.clone(),
+            dry_run: run.dry_run,
             pid: run.pid,
             workdir: run.workdir.clone(),
             started_at: run.started_at.clone(),
@@ -691,7 +701,7 @@ impl StorageBackend for SqliteBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -700,6 +710,7 @@ impl StorageBackend for SqliteBackend {
         .bind(&row.workflow_name)
         .bind(&row.status)
         .bind(&row.phase)
+        .bind(row.dry_run)
         .bind(row.pid)
         .bind(&row.workdir)
         .bind(&row.started_at)
@@ -1033,8 +1044,9 @@ mod tests {
         let backend = SqliteBackend::new("sqlite::memory:")
             .await
             .expect("Failed to create in-memory backend");
-        // Legacy schema: pipeline_id NOT NULL, no workflow_name.
-        // Individual statements (sqlx does not batch multi-statement SQL).
+        // Legacy schema: pipeline_id NOT NULL, no workflow_name, no dry_run
+        // (pre-#907 P3-14). Individual statements (sqlx does not batch
+        // multi-statement SQL).
         for stmt in [
             "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, password_hash TEXT, created_at TEXT NOT NULL)",
             "CREATE TABLE pipelines (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL, toml_content TEXT NOT NULL, rules_count INTEGER NOT NULL DEFAULT 0, forked_from TEXT, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
@@ -1300,6 +1312,7 @@ mod tests {
             workflow_name: Some("run-test".to_string()),
             status: "queued".to_string(),
             phase: "parsing".to_string(),
+            dry_run: false,
             pid: None,
             workdir: Some("/tmp/workdir".to_string()),
             started_at: None,
@@ -1526,6 +1539,7 @@ mod tests {
             workflow_name: None,
             status: "running".to_string(),
             phase: "executing".to_string(),
+            dry_run: false,
             pid: None,
             workdir: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -1559,6 +1573,7 @@ mod tests {
                 workflow_name: None,
                 status: "completed".to_string(),
                 phase: "reporting".to_string(),
+                dry_run: false,
                 pid: None,
                 workdir: None,
                 started_at: None,

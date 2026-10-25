@@ -448,10 +448,15 @@ pub async fn put_webhook_config(
     // signing secret (new or previously stored) is therefore refused; the
     // response body says so instead of silently shipping unsigned events.
     if enabled && secret.is_none() {
+        // The stored value decrypts to "" when the master key is unset or
+        // the ciphertext is unopenable (e.g. rotated key) — crypto::open
+        // signals failure that way. Such a row is NOT a usable secret: the
+        // gate must treat it as absent, or #909-NIT-1's downgrade to
+        // unsigned (forgeable) deliveries silently re-arms itself.
         let has_stored_secret = crate::domains::observability::webhook::load_settings()
             .await
-            .map(|s| s.secret.is_some())
-            .unwrap_or(false);
+            .and_then(|s| s.secret)
+            .is_some_and(|s| !s.is_empty());
         if !has_stored_secret {
             return Err(err(
                 StatusCode::BAD_REQUEST,

@@ -35,6 +35,10 @@ pub struct RunRow {
     pub workflow_name: Option<String>,
     pub status: String, // "queued"|"running"|"paused"|"completed"|"failed"|"cancelled"
     pub phase: String,  // "parsing"|"validating"|"preparing"|"executing"|"reporting"
+    /// Whether the run was launched in dry-run mode (plan-only, no rule
+    /// shells). Persisted so run lists can flag dry runs instead of letting
+    /// them pose as normal executions (issue #907 P3-14).
+    pub dry_run: bool,
     pub pid: Option<i64>,
     pub workdir: Option<String>,
     pub started_at: Option<String>,

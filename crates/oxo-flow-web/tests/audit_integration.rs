@@ -65,6 +65,7 @@ async fn runs_schema_accepts_backend_insert() {
             workflow_name: Some("fill-test".into()),
             status: "queued".into(),
             phase: "parsing".into(),
+            dry_run: false,
             pid: None,
             workdir: None,
             started_at: None,
