@@ -474,7 +474,9 @@ impl DiagnosticsEngine {
                 ]),
                 likely_cause: "An output pattern still contains a wildcard that has no value for this rule instance.",
                 auto_fixable: false,
-                fix_desc: Some("Declare a value source for the wildcard (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it from the output pattern."),
+                fix_desc: Some(
+                    "Declare a value source for the wildcard (sample_pattern, [[values]], [[sample_groups]], input_groups) or remove it from the output pattern.",
+                ),
                 fix_config_path: None,
             },
             Pattern {
