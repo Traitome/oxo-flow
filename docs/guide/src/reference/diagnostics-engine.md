@@ -87,6 +87,7 @@ authoritative list is
 | Invalid parameter | "invalid option", "unrecognized", "unknown option", exit 1 | ❌ Check tool documentation |
 | Missing required parameter | "arguments are required", "missing required <arg>", "must specify", exit 1 | ❌ Add the missing parameter |
 | Wildcard expanded empty | "no files/matches", "wildcard … did not match" | ❌ Check naming |
+| Unbound wildcard in output | "contains unbound wildcard" (engine fails the rule before the shell runs) | ❌ Declare a value source (`sample_pattern`, `[[values]]`, `[[sample_groups]]`, `input_groups`) or remove the wildcard |
 | Conda environment failed | "CondaError", "Solving environment: failed", "environment.yml", exit 1 | ❌ Verify conda env name |
 | Docker failed | exit 125/126, "docker daemon", "error response from daemon" | ❌ Check Docker daemon |
 | Singularity/Apptainer failed | exit 255, "singularity", "apptainer", "image not found" | ❌ Pull the image |
