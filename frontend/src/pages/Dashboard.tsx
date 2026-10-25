@@ -146,7 +146,12 @@ export default function Dashboard() {
                 {runs.slice(0, 5).map((r) => (
                   <tr key={r.id}>
                     <td>{r.workflow_name ?? r.id.slice(0, 8)}</td>
-                    <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
+                    <td>
+                      <span className={`status-badge ${r.status}`}>{r.status}</span>
+                      {r.dry_run && (
+                        <span className="status-badge skipped" style={{ marginLeft: 4 }}>{t('monitor.dry')}</span>
+                      )}
+                    </td>
                     <td>{r.started_at ? new Date(r.started_at).toLocaleString(getLocale(lang)) : '-'}</td>
                     <td><Link to={`/runs/${r.id}`} className="view-link">{t('dashboard.view')}</Link></td>
                   </tr>

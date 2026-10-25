@@ -947,7 +947,14 @@ export default function MonitorReport() {
                   style={selId === r.id ? { background: 'var(--color-primary-light)', cursor: 'pointer' } : { cursor: 'pointer' }}
                 >
                   <td className="mono">{r.id.slice(0, 8)}</td>
-                  <td><span className={`status-badge ${r.status}`}>{r.status}</span></td>
+                  <td>
+                    <span className={`status-badge ${r.status}`}>{r.status}</span>
+                    {r.dry_run && (
+                      <span className="status-badge skipped" style={{ marginLeft: 4 }} title={t('monitor.dryRunPreview')}>
+                        {t('monitor.dry')}
+                      </span>
+                    )}
+                  </td>
                   <td>{r.phase || '-'}</td>
                   <td style={{ fontSize: '0.8rem' }}>{r.created_at ? new Date(r.created_at).toLocaleString(locale) : '-'}</td>
                   <td>
