@@ -175,10 +175,13 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
       }
       return o === v;
     };
-    const envPair = (f: RuleFormState): string | null => {
-      if (f.environment === 'system') return f.environmentSpec === '' ? null : `system`;
-      return `${f.environment}::${f.environmentSpec}`;
-    };
+    // Encode environment as a comparable key. `system` must carry its spec
+    // too (system::spec) — mapping it to a constant made a spec-only change
+    // compare equal and silently produce no patch (review NIT-1 on #918).
+    // An empty spec encodes as null, mirroring the null patch that removes
+    // the environment table.
+    const envPair = (f: RuleFormState): string | null =>
+      f.environmentSpec === '' ? null : `${f.environment}::${f.environmentSpec}`;
     const resourcesOf = (f: RuleFormState): Record<string, unknown> | null => {
       const r: Record<string, unknown> = {};
       if (f.threads !== '') r.threads = Number(f.threads);
