@@ -4036,9 +4036,13 @@ refetch run state when you see it.</p>
 <code>POST /api/events/ticket</code> under normal bearer auth (EventSource cannot set
 an Authorization header; the ticket is single-use, expires in 30 s, and
 replaces the session token that used to travel — and leak — in the URL,</p>
-<h1 id="522-the-stream-is-filtered-to-the-subscribers-own">522). The stream is filtered to the subscriber's own<a class="headerlink" href="#522-the-stream-is-filtered-to-the-subscribers-own" title="Permanent link">#</a></h1>
-<p>runs — admins see everything. Events carry a <code>user</code> field (the owning user
-id, or <code>null</code> for system-wide events).</p>
+<h1 id="522-post-apieventsticket-responds">522). <code>POST /api/events/ticket</code> responds<a class="headerlink" href="#522-post-apieventsticket-responds" title="Permanent link">#</a></h1>
+<p><code>{"ticket": "...", "expires_in_secs": 30}</code>. The stream is filtered to the
+subscriber's own runs — admins see everything. Events carry a <code>user</code> field
+(the owning user id, or <code>null</code> for system-wide events). The <code>run_started</code>
+event's <code>data.username</code> field predates the canonical user model and also
+carries the canonical user id (kept for wire compatibility — read the
+envelope <code>user</code> field instead).</p>
 <p><code>run_completed</code> carries a <code>summary</code> field: the CLI's invalidation summary
 extracted from the execution log — config changes, edited rule definitions,
 and input-set changes that invalidated checkpoint records this run
