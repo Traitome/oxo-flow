@@ -505,6 +505,7 @@ mod tests {
         assert!(!alert.auto_fixable);
         // The Config category must not escalate to Critical (only Resource
         // failures do) and must not collapse to the generic exit_code id.
+        assert!(matches!(alert.level, AlertLevel::Alert));
         assert_ne!(alert.alert_id, "failed:call_variants:exit_code");
     }
 
