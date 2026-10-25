@@ -166,7 +166,10 @@ impl Modify for SecurityAddon {
         crate::sse::events_ticket,
         crate::server::openapi_json,
     ),
-    components(schemas(crate::domains::workflow::handlers::ApiError))
+    components(schemas(
+        crate::domains::workflow::handlers::ApiError,
+        crate::sse::TicketResponse,
+    ))
 )]
 pub struct ApiDoc;
 
