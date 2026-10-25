@@ -3348,6 +3348,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#spa-interaction-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SPA Interaction Patterns
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4124,6 +4135,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#spa-interaction-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SPA Interaction Patterns
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4541,6 +4563,15 @@ only present when a handler supplies them (e.g. <code>429</code> bodies carry
 </span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>event: done
 </span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>data: {"pipeline_id": "...", ...}
 </span></code></pre></div>
+<hr />
+<h2 id="spa-interaction-patterns">SPA Interaction Patterns<a class="headerlink" href="#spa-interaction-patterns" title="Permanent link">#</a></h2>
+<p>The frontend (<code>frontend/</code>, React 19 + TypeScript) follows a few shared UX conventions so behavior stays consistent across pages:</p>
+<ul>
+<li><strong>Collapsible sections (issue #907 P3-16)</strong>: Settings sections, the Rule Inspector field groups (inputs/outputs, resources, advanced), and the run monitor's alert cards + Recent Events table fold behind clickable headers (<code>role="button"</code>, <code>aria-expanded</code>, Enter/Space toggles, rotating chevron). Sections default to open — the monitor's alert cards and events table are the exception, defaulting collapsed so a burst of alerts doesn't bury the live view. Collapsing only hides children; form state lives in the parent component, so no draft input is lost.</li>
+<li><strong>Styled confirmation dialogs (issue #907 D2)</strong>: destructive actions (pipeline delete) open the shared <code>Modal</code> component instead of <code>window.confirm</code> — the native dialog cannot be styled and blocks the event loop in the embedded desktop shell. The modal provides Escape/backdrop close, a focus trap, and focus restore.</li>
+<li><strong>Honest AI-disabled state</strong>: when no AI provider is configured, the Dashboard entry card renders a "configure AI" call-to-action linking to <code>/settings</code> (with a note about server-side configuration), and the chat composer's editor hand-off CTA only renders outside the editor context.</li>
+<li><strong>Polling-stable UI state</strong>: expansion/collapse choices on the run monitor are keyed by stable alert identifiers (<code>alert_id</code>, falling back to <code>rule-prediction</code>), so they survive the 5-second polling re-render.</li>
+</ul>
 
 
 
