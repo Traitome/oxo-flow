@@ -104,6 +104,155 @@ async fn test_import_invalid_url_format() {
     assert!(resp.status().is_client_error());
 }
 
+// ── Share URL transport truth (#907 R16) ──
+
+#[test]
+fn share_url_scheme_follows_actual_transport() {
+    // SAFETY: env::set_var/remove_var are process-wide and racy with any
+    // concurrent getenv — all cases therefore run in ONE serial test, and no
+    // other test in this binary touches OXO_FLOW_PUBLIC_URL/OXO_FLOW_HOST.
+    // set_base_path/set_bound_port are first-call-wins OnceLocks; no other
+    // test in this binary sets them, so the values chosen here hold.
+    unsafe {
+        // Default: the server has no native TLS, so without an explicit
+        // public-URL override the minted scheme must be oxo+http:// — the
+        // old hardcoded oxo+https:// was a transport lie on plain-HTTP
+        // deployments.
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+        let url = server::share_url_for("tok-r16");
+        assert!(
+            url.starts_with("oxo+http://") && !url.starts_with("oxo+https://"),
+            "default share URL must be oxo+http:// (got {url})"
+        );
+        assert!(
+            url.ends_with("/share/tok-r16"),
+            "URL must end in the token path (got {url})"
+        );
+
+        // Override with an HTTPS public origin (reverse-proxy deployment):
+        // scheme AND authority both come from the override.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://flows.example.com");
+        assert_eq!(
+            server::share_url_for("tok-pub"),
+            "oxo+https://flows.example.com/share/tok-pub"
+        );
+
+        // Override with an HTTP public origin keeps the plain scheme.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "http://gw.internal:9000");
+        assert_eq!(
+            server::share_url_for("tok-gw"),
+            "oxo+http://gw.internal:9000/share/tok-gw"
+        );
+
+        // Path-carrying override (deploy-modes.md reverse-proxy recipe):
+        // the override IS the complete public origin — the local base path
+        // must NOT be appended a second time (review B1: /oxo-flow twice).
+        server::set_base_path("/oxo-flow");
+        server::set_bound_port(18080);
+        std::env::set_var(
+            "OXO_FLOW_PUBLIC_URL",
+            "https://flows.lab.example.edu/oxo-flow",
+        );
+        assert_eq!(
+            server::share_url_for("tok-mount"),
+            "oxo+https://flows.lab.example.edu/oxo-flow/share/tok-mount"
+        );
+
+        // Host-only override with a base path mounted: the local prefix
+        // still applies.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://cdn.example.com");
+        assert_eq!(
+            server::share_url_for("tok-host"),
+            "oxo+https://cdn.example.com/oxo-flow/share/tok-host"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // An override that carries its own mount path also wins over a
+        // DIFFERENT local base path — the override is the whole origin
+        // (guards against a regression to double-prefixing).
+        server::set_base_path("/other");
+        std::env::set_var(
+            "OXO_FLOW_PUBLIC_URL",
+            "https://flows.lab.example.edu/oxo-flow",
+        );
+        assert_eq!(
+            server::share_url_for("tok-mount2"),
+            "oxo+https://flows.lab.example.edu/oxo-flow/share/tok-mount2"
+        );
+        server::set_base_path("/oxo-flow");
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Malformed overrides fall back to the local mint (review N4):
+        // port-only authority, bare IPv6 literal.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://:8080");
+        let url = server::share_url_for("tok-porthost");
+        assert!(
+            url.starts_with("oxo+http://localhost:18080/oxo-flow/share/tok-porthost"),
+            "port-only override must be ignored for a local mint (got {url})"
+        );
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "::1");
+        let url = server::share_url_for("tok-v6-override");
+        assert_eq!(
+            url, "oxo+http://[::1]/oxo-flow/share/tok-v6-override",
+            "scheme-less IPv6 override must be bracketed, no local port injected (got {url})"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Host-only IPv6 override keeps the bracketing too.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "http://[2001:db8::1]:8443");
+        assert_eq!(
+            server::share_url_for("tok-v6-br"),
+            "oxo+http://[2001:db8::1]:8443/oxo-flow/share/tok-v6-br"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Default branch with a base path + bound port: prefix and port flow
+        // through, and an IPv6 host literal gets bracketed (review N2).
+        std::env::set_var("OXO_FLOW_HOST", "::1");
+        let url = server::share_url_for("tok-v6");
+        assert_eq!(
+            url, "oxo+http://[::1]:18080/oxo-flow/share/tok-v6",
+            "IPv6 literal must be bracketed in the default mint (got {url})"
+        );
+        std::env::remove_var("OXO_FLOW_HOST");
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // A whitespace-only override behaves as unset — with a warning in
+        // the logs (review N5) — and the default mint still applies.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "   ");
+        let url = server::share_url_for("tok-ws");
+        assert!(
+            url.starts_with("oxo+http://") && url.ends_with("/oxo-flow/share/tok-ws"),
+            "whitespace-only override must fall through to the local mint (got {url})"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+    }
+}
+
+#[tokio::test]
+async fn test_import_accepts_oxo_http_scheme() {
+    // The default minted scheme changed to oxo+http://; the import endpoint
+    // must accept it (only a truly malformed URL is rejected).
+    common::ensure_db().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/pipelines/import")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"url": "oxo+http://example.com/share/abc123"}).to_string(),
+        ))
+        .unwrap();
+    let resp = app_personal().oneshot(req).await.unwrap();
+    // 404/400 = the URL format was accepted and the token lookup ran;
+    // 4xx for an unknown token is fine — a 400 INVALID_URL would NOT be.
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let code = body["code"].as_str().unwrap_or("");
+    assert_ne!(code, "INVALID_URL", "oxo+http:// must pass URL validation");
+}
+
 #[tokio::test]
 async fn test_import_bad_request() {
     common::ensure_db().await;

@@ -135,6 +135,24 @@ Rate limiting and SSE:
   event so the client can refetch instead of silently missing run state
   transitions.
 
+Share URL truth (#907 R16):
+
+- The server has no native TLS, so minted share URLs use `oxo+http://`
+  with the actual bind host/port (plus the `--base-path` prefix) by
+  default — a hardcoded `oxo+https://` advertised TLS the process never
+  spoke. IPv6 host literals are bracketed so the URL stays parseable.
+- `OXO_FLOW_PUBLIC_URL` (e.g. `https://flows.example.com`) lets a
+  reverse-proxy deployment declare its public origin; scheme and
+  authority of minted URLs then come from that override. A value that
+  also carries the mount path (`https://flows.example.com/oxo-flow`, the
+  sub-path deploy recipe) replaces the local `--base-path` prefix
+  instead of being appended to it; a scheme-less value still mints
+  `oxo+http://` but logs a warning; an empty value warns and is treated
+  as unset; a value without any host (including port-only `:8080`) is
+  ignored with a warning and a local URL is minted instead; IPv6
+  literals on the override path are bracketed. Import accepts both
+  schemes, so older `oxo+https://` links keep working.
+
 ---
 
 ## Domain-Driven Module Structure
@@ -196,7 +214,7 @@ Rate limiting and SSE:
 │   ├── /{id}/fork          # Fork into user workspace (v0.8 collab)
 │   └── /{id}/share         # Share pipeline (v0.8 collab)
 │
-├── /pipelines/import       # Import from oxo+https:// URL (v0.8 collab)
+├── /pipelines/import       # Import from oxo+http(s):// share URL (v0.8 collab)
 │
 ├── /runs
 │   ├── /                   # POST: create run; GET: list runs

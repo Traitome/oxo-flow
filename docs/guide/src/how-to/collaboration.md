@@ -63,11 +63,23 @@ curl -X POST http://localhost:8080/api/pipelines/pipeline-abc/share \
 
 # Response
 {
-  "share_url": "oxo+https://lab.example.com:8080/share/abc123",
+  "share_url": "oxo+http://lab.example.com:8080/share/abc123",
   "access_token": "abc123",
   "expires_at": "2024-02-12T00:00:00+00:00"
 }
 ```
+
+**Share URL scheme**: the web server has no native TLS — it speaks plain
+HTTP, with TLS terminating at a reverse proxy when one is present. The
+minted URL therefore reflects the actual transport: `oxo+http://` by
+default, and `oxo+https://` only when you declare a public HTTPS origin:
+
+- Set `OXO_FLOW_PUBLIC_URL=https://flows.example.com` and share URLs become
+  `oxo+https://flows.example.com/share/<token>` (the declared authority
+  replaces the local host/port guess). This is the setting for
+  reverse-proxy deployments.
+- URLs minted before this change (`oxo+https://…`) keep working — the
+  import API accepts both schemes.
 
 **Visibility levels** (`link` / `public` — `public` is an alias of `link`)
 are stored on the share record; other values (e.g. `workspace`) are
@@ -78,13 +90,13 @@ goes through the [import API](#import) below.
 
 ## Import
 
-Import a pipeline from an `oxo+https://` share link (`oxo+http://` is
-accepted too — the token, not the scheme, is what the import validates):
+Import a pipeline from an `oxo+http://` or `oxo+https://` share link
+(the token, not the scheme, is what the import validates):
 
 ```bash
 curl -X POST http://localhost:8080/api/pipelines/import \
   -H "Content-Type: application/json" \
-  -d '{"url": "oxo+https://lab.example.com:8080/share/abc123"}'
+  -d '{"url": "oxo+http://lab.example.com:8080/share/abc123"}'
 
 # Response
 {
@@ -92,8 +104,11 @@ curl -X POST http://localhost:8080/api/pipelines/import \
 }
 ```
 
-The `oxo+https://` protocol prefix makes share links explicit and unambiguous —
-you can paste them into any tool and the intent is clear.
+The `oxo+` protocol prefix makes share links explicit and unambiguous —
+you can paste them into any tool and the intent is clear. The scheme after
+it mirrors how the share was actually served (`oxo+http://` by default,
+`oxo+https://` behind a declared public HTTPS origin), and both are
+accepted on import.
 
 **Import behavior**:
 
@@ -116,7 +131,7 @@ No nested RBAC. No group hierarchies. Simple and transparent.
 
 ## Share Landing Pages
 
-A share link (`oxo+https://host:port/share/<token>`) opens a public
+A share link (`oxo+http(s)://host:port/share/<token>`) opens a public
 read-only landing page — pipeline name/version, DAG shape, the full TOML,
 the owner, expiry, and the most recent terminal run as provenance. **No
 session is required to view it** (the token is the authorization). The
