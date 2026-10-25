@@ -164,8 +164,9 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
     // #907 P2-10: only include keys that actually differ from the original
     // rule. The patch replaces whole keys, so resending an untouched field
     // re-serialized it (normalizing away formatting/comments in that key's
-    // TOML); a diff-form patch touches only what the user edited. New rules
-    // (rule === null → empty originals) keep the full patch.
+    // TOML); a diff-form patch touches only what the user edited. For a new
+    // rule (rule === null) the original is an empty form, so every populated
+    // field differs and the patch naturally carries them all.
     const formIs = (key: keyof RuleFormState) => {
       const o = original[key];
       const v = form[key];
@@ -261,7 +262,8 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
     </div>
   );
 
-  const stringList = (key: 'input' | 'output') => (    <div className="inspector-list">
+  const stringList = (key: 'input' | 'output') => (
+    <div className="inspector-list">
       {form[key].map((item, i) => (
         <div className="inspector-list-row" key={i}>
           <input
@@ -355,65 +357,65 @@ export default function RuleInspector({ ruleName, rule, onSave, onClose }: RuleI
         {openGroups.adv && (
           <>
             {form.envvars.map((ev, i) => (
-          <div className="inspector-list-row" key={i}>
-            <input
-              placeholder={t('inspector.envvarNamePlaceholder')}
-              value={ev.key}
-              onChange={(e) =>
-                setForm((prev) => {
-                  const next = [...prev.envvars];
-                  next[i] = { ...next[i], key: e.target.value };
-                  return { ...prev, envvars: next };
-                })
-              }
-            />
-            <input
-              placeholder={t('inspector.envvarValuePlaceholder')}
-              value={ev.value}
-              onChange={(e) =>
-                setForm((prev) => {
-                  const next = [...prev.envvars];
-                  next[i] = { ...next[i], value: e.target.value };
-                  return { ...prev, envvars: next };
-                })
-              }
-            />
+              <div className="inspector-list-row" key={i}>
+                <input
+                  placeholder={t('inspector.envvarNamePlaceholder')}
+                  value={ev.key}
+                  onChange={(e) =>
+                    setForm((prev) => {
+                      const next = [...prev.envvars];
+                      next[i] = { ...next[i], key: e.target.value };
+                      return { ...prev, envvars: next };
+                    })
+                  }
+                />
+                <input
+                  placeholder={t('inspector.envvarValuePlaceholder')}
+                  value={ev.value}
+                  onChange={(e) =>
+                    setForm((prev) => {
+                      const next = [...prev.envvars];
+                      next[i] = { ...next[i], value: e.target.value };
+                      return { ...prev, envvars: next };
+                    })
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn-sm"
+                  onClick={() => setForm((prev) => ({ ...prev, envvars: prev.envvars.filter((_, j) => j !== i) }))}
+                  title={t('inspector.remove')}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
             <button
               type="button"
               className="btn-sm"
-              onClick={() => setForm((prev) => ({ ...prev, envvars: prev.envvars.filter((_, j) => j !== i) }))}
-              title={t('inspector.remove')}
+              onClick={() => setForm((prev) => ({ ...prev, envvars: [...prev.envvars, { key: '', value: '' }] }))}
             >
-              <X size={12} />
+              {t('inspector.addVariable')}
             </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="btn-sm"
-          onClick={() => setForm((prev) => ({ ...prev, envvars: [...prev.envvars, { key: '', value: '' }] }))}
-        >
-          {t('inspector.addVariable')}
-        </button>
 
-        <div className="inspector-grid">
-          {textInput(t('inspector.condition'), 'when', t('inspector.conditionPlaceholder'))}
-          {textInput(t('inspector.retries'), 'retries', t('inspector.retriesPlaceholder'), 'number')}
-          {textInput(t('inspector.tags'), 'tags', t('inspector.tagsPlaceholder'))}
-          {textInput(t('inspector.log'), 'log', t('inspector.logPlaceholder'))}
-          {textInput(t('inspector.benchmark'), 'benchmark', t('inspector.benchmarkPlaceholder'))}
-        </div>
+            <div className="inspector-grid">
+              {textInput(t('inspector.condition'), 'when', t('inspector.conditionPlaceholder'))}
+              {textInput(t('inspector.retries'), 'retries', t('inspector.retriesPlaceholder'), 'number')}
+              {textInput(t('inspector.tags'), 'tags', t('inspector.tagsPlaceholder'))}
+              {textInput(t('inspector.log'), 'log', t('inspector.logPlaceholder'))}
+              {textInput(t('inspector.benchmark'), 'benchmark', t('inspector.benchmarkPlaceholder'))}
+            </div>
 
-        <div className="inspector-grid">
-          <label className="inspector-check">
-            <input type="checkbox" checked={form.optional} onChange={(e) => set('optional', e.target.checked)} />
-            <span>{t('inspector.optional')}</span>
-          </label>
-          <label className="inspector-check">
-            <input type="checkbox" checked={form.required} onChange={(e) => set('required', e.target.checked)} />
-            <span>{t('inspector.required')}</span>
-          </label>
-        </div>
+            <div className="inspector-grid">
+              <label className="inspector-check">
+                <input type="checkbox" checked={form.optional} onChange={(e) => set('optional', e.target.checked)} />
+                <span>{t('inspector.optional')}</span>
+              </label>
+              <label className="inspector-check">
+                <input type="checkbox" checked={form.required} onChange={(e) => set('required', e.target.checked)} />
+                <span>{t('inspector.required')}</span>
+              </label>
+            </div>
           </>
         )}
       </div>

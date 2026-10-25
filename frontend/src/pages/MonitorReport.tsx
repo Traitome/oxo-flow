@@ -172,6 +172,10 @@ export default function MonitorReport() {
     // instance loaders would otherwise keep showing run A's content for run B.
     setLogs(null);
     setInstances(null);
+    // Alert collapse state is per-run too — run B starts with every card
+    // expanded to its one-line summary (issue #907 NIT-4).
+    setCollapsedAlerts(new Set());
+    setEventsOpen(false);
     session.setActiveRunId(id);
     session.setChatContext('monitor');
     await fetchDetail(id, ctrl.signal);
