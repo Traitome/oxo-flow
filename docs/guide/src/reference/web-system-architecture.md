@@ -330,3 +330,14 @@ data: {"step": "generate", "message": "Generating pipeline via AI..."}
 event: done
 data: {"pipeline_id": "...", ...}
 ```
+
+---
+
+## SPA Interaction Patterns
+
+The frontend (`frontend/`, React 19 + TypeScript) follows a few shared UX conventions so behavior stays consistent across pages:
+
+- **Collapsible sections (issue #907 P3-16)**: Settings sections, the Rule Inspector field groups (inputs/outputs, resources, advanced), and the run monitor's alert cards + Recent Events table fold behind clickable headers (`role="button"`, `aria-expanded`, Enter/Space toggles, rotating chevron). Sections default to open — the monitor's alert cards and events table are the exception, defaulting collapsed so a burst of alerts doesn't bury the live view. Collapsing only hides children; form state lives in the parent component, so no draft input is lost.
+- **Styled confirmation dialogs (issue #907 D2)**: destructive actions (pipeline delete) open the shared `Modal` component instead of `window.confirm` — the native dialog cannot be styled and blocks the event loop in the embedded desktop shell. The modal provides Escape/backdrop close, a focus trap, and focus restore.
+- **Honest AI-disabled state**: when no AI provider is configured, the Dashboard entry card renders a "configure AI" call-to-action linking to `/settings` (with a note about server-side configuration), and the chat composer's editor hand-off CTA only renders outside the editor context.
+- **Polling-stable UI state**: expansion/collapse choices on the run monitor are keyed by stable alert identifiers (`alert_id`, falling back to `rule-prediction`), so they survive the 5-second polling re-render.
