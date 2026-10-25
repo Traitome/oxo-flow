@@ -257,14 +257,13 @@ export default function Settings() {
             {refs?.installed?.map((ref, idx) => {
               // Badge derives from the row's own found/missing data — a
               // partial build must not inherit the "Complete" badge (#907
-              // P1-4: the badge used to be hard-coded success).
-              const foundCount = ref.found?.length ?? 0;
+              // P1-4: the badge used to be hard-coded success). `installed`
+              // entries always have non-empty `found` (the backend gates on
+              // it), so "Partial" is the only non-complete state here.
               const missingCount = ref.missing_components?.length ?? 0;
               const badge = missingCount === 0
                 ? { cls: 'status-badge success', key: 'settings.refs.complete' }
-                : foundCount === 0
-                  ? { cls: 'status-badge warning', key: 'settings.refs.notBuilt' }
-                  : { cls: 'status-badge warning', key: 'settings.refs.partial' };
+                : { cls: 'status-badge warning', key: 'settings.refs.partial' };
               return (
                 <div key={idx} className="ref-row">
                   <div>
