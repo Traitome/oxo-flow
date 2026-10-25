@@ -713,6 +713,9 @@ the token itself is the authorization. Expired links return `410`.
 Share URLs minted by `POST .../share` use `oxo+http://` by default (the
 server has no native TLS) and `oxo+https://` only when `OXO_FLOW_PUBLIC_URL`
 declares a public HTTPS origin; the import endpoint accepts both schemes.
+An override that carries its own mount path (e.g.
+`https://flows.example.com/oxo-flow` behind a sub-path proxy) replaces the
+local `--base-path` prefix instead of being appended to it.
 
 See [Collaboration](../how-to/collaboration.md) for details.
 

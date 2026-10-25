@@ -140,11 +140,16 @@ Share URL truth (#907 R16):
 - The server has no native TLS, so minted share URLs use `oxo+http://`
   with the actual bind host/port (plus the `--base-path` prefix) by
   default — a hardcoded `oxo+https://` advertised TLS the process never
-  spoke.
+  spoke. IPv6 host literals are bracketed so the URL stays parseable.
 - `OXO_FLOW_PUBLIC_URL` (e.g. `https://flows.example.com`) lets a
   reverse-proxy deployment declare its public origin; scheme and
-  authority of minted URLs then come from that override. Import accepts
-  both schemes, so older `oxo+https://` links keep working.
+  authority of minted URLs then come from that override. A value that
+  also carries the mount path (`https://flows.example.com/oxo-flow`, the
+  sub-path deploy recipe) replaces the local `--base-path` prefix
+  instead of being appended to it; a scheme-less value still mints
+  `oxo+http://` but logs a warning; a value without any host is ignored
+  with a warning. Import accepts both schemes, so older `oxo+https://`
+  links keep working.
 
 ---
 

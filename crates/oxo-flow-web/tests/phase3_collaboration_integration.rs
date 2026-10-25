@@ -109,8 +109,10 @@ async fn test_import_invalid_url_format() {
 #[test]
 fn share_url_scheme_follows_actual_transport() {
     // SAFETY: env::set_var/remove_var are process-wide and racy with any
-    // concurrent getenv — all three cases therefore run in ONE serial test,
-    // and no other test in this binary touches OXO_FLOW_PUBLIC_URL.
+    // concurrent getenv — all cases therefore run in ONE serial test, and no
+    // other test in this binary touches OXO_FLOW_PUBLIC_URL/OXO_FLOW_HOST.
+    // set_base_path/set_bound_port are first-call-wins OnceLocks; no other
+    // test in this binary sets them, so the values chosen here hold.
     unsafe {
         // Default: the server has no native TLS, so without an explicit
         // public-URL override the minted scheme must be oxo+http:// — the
@@ -141,6 +143,39 @@ fn share_url_scheme_follows_actual_transport() {
             server::share_url_for("tok-gw"),
             "oxo+http://gw.internal:9000/share/tok-gw"
         );
+
+        // Path-carrying override (deploy-modes.md reverse-proxy recipe):
+        // the override IS the complete public origin — the local base path
+        // must NOT be appended a second time (review B1: /oxo-flow twice).
+        server::set_base_path("/oxo-flow");
+        server::set_bound_port(18080);
+        std::env::set_var(
+            "OXO_FLOW_PUBLIC_URL",
+            "https://flows.lab.example.edu/oxo-flow",
+        );
+        assert_eq!(
+            server::share_url_for("tok-mount"),
+            "oxo+https://flows.lab.example.edu/oxo-flow/share/tok-mount"
+        );
+
+        // Host-only override with a base path mounted: the local prefix
+        // still applies.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://cdn.example.com");
+        assert_eq!(
+            server::share_url_for("tok-host"),
+            "oxo+https://cdn.example.com/oxo-flow/share/tok-host"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+
+        // Default branch with a base path + bound port: prefix and port flow
+        // through, and an IPv6 host literal gets bracketed (review N2).
+        std::env::set_var("OXO_FLOW_HOST", "::1");
+        let url = server::share_url_for("tok-v6");
+        assert_eq!(
+            url, "oxo+http://[::1]:18080/oxo-flow/share/tok-v6",
+            "IPv6 literal must be bracketed in the default mint (got {url})"
+        );
+        std::env::remove_var("OXO_FLOW_HOST");
         std::env::remove_var("OXO_FLOW_PUBLIC_URL");
     }
 }

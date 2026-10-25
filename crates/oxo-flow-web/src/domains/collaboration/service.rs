@@ -105,7 +105,7 @@ pub async fn import_pipeline(
         .or_else(|| url.strip_prefix("oxo+http://"))
         .and_then(|rest| rest.rsplit('/').next())
         .ok_or_else(|| {
-            "Invalid share URL format. Use: oxo+https://host/share/<token>".to_string()
+            "Invalid share URL format. Use: oxo+http(s)://host[:port]/share/<token>".to_string()
         })?;
 
     let share = db

@@ -808,31 +808,62 @@ pub fn bound_port() -> Option<u16> {
 /// The web server has no native TLS — it speaks plain HTTP; TLS terminates at
 /// a reverse proxy, if anywhere. Advertising `oxo+https://` therefore lied
 /// about every self-hosted deployment. The scheme now follows reality:
-/// `oxo+http://` by default, `oxo+https://` only when an operator explicitly
-/// declares a public HTTPS origin via `OXO_FLOW_PUBLIC_URL` (reverse-proxy
-/// deployments), whose authority (host and port) also replaces the local bind
-/// guess. Import accepts both schemes, so URLs minted before this change
-/// keep working.
+///
+/// - `oxo+http://` by default, built from the real bind host and port.
+/// - When `OXO_FLOW_PUBLIC_URL` declares a public origin (reverse-proxy
+///   deployments), its scheme and authority replace the local guess. A
+///   scheme-less value is still accepted as plain HTTP but logged as a
+///   warning; a value with no host at all is ignored with a warning.
+/// - An override that carries its own mount path (`https://host/oxo-flow`)
+///   names the complete public origin and replaces the local `--base-path`
+///   prefix — appending both would double the mount segment. A host-only
+///   override keeps the local prefix.
+///
+/// Import accepts both schemes, so URLs minted before this change keep
+/// working.
 pub fn share_url_for(token: &str) -> String {
     let prefix = base_path().trim_end_matches('/');
     if let Ok(public) = std::env::var("OXO_FLOW_PUBLIC_URL") {
-        let public = public.trim().trim_end_matches('/');
+        let public = public.trim();
         if !public.is_empty() {
-            // Operators must supply a scheme; oxo+ is prepended to whatever
-            // they declared (https://cdn.example.com → oxo+https://...).
-            let authority = public
-                .strip_prefix("https://")
-                .or_else(|| public.strip_prefix("http://"))
-                .unwrap_or(public);
-            let scheme = if public.starts_with("https://") {
-                "https"
+            let (scheme, authority) = if let Some(rest) = public.strip_prefix("https://") {
+                ("https", rest)
+            } else if let Some(rest) = public.strip_prefix("http://") {
+                ("http", rest)
             } else {
-                "http"
+                // Keep accepting scheme-less values (early deployments relied
+                // on the coercion) but say so — a silently wrong scheme mints
+                // links nobody can diagnose.
+                tracing::warn!(
+                    "OXO_FLOW_PUBLIC_URL={public:?} lacks a scheme; minting oxo+http:// — \
+                     declare the full origin (e.g. https://host[/mount]) for HTTPS deployments"
+                );
+                ("http", public)
             };
-            return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
+            let authority = authority.trim_end_matches('/');
+            if authority.is_empty() || authority.starts_with('/') {
+                tracing::warn!(
+                    "OXO_FLOW_PUBLIC_URL={public:?} carries no host; ignoring it and minting \
+                     a local share URL instead"
+                );
+            } else if authority.contains('/') {
+                // The override includes its own mount path — it is the whole
+                // public origin (deploy-modes.md's reverse-proxy recipe pairs
+                // --base-path /oxo-flow with PUBLIC_URL=…/oxo-flow).
+                return format!("oxo+{scheme}://{authority}/share/{token}");
+            } else {
+                return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
+            }
         }
     }
-    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
+    let mut host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
+    if host.trim().is_empty() {
+        host = "localhost".into();
+    }
+    // Bracket IPv6 literals (::1) so the minted URL stays parseable.
+    if host.contains(':') && !host.starts_with('[') {
+        host = format!("[{host}]");
+    }
     // Use the port the server actually bound (issue #82 P0-6: the URL was
     // hardcoded to 3000 even when serving on 8080 or any -p value).
     let port = bound_port().unwrap_or(3000);
