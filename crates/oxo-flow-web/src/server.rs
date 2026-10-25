@@ -863,7 +863,8 @@ async fn require_auth(
         || path == "/api/openapi.json"
         || path == "/api/license"
         // EventSource cannot set an Authorization header; sse_events
-        // validates ?token= against the sessions table itself.
+        // validates a one-time ?ticket= minted at POST /api/events/ticket
+        // (#522) against the in-memory ticket map.
         || path == "/api/events"
         // Share landing pages are the product of a share link — the share
         // token IS the authorization (issue #82 P0-6).
