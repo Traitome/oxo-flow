@@ -111,15 +111,6 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// Rule count of a workflow definition, or the parse error. A definition the
-/// engine cannot read must never reach the database: it would be stored as an
-/// unrunnable `rules_count = 0` row while the API reports success.
-fn count_rules(toml: &str) -> Result<i64, String> {
-    oxo_flow_core::WorkflowConfig::parse(toml)
-        .map(|wf| wf.rules.len() as i64)
-        .map_err(|e| e.to_string())
-}
-
 pub fn get_pool() -> Result<&'static sqlx::SqlitePool, (StatusCode, Json<ApiError>)> {
     crate::infra::db::sqlite::try_pool().map_err(|_| {
         err(
@@ -567,10 +558,6 @@ pub async fn save_pipeline(
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("untitled");
-    let version = req
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.1.0");
     let visibility = req
         .get("visibility")
         .and_then(|v| v.as_str())
@@ -588,13 +575,19 @@ pub async fn save_pipeline(
     // never trusted (issue #82 P0-4).
     let user_id = crate::domains::auth::current_user::resolve(authenticated.as_ref()).id;
 
-    let rules_count = count_rules(toml_content).map_err(|e| {
+    // One parse drives both derived columns: the rule count and the version.
+    // TOML is the truth — an explicit `version` JSON field is no longer
+    // honored (issue #907 P2-5): a stored version that disagrees with the
+    // content silently poisons fork/import snapshots and provenance.
+    let parsed = oxo_flow_core::WorkflowConfig::parse(toml_content).map_err(|e| {
         err(
             StatusCode::BAD_REQUEST,
             "PARSE_ERROR",
             format!("toml_content is not a valid workflow: {e}"),
         )
     })?;
+    let rules_count = parsed.rules.len() as i64;
+    let version = parsed.workflow.version;
 
     let now = now_iso();
     let id = uuid::Uuid::new_v4().to_string();
@@ -602,7 +595,7 @@ pub async fn save_pipeline(
     sqlx::query(
         "INSERT INTO pipelines (id, user_id, name, version, toml_content, rules_count, forked_from, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&id).bind(&user_id).bind(name).bind(version).bind(toml_content)
+    .bind(&id).bind(&user_id).bind(name).bind(&version).bind(toml_content)
     .bind(rules_count).bind(None::<String>).bind(visibility).bind(&now).bind(&now)
     .execute(pool).await
     .map_err(|e| {
@@ -615,7 +608,7 @@ pub async fn save_pipeline(
     })?;
 
     // The initial save is revision 1 of the pipeline's history.
-    record_revision(pool, &id, &user_id, version, toml_content).await;
+    record_revision(pool, &id, &user_id, &version, toml_content).await;
 
     Ok(Json(Pipeline {
         id,
@@ -829,16 +822,28 @@ pub async fn update_pipeline(
 
     // A name-only rename keeps the stored rule count; supplied content must
     // parse (same contract as POST /api/pipelines) or the stale count would
-    // mask an unrunnable definition.
-    let rules_count = match req.get("toml_content").and_then(|v| v.as_str()) {
-        Some(_) => count_rules(&toml_content).map_err(|e| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "PARSE_ERROR",
-                format!("toml_content is not a valid workflow: {e}"),
-            )
-        })?,
+    // mask an unrunnable definition. Content-bearing updates re-derive the
+    // version from the new TOML so the stored column tracks `[workflow]`
+    // version (issue #907 P2-5); renames keep the existing version.
+    let parsed = match req.get("toml_content").and_then(|v| v.as_str()) {
+        Some(_) => Some(
+            oxo_flow_core::WorkflowConfig::parse(&toml_content).map_err(|e| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "PARSE_ERROR",
+                    format!("toml_content is not a valid workflow: {e}"),
+                )
+            })?,
+        ),
+        None => None,
+    };
+    let rules_count = match &parsed {
+        Some(wf) => wf.rules.len() as i64,
         None => existing.rules_count,
+    };
+    let version = match &parsed {
+        Some(wf) => wf.workflow.version.clone(),
+        None => existing.version.clone(),
     };
 
     let now = now_iso();
@@ -852,9 +857,10 @@ pub async fn update_pipeline(
     )
     .await;
     sqlx::query(
-        "UPDATE pipelines SET name = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+        "UPDATE pipelines SET name = ?, version = ?, toml_content = ?, visibility = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&name)
+    .bind(&version)
     .bind(&toml_content)
     .bind(&visibility)
     .bind(rules_count)
@@ -875,7 +881,7 @@ pub async fn update_pipeline(
         id,
         user_id: existing.user_id,
         name,
-        version: existing.version,
+        version,
         toml_content,
         rules_count: rules_count as usize,
         forked_from: existing.forked_from,
@@ -1698,11 +1704,14 @@ pub async fn get_revision(
     tag = "workflow",
     responses(
         (status = 200, description = "Success", body = Pipeline),
+        (status = 400, description = "Unparsable revision", body = ApiError),
         (status = 404, description = "Error", body = ApiError),
     )
 )]
 /// POST /api/pipelines/{id}/rollback — restore a revision as the current
-/// pipeline (creating a new revision, so nothing is lost).
+/// pipeline (creating a new revision, so nothing is lost). The restored
+/// revision must parse; its version and rules_count are derived from the
+/// revision TOML itself (TOML-is-truth, #907 P2-5).
 pub async fn rollback_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
@@ -1773,14 +1782,19 @@ pub async fn rollback_pipeline(
     // The restored content must parse — the same contract as save/update. A
     // stale rules_count kept from the current pipeline would mask an
     // unrunnable revision, and the snapshot below must not be written for a
-    // rollback that is about to be rejected.
-    let rules_count = count_rules(&toml_content).map_err(|e| {
+    // rollback that is about to be rejected. rules_count AND version are both
+    // derived from the revision's TOML (TOML-is-truth, #907 P2-5): writing the
+    // old TOML back under the pre-rollback version would recreate exactly the
+    // divergence P2-5 removed.
+    let parsed = oxo_flow_core::WorkflowConfig::parse(&toml_content).map_err(|e| {
         err(
             StatusCode::BAD_REQUEST,
             "PARSE_ERROR",
             format!("revision {revision_id} is not a valid workflow: {e}"),
         )
     })?;
+    let rules_count = parsed.rules.len() as i64;
+    let version = parsed.workflow.version.clone();
 
     // Restore = snapshot current + write the old content back.
     record_revision(
@@ -1793,9 +1807,10 @@ pub async fn rollback_pipeline(
     .await;
     let now = now_iso();
     sqlx::query(
-        "UPDATE pipelines SET toml_content = ?, rules_count = ?, updated_at = ? WHERE id = ?",
+        "UPDATE pipelines SET toml_content = ?, version = ?, rules_count = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&toml_content)
+    .bind(&version)
     .bind(rules_count)
     .bind(&now)
     .bind(&id)
@@ -1814,7 +1829,7 @@ pub async fn rollback_pipeline(
         id,
         user_id: pipeline.user_id,
         name: pipeline.name,
-        version: pipeline.version,
+        version,
         toml_content,
         rules_count: rules_count as usize,
         forked_from: pipeline.forked_from,

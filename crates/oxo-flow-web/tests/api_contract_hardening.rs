@@ -17,6 +17,28 @@ async fn ensure_db() {
     common::ensure_db().await;
 }
 
+/// Reset the singleton webhook_config row to a known precondition.
+///
+/// All webhook tests in this binary share one file-backed DB and one row
+/// (id = 1), and cargo runs them in parallel — so each test must seed the
+/// state it asserts against instead of relying on another test's leftovers.
+/// The row is a singleton (`CHECK (id = 1)`), so seeding alone still races:
+/// every webhook test also takes this mutex to serialize its whole body.
+static WEBHOOK_ROW: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn seed_webhook_row(secret: Option<&str>) {
+    let pool = oxo_flow_web::infra::db::sqlite::try_pool().expect("personal mode has SQLite");
+    sqlx::query(
+        "INSERT INTO webhook_config (id, url, secret, enabled, events, signature_scheme, updated_at) \
+         VALUES (1, 'https://hooks.example/alive', ?, 0, '[]', 'sha256-keyed', '2026-10-25T00:00:00Z') \
+         ON CONFLICT(id) DO UPDATE SET url = excluded.url, secret = excluded.secret, enabled = 0",
+    )
+    .bind(secret)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn request(
     app: &axum::Router,
     method: &str,
@@ -499,7 +521,14 @@ async fn webhook_enable_without_any_secret_is_refused() {
 
     // Fresh config, no secret stored, none supplied: enabling must fail with
     // a dedicated code (a webhook URL is a bearer credential; unsigned
-    // delivery lets anyone who guesses the URL forge events).
+    // delivery lets anyone who guesses the URL forge events). The row is
+    // seeded here — cargo runs this binary's tests in parallel against one
+    // shared DB row, so another test's leftover secret must not leak in.
+    // seeded under the row lock: cargo runs this binary's tests in parallel
+    // against one shared DB row, so the seed itself must not interleave
+    // with another webhook test's request.
+    let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(None).await;
     let (status, body) = put(
         &app,
         "/api/webhook",
@@ -525,8 +554,11 @@ async fn webhook_disable_allows_clearing_the_secret() {
     ensure_db().await;
     let app = server::build_router("personal");
 
-    // Seeded with a secret by the previous test's shared DB row; disabling
-    // must never demand one (the gate only guards going live).
+    // Seed our own stored secret instead of depending on a previous test's
+    // shared-DB leftovers; disabling must never demand one (the gate only
+    // guards going live).
+    let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(Some("leftover-key")).await;
     let (status, body) = put(&app, "/api/webhook", json!({"enabled": false, "url": ""})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
@@ -599,4 +631,150 @@ async fn login_bruteforce_lockout_answers_429() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// Issue #907 — P2-5 (stored version derives from the TOML, not the caller),
+// #909 NIT-1 (an unopenable stored secret is not a usable secret), and
+// P3-14 (dry runs are flagged in the run records, not posing as executions).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pipeline_version_tracks_the_toml_not_the_request_body() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // Save with version = 1.2.3 INSIDE the TOML and a deliberately
+    // conflicting `version` JSON field: the TOML is the source of truth.
+    let toml_v1 = VALID_TOML.replace(
+        "[workflow]\nname = \"contract-test\"",
+        "[workflow]\nname = \"contract-test\"\nversion = \"1.2.3\"",
+    );
+    let (status, body) = post(
+        &app,
+        "/api/pipelines",
+        json!({"toml_content": toml_v1, "name": "version-sync", "version": "9.9.9"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["id"]
+        .as_str()
+        .expect("pipeline id: {body}")
+        .to_string();
+    assert_eq!(
+        body["version"], "1.2.3",
+        "the TOML version wins over the request field: {body}"
+    );
+
+    // Update the TOML to 2.0.0 with NO version field at all — the stored
+    // version must follow the content (the UPDATE previously omitted the
+    // version column entirely).
+    let toml_v2 = toml_v1.replace("version = \"1.2.3\"", "version = \"2.0.0\"");
+    let (status, body) = put(
+        &app,
+        &format!("/api/pipelines/{id}"),
+        json!({"toml_content": toml_v2}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["version"], "2.0.0", "{body}");
+
+    // And GET agrees with the update response (no stale stored copy).
+    let (status, body) = get(&app, &format!("/api/pipelines/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["version"], "2.0.0",
+        "GET must return the synced version: {body}"
+    );
+}
+
+#[tokio::test]
+async fn webhook_enable_refuses_a_stored_secret_that_does_not_decrypt() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // Seed the config row with a `v1:` ciphertext that no master key can
+    // open (the test binary never sets OXO_FLOW_MASTER_KEY, so crypto::open
+    // degrades it to "") — the state a rotated master key leaves behind.
+    // The old `secret.is_some()` gate accepted this row and enabled
+    // unsigned, forgeable deliveries. Seed under the row lock (parallel
+    // tests share the row); the stored value is present but NOT usable.
+    let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(Some("v1:bm90LWE6cmVhbGtleQ")).await;
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({"enabled": true, "url": "https://hooks.example/alive"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "WEBHOOK_SECRET_REQUIRED", "{body}");
+
+    // Supplying a fresh secret heals the row and the same request succeeds.
+    let (status, body) = put(
+        &app,
+        "/api/webhook",
+        json!({"enabled": true, "url": "https://hooks.example/alive", "secret": "k"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Cleanup: clear the row entirely, so no usable secret leaks from the
+    // shared-file DB into the other webhook tests running in parallel.
+    // The seed itself is safe out-of-lock (every other webhook test seeds
+    // its own state under the lock first), but keep the write inside it
+    // anyway so no webhook-row write ever races.
+    drop(_guard);
+    let _guard = WEBHOOK_ROW.lock().await;
+    seed_webhook_row(None).await;
+}
+
+#[tokio::test]
+async fn dry_run_launches_are_flagged_in_the_run_record() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // A dry-run creation must persist dry_run = true (P3-14): the runs
+    // table previously had no such column, so a plan-only run was
+    // indistinguishable from a real execution in every run listing.
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({"toml_content": VALID_TOML, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let run_id = body["run_id"].as_str().expect("run id: {body}").to_string();
+
+    let (status, body) = get(&app, &format!("/api/runs/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["dry_run"], true,
+        "single-run GET must flag the dry run: {body}"
+    );
+
+    let (status, body) = get(&app, &format!("/api/runs/{run_id}/status")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = get(&app, "/api/runs?limit=100").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let flagged = body["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .find(|r| r["id"] == run_id.as_str())
+        .expect("the new run appears in the list");
+    assert_eq!(
+        flagged["dry_run"], true,
+        "the run list must flag the dry run: {flagged}"
+    );
+
+    // A normal run stays dry_run = false (default, and the historical rows'
+    // migration default).
+    let (status, body) = post(&app, "/api/runs", json!({"toml_content": VALID_TOML})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let normal_id = body["run_id"].as_str().expect("run id: {body}").to_string();
+    let (status, body) = get(&app, &format!("/api/runs/{normal_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["dry_run"], false, "{body}");
 }

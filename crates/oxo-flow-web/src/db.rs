@@ -74,6 +74,9 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             workflow_name TEXT,
             status TEXT NOT NULL,
             phase TEXT NOT NULL DEFAULT 'parsing',
+            -- #907 P3-14: must match the fresh schema in infra::db::sqlite::init_pool
+            -- (tests/audit_integration.rs pins the two boot paths to one schema).
+            dry_run INTEGER NOT NULL DEFAULT 0,
             pid INTEGER,
             workdir TEXT,
             started_at DATETIME,

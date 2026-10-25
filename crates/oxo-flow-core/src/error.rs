@@ -74,8 +74,10 @@ pub enum OxoFlowError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// TOML deserialization error.
-    #[error("TOML parse error: {0}")]
+    /// TOML deserialization error. `toml::de::Error`'s own Display already
+    /// reads "TOML parse error at line …/column …" — no prefix here, or the
+    /// message doubles (issue #907 P3-11).
+    #[error(transparent)]
     Toml(#[from] toml::de::Error),
 
     /// Serialization error.
@@ -442,5 +444,25 @@ mod tests {
         };
         assert!(err.to_string().contains("wildcard"));
         assert!(err.to_string().contains("no files matched"));
+    }
+
+    #[test]
+    fn error_display_toml_is_not_double_prefixed() {
+        // `toml::de::Error`'s own Display already reads "TOML parse error at
+        // line …" — the transparent wrapper must not prepend another copy
+        // (issue #907 P3-11).
+        let err: OxoFlowError = "not valid [ toml"
+            .parse::<toml::Value>()
+            .expect_err("malformed input")
+            .into();
+        let text = err.to_string();
+        assert!(
+            text.starts_with("TOML parse error"),
+            "toml's own Display must lead the message: {text}"
+        );
+        assert!(
+            !text.contains("TOML parse error: TOML parse error"),
+            "the prefix must not double: {text}"
+        );
     }
 }

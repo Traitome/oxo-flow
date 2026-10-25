@@ -323,6 +323,14 @@ DELETE /api/pipelines/{id}         # Delete pipeline
 POST   /api/pipelines/search       # Search by name, tags, content
 ```
 
+The pipeline's `version` is always derived from the stored TOML's
+`[workflow] version` key — the TOML is the source of truth (#907 P2-5).
+An explicit `version` field on POST/PUT is ignored (never stored), so a
+save whose content carries `version = "1.2.3"` reports `1.2.3` on the
+next GET, and updating content without touching `[workflow] version`
+bumps the reported version to match. This mirrors the CLI, where the
+file on disk defines the version.
+
 ---
 
 ## Execution & Runs
@@ -389,7 +397,7 @@ Cursor pagination, not page numbers: pass the `created_at` of the last row
 of the previous page as `cursor` (`created_at < cursor`). `limit` defaults
 to 100 and is capped at 500. The response is the envelope
 `{ items, next_cursor, total }`, where `next_cursor: null` means the last
-page.
+page. Each item carries `dry_run` (#907 P3-14) — see [Run Detail](#run-detail).
 
 ### Run Status
 ```
@@ -413,7 +421,7 @@ Deterministic error analysis: `{ failed_nodes: [{ rule, error_pattern, likely_ca
 ```
 GET /api/runs/{id}
 ```
-The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.)
+The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, workdir, started_at, finished_at, created_at }` — the identity other run endpoints key off. (`pipeline_id`/`pipeline_snapshot` may be `null` for legacy rows; no `pid` — the host process id stays engine-internal.) `dry_run` mirrors the creation request (`true` for preview runs spawned by `dry_run: true`) and appears in both the list and detail responses (#907 P3-14) — legacy rows created before the column existed read as `false`.
 
 ### Run Preview
 ```
@@ -740,10 +748,14 @@ signature scheme is configurable:
 Validation on `PUT` (issue #907 N5): `url` must parse as an absolute
 `http://` or `https://` URL with a host (`400 INVALID_URL` otherwise — a
 bare `https://` prefix no longer passes). Enabling delivery requires a
-signing secret: either supply `secret` in the request or leave a previously
-stored one in place (`400 WEBHOOK_SECRET_REQUIRED` otherwise) — a webhook
-URL is a bearer credential, and unsigned delivery lets anyone who learns
-the URL forge events. Disabling (`enabled: false`) never demands a secret.
+usable signing secret: either supply `secret` in the request or leave a
+previously stored one in place (`400 WEBHOOK_SECRET_REQUIRED` otherwise) —
+a webhook URL is a bearer credential, and unsigned delivery lets anyone who
+learns the URL forge events. Disabling (`enabled: false`) never demands a
+secret. A stored secret that fails to decrypt (e.g. the master key was
+rotated) reads as absent: enable is refused until a fresh `secret` is
+supplied (#907, review NIT-1) — silently signing with an empty key would
+produce forgeable deliveries.
 
 Admin-only outside personal mode — the endpoint is shared infrastructure.
 
