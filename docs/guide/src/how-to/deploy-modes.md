@@ -371,6 +371,20 @@ oxo-flow serve --mode team --base-path /oxo-flow
 OXO_FLOW_TRUSTED_PROXY=1
 ```
 
+For TLS-terminating proxies (the common public deployment), also declare
+the public origin so minted share URLs tell the truth about the transport
+(#907 R16) — by default they carry `oxo+http://` with the local bind
+host/port, which is unreachable from outside the proxy:
+
+```bash
+# /etc/oxo-flow/server.env (append) — public HTTPS entry point
+OXO_FLOW_PUBLIC_URL=https://flows.lab.example.edu/oxo-flow
+```
+
+Share URLs then become `oxo+https://flows.lab.example.edu/oxo-flow/share/<token>`
+(see [Collaboration](collaboration.md)); the import API accepts both
+schemes, so previously minted links keep working.
+
 ## Performance
 
 | Mode | Startup | Memory (idle) | Memory (100 pipelines) |

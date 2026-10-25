@@ -41,8 +41,13 @@ export default function Share() {
     setImporting(true);
     try {
       // The URL format matches the import API contract; the server resolves
-      // the token locally.
-      const url = `oxo+https://${window.location.host}/share/${token}`;
+      // the token locally. Scheme + base path mirror how THIS page was
+      // actually served — hardcoding oxo+https:// produced URLs the server
+      // itself could not have minted on plain-HTTP deployments (#907 R16).
+      const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+      const prefix = base.replace(/\/$/, '');
+      const scheme = window.location.protocol === 'https:' ? 'oxo+https' : 'oxo+http';
+      const url = `${scheme}://${window.location.host}${prefix}/share/${token}`;
       const result = await api.importPipeline(url);
       setNotice({ text: t('share.imported') });
       navigate(`/editor?pipeline=${result.pipeline_id}`);

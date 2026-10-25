@@ -62,8 +62,9 @@ export default function Pipelines() {
     let httpsUrl: string;
     try {
       const res = await api.sharePipeline(id, 'link', 30);
-      // The API returns an oxo+https:// URL; surface a clickable https://
-      // link (the oxo+ scheme is the import format).
+      // The API returns an oxo+http:// or oxo+https:// URL (scheme follows
+      // the actual serving transport, #907 R16); surface a clickable
+      // http(s):// link — stripping `oxo+` leaves the browser URL intact.
       httpsUrl = res.share_url.replace('oxo+', '');
     } catch (err: unknown) {
       setNotice(t('pipelines.shareFailed') + `: ${describeApiError(err, t('common.unknownError'))}`);

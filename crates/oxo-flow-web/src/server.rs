@@ -802,6 +802,43 @@ pub fn bound_port() -> Option<u16> {
     BOUND_PORT.get().copied()
 }
 
+/// Build the canonical share URL for a token (issue #907 R16: the URL must
+/// tell the transport truth).
+///
+/// The web server has no native TLS — it speaks plain HTTP; TLS terminates at
+/// a reverse proxy, if anywhere. Advertising `oxo+https://` therefore lied
+/// about every self-hosted deployment. The scheme now follows reality:
+/// `oxo+http://` by default, `oxo+https://` only when an operator explicitly
+/// declares a public HTTPS origin via `OXO_FLOW_PUBLIC_URL` (reverse-proxy
+/// deployments), whose authority (host and port) also replaces the local bind
+/// guess. Import accepts both schemes, so URLs minted before this change
+/// keep working.
+pub fn share_url_for(token: &str) -> String {
+    let prefix = base_path().trim_end_matches('/');
+    if let Ok(public) = std::env::var("OXO_FLOW_PUBLIC_URL") {
+        let public = public.trim().trim_end_matches('/');
+        if !public.is_empty() {
+            // Operators must supply a scheme; oxo+ is prepended to whatever
+            // they declared (https://cdn.example.com → oxo+https://...).
+            let authority = public
+                .strip_prefix("https://")
+                .or_else(|| public.strip_prefix("http://"))
+                .unwrap_or(public);
+            let scheme = if public.starts_with("https://") {
+                "https"
+            } else {
+                "http"
+            };
+            return format!("oxo+{scheme}://{authority}{prefix}/share/{token}");
+        }
+    }
+    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
+    // Use the port the server actually bound (issue #82 P0-6: the URL was
+    // hardcoded to 3000 even when serving on 8080 or any -p value).
+    let port = bound_port().unwrap_or(3000);
+    format!("oxo+http://{host}:{port}{prefix}/share/{token}")
+}
+
 /// Add standard security headers to every response.
 async fn security_headers(
     request: axum::extract::Request,

@@ -104,6 +104,71 @@ async fn test_import_invalid_url_format() {
     assert!(resp.status().is_client_error());
 }
 
+// ── Share URL transport truth (#907 R16) ──
+
+#[test]
+fn share_url_scheme_follows_actual_transport() {
+    // SAFETY: env::set_var/remove_var are process-wide and racy with any
+    // concurrent getenv — all three cases therefore run in ONE serial test,
+    // and no other test in this binary touches OXO_FLOW_PUBLIC_URL.
+    unsafe {
+        // Default: the server has no native TLS, so without an explicit
+        // public-URL override the minted scheme must be oxo+http:// — the
+        // old hardcoded oxo+https:// was a transport lie on plain-HTTP
+        // deployments.
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+        let url = server::share_url_for("tok-r16");
+        assert!(
+            url.starts_with("oxo+http://") && !url.starts_with("oxo+https://"),
+            "default share URL must be oxo+http:// (got {url})"
+        );
+        assert!(
+            url.ends_with("/share/tok-r16"),
+            "URL must end in the token path (got {url})"
+        );
+
+        // Override with an HTTPS public origin (reverse-proxy deployment):
+        // scheme AND authority both come from the override.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "https://flows.example.com");
+        assert_eq!(
+            server::share_url_for("tok-pub"),
+            "oxo+https://flows.example.com/share/tok-pub"
+        );
+
+        // Override with an HTTP public origin keeps the plain scheme.
+        std::env::set_var("OXO_FLOW_PUBLIC_URL", "http://gw.internal:9000");
+        assert_eq!(
+            server::share_url_for("tok-gw"),
+            "oxo+http://gw.internal:9000/share/tok-gw"
+        );
+        std::env::remove_var("OXO_FLOW_PUBLIC_URL");
+    }
+}
+
+#[tokio::test]
+async fn test_import_accepts_oxo_http_scheme() {
+    // The default minted scheme changed to oxo+http://; the import endpoint
+    // must accept it (only a truly malformed URL is rejected).
+    common::ensure_db().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/pipelines/import")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"url": "oxo+http://example.com/share/abc123"}).to_string(),
+        ))
+        .unwrap();
+    let resp = app_personal().oneshot(req).await.unwrap();
+    // 404/400 = the URL format was accepted and the token lookup ran;
+    // 4xx for an unknown token is fine — a 400 INVALID_URL would NOT be.
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let code = body["code"].as_str().unwrap_or("");
+    assert_ne!(code, "INVALID_URL", "oxo+http:// must pass URL validation");
+}
+
 #[tokio::test]
 async fn test_import_bad_request() {
     common::ensure_db().await;

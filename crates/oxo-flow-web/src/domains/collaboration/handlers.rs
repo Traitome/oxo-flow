@@ -239,12 +239,12 @@ pub async fn share_pipeline(
         )
     })?;
 
-    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
-    // Use the port the server actually bound (issue #82 P0-6: the URL was
-    // hardcoded to 3000 even when serving on 8080 or any -p value).
-    let port = crate::server::bound_port().unwrap_or(3000);
     Ok(Json(ShareResponse {
-        share_url: format!("oxo+https://{host}:{port}/share/{token}"),
+        // Single source of truth for the URL shape (server.rs): emits
+        // oxo+http:// unless OXO_FLOW_PUBLIC_URL declares an HTTPS origin —
+        // the server itself has no TLS, so a hardcoded oxo+https:// was a
+        // transport lie on plain-HTTP deployments (#907 R16).
+        share_url: crate::server::share_url_for(&token),
         access_token: token,
         expires_at,
     }))
@@ -264,16 +264,18 @@ pub async fn import_pipeline(
     authenticated: Option<Extension<CurrentUser>>,
     ApiJson(body): ApiJson<ImportRequest>,
 ) -> ApiResult<ImportResponse> {
-    // Validate URL format
+    // Validate URL format (both schemes accepted: the share handler mints
+    // oxo+http:// by default and oxo+https:// behind a public HTTPS origin)
     if !body.url.starts_with("oxo+https://") && !body.url.starts_with("oxo+http://") {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "INVALID_URL",
-            "URL must use oxo+https:// format".into(),
+            "URL must use oxo+https:// or oxo+http:// format".into(),
         ));
     }
 
-    // Extract token from URL: oxo+https://host/share/{token}
+    // Extract token from URL: oxo+https://host[:port]/share/{token} or
+    // oxo+http://host[:port]/share/{token}
     let token = body.url.rsplit('/').next().unwrap_or("").to_string();
 
     let pool = get_pool()?;

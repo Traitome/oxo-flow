@@ -702,13 +702,17 @@ environment table in `AGENTS.md`).
 
 ```
 POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
-POST /api/pipelines/{id}/share   # Share (link or workspace; URL uses the bound port)
-POST /api/pipelines/import       # Import from oxo+https:// URL
+POST /api/pipelines/{id}/share   # Share (link/public only; URL follows the actual transport)
+POST /api/pipelines/import       # Import from oxo+http(s):// share URL
 GET  /api/share/{token}          # PUBLIC landing payload (no session required)
 ```
 `GET /api/share/{token}` powers the share landing page: pipeline identity,
 DAG rule order, TOML, owner, expiry, and the most recent terminal run —
 the token itself is the authorization. Expired links return `410`.
+
+Share URLs minted by `POST .../share` use `oxo+http://` by default (the
+server has no native TLS) and `oxo+https://` only when `OXO_FLOW_PUBLIC_URL`
+declares a public HTTPS origin; the import endpoint accepts both schemes.
 
 See [Collaboration](../how-to/collaboration.md) for details.
 

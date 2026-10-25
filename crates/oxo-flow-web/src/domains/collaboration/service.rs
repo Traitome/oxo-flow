@@ -83,10 +83,11 @@ pub async fn share_pipeline(
         .await
         .map_err(|e| format!("Failed to create share: {e}"))?;
 
-    let host = std::env::var("OXO_FLOW_HOST").unwrap_or_else(|_| "localhost".into());
-    let port = std::env::var("OXO_FLOW_PORT").unwrap_or_else(|_| "3000".into());
+    // Keep dead-code parity with the live handler: share_pipeline has no
+    // production callers (handlers use inline SQL), but if it ever comes
+    // back it must emit the same honest URL (#907 R16).
     Ok(ShareResponse {
-        share_url: format!("oxo+https://{host}:{port}/share/{token}"),
+        share_url: crate::server::share_url_for(&token),
         access_token: token,
         expires_at: share.expires_at,
     })
@@ -174,5 +175,20 @@ mod tests {
     fn test_parse_share_url_invalid() {
         let result = "just-a-string".strip_prefix("oxo+https://");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_share_url_accepts_http() {
+        // Import must keep accepting the oxo+http:// scheme that the share
+        // handler now mints by default (#907 R16).
+        let url = "oxo+http://lab.org:8080/share/tok-1";
+        let token = url
+            .strip_prefix("oxo+https://")
+            .or_else(|| url.strip_prefix("oxo+http://"))
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert_eq!(token, "tok-1");
     }
 }
