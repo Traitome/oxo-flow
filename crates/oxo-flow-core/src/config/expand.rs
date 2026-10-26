@@ -1679,7 +1679,7 @@ impl WorkflowConfig {
         if !rule.expand_inputs.is_empty() && rule.input.to_vec().is_empty() {
             return Err(OxoFlowError::Validation {
                 message: format!(
-                    "rule '{}' declares expand_inputs but has zero concrete inputs — every expanded entry was dropped because no live producer instance declares the paths",
+                    "rule '{}' declares expand_inputs but has zero concrete inputs — every expanded entry was dropped or never expanded because no live producer instance declares the paths",
                     rule.name
                 ),
                 rule: Some(rule.name.clone()),

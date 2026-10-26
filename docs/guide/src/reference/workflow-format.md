@@ -2501,8 +2501,8 @@ The engine closes that gap in two layers (issues #882/#883):
 
 - **Baked inputs** — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
-  paths (`expand_inputs entries dropped: producers skipped by
-  when-condition`). The comparison expands `{config.*}` tokens on both
+  paths (`expand_inputs entries dropped: no live producer instance
+  declares these paths`). The comparison expands `{config.*}` tokens on both
   sides (recorded producer outputs keep them raw), so patterns written as
   `ref_{config.genome}.fai` drop correctly too. The full list stays in
   `expand_inputs_baked` provenance (config-expanded, matching how the
