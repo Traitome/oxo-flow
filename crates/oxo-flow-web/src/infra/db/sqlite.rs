@@ -134,8 +134,8 @@ impl SqliteBackend {
         .map_err(|e| e.to_string())?;
         sqlx::query(
             r#"INSERT INTO runs_migrated
-                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at)
-                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, started_at, finished_at, created_at
+                (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at)
+                SELECT id, user_id, NULLIF(pipeline_id, ''), pipeline_snapshot, NULL, status, phase, 0, pid, workdir, NULL, started_at, finished_at, created_at
                 FROM runs"#,
         )
         .execute(&mut *conn)

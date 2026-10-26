@@ -203,6 +203,16 @@ impl StorageBackend for PostgresBackend {
         .await
         .map_err(|e| format!("PG init schema: {e}"))?;
 
+        // Migration for pre-existing postgres databases: the runs table
+        // gained `config_overrides` after #930. Idempotent (duplicates the
+        // established ALTER...ok() swallow pattern); run execution remains
+        // SQLite-only (#207) so this only keeps the pg StorageBackend's
+        // run methods from failing on legacy tables.
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS config_overrides TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
+
         // Seed admin user
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
             .fetch_one(&self.pool)
