@@ -4263,7 +4263,9 @@ Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</c
   <code>config 'min_quality' expects an integer</code>). A typo in an override key is
   therefore only a warning, not a run failure.
   Cluster (<code>cluster_id</code>) runs carry the same overrides into the remote
-  wrapper command.</li>
+  wrapper command. Overrides and include-file keys are validated <strong>before</strong>
+  the run row is persisted, so a <code>400</code> never leaves a ghost <code>queued</code> run
+  behind (PR #930 NIT-3).</li>
 <li><code>cluster_id</code> (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   <a href="#cluster-connections-remote-execution">Cluster Connections</a>).</li>
@@ -4336,6 +4338,11 @@ rejected with <code>400 UNSUPPORTED_FIELD</code> instead of being silently ignor
 the database (same workdir, same owner), spawned with <code>--resume-failed
 --rerun</code> so the failed rules re-execute despite their existing outputs and
 the checkpoint's cascade invalidation re-runs their downstream dependents.
+The retry <strong>replays the original run's <code>config_overrides</code></strong> (PR #930 NIT-8):
+the new row carries the stored overrides forward and the spawned CLI
+receives the same <code>--arg=KEY=VALUE</code> entries, so a retry re-executes with the
+configuration it claims to redo instead of silently falling back to
+defaults.
 Returns <code>{ new_run_id, will_rerun: [...], will_skip: [...] }</code> — plus an
 optional <code>note</code> when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
