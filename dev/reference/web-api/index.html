@@ -4201,11 +4201,12 @@ file on disk defines the version.</p>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/runs
 </span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>Content-Type: application/json
 </span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;", "samples": ["S1", "S2"], "targets": ["rule_name"]}
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>{"toml_content": "&lt;workflow TOML&gt;", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "&lt;uuid&gt;", "cluster_id": "&lt;cluster-id&gt;", "samples": ["S1", "S2"], "targets": ["rule_name"], "include_files": {"envs/clinical/pixi.toml": "[env] ..."}, "config_overrides": ["min_quality=30"]}
 </span></code></pre></div>
 <code>toml_content</code> is the workflow source (required — the run is created from
 it, not from a saved pipeline); <code>max_jobs</code>, <code>dry_run</code>, <code>keep_going</code>,
-<code>pipeline_id</code>, <code>cluster_id</code>, <code>samples</code>, and <code>targets</code> are top-level fields
+<code>pipeline_id</code>, <code>cluster_id</code>, <code>samples</code>, <code>targets</code>, <code>include_files</code>, and
+<code>config_overrides</code> are top-level fields
 (not nested under a <code>config</code> object). Run-mutating endpoints
 (create/cancel/pause/resume/retry/clean/resume-checkpoint) require the
 <code>user</code> role or above — the viewer role is read-only — and a <code>pipeline_id</code>
@@ -4238,6 +4239,31 @@ Malformed or unknown pipeline ids are rejected (<code>400 INVALID_PIPELINE_ID</c
 <li><code>keep_going: true</code> maps to <code>--keep-going</code> (the CLI also accepts <code>-k</code>).</li>
 <li><code>samples</code> (array of strings, optional) maps to <code>--samples</code> (comma-joined).</li>
 <li><code>targets</code> (array of strings, optional) maps to <code>-t</code> per entry.</li>
+<li><code>include_files</code> (object, optional) stages <strong>[[include]] source files</strong>
+  alongside the workflow: keys are workflow-relative paths (e.g.
+  <code>envs/clinical/pixi.toml</code>), values are the file contents. Keys are
+  validated as relative workspace paths — absolute paths, <code>..</code> components,
+  and degenerate keys (empty, <code>.</code>-only, trailing slash) are rejected
+  (<code>400 INVALID_INCLUDE_PATH</code>), and the key <code>workflow.oxoflow</code>
+  is rejected because it would overwrite the main workflow. Files are written
+  beside <code>workflow.oxoflow</code> in the run directory, where the CLI's
+  <code>resolve_includes</code> resolves them unchanged — the same machinery local
+  <code>oxo-flow run</code> uses. Note: <code>pipeline_snapshot</code> in the run row stores only
+  the host TOML, so status/DAG endpoints re-parse it without includes; the
+  run itself executes correctly because the spawned CLI re-parses from disk.
+  There is no per-key content cap beyond the request-body limit (2 MiB by
+  default, <code>body_limit</code> in the server config).</li>
+<li><code>config_overrides</code> (array of strings, optional) passes CLI config
+  overrides through to the spawned run as <code>--arg=KEY=VALUE</code> entries. Each
+  entry must be a non-empty <code>KEY=VALUE</code> string (<code>400
+  INVALID_CONFIG_OVERRIDE</code> otherwise); full override semantics
+  (canonicalization, unknown keys, declared-key value checks) are enforced
+  by the CLI — it <strong>warns on unknown keys</strong> (they change nothing) and
+  <strong>hard-fails on an invalid value for a declared key</strong> (e.g.
+  <code>config 'min_quality' expects an integer</code>). A typo in an override key is
+  therefore only a warning, not a run failure.
+  Cluster (<code>cluster_id</code>) runs carry the same overrides into the remote
+  wrapper command.</li>
 <li><code>cluster_id</code> (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   <a href="#cluster-connections-remote-execution">Cluster Connections</a>).</li>
