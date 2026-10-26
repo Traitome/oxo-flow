@@ -758,39 +758,46 @@ pub async fn oauth_callback(
     // — or resolve to — a local users.username (e.g. "admin"). Both the
     // users.id and the username carry provider prefixes; the session binds
     // to the namespaced id, and role resolution only ever reads that row.
-    if let Ok(pool) = get_pool() {
-        let oauth_user_id = format!("oauth:{provider}:{}", result.provider_user_id);
-        let oauth_username = format!("{provider}:{}", result.username);
-        let _ = sqlx::query(
-            "INSERT OR IGNORE INTO users (id, username, role, auth_type, os_user, created_at) \
-             VALUES (?, ?, 'user', 'oauth', '', ?)",
-        )
-        .bind(&oauth_user_id)
-        .bind(&oauth_username)
-        .bind(now_iso())
-        .execute(pool)
-        .await;
+    // The user row MUST exist before the session is persisted: two provider
+    // accounts can share a display name, and a silently skipped insert left
+    // the session pointing at a nonexistent user (every request 401'd).
+    let pool = get_pool()?;
+    let oauth_user_id = format!("oauth:{provider}:{}", result.provider_user_id);
+    let oauth_username = format!("{provider}:{}", result.username);
+    let fallback_username = format!("{provider}:{}", result.provider_user_id);
+    let stored_username = super::service::ensure_oauth_user(
+        pool,
+        &oauth_user_id,
+        &oauth_username,
+        &fallback_username,
+    )
+    .await
+    .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, "DB_ERROR", e))?;
+    if stored_username != oauth_username {
+        // Display name was taken — the row carries the unique fallback and
+        // the response field stays the provider display name (display only).
+        tracing::info!(
+            "OAuth username '{}' already taken; persisted identity '{}' as '{}'",
+            oauth_username,
+            oauth_user_id,
+            stored_username
+        );
+    }
 
-        let expires = chrono::Utc::now() + chrono::Duration::hours(24);
-        let insert_result = sqlx::query(
-            "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&result.token)
-        .bind(&oauth_user_id)
-        .bind(now_iso())
-        .bind(expires.to_rfc3339())
-        .execute(pool)
-        .await;
+    let expires = chrono::Utc::now() + chrono::Duration::hours(24);
+    let insert_result = sqlx::query(
+        "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&result.token)
+    .bind(&oauth_user_id)
+    .bind(now_iso())
+    .bind(expires.to_rfc3339())
+    .execute(pool)
+    .await;
 
-        if let Err(e) = insert_result {
-            tracing::error!(
-                "Failed to persist OAuth session for user '{}': {e}",
-                result.username
-            );
-        }
-    } else {
+    if let Err(e) = insert_result {
         tracing::error!(
-            "DB pool unavailable — OAuth session NOT persisted for user '{}'",
+            "Failed to persist OAuth session for user '{}': {e}",
             result.username
         );
     }
