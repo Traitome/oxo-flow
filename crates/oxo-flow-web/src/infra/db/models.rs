@@ -41,6 +41,10 @@ pub struct RunRow {
     pub dry_run: bool,
     pub pid: Option<i64>,
     pub workdir: Option<String>,
+    /// JSON array of the validated `KEY=VALUE` config overrides the run was
+    /// created with (`None` when the client sent none). Persisted so retry
+    /// re-executes with the same configuration as the original run.
+    pub config_overrides: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,

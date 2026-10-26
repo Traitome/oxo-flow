@@ -117,6 +117,7 @@ impl StorageBackend for PostgresBackend {
                 dry_run BOOLEAN NOT NULL DEFAULT FALSE,
                 pid BIGINT,
                 workdir TEXT,
+                config_overrides TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL
@@ -201,6 +202,16 @@ impl StorageBackend for PostgresBackend {
         .execute(&self.pool)
         .await
         .map_err(|e| format!("PG init schema: {e}"))?;
+
+        // Migration for pre-existing postgres databases: the runs table
+        // gained `config_overrides` after #930. Idempotent (duplicates the
+        // established ALTER...ok() swallow pattern); run execution remains
+        // SQLite-only (#207) so this only keeps the pg StorageBackend's
+        // run methods from failing on legacy tables.
+        sqlx::query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS config_overrides TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
 
         // Seed admin user
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
@@ -416,6 +427,7 @@ impl StorageBackend for PostgresBackend {
             dry_run: run.dry_run,
             pid: run.pid,
             workdir: run.workdir.clone(),
+            config_overrides: run.config_overrides.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -426,7 +438,7 @@ impl StorageBackend for PostgresBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -438,6 +450,7 @@ impl StorageBackend for PostgresBackend {
         .bind(row.dry_run)
         .bind(row.pid)
         .bind(&row.workdir)
+        .bind(&row.config_overrides)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)

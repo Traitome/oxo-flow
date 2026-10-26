@@ -412,7 +412,9 @@ Execution flags are forwarded to the CLI executor:
   `config 'min_quality' expects an integer`). A typo in an override key is
   therefore only a warning, not a run failure.
   Cluster (`cluster_id`) runs carry the same overrides into the remote
-  wrapper command.
+  wrapper command. Overrides and include-file keys are validated **before**
+  the run row is persisted, so a `400` never leaves a ghost `queued` run
+  behind (PR #930 NIT-3).
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections-remote-execution)).
@@ -510,6 +512,11 @@ The retry **really executes**: the returned `new_run_id` is a real run in
 the database (same workdir, same owner), spawned with `--resume-failed
 --rerun` so the failed rules re-execute despite their existing outputs and
 the checkpoint's cascade invalidation re-runs their downstream dependents.
+The retry **replays the original run's `config_overrides`** (PR #930 NIT-8):
+the new row carries the stored overrides forward and the spawned CLI
+receives the same `--arg=KEY=VALUE` entries, so a retry re-executes with the
+configuration it claims to redo instead of silently falling back to
+defaults.
 Returns `{ new_run_id, will_rerun: [...], will_skip: [...] }` — plus an
 optional `note` when the plan is empty on a previously failed run (it died
 before executing any rule, e.g. a configuration error at spawn; the retry
