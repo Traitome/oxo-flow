@@ -55,10 +55,15 @@ pub fn user_root(username: &str) -> Result<PathBuf> {
     Ok(base_workspace().join("users").join(username))
 }
 
-/// Reject absolute paths and `..` components in a client-supplied relative
-/// path (#521) — both turn path-taking endpoints into arbitrary-path
-/// existence/size oracles.
+/// Reject absolute paths, `..` components, and degenerate forms (empty,
+/// `.`-only, trailing slash) in a client-supplied relative path (#521) —
+/// absolute/`..` turn path-taking endpoints into arbitrary-path
+/// existence/size oracles; degenerate forms resolve to directories or
+/// nothing and only produce confusing downstream failures.
 pub fn check_relative_path(raw: &str) -> Result<(), String> {
+    if raw.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
     let candidate = std::path::Path::new(raw);
     if candidate.is_absolute() {
         return Err(format!(
@@ -72,6 +77,12 @@ pub fn check_relative_path(raw: &str) -> Result<(), String> {
         return Err(format!(
             "'..' components are not allowed in data paths ('{raw}')"
         ));
+    }
+    if raw.ends_with('/') {
+        return Err(format!("path '{raw}' must name a file, not end with '/'"));
+    }
+    if raw == "." || raw.starts_with("./") && raw[2..].trim_matches('/').is_empty() {
+        return Err(format!("path '{raw}' does not name a file"));
     }
     Ok(())
 }
@@ -301,6 +312,25 @@ mod tests {
         assert!(inputs_directory("..").is_err());
         assert!(inputs_directory("/etc").is_err());
         assert!(inputs_directory("alice").is_ok());
+    }
+
+    #[test]
+    fn check_relative_path_rejects_degenerate_forms() {
+        // Empty, `.`-only, and trailing-slash keys resolve to directories
+        // or nothing — reject them at the gate instead of failing later
+        // with a confusing 500.
+        assert!(check_relative_path("").is_err());
+        assert!(check_relative_path(".").is_err());
+        assert!(check_relative_path("./").is_err());
+        assert!(check_relative_path("dir/").is_err());
+        assert!(check_relative_path("./").is_err());
+        // Real relative file paths, including nested ones, stay accepted.
+        assert!(check_relative_path("envs/pixi.toml").is_ok());
+        assert!(check_relative_path("a.txt").is_ok());
+        // Pre-existing guarantees keep holding.
+        assert!(check_relative_path("/etc/passwd").is_err());
+        assert!(check_relative_path("../secret").is_err());
+        assert!(check_relative_path("a/../b").is_err());
     }
 
     #[test]

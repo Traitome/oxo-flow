@@ -101,9 +101,9 @@ pub struct CreateRunRequest {
     pub include_files: Option<std::collections::BTreeMap<String, String>>,
     /// CLI config overrides passed through to the spawned run as
     /// `KEY=VALUE` argv entries (`--arg`/positional semantics live inside
-    /// the CLI). Each entry must be a non-empty `KEY=VALUE` string; keys
-    /// must be declared in the workflow's `[config]` (enforced by the CLI,
-    /// which fails the run loudly on a typo).
+    /// the CLI). Each entry must be a non-empty `KEY=VALUE` string; the
+    /// CLI warns on unknown keys and hard-fails on invalid values for
+    /// declared keys.
     #[serde(default)]
     pub config_overrides: Option<Vec<String>>,
 }

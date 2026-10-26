@@ -102,7 +102,7 @@ fn quota_usage_for(toml: &str) -> (u32, u64) {
 /// Light shape gate for `config_overrides` (full semantics live in the
 /// CLI's `parse_cli_overrides`): each entry must be a non-empty KEY=VALUE
 /// string. Mirrors the CLI's `--arg KEY=VALUE` surface, which the executor
-/// appends to the spawned argv.
+/// appends to the spawned argv in equals form (`--arg=KEY=VALUE`).
 fn validate_config_overrides(
     req: &CreateRunRequest,
 ) -> Result<Vec<String>, (StatusCode, Json<ApiError>)> {
@@ -530,21 +530,20 @@ pub async fn create_run(
         }
 
         // Config-override passthrough: light shape validation here (the
-        // CLI enforces the declared-key gate and fails the run loudly on
-        // an unknown key), full semantics stay inside the CLI.
+        // CLI warns on unknown keys and hard-fails on invalid values for
+        // declared keys), full semantics stay inside the CLI.
         let validated_overrides = validate_config_overrides(&req)?;
         // Write [[include]] source files beside workflow.oxoflow so the
         // CLI's `from_file` re-parse resolves them via resolve_includes —
         // the same machinery local `oxo-flow run` uses. Keys are
-        // workflow-relative workspace paths; BTreeMap iteration makes the
+        // workflow-relative workspace paths; the BTreeMap below keeps the
         // persisted staging order-independent.
-        let mut include_paths: Vec<(String, String)> = req
+        let include_paths: Vec<(String, String)> = req
             .include_files
             .iter()
             .flat_map(|m| m.iter())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        include_paths.sort_by(|a, b| a.0.cmp(&b.0));
         for (rel, content) in &include_paths {
             if rel == "workflow.oxoflow" {
                 return Err(err(

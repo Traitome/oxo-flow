@@ -252,10 +252,11 @@ pub fn spawn_remote_run(
 
         // 2. write the per-run wrapper into the remote dir and launch under
         //    nohup. The wrapper name is unique (pkill target). Config
-        //    overrides ride `--arg KEY=VALUE` (single-quoted per token by
-        //    shell_quote) so the remote run sees the same values the web
-        //    caller passed — the CLI's declared-key gate still applies
-        //    remotely.
+        //    overrides ride `--arg=KEY=VALUE` in equals form (single-quoted
+        //    per token by shell_quote) so the remote run sees the same
+        //    values the web caller passed — equals form survives
+        //    hyphen-leading values, and the CLI's declared-key gate still
+        //    applies remotely.
         let wrapper = format!("run-{run_id}.sh");
         let mut run_cmd = format!(
             "oxo-flow run workflow.oxoflow --workdir .{jobs}",
@@ -265,7 +266,7 @@ pub fn spawn_remote_run(
             }
         );
         for kv in &config_overrides {
-            run_cmd.push_str(" --arg ");
+            run_cmd.push_str(" --arg=");
             run_cmd.push_str(&shell_quote(kv));
         }
         run_cmd.push_str(" > execution.log 2>&1");

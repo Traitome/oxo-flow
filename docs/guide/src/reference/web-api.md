@@ -391,20 +391,26 @@ Execution flags are forwarded to the CLI executor:
 - `include_files` (object, optional) stages **[[include]] source files**
   alongside the workflow: keys are workflow-relative paths (e.g.
   `envs/clinical/pixi.toml`), values are the file contents. Keys are
-  validated as relative workspace paths — absolute paths and `..` components
-  are rejected (`400 INVALID_INCLUDE_PATH`), and the key `workflow.oxoflow`
+  validated as relative workspace paths — absolute paths, `..` components,
+  and degenerate keys (empty, `.`-only, trailing slash) are rejected
+  (`400 INVALID_INCLUDE_PATH`), and the key `workflow.oxoflow`
   is rejected because it would overwrite the main workflow. Files are written
   beside `workflow.oxoflow` in the run directory, where the CLI's
   `resolve_includes` resolves them unchanged — the same machinery local
   `oxo-flow run` uses. Note: `pipeline_snapshot` in the run row stores only
   the host TOML, so status/DAG endpoints re-parse it without includes; the
   run itself executes correctly because the spawned CLI re-parses from disk.
+  There is no per-key content cap beyond the request-body limit (2 MiB by
+  default, `body_limit` in the server config).
 - `config_overrides` (array of strings, optional) passes CLI config
-  overrides through to the spawned run as `--arg KEY=VALUE` entries. Each
+  overrides through to the spawned run as `--arg=KEY=VALUE` entries. Each
   entry must be a non-empty `KEY=VALUE` string (`400
-  INVALID_CONFIG_OVERRIDE` otherwise); full override semantics (keys must be
-  declared in the workflow's `[config]`, canonicalization, unknown-key
-  warnings) are enforced by the CLI, which fails the run loudly on a typo.
+  INVALID_CONFIG_OVERRIDE` otherwise); full override semantics
+  (canonicalization, unknown keys, declared-key value checks) are enforced
+  by the CLI — it **warns on unknown keys** (they change nothing) and
+  **hard-fails on an invalid value for a declared key** (e.g.
+  `config 'min_quality' expects an integer`). A typo in an override key is
+  therefore only a warning, not a run failure.
   Cluster (`cluster_id`) runs carry the same overrides into the remote
   wrapper command.
 - `cluster_id` (optional) names a configured SSH cluster connection: the

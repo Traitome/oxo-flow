@@ -332,12 +332,13 @@ pub fn build_cli_args(
             args.push("-t".into());
             args.push(target.into());
         }
-        // dry-run shares the --arg KEY=VALUE surface with run (main.rs),
-        // so the passthrough is flag-form there too. `--arg` must precede
-        // positional overrides, and we never send positional ones.
+        // dry-run shares the --arg KEY=VALUE surface with run (main.rs).
+        // Equals form keeps hyphen-leading VALUES out of clap's flag
+        // parser — a space-form `--arg -x` would be eaten as a flag and
+        // kill the spawn at argv level instead of reaching the CLI's
+        // targeted declared-key gate.
         for kv in &flags.config_overrides {
-            args.push("--arg".into());
-            args.push(kv.into());
+            args.push(format!("--arg={kv}").into());
         }
     } else {
         if flags.keep_going {
@@ -361,12 +362,12 @@ pub fn build_cli_args(
             args.push("-t".into());
             args.push(target.into());
         }
-        // Config overrides ride the shared `--arg KEY=VALUE` flag (mirrors
-        // the CLI's own flag/positional merge in main.rs); the CLI's
-        // declared-key gate and canonicalization still apply.
+        // Config overrides ride the shared `--arg KEY=VALUE` flag in
+        // equals form (mirrors the CLI's own flag/positional merge in
+        // main.rs); equals form survives hyphen-leading values, and the
+        // CLI's declared-key gate and canonicalization still apply.
         for kv in &flags.config_overrides {
-            args.push("--arg".into());
-            args.push(kv.into());
+            args.push(format!("--arg={kv}").into());
         }
     }
     args
@@ -1160,10 +1161,10 @@ mod tests {
         );
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
-        // Config overrides ride the shared `--arg KEY=VALUE` flag in both
-        // branches — the CLI's declared-key gate still applies at run time.
-        assert!(strs.contains(&"--arg".to_string()));
-        assert!(strs.contains(&"min_quality=30".to_string()));
+        // Config overrides ride the shared `--arg KEY=VALUE` flag in equals
+        // form in both branches — the CLI's declared-key gate still applies
+        // at run time, and equals form survives hyphen-leading values.
+        assert!(strs.contains(&"--arg=min_quality=30".to_string()));
         // dry-run shares --samples/-t (issue #79 P2: the preview dropped
         // them) and asks for the machine-readable instance-level plan,
         // but omits execution-only flags (-j / --keep-going).
@@ -1188,8 +1189,7 @@ mod tests {
         assert!(!strs.contains(&"-j".to_string()));
         // dry-run also carries --arg passthrough (main.rs dry-run shares
         // the --arg flag), so the override reaches the preview too.
-        assert!(strs.contains(&"--arg".to_string()));
-        assert!(strs.contains(&"min_quality=30".to_string()));
+        assert!(strs.contains(&"--arg=min_quality=30".to_string()));
     }
 
     #[test]
@@ -1204,7 +1204,9 @@ mod tests {
             &flags,
         );
         assert!(
-            !args.iter().any(|a| a == "--arg"),
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy().starts_with("--arg")),
             "empty overrides must not emit --arg: {args:?}"
         );
     }
