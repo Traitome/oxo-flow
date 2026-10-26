@@ -377,6 +377,53 @@ async fn create_run_keeps_the_stable_missing_toml_error() {
     assert_eq!(body["message"], "toml_content required", "{body}");
 }
 
+#[tokio::test]
+async fn create_run_accepts_include_files_and_config_overrides() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // The CLI→web milestone fields: [[include]] sources staged beside the
+    // workflow, config overrides passed through as `--arg KEY=VALUE`. The
+    // run itself is a dry-run, so nothing executes — the point is that the
+    // typed contract accepts both fields end to end (staging happens before
+    // the spawn; a 200 means the include files parsed, validated, and were
+    // written).
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "dry_run": true,
+            "include_files": {"envs/pixi.toml": "[env]\n"},
+            "config_overrides": ["min_quality=30"],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["run_id"].as_str().is_some(), "{body}");
+}
+
+#[tokio::test]
+async fn create_run_rejects_include_files_absolute_paths() {
+    ensure_db().await;
+    let app = server::build_router("personal");
+
+    // Absolute-path keys would escape the run sandbox — rejected with the
+    // structured INVALID_INCLUDE_PATH code, never staged.
+    let (status, body) = post(
+        &app,
+        "/api/runs",
+        json!({
+            "toml_content": VALID_TOML,
+            "dry_run": true,
+            "include_files": {"/etc/passwd": "root:x:0:0"},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "INVALID_INCLUDE_PATH", "{body}");
+}
+
 // ---------------------------------------------------------------------------
 // F-6① — empty-body POSTs must not demand a JSON content type
 // ---------------------------------------------------------------------------

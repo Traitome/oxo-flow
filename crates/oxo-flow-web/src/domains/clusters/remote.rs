@@ -171,6 +171,7 @@ pub fn spawn_remote_run(
     cluster: ClusterRow,
     local_workdir: PathBuf,
     max_jobs: Option<usize>,
+    config_overrides: Vec<String>,
 ) {
     register_remote(&run_id, &cluster.id);
     tokio::spawn(async move {
@@ -250,16 +251,30 @@ pub fn spawn_remote_run(
         }
 
         // 2. write the per-run wrapper into the remote dir and launch under
-        //    nohup. The wrapper name is unique (pkill target).
+        //    nohup. The wrapper name is unique (pkill target). Config
+        //    overrides ride `--arg=KEY=VALUE` in equals form (single-quoted
+        //    per token by shell_quote) so the remote run sees the same
+        //    values the web caller passed — equals form survives
+        //    hyphen-leading values, and the CLI's declared-key gate still
+        //    applies remotely.
         let wrapper = format!("run-{run_id}.sh");
-        let launch_script = format!(
-            "cd {remote_dir_q} && printf '%s\\n' '#!/bin/sh' 'oxo-flow run workflow.oxoflow --workdir .{jobs} > execution.log 2>&1' 'echo $? > .exit-code' > {wrapper_q} && nohup sh {wrapper_q} >/dev/null 2>&1 & echo launched",
-            remote_dir_q = shell_quote(&remote_dir),
-            wrapper_q = shell_quote(&wrapper),
+        let mut run_cmd = format!(
+            "oxo-flow run workflow.oxoflow --workdir .{jobs}",
             jobs = match max_jobs {
                 Some(j) => format!(" -j {j}"),
                 None => String::new(),
-            },
+            }
+        );
+        for kv in &config_overrides {
+            run_cmd.push_str(" --arg=");
+            run_cmd.push_str(&shell_quote(kv));
+        }
+        run_cmd.push_str(" > execution.log 2>&1");
+        let launch_script = format!(
+            "cd {remote_dir_q} && printf '%s\\n' '#!/bin/sh' {run_cmd_q} 'echo $? > .exit-code' > {wrapper_q} && nohup sh {wrapper_q} >/dev/null 2>&1 & echo launched",
+            remote_dir_q = shell_quote(&remote_dir),
+            wrapper_q = shell_quote(&wrapper),
+            run_cmd_q = shell_quote(&run_cmd),
         );
         match remote_exec(&cluster, &launch_script).await {
             Ok((0, out)) => tracing::info!("remote launch for {run_id}: {out}"),

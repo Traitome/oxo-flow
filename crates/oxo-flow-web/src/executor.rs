@@ -295,6 +295,10 @@ pub struct RunFlags {
     /// resume_failed, this makes the retry actually execute the failed set
     /// (their outputs exist, so freshness alone would skip them again).
     pub rerun: bool,
+    /// CLI config overrides appended verbatim as trailing `KEY=VALUE` argv
+    /// entries — all override semantics (declared-key gate, canonicalization,
+    /// unknown-key warnings) live inside the CLI. Empty = none.
+    pub config_overrides: Vec<String>,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -328,6 +332,14 @@ pub fn build_cli_args(
             args.push("-t".into());
             args.push(target.into());
         }
+        // dry-run shares the --arg KEY=VALUE surface with run (main.rs).
+        // Equals form keeps hyphen-leading VALUES out of clap's flag
+        // parser — a space-form `--arg -x` would be eaten as a flag and
+        // kill the spawn at argv level instead of reaching the CLI's
+        // targeted declared-key gate.
+        for kv in &flags.config_overrides {
+            args.push(format!("--arg={kv}").into());
+        }
     } else {
         if flags.keep_going {
             args.push("--keep-going".into());
@@ -349,6 +361,13 @@ pub fn build_cli_args(
         for target in &flags.targets {
             args.push("-t".into());
             args.push(target.into());
+        }
+        // Config overrides ride the shared `--arg KEY=VALUE` flag in
+        // equals form (mirrors the CLI's own flag/positional merge in
+        // main.rs); equals form survives hyphen-leading values, and the
+        // CLI's declared-key gate and canonicalization still apply.
+        for kv in &flags.config_overrides {
+            args.push(format!("--arg={kv}").into());
         }
     }
     args
@@ -1122,6 +1141,7 @@ mod tests {
             max_jobs: Some(4),
             samples: vec!["S1".into(), "S2".into()],
             targets: vec!["align".into()],
+            config_overrides: vec!["min_quality=30".into()],
         };
         let args = build_cli_args(
             std::path::Path::new("wf.oxoflow"),
@@ -1141,6 +1161,10 @@ mod tests {
         );
         assert!(strs.contains(&"-t".to_string()));
         assert!(strs.contains(&"align".to_string()));
+        // Config overrides ride the shared `--arg KEY=VALUE` flag in equals
+        // form in both branches — the CLI's declared-key gate still applies
+        // at run time, and equals form survives hyphen-leading values.
+        assert!(strs.contains(&"--arg=min_quality=30".to_string()));
         // dry-run shares --samples/-t (issue #79 P2: the preview dropped
         // them) and asks for the machine-readable instance-level plan,
         // but omits execution-only flags (-j / --keep-going).
@@ -1163,6 +1187,28 @@ mod tests {
         assert!(strs.contains(&"align".to_string()));
         assert!(!strs.contains(&"--keep-going".to_string()));
         assert!(!strs.contains(&"-j".to_string()));
+        // dry-run also carries --arg passthrough (main.rs dry-run shares
+        // the --arg flag), so the override reaches the preview too.
+        assert!(strs.contains(&"--arg=min_quality=30".to_string()));
+    }
+
+    #[test]
+    fn build_cli_args_empty_overrides_emit_nothing() {
+        let flags = RunFlags {
+            config_overrides: vec![],
+            ..RunFlags::default()
+        };
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &flags,
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy().starts_with("--arg")),
+            "empty overrides must not emit --arg: {args:?}"
+        );
     }
 
     #[test]

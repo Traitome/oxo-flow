@@ -90,6 +90,22 @@ pub struct CreateRunRequest {
     pub samples: Option<Vec<String>>,
     #[serde(default)]
     pub targets: Option<Vec<String>>,
+    /// Secondary workflow files ([[include]] sources) keyed by their
+    /// workflow-relative path, e.g. `{"envs/clinical/pixi.toml": "..."}`.
+    /// Keys are validated as relative workspace paths (no absolute paths,
+    /// no `..`, not `workflow.oxoflow` itself) and written beside
+    /// `workflow.oxoflow` in the run directory, where the CLI's
+    /// `resolve_includes` resolves them unchanged. `BTreeMap` keeps the
+    /// persisted staging order-independent.
+    #[serde(default)]
+    pub include_files: Option<std::collections::BTreeMap<String, String>>,
+    /// CLI config overrides passed through to the spawned run as
+    /// `KEY=VALUE` argv entries (`--arg`/positional semantics live inside
+    /// the CLI). Each entry must be a non-empty `KEY=VALUE` string; the
+    /// CLI warns on unknown keys and hard-fails on invalid values for
+    /// declared keys.
+    #[serde(default)]
+    pub config_overrides: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -343,6 +359,8 @@ mod tests {
             "pipeline_id": "p1",
             "samples": ["S1"],
             "targets": [],
+            "include_files": {"envs/clinical/pixi.toml": "[env]"},
+            "config_overrides": ["min_quality=30"],
         });
         let back: CreateRunRequest = serde_json::from_value(json).unwrap();
         assert_eq!(back.toml_content, "[workflow]\nname = \"x\"");
@@ -350,6 +368,28 @@ mod tests {
         assert_eq!(back.max_jobs, Some(4));
         assert_eq!(back.dry_run, Some(true));
         assert_eq!(back.samples.as_deref(), Some(&["S1".to_string()][..]));
+        assert_eq!(
+            back.include_files
+                .as_ref()
+                .and_then(|m| m.get("envs/clinical/pixi.toml")),
+            Some(&"[env]".to_string())
+        );
+        assert_eq!(
+            back.config_overrides.as_deref(),
+            Some(&["min_quality=30".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn test_create_run_request_defaults() {
+        // Both new fields are optional with serde defaults — an older
+        // client payload (no include_files / config_overrides) must keep
+        // parsing so the API stays backward-compatible.
+        let back: CreateRunRequest =
+            serde_json::from_value(serde_json::json!({"toml_content": "[workflow]\nname = \"x\""}))
+                .unwrap();
+        assert!(back.include_files.is_none());
+        assert!(back.config_overrides.is_none());
     }
 
     #[test]
