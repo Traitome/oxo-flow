@@ -2501,8 +2501,8 @@ The engine closes that gap in two layers (issues #882/#883):
 
 - **Baked inputs** — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
-  paths (`expand_inputs entries dropped: producers skipped by
-  when-condition`). The comparison expands `{config.*}` tokens on both
+  paths (`expand_inputs entries dropped: no live producer instance
+  declares these paths`). The comparison expands `{config.*}` tokens on both
   sides (recorded producer outputs keep them raw), so patterns written as
   `ref_{config.genome}.fai` drop correctly too. The full list stays in
   `expand_inputs_baked` provenance (config-expanded, matching how the
@@ -2518,21 +2518,29 @@ The engine closes that gap in two layers (issues #882/#883):
   the plan: the executor evaluates its `when` and counts it as skipped
   exactly once.
 
-The baked-input drop is **per path**: it does not check whether a second,
-surviving rule also declares the identical output path (the duplicate-owner
-shape lint [W033](../commands/lint.md) warns about). In that corner the
-surviving producer's file is dropped from the baked list too, even though
-the DAG-level plan still keeps the consumer plannable (one surviving
-producer of the input group is enough) — so the command would see fewer
-`{input}` entries than exist. Avoid `expand_inputs` over an output path
-that two rules both declare; when one owner is when-gated, list the input
-directly or fan out with a pattern that only the surviving owner produces.
-On the `run` side the same shared-path shape no longer gates preflight:
-a missing input whose only remaining producer instance was vetoed by its
-`when` at fan-out is exempt from the missing-source gate (issue #915) —
-expansion records vetoed instances' declared outputs in
-`when_skipped_outputs` (#882) and the gate exempts any missing pattern
-found there, config-expanded at compare time so `{config.*}`-bearing
+The baked-input drop is **live-producer aware** (issue #931): a recorded
+when-skipped path is dropped from the baked input list only when no live
+final-DAG instance declares the same path. Complementary when-gated
+producer twins (e.g. paired-mode `mutect2` and tumor-only `mutect2_tumoronly`
+declaring the identical `calls.vcf.gz`) are the norm for this shape — the
+vetoed twin's record must not drop entries its live twin will fulfill. When
+an entry IS dropped (the path has no live producer anywhere in the DAG), it
+stays in `expand_inputs_baked` as provenance for snapshot invalidation.
+
+If EVERY expanded entry is dropped, the consumer would execute with empty
+`{input}` args — planning fails instead with a validation error naming the
+rule (issue #931). Fix the producer's `when`-condition/config so a live
+instance covers the paths, or give the consumer a fallback input.
+
+Avoid `expand_inputs` over an output path that two rules both declare
+unless the twins are complementary when-gates (the duplicate-owner shape
+lint [W033](../commands/lint.md) warns about other shapes). On the `run`
+side a missing input whose only remaining producer instance was vetoed by
+its `when` at fan-out is exempt from the missing-source gate (issue #915)
+— expansion records vetoed instances' declared outputs in
+`when_skipped_outputs` (#882, including deferred `output_pattern` consumer
+combos vetoed at runtime instantiation) and the gate exempts any missing
+pattern found there, config-expanded at compare time so `{config.*}`-bearing
 recorded patterns match their expanded gate forms. The file belongs to a
 rule that will never run in this cohort.
 

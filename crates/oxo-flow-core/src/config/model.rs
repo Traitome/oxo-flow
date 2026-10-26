@@ -1983,16 +1983,21 @@ pub struct WorkflowConfig {
     pub expansion_pairs: HashMap<String, crate::wildcard::WildcardValues>,
 
     /// Engine-internal: concrete output paths of rule instances skipped by
-    /// an instance-level `when` gate during expansion (issues #882/#883).
+    /// an instance-level `when` gate during expansion (issues #882/#883)
+    /// — including deferred `output_pattern` consumer combos vetoed at
+    /// runtime instantiation (issue #931 plan/run parity).
     ///
-    /// When a pair/group/value instance fails its baked `when` condition,
-    /// the instance never enters the DAG — but `materialize_expand_inputs`
-    /// would still bake the absent paths into a consumer's `input` from the
-    /// `expand_inputs` pattern, leaving a dead literal the shell trips over.
-    /// Paths recorded here are dropped from the baked input list (with a
-    /// warning) while [`Rule::expand_inputs_baked`](crate::rule::Rule::expand_inputs_baked)
-    /// keeps the full provenance for snapshot invalidation. Never
-    /// serialized — user TOML cannot set it.
+    /// When an instance fails its baked `when` condition, the instance
+    /// never enters the DAG — but `materialize_expand_inputs` would still
+    /// bake the absent paths into a consumer's `input` from the
+    /// `expand_inputs` pattern, leaving a dead literal the shell trips
+    /// over. A recorded path is dropped from the baked input list (with a
+    /// warning) ONLY when no live final-DAG instance declares the same
+    /// path (#931: complementary when-gated twins may declare identical
+    /// outputs — the vetoed twin's record must not drop entries its live
+    /// twin fulfills); the full provenance list survives in
+    /// [`Rule::expand_inputs_baked`](crate::rule::Rule::expand_inputs_baked).
+    /// Never serialized — user TOML cannot set it.
     #[serde(skip)]
     pub when_skipped_outputs: std::collections::HashSet<String>,
 
