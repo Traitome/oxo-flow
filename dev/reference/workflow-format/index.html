@@ -9501,8 +9501,8 @@ The engine closes that gap in two layers (issues #882/#883):</p>
 <ul>
 <li><strong>Baked inputs</strong> — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
-  paths (<code>expand_inputs entries dropped: producers skipped by
-  when-condition</code>). The comparison expands <code>{config.*}</code> tokens on both
+  paths (<code>expand_inputs entries dropped: no live producer instance
+  declares these paths</code>). The comparison expands <code>{config.*}</code> tokens on both
   sides (recorded producer outputs keep them raw), so patterns written as
   <code>ref_{config.genome}.fai</code> drop correctly too. The full list stays in
   <code>expand_inputs_baked</code> provenance (config-expanded, matching how the
@@ -9518,21 +9518,27 @@ The engine closes that gap in two layers (issues #882/#883):</p>
   the plan: the executor evaluates its <code>when</code> and counts it as skipped
   exactly once.</li>
 </ul>
-<p>The baked-input drop is <strong>per path</strong>: it does not check whether a second,
-surviving rule also declares the identical output path (the duplicate-owner
-shape lint <a href="../../commands/lint/">W033</a> warns about). In that corner the
-surviving producer's file is dropped from the baked list too, even though
-the DAG-level plan still keeps the consumer plannable (one surviving
-producer of the input group is enough) — so the command would see fewer
-<code>{input}</code> entries than exist. Avoid <code>expand_inputs</code> over an output path
-that two rules both declare; when one owner is when-gated, list the input
-directly or fan out with a pattern that only the surviving owner produces.
-On the <code>run</code> side the same shared-path shape no longer gates preflight:
-a missing input whose only remaining producer instance was vetoed by its
-<code>when</code> at fan-out is exempt from the missing-source gate (issue #915) —
-expansion records vetoed instances' declared outputs in
-<code>when_skipped_outputs</code> (#882) and the gate exempts any missing pattern
-found there, config-expanded at compare time so <code>{config.*}</code>-bearing
+<p>The baked-input drop is <strong>live-producer aware</strong> (issue #931): a recorded
+when-skipped path is dropped from the baked input list only when no live
+final-DAG instance declares the same path. Complementary when-gated
+producer twins (e.g. paired-mode <code>mutect2</code> and tumor-only <code>mutect2_tumoronly</code>
+declaring the identical <code>calls.vcf.gz</code>) are the norm for this shape — the
+vetoed twin's record must not drop entries its live twin will fulfill. When
+an entry IS dropped (the path has no live producer anywhere in the DAG), it
+stays in <code>expand_inputs_baked</code> as provenance for snapshot invalidation.</p>
+<p>If EVERY expanded entry is dropped, the consumer would execute with empty
+<code>{input}</code> args — planning fails instead with a validation error naming the
+rule (issue #931). Fix the producer's <code>when</code>-condition/config so a live
+instance covers the paths, or give the consumer a fallback input.</p>
+<p>Avoid <code>expand_inputs</code> over an output path that two rules both declare
+unless the twins are complementary when-gates (the duplicate-owner shape
+lint <a href="../../commands/lint/">W033</a> warns about other shapes). On the <code>run</code>
+side a missing input whose only remaining producer instance was vetoed by
+its <code>when</code> at fan-out is exempt from the missing-source gate (issue #915)
+— expansion records vetoed instances' declared outputs in
+<code>when_skipped_outputs</code> (#882, including deferred <code>output_pattern</code> consumer
+combos vetoed at runtime instantiation) and the gate exempts any missing
+pattern found there, config-expanded at compare time so <code>{config.*}</code>-bearing
 recorded patterns match their expanded gate forms. The file belongs to a
 rule that will never run in this cohort.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a><span class="k">[[pairs]]</span>
