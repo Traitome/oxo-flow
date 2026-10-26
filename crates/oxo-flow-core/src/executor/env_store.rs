@@ -73,9 +73,9 @@ impl StoreKind {
     /// This is the path the *spec itself* names: pixi's spec is the
     /// manifest file, so the materialized dir is the manifest's parent
     /// (`.pixi` lives beside `pixi.toml`); venv's spec is the target dir.
-    /// Relative specs are resolved against `base` (already-absolute by the
-    /// time `ensure_environment_ready` calls in — `resolve_relative_paths`
-    /// anchored them at the workflow root).
+    /// Relative specs resolve against `base` — the caller passes the setup
+    /// cwd (the workdir), which is where `pixi install --manifest-path` /
+    /// `python -m venv` actually materialize the env.
     pub fn in_tree_path(self, spec: &str, base: Option<&Path>) -> PathBuf {
         let raw = Path::new(spec);
         if raw.is_absolute() {
@@ -86,8 +86,16 @@ impl StoreKind {
                 Self::Venv => raw.to_path_buf(),
             }
         } else {
+            // Resolve ONCE against the base, then dispatch on the joined
+            // path — no recursion. (An earlier implementation recursed with
+            // `base` dropped after the join: "." + relative is never
+            // absolute, so a relative spec with no base overflowed the
+            // thread stack at ~11.7K frames instead of resolving.)
             let joined = base.unwrap_or(Path::new(".")).join(raw);
-            self.in_tree_path(&joined.to_string_lossy(), None)
+            match self {
+                Self::Pixi => joined.parent().unwrap_or(Path::new(".")).join(".pixi"),
+                Self::Venv => joined,
+            }
         }
     }
 
@@ -628,6 +636,25 @@ mod tests {
         assert_eq!(
             StoreKind::Pixi.in_tree_path("/abs/envs/pixi.toml", None),
             PathBuf::from("/abs/envs/.pixi")
+        );
+        // Issue #928: a relative spec with base=None must terminate and
+        // resolve against the process cwd — this shape used to recurse
+        // forever (stack overflow on the second pixi rule instance).
+        assert_eq!(
+            StoreKind::Pixi.in_tree_path("envs/pixi.toml", None),
+            PathBuf::from("./envs/.pixi")
+        );
+        assert_eq!(
+            StoreKind::Venv.in_tree_path(".venv", None),
+            PathBuf::from("./.venv")
+        );
+        assert_eq!(
+            StoreKind::Venv.in_tree_path(".venv", Some(Path::new("/run"))),
+            PathBuf::from("/run/.venv")
+        );
+        assert_eq!(
+            StoreKind::Pixi.in_tree_path("envs/pixi.toml", Some(Path::new("/run"))),
+            PathBuf::from("/run/envs/.pixi")
         );
     }
 
