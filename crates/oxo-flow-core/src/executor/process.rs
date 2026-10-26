@@ -898,12 +898,16 @@ impl LocalExecutor {
         // in-tree path becomes a symlink into it. Everything below is
         // best-effort: a store failure falls back to the plain in-tree env.
         let store_kind = super::env_store::StoreKind::from_spec(env_spec);
-        // In-tree base for the store-managed kinds: pixi specs are already
-        // absolute (anchored at the workflow root above), venv specs stay
-        // relative by design (`resolve_relative_paths` does not touch them)
-        // and resolve against the setup cwd — the workdir.
+        // In-tree base for the store-managed kinds: pixi specs stay
+        // relative here (anchoring at the workflow root happens above only
+        // when a `--workdir` override is active) — pass the setup cwd (the
+        // workdir) so the in-tree probe resolves exactly where
+        // `pixi install --manifest-path` / `python -m venv` materialize,
+        // independent of the process cwd (#928).
         let store_base: Option<&std::path::Path> = match store_kind {
-            Some(super::env_store::StoreKind::Venv) => Some(self.config.workdir.as_path()),
+            Some(super::env_store::StoreKind::Pixi) | Some(super::env_store::StoreKind::Venv) => {
+                Some(self.config.workdir.as_path())
+            }
             _ => None,
         };
         if self.env_resolver.cache_is_ready(&key).await {
