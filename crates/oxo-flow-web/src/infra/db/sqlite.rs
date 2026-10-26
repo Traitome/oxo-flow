@@ -122,6 +122,7 @@ impl SqliteBackend {
                 dry_run INTEGER NOT NULL DEFAULT 0,
                 pid INTEGER,
                 workdir TEXT,
+                config_overrides TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -207,6 +208,7 @@ impl StorageBackend for SqliteBackend {
                 dry_run INTEGER NOT NULL DEFAULT 0,
                 pid INTEGER,
                 workdir TEXT,
+                config_overrides TEXT,
                 started_at TEXT,
                 finished_at TEXT,
                 created_at TEXT NOT NULL,
@@ -390,6 +392,13 @@ impl StorageBackend for SqliteBackend {
         // Migration: dry_run flag for plan-only runs (issue #907 P3-14) —
         // historical rows default to 0 (not a dry run).
         sqlx::query("ALTER TABLE runs ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await
+            .ok();
+
+        // Migration: config overrides persisted per run (JSON array of
+        // KEY=VALUE strings) so retry re-executes with the same configuration.
+        sqlx::query("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
             .execute(&self.pool)
             .await
             .ok();
@@ -691,6 +700,7 @@ impl StorageBackend for SqliteBackend {
             dry_run: run.dry_run,
             pid: run.pid,
             workdir: run.workdir.clone(),
+            config_overrides: run.config_overrides.clone(),
             started_at: run.started_at.clone(),
             finished_at: run.finished_at.clone(),
             created_at: if run.created_at.is_empty() {
@@ -701,7 +711,7 @@ impl StorageBackend for SqliteBackend {
         };
 
         sqlx::query(
-            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.user_id)
@@ -713,6 +723,7 @@ impl StorageBackend for SqliteBackend {
         .bind(row.dry_run)
         .bind(row.pid)
         .bind(&row.workdir)
+        .bind(&row.config_overrides)
         .bind(&row.started_at)
         .bind(&row.finished_at)
         .bind(&row.created_at)
@@ -1315,6 +1326,7 @@ mod tests {
             dry_run: false,
             pid: None,
             workdir: Some("/tmp/workdir".to_string()),
+            config_overrides: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),
@@ -1542,6 +1554,7 @@ mod tests {
             dry_run: false,
             pid: None,
             workdir: None,
+            config_overrides: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             finished_at: None,
             created_at: String::new(),
@@ -1576,6 +1589,7 @@ mod tests {
                 dry_run: false,
                 pid: None,
                 workdir: None,
+                config_overrides: None,
                 started_at: None,
                 finished_at: None,
                 created_at: String::new(),

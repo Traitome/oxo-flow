@@ -68,6 +68,7 @@ async fn runs_schema_accepts_backend_insert() {
             dry_run: false,
             pid: None,
             workdir: None,
+            config_overrides: None,
             started_at: None,
             finished_at: None,
             created_at: String::new(),

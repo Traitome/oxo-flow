@@ -438,6 +438,34 @@ pub async fn create_run(
         ));
     }
 
+    // Validate BEFORE anything is persisted: `validate_config_overrides`
+    // and the two pure include-key gates below answer 400s, and a 400 must
+    // never leave a ghost `queued` runs row behind (PR #930 NIT-3). IO
+    // staging (mkdir/write) still happens after the row exists.
+    let validated_overrides = validate_config_overrides(&req)?;
+    let include_paths: Vec<(String, String)> = req
+        .include_files
+        .iter()
+        .flat_map(|m| m.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (rel, _) in &include_paths {
+        if rel == "workflow.oxoflow" {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_INCLUDE_PATH",
+                "include_files key 'workflow.oxoflow' would overwrite the main workflow".into(),
+            ));
+        }
+        if let Err(reason) = crate::workspace::check_relative_path(rel) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_INCLUDE_PATH",
+                format!("include_files key '{rel}' is not a valid relative path: {reason}"),
+            ));
+        }
+    }
+
     let resp = service::create_run(toml, &config, None)
         .map_err(|e| err(StatusCode::BAD_REQUEST, "RUN_ERROR", e))?;
 
@@ -492,13 +520,16 @@ pub async fn create_run(
             dry_run: config.dry_run.unwrap_or(false),
             pid: None,
             workdir: Some(run_dir.to_string_lossy().to_string()),
+            // Order-preserving JSON array (serde_json Vec serialization)
+            // so retry can replay the exact argv the client sent.
+            config_overrides: Some(serde_json::to_string(&validated_overrides).unwrap_or_default()),
             started_at: None,
             finished_at: None,
             created_at: now_iso(),
             workflow_name: Some(workflow_name),
         };
         if let Err(e) = sqlx::query(
-            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at, workflow_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.id)
         .bind(&run.user_id)
@@ -509,6 +540,7 @@ pub async fn create_run(
         .bind(run.dry_run)
         .bind(run.pid)
         .bind(&run.workdir)
+        .bind(&run.config_overrides)
         .bind(&run.started_at)
         .bind(&run.finished_at)
         .bind(&run.created_at)
@@ -529,36 +561,16 @@ pub async fn create_run(
             tracing::info!("Saved workflow to {:?}", workflow_path);
         }
 
-        // Config-override passthrough: light shape validation here (the
-        // CLI warns on unknown keys and hard-fails on invalid values for
-        // declared keys), full semantics stay inside the CLI.
-        let validated_overrides = validate_config_overrides(&req)?;
+        // Config-override passthrough: shape-validated above, before the
+        // row was persisted (PR #930 NIT-3); full semantics stay inside
+        // the CLI, which warns on unknown keys and hard-fails on invalid
+        // values for declared keys.
         // Write [[include]] source files beside workflow.oxoflow so the
         // CLI's `from_file` re-parse resolves them via resolve_includes —
         // the same machinery local `oxo-flow run` uses. Keys are
-        // workflow-relative workspace paths; the BTreeMap below keeps the
-        // persisted staging order-independent.
-        let include_paths: Vec<(String, String)> = req
-            .include_files
-            .iter()
-            .flat_map(|m| m.iter())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        // workflow-relative workspace paths, gated above; the staging loop
+        // below only performs the IO.
         for (rel, content) in &include_paths {
-            if rel == "workflow.oxoflow" {
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    "INVALID_INCLUDE_PATH",
-                    "include_files key 'workflow.oxoflow' would overwrite the main workflow".into(),
-                ));
-            }
-            if let Err(reason) = crate::workspace::check_relative_path(rel) {
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    "INVALID_INCLUDE_PATH",
-                    format!("include_files key '{rel}' is not a valid relative path: {reason}"),
-                ));
-            }
             let dest = run_dir.join(rel);
             if let Some(parent) = dest.parent()
                 && let Err(e) = tokio::fs::create_dir_all(parent).await
@@ -1490,6 +1502,16 @@ pub async fn retry_run(
     // plan, verified against the same single source of truth.
     let new_run_id = plan.new_run_id.clone();
     let now = now_iso();
+    // Replay the original run's config overrides (PR #930 NIT-8): a retry
+    // that dropped them would re-execute with default configuration while
+    // claiming to redo the same pipeline. Parse errors fall back to no
+    // overrides (the value only exists if a pre-check passed at create
+    // time, so this is a corrupted-row fallback, not a validation path).
+    let retry_overrides: Vec<String> = run
+        .config_overrides
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
     let new_run = models::RunRow {
         id: new_run_id.clone(),
         user_id: user.id.clone(),
@@ -1501,12 +1523,13 @@ pub async fn retry_run(
         dry_run: run.dry_run,
         pid: None,
         workdir: run.workdir.clone(),
+        config_overrides: run.config_overrides.clone(),
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
     };
     sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&new_run.id)
     .bind(&new_run.user_id)
@@ -1518,6 +1541,7 @@ pub async fn retry_run(
     .bind(new_run.dry_run)
     .bind(new_run.pid)
     .bind(&new_run.workdir)
+    .bind(&new_run.config_overrides)
     .bind(&new_run.started_at)
     .bind(&new_run.finished_at)
     .bind(&new_run.created_at)
@@ -1554,7 +1578,7 @@ pub async fn retry_run(
             targets: vec![],
             resume_failed: true,
             rerun: true,
-            config_overrides: vec![],
+            config_overrides: retry_overrides,
         },
     );
 
@@ -2583,12 +2607,16 @@ pub async fn resume_checkpoint(
         dry_run: run.dry_run,
         pid: None,
         workdir: Some(workdir.clone()),
+        // The resume subcommand has no --arg passthrough surface in
+        // spawn_background_run_with_args; the checkpointed workflow in the
+        // workdir already carries the original run's baked configuration.
+        config_overrides: None,
         started_at: None,
         finished_at: None,
         created_at: now.clone(),
     };
     sqlx::query(
-        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO runs (id, user_id, pipeline_id, pipeline_snapshot, workflow_name, status, phase, dry_run, pid, workdir, config_overrides, started_at, finished_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&new_run.id)
     .bind(&new_run.user_id)
@@ -2600,6 +2628,7 @@ pub async fn resume_checkpoint(
     .bind(new_run.dry_run)
     .bind(new_run.pid)
     .bind(&new_run.workdir)
+    .bind(&new_run.config_overrides)
     .bind(&new_run.started_at)
     .bind(&new_run.finished_at)
     .bind(&new_run.created_at)

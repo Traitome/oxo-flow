@@ -79,6 +79,7 @@ pub async fn init_db(database_url: &str) -> Result<()> {
             dry_run INTEGER NOT NULL DEFAULT 0,
             pid INTEGER,
             workdir TEXT,
+            config_overrides TEXT,
             started_at DATETIME,
             finished_at DATETIME,
             created_at DATETIME,
@@ -193,6 +194,13 @@ pub async fn init_db(database_url: &str) -> Result<()> {
     // Migration (issue #79 P1-06): password hashes for DB-created accounts.
     // Idempotent — safe to run on every init.
     sqlx::query("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        .execute(&pool)
+        .await
+        .ok();
+
+    // Migration: config overrides persisted per run (JSON array of KEY=VALUE
+    // strings) so retry re-executes with the same configuration. Idempotent.
+    sqlx::query("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
         .execute(&pool)
         .await
         .ok();
