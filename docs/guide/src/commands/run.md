@@ -525,9 +525,12 @@ Unknown module names fail with the known module list. `dry-run --module`
 previews the same set.
 
 The same when-awareness covers the preflight source gate on `-t`/`--module`
-runs: an input pattern whose only other producer is when-gated false (or
-whose would-be producer was skipped at expansion) does not gate the run —
-its file belongs to a rule that will never run in this cohort, not to a
+runs: a missing input whose only remaining producer instance was vetoed by
+its `when` at fan-out does not gate the run. Expansion records those vetoed
+instances' declared outputs in `when_skipped_outputs` (#882), and the gate
+exempts any missing pattern found there — config-expanded at compare time,
+so `{config.*}`-bearing recorded patterns match their expanded gate forms.
+The file belongs to a rule that will never run in this cohort, not to a
 dead source of the selected closure.
 
 ### Run directory layout
