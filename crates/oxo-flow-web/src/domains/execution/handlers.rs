@@ -99,6 +99,36 @@ fn quota_usage_for(toml: &str) -> (u32, u64) {
         .unwrap_or((1, 0))
 }
 
+/// Light shape gate for `config_overrides` (full semantics live in the
+/// CLI's `parse_cli_overrides`): each entry must be a non-empty KEY=VALUE
+/// string. Mirrors the CLI's `--arg KEY=VALUE` surface, which the executor
+/// appends to the spawned argv.
+fn validate_config_overrides(
+    req: &CreateRunRequest,
+) -> Result<Vec<String>, (StatusCode, Json<ApiError>)> {
+    let overrides = req.config_overrides.clone().unwrap_or_default();
+    for kv in &overrides {
+        if kv.is_empty() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_CONFIG_OVERRIDE",
+                "config_overrides entries must be non-empty KEY=VALUE strings".into(),
+            ));
+        }
+        match kv.split_once('=') {
+            Some((k, _)) if !k.trim_start_matches('-').is_empty() => {}
+            _ => {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_CONFIG_OVERRIDE",
+                    format!("config_overrides entry '{kv}' must be KEY=VALUE"),
+                ));
+            }
+        }
+    }
+    Ok(overrides)
+}
+
 #[cfg(test)]
 mod quota_tests {
     use super::*;
@@ -499,6 +529,64 @@ pub async fn create_run(
             tracing::info!("Saved workflow to {:?}", workflow_path);
         }
 
+        // Config-override passthrough: light shape validation here (the
+        // CLI enforces the declared-key gate and fails the run loudly on
+        // an unknown key), full semantics stay inside the CLI.
+        let validated_overrides = validate_config_overrides(&req)?;
+        // Write [[include]] source files beside workflow.oxoflow so the
+        // CLI's `from_file` re-parse resolves them via resolve_includes —
+        // the same machinery local `oxo-flow run` uses. Keys are
+        // workflow-relative workspace paths; BTreeMap iteration makes the
+        // persisted staging order-independent.
+        let mut include_paths: Vec<(String, String)> = req
+            .include_files
+            .iter()
+            .flat_map(|m| m.iter())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        include_paths.sort_by(|a, b| a.0.cmp(&b.0));
+        for (rel, content) in &include_paths {
+            if rel == "workflow.oxoflow" {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_INCLUDE_PATH",
+                    "include_files key 'workflow.oxoflow' would overwrite the main workflow".into(),
+                ));
+            }
+            if let Err(reason) = crate::workspace::check_relative_path(rel) {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_INCLUDE_PATH",
+                    format!("include_files key '{rel}' is not a valid relative path: {reason}"),
+                ));
+            }
+            let dest = run_dir.join(rel);
+            if let Some(parent) = dest.parent()
+                && let Err(e) = tokio::fs::create_dir_all(parent).await
+            {
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "RUN_ERROR",
+                    format!("Failed to create include directory: {e}"),
+                ));
+            }
+            if let Err(e) = tokio::fs::write(&dest, content).await {
+                tracing::error!("Failed to write include {rel} to {:?}: {e}", dest);
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "RUN_ERROR",
+                    format!("Failed to write include file '{rel}': {e}"),
+                ));
+            }
+        }
+        if !include_paths.is_empty() {
+            tracing::info!(
+                "Staged {} into {:?}",
+                oxo_flow_core::plural(include_paths.len(), "include file", "include files"),
+                run_dir
+            );
+        }
+
         // Stage the acting user's uploaded inputs into the run workspace
         // (issue #276 L1): `POST /api/files` writes to
         // `workspace/users/<u>/inputs/`, but the CLI executes in
@@ -557,6 +645,7 @@ pub async fn create_run(
                 cluster_row,
                 run_dir,
                 req.max_jobs,
+                validated_overrides,
             );
             return Ok(Json(resp));
         }
@@ -575,6 +664,7 @@ pub async fn create_run(
                 max_jobs: req.max_jobs,
                 samples: req.samples.unwrap_or_default(),
                 targets: req.targets.unwrap_or_default(),
+                config_overrides: validated_overrides,
             },
         );
     }
@@ -1465,6 +1555,7 @@ pub async fn retry_run(
             targets: vec![],
             resume_failed: true,
             rerun: true,
+            config_overrides: vec![],
         },
     );
 
