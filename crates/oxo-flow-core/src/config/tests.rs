@@ -2756,6 +2756,197 @@ shell = "true"
 }
 
 #[test]
+fn module_closure_resolves_complementary_when_gates_to_satisfiable_producer() {
+    // Issue #915 Bug 1: two rules share one output path behind
+    // complementary `when` gates. The gated-off rule's output must not
+    // claim the producer slot — the closure must wire the satisfiable
+    // sibling, and the gated-off template must not stay a member (its
+    // wildcard-gated instances never instantiated, so target resolution
+    // aborted with `rule not found`).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.oxoflow"),
+        r#"[workflow]
+name = "m"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+input = ["raw.fq"]
+output = ["out.bam"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[config]
+mode = "tumoronly"
+
+[[include]]
+path = "m.oxoflow"
+name = "mapper"
+inputs = ["raw.fq"]
+outputs = ["out.bam"]
+
+[[rules]]
+name = "fetch_paired"
+output = ["raw.fq"]
+when = "config.mode == 'paired'"
+shell = "true"
+
+[[rules]]
+name = "fetch_tumoronly"
+output = ["raw.fq"]
+when = "config.mode != 'paired'"
+shell = "true"
+"#;
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    let closure = config.module_closure("mapper").expect("module exists");
+    assert!(
+        closure.contains(&"fetch_tumoronly".to_string()),
+        "the satisfiable complementary-gate producer must join the closure: {closure:?}"
+    );
+    assert!(
+        !closure.contains(&"fetch_paired".to_string()),
+        "the when-false complementary-gate producer must stay out: {closure:?}"
+    );
+}
+
+#[test]
+fn module_closure_drops_wildcard_gated_member_templates() {
+    // Issue #915 Bug 1 (expansion half): a module member whose
+    // wildcard-gated instances were all pruned at fan-out has no node in
+    // the instantiated DAG — keeping the template name in the closure made
+    // `--module` abort with `rule not found`.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.oxoflow"),
+        r#"[workflow]
+name = "m"
+version = "1.0.0"
+
+[[rules]]
+name = "sv_paired"
+input = ["bam/{pair_id}.bam"]
+when = "wildcard.control != ''"
+output = ["sv/{pair_id}.tsv"]
+shell = "true"
+
+[[rules]]
+name = "sv_tumoronly"
+input = ["bam/{pair_id}.bam"]
+when = "wildcard.control == ''"
+output = ["sv/{pair_id}.tsv"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[[pairs]]
+pair_id = "Pt01"
+experiment = "Pt01-TD"
+
+[[include]]
+path = "m.oxoflow"
+name = "clinical"
+
+[[rules]]
+name = "bam"
+input = ["raw/{pair_id}.bam"]
+output = ["bam/{pair_id}.bam"]
+shell = "true"
+"#;
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+    let mut config = WorkflowConfig::from_file(&wf).unwrap();
+    config.apply_defaults();
+    config.expand_wildcards().unwrap();
+    let closure = config.module_closure("clinical").expect("module exists");
+    assert_eq!(
+        closure,
+        vec!["sv_tumoronly".to_string()],
+        "the gated-off template produced no instance and must be dropped; the surviving \
+         tumor-only template stays a member. The host pair-patterned producer joins \
+         through the DAG dependency machinery, not this closure: {closure:?}"
+    );
+}
+
+#[test]
+fn module_closure_keeps_when_true_members_and_skips_when_false_producers_only() {
+    // Guard rail for the #915 producer-map skip: a rule with NO `when` and
+    // a rule whose `when` evaluates TRUE keep their producer slots; the
+    // skip applies only to rules whose `when` evaluates false.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.oxoflow"),
+        r#"[workflow]
+name = "m"
+version = "1.0.0"
+
+[[rules]]
+name = "step"
+input = ["raw.fq"]
+output = ["out.bam"]
+shell = "true"
+"#,
+    )
+    .unwrap();
+    let host = r#"[workflow]
+name = "host"
+version = "1.0.0"
+
+[config]
+mode = "paired"
+
+[[include]]
+path = "m.oxoflow"
+name = "mapper"
+inputs = ["raw.fq"]
+outputs = ["out.bam"]
+
+[[rules]]
+name = "fetch_plain"
+output = ["raw.fq"]
+shell = "true"
+
+[[rules]]
+name = "fetch_when_true"
+output = ["raw2.fq"]
+when = "config.mode == 'paired'"
+shell = "true"
+
+[[rules]]
+name = "fetch_when_false"
+output = ["raw3.fq"]
+when = "config.mode != 'paired'"
+shell = "true"
+"#;
+    let wf = dir.path().join("host.oxoflow");
+    std::fs::write(&wf, host).unwrap();
+    let config = WorkflowConfig::from_file(&wf).unwrap();
+    let closure = config.module_closure("mapper").expect("module exists");
+    // fetch_plain wins the raw.fq slot (first declaration, never gated) —
+    // the module's declared input wires to it. fetch_when_true and
+    // fetch_when_false produce inputs no contract declares, so neither
+    // enters the closure directly; the when-false skip is exercised by
+    // module_closure_resolves_complementary_when_gates_to_satisfiable_producer
+    // (there the when-false sibling competes for the SAME slot).
+    assert!(closure.contains(&"fetch_plain".to_string()), "{closure:?}");
+    assert!(
+        !closure.contains(&"fetch_when_false".to_string()),
+        "when-false producers must not join the closure: {closure:?}"
+    );
+}
+
+#[test]
 fn include_from_git_repo_resolves_path_inside_checkout() {
     // Issue #112: includes may come from a pinned git repository
     // (repo + ref + path) — the versioned-module composition story.

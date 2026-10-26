@@ -1717,6 +1717,18 @@ fn missing_source_findings(
             )
         }
     });
+    // Would-be outputs of fan-out instances vetoed by their `when`,
+    // config-expanded at compare time: the record site (`expand_rule_patterns`,
+    // #882) expands only `\w+` wildcards and `{values.*}`, so `{config.*}`
+    // tokens stay raw in the set while the gate's patterns are expanded
+    // (issue #915 review).
+    let when_skipped: HashSet<String> = config
+        .when_skipped_outputs
+        .iter()
+        .map(|recorded| {
+            oxo_flow_core::executor::checkpoint::expand_config_in_path(recorded, wildcard_values)
+        })
+        .collect();
     let mut findings = Vec::new();
     for name in order {
         let Some(rule) = config.get_rule(name) else {
@@ -1758,6 +1770,14 @@ fn missing_source_findings(
             // Only external sources gate here — a missing pattern WITH a
             // producer belongs to the manifest/cascade path below.
             if dag.producer_of(&pattern).is_some() {
+                continue;
+            }
+            // Issue #915: a fan-out instance vetoed by its `when` never
+            // instantiates, so its declared outputs have no producer here —
+            // but they were recorded at expansion (#882). A missing input
+            // matching one of those recorded patterns belongs to a rule
+            // that will never run in this cohort, not to a dead source.
+            if when_skipped.contains(&pattern) {
                 continue;
             }
             // A bare relative input may resolve inside the sample_pattern
@@ -9283,6 +9303,153 @@ shell = "cat {{{{input}}}} > {{{{output}}}}"
         assert!(
             findings.is_empty(),
             "input present in the sample_pattern dir must not gate: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_input_of_when_false_shared_output_producer() {
+        // Issue #915 Bug 3 (complementary when gates on one shared output):
+        // in a tumor-only cohort the fanned paired instance is vetoed by its
+        // `when` at expansion, so `shared.txt` has NO producer in the DAG and
+        // no declaring rule survives in config.rules. The preflight gate must
+        // still not flag inputs that belong to the dead side of the
+        // complementary pair: expansion recorded the vetoed outputs in
+        // `when_skipped_outputs` (#882), and that exemption alone resolves
+        // this — mutation-detectable (deleting the clause fails the test).
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "sharedout"
+version = "1.0"
+
+[config]
+mode = "tumoronly"
+
+[[rules]]
+name = "consumer"
+input = ["shared.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Production-faithful post-expansion state: the paired instance was
+        // fully vetoed at fan-out — expansion removed it from config.rules
+        // AND recorded its outputs (so no DAG producer for shared.txt).
+        config.when_skipped_outputs.insert("shared.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("shared.txt").is_none(),
+            "fixture precondition: the vetoed side must leave shared.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "the gated-off producer's input must not gate the satisfiable consumer: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_pattern_recorded_in_when_skipped_outputs() {
+        // Issue #915 (expansion half): an instance vetoed at fan-out
+        // records its would-be outputs in when_skipped_outputs (#882).
+        // A consumer missing such a pattern must not gate — the producer
+        // never existed for this cohort by design.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "skipped"
+version = "1.0"
+
+[config]
+mode = "off"
+
+[[rules]]
+name = "consumer"
+input = ["morphed.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        config
+            .when_skipped_outputs
+            .insert("morphed.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        // The vetoed morph rule is gone from config.rules entirely (as a
+        // fully-vetoed fan-out leaves nothing behind), so the DAG has no
+        // producer for morphed.txt and the when_skipped_outputs exemption
+        // is the only path to an empty gate.
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        assert!(
+            dag.producer_of("morphed.txt").is_none(),
+            "fixture precondition: the vetoed producer must leave morphed.txt producerless"
+        );
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a when_skipped_outputs pattern must not gate its consumers: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_expands_config_tokens_in_when_skipped_outputs() {
+        // Issue #915 review NIT-1: the record site (#882) expands only `\w+`
+        // wildcards and `{values.*}`, so a `{config.*}`-bearing vetoed output
+        // stays RAW in when_skipped_outputs while the gate's patterns are
+        // config-expanded. The compare-time expansion must bridge that gap.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "cfgtoken"
+version = "1.0"
+
+[config]
+genome = "hg38"
+
+[[rules]]
+name = "consumer"
+input = ["ref_hg38.fai"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        // Recorded exactly as expand_rule_patterns leaves it: raw token.
+        config
+            .when_skipped_outputs
+            .insert("ref_{config.genome}.fai".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        let dag = WorkflowDag::from_rules_with_config(&config.rules, &wildcard_values).unwrap();
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a raw {{config.*}} recorded entry must match after compare-time expansion: {findings:?}"
         );
     }
 

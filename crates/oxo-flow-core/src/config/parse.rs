@@ -767,8 +767,37 @@ impl WorkflowConfig {
     /// elasticity): the module's own rules plus every HOST rule producing
     /// one of its declared concrete inputs. Upstream DAG dependents are
     /// added by the caller through the regular target machinery.
+    ///
+    /// When-aware (issue #915): two rules sharing one output path behind
+    /// complementary `when` gates resolve to the satisfiable one. A rule
+    /// whose template `when` evaluates false under the effective config is
+    /// skipped when building the producer map, and closure members whose
+    /// template no longer survives expansion (its wildcard-gated instances
+    /// were all pruned) are dropped — otherwise the caller enumerates a
+    /// target that cannot resolve in the instantiated DAG.
     pub fn module_closure(&self, module: &str) -> Option<Vec<String>> {
         let members = self.module_rules.get(module)?.clone();
+        let wildcard_values = self.config_placeholder_values();
+        // Producer map keys and contract inputs are `{config.*}`-expanded
+        // so a concrete contract input wires its producer even when that
+        // producer declares the same path through a config-routed output
+        // template (issue #468 — raw matching silently dropped the
+        // producer from the `--module` closure). When-false rules are
+        // excluded: their outputs will never exist in this configuration,
+        // so a satisfiable complementary-gate sibling must be the wired
+        // producer (issue #915).
+        let expand = |p: &str| crate::config::expand_config_vars_in_path(p, &self.config);
+        let mut producers: HashMap<String, String> = HashMap::new();
+        for rule in &self.rules {
+            if self.when_condition_false(rule, &wildcard_values) {
+                continue;
+            }
+            for out in rule.output.to_vec() {
+                producers
+                    .entry(expand(&out))
+                    .or_insert_with(|| rule.name.clone());
+            }
+        }
         let mut closure: Vec<String> = members.clone();
         // Declared concrete inputs the module needs wired in.
         for (idx, contract) in self.include_contracts.iter().enumerate() {
@@ -777,20 +806,6 @@ impl WorkflowConfig {
                 .any(|r| self.module_of.get(r).is_some_and(|p| *p == idx));
             if !module_uses_this_contract {
                 continue;
-            }
-            // Producer map keys and contract inputs are `{config.*}`-
-            // expanded so a concrete contract input wires its producer even
-            // when that producer declares the same path through a
-            // config-routed output template (issue #468 — raw matching
-            // silently dropped the producer from the `--module` closure).
-            let expand = |p: &str| crate::config::expand_config_vars_in_path(p, &self.config);
-            let mut producers: HashMap<String, String> = HashMap::new();
-            for rule in &self.rules {
-                for out in rule.output.to_vec() {
-                    producers
-                        .entry(expand(&out))
-                        .or_insert_with(|| rule.name.clone());
-                }
             }
             for input in &contract.inputs {
                 let expanded = expand(input);
@@ -805,6 +820,15 @@ impl WorkflowConfig {
                 }
             }
         }
+        // Wildcard-gated templates fan out into instances: a member whose
+        // template produced no surviving instance was gated off for this
+        // cohort (issue #915) and must not stay in the closure — the
+        // instantiated DAG has no node with that name, and target
+        // resolution would abort with `rule not found`.
+        closure.retain(|member| {
+            self.get_rule(member).is_some()
+                || self.expansion_templates.values().any(|t| t == member)
+        });
         Some(closure)
     }
 

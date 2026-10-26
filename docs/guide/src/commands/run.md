@@ -515,8 +515,23 @@ oxo-flow run main.oxoflow --module 20_germline --module 30_vcf_norm -t report
 
 The closure is: the module's rules + every host rule producing one of its
 declared concrete contract inputs; upstream DAG dependents come through
-the regular target machinery. Unknown module names fail with the known
-module list. `dry-run --module` previews the same set.
+the regular target machinery. The closure is **when-aware** (issue #915):
+two rules sharing one output path behind complementary `when` gates
+resolve to the satisfiable one — a rule whose template `when` evaluates
+false under the effective config never claims a producer slot, and a
+member whose wildcard-gated instances were all pruned at fan-out is
+dropped from the closure (its name has no node in the instantiated DAG).
+Unknown module names fail with the known module list. `dry-run --module`
+previews the same set.
+
+The same when-awareness covers the preflight source gate on `-t`/`--module`
+runs: a missing input whose only remaining producer instance was vetoed by
+its `when` at fan-out does not gate the run. Expansion records those vetoed
+instances' declared outputs in `when_skipped_outputs` (#882), and the gate
+exempts any missing pattern found there — config-expanded at compare time,
+so `{config.*}`-bearing recorded patterns match their expanded gate forms.
+The file belongs to a rule that will never run in this cohort, not to a
+dead source of the selected closure.
 
 ### Run directory layout
 
