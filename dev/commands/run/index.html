@@ -5304,8 +5304,22 @@ producers of its declared inputs:</p>
 </span></code></pre></div>
 <p>The closure is: the module's rules + every host rule producing one of its
 declared concrete contract inputs; upstream DAG dependents come through
-the regular target machinery. Unknown module names fail with the known
-module list. <code>dry-run --module</code> previews the same set.</p>
+the regular target machinery. The closure is <strong>when-aware</strong> (issue #915):
+two rules sharing one output path behind complementary <code>when</code> gates
+resolve to the satisfiable one — a rule whose template <code>when</code> evaluates
+false under the effective config never claims a producer slot, and a
+member whose wildcard-gated instances were all pruned at fan-out is
+dropped from the closure (its name has no node in the instantiated DAG).
+Unknown module names fail with the known module list. <code>dry-run --module</code>
+previews the same set.</p>
+<p>The same when-awareness covers the preflight source gate on <code>-t</code>/<code>--module</code>
+runs: a missing input whose only remaining producer instance was vetoed by
+its <code>when</code> at fan-out does not gate the run. Expansion records those vetoed
+instances' declared outputs in <code>when_skipped_outputs</code> (#882), and the gate
+exempts any missing pattern found there — config-expanded at compare time,
+so <code>{config.*}</code>-bearing recorded patterns match their expanded gate forms.
+The file belongs to a rule that will never run in this cohort, not to a
+dead source of the selected closure.</p>
 <h3 id="run-directory-layout">Run directory layout<a class="headerlink" href="#run-directory-layout" title="Permanent link">#</a></h3>
 <p>Each run leaves a directory you can navigate with ordinary tools:</p>
 <div class="language-console highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="go">.oxo-flow/runs/2026-08-17T14-30-05/   # `latest` symlinks to the newest</span>

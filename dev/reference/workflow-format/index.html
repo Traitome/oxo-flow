@@ -9522,7 +9522,15 @@ the DAG-level plan still keeps the consumer plannable (one surviving
 producer of the input group is enough) — so the command would see fewer
 <code>{input}</code> entries than exist. Avoid <code>expand_inputs</code> over an output path
 that two rules both declare; when one owner is when-gated, list the input
-directly or fan out with a pattern that only the surviving owner produces.</p>
+directly or fan out with a pattern that only the surviving owner produces.
+On the <code>run</code> side the same shared-path shape no longer gates preflight:
+a missing input whose only remaining producer instance was vetoed by its
+<code>when</code> at fan-out is exempt from the missing-source gate (issue #915) —
+expansion records vetoed instances' declared outputs in
+<code>when_skipped_outputs</code> (#882) and the gate exempts any missing pattern
+found there, config-expanded at compare time so <code>{config.*}</code>-bearing
+recorded patterns match their expanded gate forms. The file belongs to a
+rule that will never run in this cohort.</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a><span class="k">[[pairs]]</span>
 </span><span id="__span-88-2"><a id="__codelineno-88-2" name="__codelineno-88-2" href="#__codelineno-88-2"></a><span class="n">pair_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"P1"</span>
 </span><span id="__span-88-3"><a id="__codelineno-88-3" name="__codelineno-88-3" href="#__codelineno-88-3"></a><span class="n">experiment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"Pt01_T"</span>
