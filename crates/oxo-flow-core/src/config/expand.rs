@@ -1593,20 +1593,39 @@ impl WorkflowConfig {
                     *path = crate::wildcard::expand_values_namespace(path, bindings);
                 }
             }
+            // Baked entries are provenance literals for the input manifest
+            // (issue #757): checkpoint compares them against
+            // config-EXPANDED input patterns (`expand_config_in_path`), so
+            // `{config.*}` tokens must resolve here — `cartesian_expand`
+            // leaves dotted names raw (WILDCARD_RE never matches them).
+            for path in &mut expanded {
+                *path = expand_config_vars_in_path(path, &self.config);
+            }
             let mut current_input = rule.input.to_vec();
             // Provenance for the baked literals (issue #757): the input
             // manifest tolerates a baked path absent by design (an
             // aligner-gated producer skipped under the active config)
-            // instead of letting it poison the whole snapshot.
+            // instead of letting it poison the whole snapshot. Entries are
+            // config-expanded above so the manifest comparisons match.
             rule.expand_inputs_baked.extend(expanded.iter().cloned());
             // When-gated producer instances skipped during expansion
             // (#882/#883): their outputs never enter the DAG, so baking
             // them into `input` leaves a dead literal the shell trips
             // over. Drop those entries with a warning — the full list
-            // stays in `expand_inputs_baked` as provenance.
+            // stays in `expand_inputs_baked` as provenance. The recorded
+            // entries keep `{config.*}` tokens raw (`expand_rule_patterns`
+            // never matches dotted names), so the set is expanded at
+            // compare time on both sides — the baked/consumer paths are
+            // config-expanded above (mirrors the missing-source gate,
+            // issue #915 review).
+            let skipped_expanded: std::collections::HashSet<String> = self
+                .when_skipped_outputs
+                .iter()
+                .map(|recorded| expand_config_vars_in_path(recorded, &self.config))
+                .collect();
             let mut dropped = Vec::new();
             expanded.retain(|path| {
-                if self.when_skipped_outputs.contains(path) {
+                if skipped_expanded.contains(path) {
                     dropped.push(path.clone());
                     false
                 } else {
@@ -3141,4 +3160,75 @@ shell = "cat {input} > {output}"
     // Full provenance list keeps both entries (#757 snapshot machinery).
     assert!(cohort.expand_inputs_baked.contains("ascat/P1/purity.tsv"));
     assert!(cohort.expand_inputs_baked.contains("ascat/P2/purity.tsv"));
+}
+
+#[test]
+fn materialize_expand_inputs_drop_filter_expands_config_tokens() {
+    // Issue #915 review follow-up: `expand_rule_patterns` records
+    // when-skipped outputs with `{config.*}` tokens RAW (the dotted name
+    // never matches `WILDCARD_RE`), while the consumer's baked paths are
+    // config-expanded. The drop filter must expand the recorded entries at
+    // compare time, or the raw entry survives into `input` as a dead
+    // literal.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[config]
+genome = "hg38"
+
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+
+[[rules]]
+name = "index_ref"
+input = ["raw/{genome}.fa"]
+output = ["ref_{config.genome}.fai"]
+when = "wildcard.experiment == 'never'"
+shell = "touch {output}"
+
+[[rules]]
+name = "cohort"
+input = []
+expand_inputs = [
+  { pattern = "ref_{config.genome}.fai", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["cohort/summary.tsv"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    // Precondition: the only producer instance was vetoed, and the record
+    // keeps the raw token (this is the shape the drop filter must handle).
+    assert!(
+        config
+            .when_skipped_outputs
+            .contains("ref_{config.genome}.fai"),
+        "raw config-token entry must be recorded: {:?}",
+        config.when_skipped_outputs
+    );
+
+    let cohort = config
+        .rules
+        .iter()
+        .find(|r| r.name == "cohort")
+        .expect("cohort rule must exist");
+    // The baked path (config-expanded) matches the recorded entry only
+    // after compare-time expansion — it must be dropped from `input`.
+    assert!(
+        !cohort.input.to_vec().contains(&"ref_hg38.fai".to_string()),
+        "config-token when-skipped output must be dropped from input: {:?}",
+        cohort.input.to_vec()
+    );
+    // Provenance list still keeps it (#757).
+    assert!(cohort.expand_inputs_baked.contains("ref_hg38.fai"));
 }
