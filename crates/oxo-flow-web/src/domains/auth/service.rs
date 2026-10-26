@@ -310,6 +310,72 @@ pub async fn handle_oauth_callback(
     })
 }
 
+/// Ensure the canonical OAuth users row exists for this identity, returning
+/// the username the row carries.
+///
+/// Idempotent on the namespaced id: an existing row (re-login) is reused
+/// untouched. Otherwise the row is inserted with the provider display name;
+/// when that username is already taken — two ORCID accounts can legitimately
+/// share a given name, and INSERT OR IGNORE would then silently skip the row
+/// while the session still binds to the id — the insert is retried with a
+/// fallback username derived from the unique provider user id
+/// (`orcid:0000-0002-1825-0097`). The session must never outlive its user row:
+/// role resolution reads the row by id and fails closed (#516), so a skipped
+/// insert meant every subsequent request answered 401.
+pub async fn ensure_oauth_user(
+    pool: &sqlx::SqlitePool,
+    oauth_user_id: &str,
+    oauth_username: &str,
+    fallback_username: &str,
+) -> Result<String, String> {
+    if oauth_user_id.is_empty() || fallback_username.is_empty() {
+        return Err("OAuth identity is missing its unique id".into());
+    }
+
+    // Re-login: the row already exists, reuse it untouched.
+    let existing = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+        .bind(oauth_user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("OAuth user lookup failed: {e}"))?;
+    if let Some(name) = existing {
+        return Ok(name);
+    }
+
+    let insert = |username: &str| {
+        sqlx::query(
+            "INSERT INTO users (id, username, role, auth_type, os_user, created_at) \
+             VALUES (?, ?, 'user', 'oauth', '', ?)",
+        )
+        .bind(oauth_user_id)
+        .bind(username)
+        .bind(chrono::Utc::now().to_rfc3339())
+    };
+
+    match insert(oauth_username).execute(pool).await {
+        Ok(_) => Ok(oauth_username.to_string()),
+        Err(first_err) => {
+            // Not a username collision (DB down, schema drift, …): surface it.
+            let retry =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
+                    .bind(oauth_username)
+                    .fetch_one(pool)
+                    .await
+                    .map(|n| n > 0)
+                    .unwrap_or(false);
+            if !retry {
+                return Err(format!("Failed to create OAuth user record: {first_err}"));
+            }
+            // Collision on the display name: retry with the unique fallback.
+            insert(fallback_username)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to create OAuth user record: {e}"))?;
+            Ok(fallback_username.to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +507,71 @@ mod tests {
         let hash = hash_password("s3cret").expect("hash succeeds");
         assert!(verify_db_password("s3cret", &hash));
         assert!(!verify_db_password("wrong", &hash));
+    }
+
+    /// A one-connection in-memory users table (per-connection `sqlite::memory:`).
+    async fn users_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        sqlx::query(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, \
+             role TEXT NOT NULL, auth_type TEXT NOT NULL, os_user TEXT, \
+             password_hash TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_ensure_oauth_user_creates_and_reuses_row() {
+        let pool = users_pool().await;
+        let name = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Alice", "orcid:id-A")
+            .await
+            .expect("first insert succeeds");
+        assert_eq!(name, "orcid:Alice");
+
+        // Re-login: same id, untouched — even with a different display name.
+        let name = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Renamed", "orcid:id-A")
+            .await
+            .expect("re-login reuses the existing row");
+        assert_eq!(name, "orcid:Alice");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_oauth_user_same_display_name_both_rows_exist() {
+        // The reported bug: two provider accounts sharing a given name. Both
+        // must end up with a users row; neither may be silently skipped.
+        let pool = users_pool().await;
+        let first = ensure_oauth_user(&pool, "oauth:orcid:id-A", "orcid:Wei", "orcid:id-A")
+            .await
+            .expect("first account inserts");
+        let second = ensure_oauth_user(&pool, "oauth:orcid:id-B", "orcid:Wei", "orcid:id-B")
+            .await
+            .expect("second account falls back to its unique id");
+        assert_eq!(first, "orcid:Wei");
+        assert_eq!(
+            second, "orcid:id-B",
+            "collision falls back to the unique id"
+        );
+
+        let rows = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM users WHERE username = 'orcid:Wei' OR username = 'orcid:id-B'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 2, "both identities have a persisted row");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_oauth_user_missing_id_rejected() {
+        let pool = users_pool().await;
+        let result = ensure_oauth_user(&pool, "", "orcid:Wei", "orcid:").await;
+        assert!(result.is_err(), "empty id must fail closed");
     }
 }

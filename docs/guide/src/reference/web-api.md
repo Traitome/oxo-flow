@@ -700,6 +700,14 @@ The redirect URI is `OXO_FLOW_OAUTH_REDIRECT_URI` when set, with a fixed
 fallback of `http://localhost:3000/api/auth/oauth/callback` (see the
 environment table in `AGENTS.md`).
 
+The local user record is idempotent on the provider identity: the canonical
+users row is keyed by the namespaced id `oauth:{provider}:{provider_user_id}`
+(e.g. the ORCID iD), so re-login reuses the same row. Display names are NOT
+unique across provider accounts — two ORCID accounts can share a given name —
+so when a display name is already taken the row is persisted under a fallback
+username derived from the unique provider id (`{provider}:{provider_user_id}`);
+the login still succeeds and the session always resolves to a real user row.
+
 ---
 
 ## Collaboration (Phase 3)
