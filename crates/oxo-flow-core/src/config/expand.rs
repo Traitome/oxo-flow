@@ -1512,13 +1512,23 @@ impl WorkflowConfig {
         }
 
         // Apply gather injections and expand_inputs
+        // Live-producer outputs from the COMPLETE final rule set (issue
+        // #931): a recorded when-skipped output only drops from a
+        // consumer's expand_inputs when no instance anywhere in the DAG
+        // declares the same path — complementary when-gated twins make
+        // path equality the norm, not the exception.
+        let live_producer_outputs: std::collections::HashSet<String> = final_rules
+            .iter()
+            .flat_map(|rule| rule.output.to_vec())
+            .map(|o| expand_config_vars_in_path(&o, &self.config))
+            .collect();
         for rule in &mut final_rules {
             if let Some(injected) = gather_injections.get(&rule.name) {
                 let mut current_input = rule.input.to_vec();
                 current_input.extend(injected.clone());
                 rule.input = FilePatterns::List(current_input);
             }
-            self.materialize_expand_inputs(rule);
+            self.materialize_expand_inputs(rule, &live_producer_outputs)?;
         }
 
         self.rules = final_rules;
@@ -1554,7 +1564,24 @@ impl WorkflowConfig {
     /// Shared by the plan-time post-loop above and the runtime
     /// output_pattern-consumer instantiation, whose deferred templates
     /// never pass through the plan-time pass.
-    fn materialize_expand_inputs(&self, rule: &mut Rule) {
+    ///
+    /// `live_producer_outputs` lists every output path a rule instance in
+    /// the final DAG declares (config-expanded) — including the consumer's
+    /// own about-to-be-instantiated instance. A recorded when-skipped
+    /// output is only a dead literal when NO live instance produces the
+    /// same path (issue #931: complementary when-gated twins may declare
+    /// identical outputs; the vetoed twin's record must not drop entries
+    /// its live twin will fulfill).
+    ///
+    /// Fails planning when the rule declared `expand_inputs` but ends up
+    /// with zero concrete inputs (issue #931 Expected #3): executing with
+    /// empty args is never the right outcome — the consumer's shell would
+    /// immediately fail at runtime with a confusing downstream error.
+    fn materialize_expand_inputs(
+        &self,
+        rule: &mut Rule,
+        live_producer_outputs: &std::collections::HashSet<String>,
+    ) -> Result<()> {
         for exp in &rule.expand_inputs {
             // `{meta.<column>}` inside an expand_inputs pattern is never
             // resolved: per-instance metadata substitution has already run
@@ -1625,7 +1652,11 @@ impl WorkflowConfig {
                 .collect();
             let mut dropped = Vec::new();
             expanded.retain(|path| {
-                if skipped_expanded.contains(path) {
+                // #882/#883 drop, gated by #931 live-producer awareness: an
+                // entry survives when any final-DAG instance declares the
+                // same path — only a path with NO producer anywhere is a
+                // dead literal worth dropping.
+                if skipped_expanded.contains(path) && !live_producer_outputs.contains(path) {
                     dropped.push(path.clone());
                     false
                 } else {
@@ -1636,12 +1667,29 @@ impl WorkflowConfig {
                 tracing::warn!(
                     rule = %rule.name,
                     dropped = %dropped.join(", "),
-                    "expand_inputs entries dropped: producers skipped by when-condition (instances absent from the DAG)"
+                    "expand_inputs entries dropped: no live producer instance declares these paths (when-skipped and absent from the DAG)"
                 );
             }
             current_input.extend(expanded);
             rule.input = FilePatterns::List(current_input);
         }
+        // Issue #931 Expected #3: a consumer that declared expand_inputs
+        // but kept NOTHING after the live-producer drop filter would
+        // execute with empty args — fail planning instead.
+        if !rule.expand_inputs.is_empty() && rule.input.to_vec().is_empty() {
+            return Err(OxoFlowError::Validation {
+                message: format!(
+                    "rule '{}' declares expand_inputs but has zero concrete inputs — every expanded entry was dropped because no live producer instance declares the paths",
+                    rule.name
+                ),
+                rule: Some(rule.name.clone()),
+                suggestion: Some(
+                    "check the when-conditions of the producer rules this consumer expands over: either a producer instance should be live under the active config (fix its when-condition/config), or the consumer should declare a fallback input"
+                        .to_string(),
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Resolve one `expand_inputs` pattern's variable table: config
@@ -2738,6 +2786,14 @@ impl WorkflowConfig {
                             &combo_values,
                             self.base_dir.as_deref(),
                         ) {
+                            // Runtime veto records its would-be outputs
+                            // (plan-time parity): the deferred consumer's
+                            // expand_inputs drop filter reads this set, so a
+                            // genuinely absent instance must not leave dead
+                            // literals behind. Live-producer awareness lives
+                            // in the filter itself (issue #931).
+                            let skipped = expand_rule_patterns(&consumer.output, &merged);
+                            self.when_skipped_outputs.extend(skipped.to_vec());
                             continue;
                         }
                         baked_when = Some(baked);
@@ -2880,7 +2936,24 @@ impl WorkflowConfig {
         // `instance_bindings` see the same bindings the instance text was
         // baked from.
         self.expansion_values.insert(name.clone(), merged.clone());
-        self.materialize_expand_inputs(&mut instance);
+        // Live-producer outputs for the drop filter (issue #931): every
+        // rule already in the runtime set plus THIS instance (pushed
+        // below, after materialization). Config-expanded for path
+        // equality against the consumer's baked literals.
+        let mut live_producer_outputs: std::collections::HashSet<String> = self
+            .rules
+            .iter()
+            .flat_map(|rule| rule.output.to_vec())
+            .map(|o| expand_config_vars_in_path(&o, &self.config))
+            .collect();
+        live_producer_outputs.extend(
+            instance
+                .output
+                .to_vec()
+                .into_iter()
+                .map(|o| expand_config_vars_in_path(&o, &self.config)),
+        );
+        self.materialize_expand_inputs(&mut instance, &live_producer_outputs)?;
         // Readiness attribution (issue #63): the producer-pattern
         // wildcard bindings of this instance.
         let samples: Vec<String> = pattern_wildcards
@@ -3194,10 +3267,17 @@ when = "wildcard.experiment == 'never'"
 shell = "touch {output}"
 
 [[rules]]
+name = "live_producer"
+input = ["x.txt"]
+output = ["live/out.tsv"]
+shell = "touch {output}"
+
+[[rules]]
 name = "cohort"
 input = []
 expand_inputs = [
   { pattern = "ref_{config.genome}.fai", variables = { pair_id = "config.pairs_list" } },
+  { pattern = "live/out.tsv" },
 ]
 output = ["cohort/summary.tsv"]
 shell = "cat {input} > {output}"
@@ -3223,12 +3303,168 @@ shell = "cat {input} > {output}"
         .find(|r| r.name == "cohort")
         .expect("cohort rule must exist");
     // The baked path (config-expanded) matches the recorded entry only
-    // after compare-time expansion — it must be dropped from `input`.
+    // after compare-time expansion — it must be dropped from `input`
+    // (the live_producer entry keeps the rule from zero inputs, so
+    // planning succeeds).
     assert!(
         !cohort.input.to_vec().contains(&"ref_hg38.fai".to_string()),
         "config-token when-skipped output must be dropped from input: {:?}",
         cohort.input.to_vec()
     );
+    assert!(cohort.input.to_vec().contains(&"live/out.tsv".to_string()));
     // Provenance list still keeps it (#757).
     assert!(cohort.expand_inputs_baked.contains("ref_hg38.fai"));
+}
+
+#[test]
+fn materialize_expand_inputs_keeps_entries_with_live_producer() {
+    // Issue #931: complementary when-gated producer rules may declare the
+    // SAME output paths — the paired twin is vetoed at expansion (its
+    // `when` carries a wildcard term, so the veto records its outputs)
+    // while the tumor-only twin's instances ARE in the final DAG,
+    // producing exactly those paths. The drop filter matched by path
+    // equality against the vetoed union alone, so the consumer's
+    // expand_inputs entries were dropped and the aggregator ran with
+    // empty INPUT. An entry may only be dropped when NO final rule
+    // instance declares it as an output.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[config]
+tumor_only = "true"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+control = "N1"
+
+[[pairs]]
+pair_id = "P2"
+experiment = "T2"
+control = "N2"
+
+[[rules]]
+name = "call_paired"
+input = ["raw/{pair_id}/{experiment}.bam", "raw/{pair_id}/{control}.bam"]
+output = ["vcf.raw/{pair_id}/calls.vcf.gz"]
+when = "config.tumor_only != 'true' && wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "call_tumoronly"
+input = ["raw/{pair_id}/{experiment}.bam"]
+output = ["vcf.raw/{pair_id}/calls.vcf.gz"]
+when = "config.tumor_only == 'true'"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "gather"
+input = []
+expand_inputs = [
+  { pattern = "vcf.raw/{pair_id}/calls.vcf.gz", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["cohort/calls.vcf.gz"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    config.expand_wildcards().unwrap();
+
+    // Precondition: the vetoed paired twin recorded its outputs (the
+    // shape that previously dropped the entries unconditionally).
+    assert!(
+        config
+            .when_skipped_outputs
+            .contains("vcf.raw/P1/calls.vcf.gz"),
+        "vetoed paired twin must record its outputs: {:?}",
+        config.when_skipped_outputs
+    );
+
+    let gather = config
+        .rules
+        .iter()
+        .find(|r| r.name == "gather")
+        .expect("gather rule must exist");
+    // The live tumor-only instances produce the same paths — the entries
+    // must SURVIVE into `input` (the consumer schedules after them).
+    assert!(
+        gather
+            .input
+            .to_vec()
+            .contains(&"vcf.raw/P1/calls.vcf.gz".to_string()),
+        "entry with a live producer must stay in input: {:?}",
+        gather.input.to_vec()
+    );
+    assert!(
+        gather
+            .input
+            .to_vec()
+            .contains(&"vcf.raw/P2/calls.vcf.gz".to_string()),
+        "entry with a live producer must stay in input: {:?}",
+        gather.input.to_vec()
+    );
+    // Provenance keeps everything it ever baked (#757).
+    assert!(
+        gather
+            .expand_inputs_baked
+            .contains("vcf.raw/P1/calls.vcf.gz")
+    );
+}
+
+#[test]
+fn materialize_expand_inputs_zero_surviving_inputs_fails_planning() {
+    // Issue #931 Expected #3: when EVERY expand_inputs entry is dropped
+    // (no live producer declares the paths), the consumer would execute
+    // with empty args — planning must fail with a Validation error naming
+    // the rule instead.
+    let dir = tempfile::tempdir().unwrap();
+    let workflow_path = dir.path().join("wf.oxoflow");
+    std::fs::write(
+        &workflow_path,
+        r#"
+[workflow]
+name = "t"
+version = "1.0.0"
+
+[[pairs]]
+pair_id = "P1"
+experiment = "T1"
+
+[[rules]]
+name = "fit_purity"
+input = ["raw/{pair_id}.txt"]
+output = ["ascat/{pair_id}/purity.tsv"]
+when = "wildcard.control != ''"
+shell = "cp {input} {output}"
+
+[[rules]]
+name = "cohort"
+input = []
+expand_inputs = [
+  { pattern = "ascat/{pair_id}/purity.tsv", variables = { pair_id = "config.pairs_list" } },
+]
+output = ["cohort/summary.tsv"]
+shell = "cat {input} > {output}"
+"#,
+    )
+    .unwrap();
+    let mut config = WorkflowConfig::from_file(&workflow_path).unwrap();
+    // The only producer instance is vetoed (the pair has no `control`), so
+    // the consumer's sole expand_inputs entry is dropped — the rule would
+    // run with zero inputs. Planning must fail here, not at shell time.
+    let err = config
+        .expand_wildcards()
+        .expect_err("zero-input expand_inputs consumer must fail planning");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cohort") && msg.contains("zero concrete inputs"),
+        "error must name the rule and the zero-input condition: {msg}"
+    );
 }

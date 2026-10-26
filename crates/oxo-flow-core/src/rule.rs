@@ -1126,8 +1126,10 @@ pub struct Rule {
     /// (issue #757): provenance for the appended literals, so the input
     /// manifest can tolerate a baked path that is absent by design —
     /// e.g. an aligner-gated producer skipped under the active config —
-    /// without poisoning the whole snapshot. Engine-internal: not a
-    /// workflow authoring field.
+    /// without poisoning the whole snapshot. Entries dropped by the
+    /// live-producer-aware when-skip filter (#882/#883, #931) stay here:
+    /// an entry leaves `input` only when no live final-DAG instance
+    /// declares it. Engine-internal: not a workflow authoring field.
     #[serde(default)]
     #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub expand_inputs_baked: std::collections::BTreeSet<String>,
