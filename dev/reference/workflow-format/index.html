@@ -9502,8 +9502,12 @@ The engine closes that gap in two layers (issues #882/#883):</p>
 <li><strong>Baked inputs</strong> — output paths of when-skipped instances are dropped
   from the consumer's baked input list, with a warning naming the dropped
   paths (<code>expand_inputs entries dropped: producers skipped by
-  when-condition</code>). The full list stays in <code>expand_inputs_baked</code>
-  provenance, so snapshot invalidation still tracks every declared entry.</li>
+  when-condition</code>). The comparison expands <code>{config.*}</code> tokens on both
+  sides (recorded producer outputs keep them raw), so patterns written as
+  <code>ref_{config.genome}.fai</code> drop correctly too. The full list stays in
+  <code>expand_inputs_baked</code> provenance (config-expanded, matching how the
+  snapshot walks compare it), so snapshot invalidation still tracks every
+  declared entry.</li>
 <li><strong>Full-run plan</strong> — a consumer whose every producer of some input group
   was when-gated false (and whose inputs are not pre-built on disk and
   not <code>optional = "any"</code>) is pruned from the full-run execution plan with
