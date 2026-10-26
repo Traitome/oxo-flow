@@ -4472,6 +4472,13 @@ which level supplied each field. API keys are stored encrypted at rest
 <p>The redirect URI is <code>OXO_FLOW_OAUTH_REDIRECT_URI</code> when set, with a fixed
 fallback of <code>http://localhost:3000/api/auth/oauth/callback</code> (see the
 environment table in <code>AGENTS.md</code>).</p>
+<p>The local user record is idempotent on the provider identity: the canonical
+users row is keyed by the namespaced id <code>oauth:{provider}:{provider_user_id}</code>
+(e.g. the ORCID iD), so re-login reuses the same row. Display names are NOT
+unique across provider accounts — two ORCID accounts can share a given name —
+so when a display name is already taken the row is persisted under a fallback
+username derived from the unique provider id (<code>{provider}:{provider_user_id}</code>);
+the login still succeeds and the session always resolves to a real user row.</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
