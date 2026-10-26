@@ -460,6 +460,53 @@ impl WorkflowConfig {
         self.expansion_templates.get(instance).map(String::as_str)
     }
 
+    /// Whether the rule's `when` condition evaluates FALSE against the
+    /// merged config — the plan-time gate `run` applies (the same inputs
+    /// the CLI's `when_condition_false` used before delegating here; typed
+    /// config values win over string wildcard values; process.rs mirrors
+    /// this). `file_exists(...)` resolves against the workflow root
+    /// (issue #241). Rules with no `when` are never gated.
+    pub fn when_condition_false(
+        &self,
+        rule: &Rule,
+        wildcard_values: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        let Some(condition) = rule.when.as_deref() else {
+            return false;
+        };
+        let mut config_values: std::collections::HashMap<String, toml::Value> = self.config.clone();
+        for (k, v) in wildcard_values {
+            if let Some(key) = k.strip_prefix("config.") {
+                config_values
+                    .entry(key.to_string())
+                    .or_insert_with(|| toml::Value::String(v.clone()));
+            }
+        }
+        // Every rule output of this run is pending at plan time: an existing
+        // file at one of those paths is a previous run's leftover that the
+        // producer will overwrite, so its stale value must not decide the
+        // gate here (issue #282 review). The verdict is deferred (true) and
+        // re-checked at execution time.
+        let pending_outputs: Vec<String> = self
+            .rules
+            .iter()
+            .flat_map(|r| {
+                let mut outs = r.output.to_vec();
+                if let Some(p) = &r.output_pattern {
+                    outs.push(p.clone());
+                }
+                outs
+            })
+            .collect();
+        !crate::executor::process::evaluate_condition_with_wildcards_base_dir_and_pending_outputs(
+            condition,
+            &config_values,
+            &std::collections::HashMap::new(),
+            self.base_dir(),
+            &pending_outputs,
+        )
+    }
+
     /// Compute a SHA-256 checksum of the workflow configuration for reproducibility.
     ///
     /// The checksum is computed from a deterministic hash of the config,

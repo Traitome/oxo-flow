@@ -1760,6 +1760,25 @@ fn missing_source_findings(
             if dag.producer_of(&pattern).is_some() {
                 continue;
             }
+            // Issue #915: a shared output path behind complementary when
+            // gates leaves the losing producer's inputs unmaterialized in
+            // this cohort. The pattern has no DAG producer (the gated-off
+            // instance never instantiated), but a rule in the workflow
+            // declares it and its `when` evaluates false — the input
+            // belongs to a rule that will never run, not to this one.
+            let produced_when_false = config.rules.iter().any(|r| {
+                r.name != rule.name
+                    && (r.output.to_vec().contains(&pattern)
+                        || r.output_pattern.as_deref() == Some(pattern.as_str()))
+                    && crate::commands::run_preview::when_condition_false(
+                        r,
+                        config,
+                        wildcard_values,
+                    )
+            });
+            if produced_when_false || config.when_skipped_outputs.contains(&pattern) {
+                continue;
+            }
             // A bare relative input may resolve inside the sample_pattern
             // discovery directory rather than the workdir.
             let absolute = Path::new(&pattern).is_absolute();
@@ -9283,6 +9302,146 @@ shell = "cat {{{{input}}}} > {{{{output}}}}"
         assert!(
             findings.is_empty(),
             "input present in the sample_pattern dir must not gate: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_input_of_when_false_shared_output_producer() {
+        // Issue #915 Bug 3: two rules share one output path behind
+        // complementary when gates (the clinical_sv_fusions_paired /
+        // _tumoronly pattern). In a tumor-only cohort the gated-off
+        // paired instance never instantiates, so the shared path has NO
+        // DAG producer — but the gate must not flag the gated-off rule's
+        // inputs either: they belong to a rule that will never run.
+        // Mirrors post-expansion reality: the DAG is built from the
+        // surviving rules only (expansion removed the gated-off
+        // instance), while the gate still scans the full config.rules.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "sharedout"
+version = "1.0"
+
+[config]
+mode = "tumoronly"
+
+[[rules]]
+name = "consumer"
+input = ["shared.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "paired_producer"
+input = ["paired_only_upstream.txt"]
+output = ["shared.txt"]
+when = "config.mode == 'paired'"
+shell = "true"
+
+[[rules]]
+name = "tumoronly_producer"
+input = []
+output = ["shared.txt"]
+when = "config.mode != 'paired'"
+shell = "echo x > {output[0]}"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        let wildcard_values = config_placeholder_values(&config.config);
+        // Post-expansion the gated-off instance is absent from the rule
+        // set; keep it in config.rules (the gate's scan source) but drop
+        // it from the DAG exactly as expansion does.
+        let surviving: Vec<oxo_flow_core::rule::Rule> = config
+            .rules
+            .iter()
+            .filter(|r| {
+                !crate::commands::run_preview::when_condition_false(r, &config, &wildcard_values)
+            })
+            .cloned()
+            .collect();
+        let dag = WorkflowDag::from_rules_with_config(
+            &surviving,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "the gated-off producer's input must not gate the satisfiable consumer: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn missing_source_gate_skips_pattern_recorded_in_when_skipped_outputs() {
+        // Issue #915 (expansion half): an instance vetoed at fan-out
+        // records its would-be outputs in when_skipped_outputs (#882).
+        // A consumer missing such a pattern must not gate — the producer
+        // never existed for this cohort by design.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = r#"
+[workflow]
+name = "skipped"
+version = "1.0"
+
+[config]
+mode = "off"
+
+[[rules]]
+name = "consumer"
+input = ["morphed.txt"]
+output = ["final.txt"]
+shell = "cat {input} > {output[0]}"
+
+[[rules]]
+name = "morph"
+input = []
+output = ["morphed.txt"]
+when = "config.mode == 'on'"
+shell = "true"
+"#;
+        let mut config = config_with_rules(toml);
+        config.apply_defaults();
+        config
+            .when_skipped_outputs
+            .insert("morphed.txt".to_string());
+        let wildcard_values = config_placeholder_values(&config.config);
+        // Post-expansion the vetoed instance is absent from the rule set;
+        // drop it from the DAG exactly as expansion does, so the gate's
+        // `producer_of` early-out cannot fire and the when_skipped_outputs
+        // exemption is genuinely reached.
+        let surviving: Vec<oxo_flow_core::rule::Rule> = config
+            .rules
+            .iter()
+            .filter(|r| {
+                !crate::commands::run_preview::when_condition_false(r, &config, &wildcard_values)
+            })
+            .cloned()
+            .collect();
+        let dag = WorkflowDag::from_rules_with_config(
+            &surviving,
+            &config_placeholder_values(&config.config),
+        )
+        .unwrap();
+        let order = dag.execution_order().unwrap();
+        let findings = source_gate_call(
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            findings.is_empty(),
+            "a when_skipped_outputs pattern must not gate its consumers: {findings:?}"
         );
     }
 

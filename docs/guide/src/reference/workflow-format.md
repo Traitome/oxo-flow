@@ -2523,6 +2523,11 @@ producer of the input group is enough) — so the command would see fewer
 `{input}` entries than exist. Avoid `expand_inputs` over an output path
 that two rules both declare; when one owner is when-gated, list the input
 directly or fan out with a pattern that only the surviving owner produces.
+On the `run` side the same shared-path shape no longer gates preflight:
+a missing input whose only other producer is when-gated false (or whose
+would-be producer was skipped at expansion, recorded in
+`when_skipped_outputs`) is exempt from the missing-source gate (issue
+#915) — the file belongs to a rule that will never run in this cohort.
 
 ```toml
 [[pairs]]
