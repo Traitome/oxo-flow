@@ -57,7 +57,7 @@ reference_dir = "..."   # Optional: base directory for auto-derived reference pa
 [citation]          # Optional: citation metadata (DOI, authors, etc.)
 [plugins]           # Optional: plugin configuration
 [webhook]           # Optional: workflow-level webhook notifications (issue #227)
-[engine]            # Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907)
+[engine]            # Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907) + protected data trees (#935)
 ```
 
 `reference_dir` is a bare top-level key, so it must appear before the first
@@ -3113,6 +3113,7 @@ measures free space mid-run and behavior is unchanged.
 min_free_disk = "50G"        # required to enable: abort/park floor
 # reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk
 # tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule
+# protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data (issue #935)
 ```
 
 | Field | Type | Default | Description |
@@ -3120,6 +3121,7 @@ min_free_disk = "50G"        # required to enable: abort/park floor
 | `min_free_disk` | String | — | Floor for free disk space at the working directory. A bare number means MiB. Sizes accept `T`/`G`/`M`/`K` suffixes (binary units: `1G` = 1024 MiB). Note `"50GB"` is **not** valid — the unit is a single letter |
 | `reclaim_free_disk` | String | `min_free_disk` | Reclaim trigger level; must be ≥ `min_free_disk` (validation error otherwise) |
 | `tmp_dir` | String | — | Global scratch directory (issue #907). Injected as `TMPDIR`/`TMP`/`TEMP` into every rule shell and into rule-level (`pre_exec`, `on_success`, `on_failure`) and workflow-level (`on_complete`, `on_error`) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable `OXO_FLOW_TMPDIR` overrides this value per invocation (set it to redirect temp traffic without editing the workflow) |
+| `protected_data_trees` | Array of String | — | Workdir-relative data trees whose content must not change behind the engine's back (issue #935 P1) — e.g. `["raw/", "reference/"]`. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud `PROTECTED TREE DRIFT:` section when a file changed, was removed, or appeared. `run` **refuses to execute** on drift unless `--allow-protected-drift` is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented |
 
 ### Response ladder
 

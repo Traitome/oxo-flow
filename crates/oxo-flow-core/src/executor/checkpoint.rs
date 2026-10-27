@@ -554,6 +554,16 @@ pub struct CheckpointState {
         deserialize_with = "deserialize_output_pattern_domains"
     )]
     pub output_pattern_domains: BTreeMap<String, Vec<crate::wildcard::WildcardValues>>,
+
+    /// Protected-tree baseline manifests (issue #935): declared tree path
+    /// (workdir-relative, normalized) → the file manifest recorded at first
+    /// observation. Drift against a baseline is reported by plan/dry-run/run
+    /// preflight and fails `run` unless `--allow-protected-drift` is passed.
+    /// Legacy checkpoints load with an empty map; trees adopted on the next
+    /// observation.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub protected_tree_baselines: BTreeMap<String, InputManifest>,
 }
 
 /// Canonical on-the-wire form: template → combos → key-sorted
@@ -684,6 +694,7 @@ impl CheckpointState {
             reentries: Vec::new(),
             rule_runs: BTreeMap::new(),
             output_pattern_domains: BTreeMap::new(),
+            protected_tree_baselines: BTreeMap::new(),
         }
     }
 
@@ -737,6 +748,13 @@ impl CheckpointState {
         self.input_manifests.insert(rule.to_string(), manifest);
     }
 
+    /// Record the baseline manifest for a protected tree (issue #935).
+    /// `key` is the normalized workdir-relative tree path.
+    pub fn record_protected_tree_baseline(&mut self, key: &str, manifest: InputManifest) {
+        self.protected_tree_baselines
+            .insert(key.to_string(), manifest);
+    }
+
     /// Set the workflow path that generated this checkpoint.
     pub fn set_workflow_path(&mut self, path: &Path) {
         self.workflow_path = Some(path.to_string_lossy().to_string());
@@ -777,6 +795,10 @@ impl CheckpointState {
         self.rule_runs.clear();
         self.reentries.clear();
         self.output_pattern_domains.clear();
+        // A foreign checkpoint's protected-tree baselines describe another
+        // workflow's view of the shared workdir (issue #935) — same reasoning
+        // as `input_manifests` above.
+        self.protected_tree_baselines.clear();
     }
 
     /// Record the workflow repository's HEAD SHA (issue #115 pillar 1).
@@ -1216,6 +1238,28 @@ pub async fn snapshot_input_manifest_async(
         rule: rule_name,
         message: format!("input manifest task failed: {e}"),
     })?
+}
+
+/// Snapshot a protected tree's file manifest (issue #935): the sorted,
+/// deduplicated (relative path, size, mtime, optional content-hash) entry
+/// list for every file under `tree`, reusing the exact machinery the rule
+/// input manifests use (`insert_manifest_entry` semantics — symlinked
+/// files recorded with target stats, symlinked directories as single
+/// entries, real directories walked recursively).
+///
+/// `tree` must already be resolved to an absolute path anchored at the
+/// workdir (callers apply the `protected_data_trees` workdir-relative
+/// resolution). Returns `Ok(None)` when the tree does not exist yet —
+/// adoption is deferred to the first observation where it does, rather
+/// than baselining an empty manifest that would flag the tree's eventual
+/// population as wholesale drift.
+pub fn snapshot_protected_tree(tree: &Path, workdir: &Path) -> Result<Option<InputManifest>> {
+    if !tree.exists() {
+        return Ok(None);
+    }
+    let mut entries = std::collections::BTreeMap::new();
+    insert_manifest_entry(tree, workdir, &mut entries)?;
+    Ok(Some(entries.into_values().collect()))
 }
 
 pub fn snapshot_input_manifest(

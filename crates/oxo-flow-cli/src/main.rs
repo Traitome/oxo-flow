@@ -210,8 +210,16 @@ pub enum Commands {
         /// prints a summary on stderr, and exits 0 immediately. Monitor
         /// with `oxo-flow status`, the run log, or report snapshots; stop
         /// with `kill <pid>` (the pid is in the summary and the pid file).
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Detach execution into a background process (see long help)"
+        )]
         background: bool,
+        /// Proceed despite protected-tree drift (issue #935): `\[engine]`
+        /// protected_data_trees baselines differ from the current tree.
+        /// Without this flag `run` refuses to execute.
+        #[arg(long)]
+        allow_protected_drift: bool,
     },
     /// Resume an interrupted workflow from a checkpoint.
     Resume {
@@ -1341,6 +1349,7 @@ async fn main() -> Result<()> {
             no_report_snapshot,
             max_submitted,
             background,
+            allow_protected_drift,
         } => {
             // ── Background runs (issue #158) ─────────────────────────────
             // The foreground process never executes the workflow: it spawns
@@ -1489,6 +1498,7 @@ async fn main() -> Result<()> {
                 no_report_snapshot,
                 max_submitted,
                 None, // checkpoint_override (run derives the workdir default)
+                allow_protected_drift,
             )
             .await?
         }
@@ -1957,6 +1967,7 @@ async fn main() -> Result<()> {
                         false, // no_report_snapshot (test mode keeps the standard run behavior)
                         None,  // max_submitted (cluster queue cap — test keeps the profile's)
                         None,  // checkpoint_override (test derives the workdir default)
+                        false, // allow_protected_drift (test honors the protection gate)
                     )
                     .await
                 );

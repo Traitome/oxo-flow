@@ -1864,6 +1864,9 @@ pub async fn run_command(
     // an explicit `resume <path>` silently resumed from a DIFFERENT (or
     // empty) checkpoint while the banner claimed otherwise.
     checkpoint_override: Option<PathBuf>,
+    // Issue #935 P1: proceed despite protected-tree drift (the fail-gate
+    // above exists so damaged vendor data never silently poisons a run).
+    allow_protected_drift: bool,
 ) -> Result<()> {
     print_banner();
 
@@ -2549,6 +2552,11 @@ pub async fn run_command(
     // as config changes); legacy checkpoints (no manifest recorded) adopt
     // the current set as a one-time baseline — the same policy as the config
     // snapshot (issue #62).
+    // Protected-tree drift state (issue #935 P1) is hoisted so the fail-gate
+    // after the block can read it. Both are definite-assignment targets: the
+    // block below always assigns them exactly once.
+    let protected_drift_lines: Vec<String>;
+    let protected_drift;
     {
         let mut ck = checkpoint.lock().await;
         // Shared with dry-run's read-only preview (issue #66) — keep the
@@ -2692,11 +2700,73 @@ pub async fn run_command(
                 Some(&run_log),
             );
         }
-        if (!mismatched.is_empty() || baselined > 0)
+        // ── Protected-tree drift (issue #935 P1) ─────────────────────────
+        // Whole-tree baselines opt-in via [engine] protected_data_trees:
+        // first observation adopts, later observations diff and report one
+        // describe() line per drifted file. Run FAILS on drift unless
+        // --allow-protected-drift — this is the fast, loud out-of-band
+        // damage detector (a truncated vendor FASTQ surfaces here within
+        // minutes, not one rule at a time).
+        let (drift_lines_inner, protected_baselined, protected_warnings) =
+            crate::commands::run_preview::detect_protected_tree_drift(
+                &mut ck,
+                &config,
+                workdir_actual.as_ref(),
+            );
+        protected_drift_lines = drift_lines_inner;
+        protected_drift = !protected_drift_lines.is_empty();
+        for line in &protected_warnings {
+            diagnostic_narrate(format_args!("  {} {}", "⚠".yellow(), line), Some(&run_log));
+        }
+        if protected_baselined > 0 {
+            diagnostic_narrate(
+                format_args!(
+                    "  Note: {} — future changes will be flagged by plan/dry-run/run",
+                    oxo_flow_core::plural(
+                        protected_baselined,
+                        "baseline recorded for protected tree",
+                        "baselines recorded for protected trees"
+                    )
+                ),
+                Some(&run_log),
+            );
+        }
+        if protected_drift {
+            diagnostic_narrate(
+                format_args!(
+                    "  {} PROTECTED TREE DRIFT detected in {} file(s):",
+                    "✗".red().bold(),
+                    protected_drift_lines.len()
+                ),
+                Some(&run_log),
+            );
+            for line in &protected_drift_lines {
+                diagnostic_narrate(format_args!("    {} {}", "·".red(), line), Some(&run_log));
+            }
+        }
+        // One save covers both detections (issue #72 + #935 P1): manifest
+        // baselines/diffs and protected-tree baselines must both persist.
+        if (!mismatched.is_empty() || baselined > 0 || protected_baselined > 0 || protected_drift)
             && let Err(e) = ck.save_to_file(&checkpoint_path)
         {
-            tracing::warn!(error = %e, "failed to save checkpoint after input-manifest detection");
+            tracing::warn!(
+                error = %e,
+                "failed to save checkpoint after input-manifest/protected-tree detection"
+            );
         }
+    }
+
+    // ── Protected-tree drift gate (issue #935 P1): fail the run ──────────
+    // Detection may not proceed silently: damaged protected data invalidates
+    // the premise of every downstream rule. The flag is an explicit operator
+    // decision, not a default.
+    if protected_drift && !allow_protected_drift {
+        let detail = protected_drift_lines.join("\n  ");
+        return Err(anyhow::anyhow!(
+            "protected data tree drift detected ({} file(s) changed since baseline):\n  {}\n\nRefusing to run against changed protected data. Restore the files or pass --allow-protected-drift to proceed anyway.",
+            protected_drift_lines.len(),
+            detail
+        ));
     }
 
     // Tombstone-aware skip (temporary rules): a tombstoned rule whose
@@ -7107,6 +7177,18 @@ pub async fn dry_run_command(
             );
         }
     }
+    // ── Protected-tree drift (issue #935 P1) — read-only ──────────────────
+    // Same detection `run` applies, on the in-memory checkpoint copy: the
+    // preview never persists baselines (dry-run stays read-only), so first
+    // observation is reported as "will be baselined" instead of "recorded".
+    // Unlike `run`, dry-run reports but does not fail (only `run` gates).
+    let (dry_protected_drift_lines, dry_protected_baselined, dry_protected_warnings) =
+        crate::commands::run_preview::detect_protected_tree_drift(
+            &mut checkpoint_state,
+            &config,
+            base_dir,
+        );
+
     // Pixi-manifest preflight (issue #848): mirror run's pending_envs —
     // every non-skip rule's env spec, resolved against the workflow dir.
     // plan/dry-run previously passed while a declared manifest was missing
@@ -7339,6 +7421,39 @@ pub async fn dry_run_command(
         }
         eprintln!(
             "  {} create the manifest at the resolved path or correct the rule's `pixi` path",
+            "hint:".yellow().bold()
+        );
+    }
+
+    // Protected-tree drift section (issue #935 P1): printed after the rule
+    // listing, before the JSON document — same placement as the pixi block.
+    if !dry_protected_warnings.is_empty() {
+        for line in &dry_protected_warnings {
+            eprintln!("  {} {}", "⚠".yellow(), line);
+        }
+    }
+    if dry_protected_baselined > 0 {
+        eprintln!(
+            "  {} {} — future changes will be flagged by plan/dry-run/run",
+            "Note:".bold().cyan(),
+            oxo_flow_core::plural(
+                dry_protected_baselined,
+                "new protected tree observed (no baseline persisted by dry-run)",
+                "new protected trees observed (no baseline persisted by dry-run)"
+            )
+        );
+    }
+    if !dry_protected_drift_lines.is_empty() {
+        eprintln!(
+            "\n  {} PROTECTED TREE DRIFT detected in {} file(s):",
+            "✗".red().bold(),
+            dry_protected_drift_lines.len()
+        );
+        for line in &dry_protected_drift_lines {
+            eprintln!("    {} {}", "·".red(), line);
+        }
+        eprintln!(
+            "  {} restore the files or pass --allow-protected-drift to run anyway",
             "hint:".yellow().bold()
         );
     }
@@ -7664,6 +7779,14 @@ pub async fn dry_run_command(
                 .iter()
                 .map(|(rule, spec)| serde_json::json!({"rule": rule, "spec": spec}))
                 .collect::<Vec<_>>(),
+            // Issue #935 P1: protected-tree drift, read-only (dry-run never
+            // persists baselines). `drifted_files` carries one describe()
+            // line per changed file; `new_trees` counts first observations.
+            "protected_tree_drift": {
+                "drifted_files": dry_protected_drift_lines,
+                "new_trees": dry_protected_baselined,
+                "warnings": dry_protected_warnings,
+            },
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }
@@ -8766,6 +8889,7 @@ pub async fn resume_command(
         no_report_snapshot,
         None,             // max_submitted (cluster queue cap — resume keeps the profile's)
         Some(checkpoint), // #538: explicit checkpoint path wins
+        false,            // allow_protected_drift (resume honors the protection gate)
     )
     .await
 }
