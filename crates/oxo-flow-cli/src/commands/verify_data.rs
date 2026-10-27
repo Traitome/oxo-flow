@@ -217,6 +217,10 @@ fn verify_tree(
             Err(e) => {
                 // A failed directory read yields no entry; report the
                 // traversal failure itself so the summary reflects it.
+                // Fail-closed even for paths the Ok arm would skip
+                // (`ignore`-listed, `.oxo-flow/`): the walk could not see
+                // past this point, so an unreadable engine-internal
+                // directory still invalidates a clean verdict (#938 m5).
                 let rel = entry_root_relative(tree, e.path().unwrap_or(tree));
                 entries.push(VerifyDataEntry::extra_error(
                     &rel,
@@ -260,12 +264,15 @@ fn verify_tree(
     (matched, mismatched, missing, extra, entries)
 }
 
-/// Best-effort tree-relative rendering of a walkdir error path.
+/// Best-effort tree-relative rendering of a walkdir error path. Falls
+/// back to `"."` when the error carries no path (or the tree root itself
+/// failed) so the JSON never carries an empty-string `file` key.
 fn entry_root_relative(tree: &Path, path: &Path) -> String {
-    path.strip_prefix(tree)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string()
+    match path.strip_prefix(tree) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel.to_string_lossy().to_string(),
+        Ok(_) => ".".to_string(),
+        Err(_) => path.to_string_lossy().to_string(),
+    }
 }
 
 /// Default per-tree exclusion applied to the extras walk: the engine's
@@ -357,7 +364,7 @@ pub fn verify_data_command(tree: PathBuf, from: PathBuf, json: bool) -> Result<(
                     actual
                 ),
                 (_, Some(note)) => eprintln!(
-                    "  {} {} (not listed in sidecar, checksum error: {})",
+                    "  {} {} (not listed in sidecar, {})",
                     "!".yellow().bold(),
                     entry.file,
                     note

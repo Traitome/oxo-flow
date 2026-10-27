@@ -46,7 +46,9 @@ not list (extras).
   silently shrink the audit: the walk reports the traversal failure as an
   extra entry with a `tree walk failed` note, and the summary's `extra`
   count includes it, so the audit exits `1` instead of passing a tree it
-  could not fully inspect.
+  could not fully inspect. This is deliberately fail-closed even for
+  engine-internal (`.oxo-flow/`) or ignored paths — an unreadable directory
+  means part of the tree was never seen, which invalidates a clean verdict.
 
 ## Options
 
