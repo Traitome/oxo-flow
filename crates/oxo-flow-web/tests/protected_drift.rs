@@ -21,11 +21,20 @@ fn app() -> axum::Router {
 }
 
 async fn get(uri: &str) -> (StatusCode, Value) {
-    let req = Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
     let resp = app().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 fn pool() -> &'static sqlx::SqlitePool {
@@ -112,7 +121,8 @@ async fn drift_preview_reports_baseline_drift() {
     .unwrap()
     .unwrap();
     ck.record_protected_tree_baseline("raw", manifest);
-    ck.save_to_file(&CheckpointState::default_path(&workdir)).unwrap();
+    ck.save_to_file(&CheckpointState::default_path(&workdir))
+        .unwrap();
 
     // Drift: truncate the protected file AFTER the baseline.
     std::fs::write(workdir.join("raw/S1.fq"), b"").unwrap();
