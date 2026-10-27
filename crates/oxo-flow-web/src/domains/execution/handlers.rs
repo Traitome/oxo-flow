@@ -2891,6 +2891,7 @@ fn internal_verify_error(message: String) -> (StatusCode, Json<ApiError>) {
     tag = "runs",
     responses(
         (status = 200, description = "Verification finished — drift findings are in the body", body = ProvenanceVerifyResponse),
+        (status = 400, description = "Error", body = ApiError),
         (status = 404, description = "Error", body = ApiError),
         (status = 500, description = "Error", body = ApiError),
         (status = 503, description = "Error", body = ApiError),
@@ -2901,7 +2902,8 @@ fn internal_verify_error(message: String) -> (StatusCode, Json<ApiError>) {
 ///
 /// Read-only: the CLI subprocess is spawned with the run's checkpoint in
 /// read mode only — it never mutates the checkpoint. The response mirrors
-/// the CLI's `--json` document (entries nested under `verify`); `ok` is
+/// the CLI's `--json` document with entries flattened to the top level
+/// (no `verify` wrapper); `ok` is
 /// false exactly when the CLI would exit 1 (mismatched or missing > 0).
 /// HTTP 200 carries drift findings — like verify-data, drift is data, not
 /// an error; HTTP errors are reserved for a missing run, infrastructure
