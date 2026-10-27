@@ -215,7 +215,7 @@ pub enum Commands {
             help = "Detach execution into a background process (see long help)"
         )]
         background: bool,
-        /// Proceed despite protected-tree drift (issue #935): [engine]
+        /// Proceed despite protected-tree drift (issue #935): `\[engine]`
         /// protected_data_trees baselines differ from the current tree.
         /// Without this flag `run` refuses to execute.
         #[arg(long)]
