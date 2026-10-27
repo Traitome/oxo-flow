@@ -5762,7 +5762,9 @@ correctly when the split values change.</p>
 <p>The checkpoint also records an <strong>input manifest</strong> for every completed rule:
 the file set its inputs resolved to at completion time, with each file's
 path, size, and modification time — plus a content hash for files up to
-64 MiB. On every run, oxo-flow re-resolves the inputs and compares:</p>
+64 MiB. Entries also record whether the file is a <strong>symlink</strong> and, if so,
+its recorded target. On every run, oxo-flow re-resolves the inputs and
+compares:</p>
 <ul>
 <li><strong>Literal glob inputs</strong> (<code>data/*.txt</code>) detect added and removed files —
   a new file matching the glob rebuilds the rule (and its DAG downstream).</li>
@@ -5774,16 +5776,46 @@ path, size, and modification time — plus a content hash for files up to
   rewrite is detected even when the mtime is preserved, and a mere <code>touch</code>
   no longer invalidates. Larger files compare size and mtime, closing the
   same stale-reuse hole for ordinary files.</li>
-<li>
-<p><strong><code>expand_inputs</code>-baked inputs</strong> whose producer is <code>when</code>-gated off under
+<li><strong><code>expand_inputs</code>-baked inputs</strong> whose producer is <code>when</code>-gated off under
   the active config are tolerated as absent: the manifest records the
   existing subset instead of erroring, so a no-op rerun does not
   invalidate the rule and cascade its producers (issue #757). If a later
   config change produces the missing files, the manifest then mismatches
-  and the rule invalidates — the flip is still caught.</p>
-</li>
-<li>
-<p><strong>Missing external source inputs fail fast before any work starts</strong>:
+  and the rule invalidates — the flip is still caught.</li>
+</ul>
+<p>When an invalidation is detected, the run output spells out WHAT changed,
+one line per affected file. Each line reads
+<code>path: &lt;old size&gt; @&lt;old mtime&gt; → &lt;new size&gt; @&lt;new mtime&gt;</code> followed by
+these labels:</p>
+<ul>
+<li><code>(content &lt;h1&gt; → &lt;h2&gt;)</code> — the content hash moved (files up to 64 MiB
+  are hashed); shown alone when a same-size/same-mtime rewrite is
+  caught by hash comparison.</li>
+<li><code>(TRUNCATED)</code> — the file collapsed to 0 B: the vendor-data incident
+  shape a write through a symlinked input path produces (the shell
+  truncates the target before the command's bytes land).</li>
+<li><code>(removed)</code> / <code>(added)</code> — the file disappeared from, or appeared in,
+  the tracked set.</li>
+<li><code>[symlink]</code> — the path resolves through a symlink on the recorded or
+  the current side (recorded symlink facts are display-only and never
+  invalidate by themselves).</li>
+</ul>
+<p>For example (from the verification of this feature):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>  · raw/S1.fq: 22 B @2026-10-27T03:08:41Z → 0 B @2026-10-27T03:08:42Z (content sha256:b29f0d4b37f… → sha256:e3b0c44298f…) (TRUNCATED) [symlink]
+</span></code></pre></div>
+<p>A pure symlink-target flip with unchanged size/mtime/hash produces no
+diff line at all (target facts are display-only); the target surfaces
+only in the first-seen notice below.</p>
+<p>A run also prints one first-seen notice per symlinked input —
+<code>ℹ input &lt;path&gt; is a symlink → &lt;target&gt;</code> — collected across all completed
+rules, deduplicated and sorted, whether or not anything invalidates. A
+rewrite of identical size/mtime through a symlink leaves the manifests
+matching (so nothing re-runs) but still names the path, because writing
+to a symlinked input path writes THROUGH to its target — the exact
+hazard behind irreversible data loss in real pipelines. The notice fires
+once per run; it is not gated on the file changing.</p>
+<ul>
+<li><strong>Missing external source inputs fail fast before any work starts</strong>:
   a required input that no rule in the DAG produces and whose concrete
   files are absent aborts the run before scheduling with
   <code>workflow is missing required source input(s) — no rule produces them</code>,
@@ -5794,16 +5826,15 @@ path, size, and modification time — plus a content hash for files up to
   intermediates (they have producers and are governed by the manifest
   cascade below), <code>[[references]]</code> outputs (built later in the same run),
   inputs discoverable through the workflow's <code>sample_pattern</code> directory,
-  when-gated-off rules, zero-fan-out scatter rules, or <code>optional</code> rules.</p>
-</li>
+  when-gated-off rules, zero-fan-out scatter rules, or <code>optional</code> rules.</li>
 </ul>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="gp"># </span>a<span class="w"> </span>new<span class="w"> </span>file<span class="w"> </span>appears<span class="w"> </span><span class="k">in</span><span class="w"> </span>data/<span class="w"> </span>after<span class="w"> </span>the<span class="w"> </span>last<span class="w"> </span>run
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="go">oxo-flow run pipeline.oxoflow</span>
 </span></code></pre></div>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="go">  ↻ input changes invalidated 2 rules: gather, report</span>
-</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="go">  Running: gather</span>
-</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="go">  Running: report</span>
-</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="go">  …</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="go">  ↻ input changes invalidated 2 rules: gather, report</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="go">  Running: gather</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="go">  Running: report</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="go">  …</span>
 </span></code></pre></div>
 <p>Invalidated rules bypass the executor's freshness gate and re-execute even
 when their outputs exist and look recent; downstream rules that consumed
@@ -5826,7 +5857,11 @@ their outputs rebuild in the same run.</p>
   runtime).</li>
 <li>Symlinked directories are recorded as single entries, never traversed
   (cycle-safe), so changes inside a symlinked directory are tracked at the
-  symlink's own metadata level.</li>
+  symlink's own metadata level. Symlinked <em>files</em> are recorded with their
+  symlink-ness and lexical target (see the first-seen notice above); the
+  comparison follows the link's resolved content — a retarget to an
+  identical-content file keeps the rule valid, while a write through the
+  link invalidates like any content change.</li>
 <li>Rules that clean up their inputs at the end of a successful run
   (<code>transform.cleanup = true</code> chunk consumers) are not manifest-tracked:
   their inputs are engine-managed intermediates governed by the
@@ -5855,10 +5890,10 @@ BAMs, unsorted alignments) and often useless once every downstream rule has
 consumed them. Marking a rule <code>temporary = true</code> deletes its outputs after
 a <strong>fully successful</strong> run — once every dependent has completed — and
 records a <strong>tombstone</strong> in the checkpoint:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="k">[[rules]]</span>
-</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
-</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
-</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="n">temporary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="k">[[rules]]</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"align"</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"aligned/{sample}.bam"</span><span class="p">]</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="n">temporary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 </span></code></pre></div>
 <p>This is checkpoint-aware, not a blind delete:</p>
 <ul>
@@ -5878,14 +5913,14 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
   kept — so the next run skips the completed producer instead of
   re-materializing it — and one line explains the choice:</li>
 </ul>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="go">  ℹ free space 39876544MB ≥ reclaim_free_disk 5120000MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="go">  ℹ free space 39876544MB ≥ reclaim_free_disk 5120000MB — temporary outputs kept (disk pressure alone triggers re-materialization; remove the [engine] thresholds to always prune)</span>
 </span></code></pre></div>
 <p>If free space cannot be measured (non-Unix platforms), the outputs are
   kept as a precaution. Workflows without <code>[engine]</code> thresholds keep the
   historical unconditional deletion.</p>
-<div class="language-console highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="go">  …</span>
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)</span>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="go">  ↻ temporary outputs needed again — re-running 1 producer rule: trim_S1</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a><span class="go">  …</span>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a><span class="go">  ⊘ temporary outputs deleted for 'trim_S1' (1 file, regenerated on demand)</span>
 </span></code></pre></div>
 <p>Dry-run predicts exactly when a tombstoned rule will regenerate
 (<code>[rerun: upstream of X]</code>) — see
@@ -5894,9 +5929,9 @@ records a <strong>tombstone</strong> in the checkpoint:</p>
 <p>Large pipelines can fill a disk mid-run. Declaring an <code>[engine]</code> section in
 the workflow makes the engine measure the working directory's free space at
 startup, at every scheduling round, and every 60 s while work is parked:</p>
-<div class="language-toml highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="k">[engine]</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># floor — entering Hold below it</span>
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a><span class="n">reclaim_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"100G"</span><span class="w">   </span><span class="c1"># optional reclaim trigger; defaults to min_free_disk</span>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="k">[engine]</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># floor — entering Hold below it</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a><span class="n">reclaim_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"100G"</span><span class="w">   </span><span class="c1"># optional reclaim trigger; defaults to min_free_disk</span>
 </span></code></pre></div>
 <p>The response ladder:</p>
 <ul>
@@ -5964,22 +5999,22 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>DAG: 5 rules in execution order
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>  1. fastqc
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a>  2. trim_reads
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5" href="#__codelineno-41-5"></a>  3. bwa_align
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6" href="#__codelineno-41-6"></a>  4. sort_bam
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7" href="#__codelineno-41-7"></a>  5. call_variants
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9" href="#__codelineno-41-9"></a>  ✓ fastqc (2.1s)
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10" href="#__codelineno-41-10"></a>  ✓ trim_reads (15.0s)
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11" href="#__codelineno-41-11"></a>  ✓ bwa_align (42.3s)
-</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12" href="#__codelineno-41-12"></a>  ✓ sort_bam (10.2s)
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13" href="#__codelineno-41-13"></a>  ✓ call_variants (8.4s)
-</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14" href="#__codelineno-41-14"></a>
-</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15" href="#__codelineno-41-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
-</span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16" href="#__codelineno-41-16"></a>✓ 5 output files verified (118.3MB total)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>DAG: 5 rules in execution order
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>  1. fastqc
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>  2. trim_reads
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a>  3. bwa_align
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6" href="#__codelineno-42-6"></a>  4. sort_bam
+</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7" href="#__codelineno-42-7"></a>  5. call_variants
+</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8" href="#__codelineno-42-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
+</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9" href="#__codelineno-42-9"></a>  ✓ fastqc (2.1s)
+</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10" href="#__codelineno-42-10"></a>  ✓ trim_reads (15.0s)
+</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11" href="#__codelineno-42-11"></a>  ✓ bwa_align (42.3s)
+</span><span id="__span-42-12"><a id="__codelineno-42-12" name="__codelineno-42-12" href="#__codelineno-42-12"></a>  ✓ sort_bam (10.2s)
+</span><span id="__span-42-13"><a id="__codelineno-42-13" name="__codelineno-42-13" href="#__codelineno-42-13"></a>  ✓ call_variants (8.4s)
+</span><span id="__span-42-14"><a id="__codelineno-42-14" name="__codelineno-42-14" href="#__codelineno-42-14"></a>
+</span><span id="__span-42-15"><a id="__codelineno-42-15" name="__codelineno-42-15" href="#__codelineno-42-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
+</span><span id="__span-42-16"><a id="__codelineno-42-16" name="__codelineno-42-16" href="#__codelineno-42-16"></a>✓ 5 output files verified (118.3MB total)
 </span></code></pre></div>
 <p>A progress bar shows execution progress with:</p>
 <ul>
@@ -5992,16 +6027,16 @@ the config surface.</p>
 <p>Workflows composed from <code>[[include]]</code> modules group the plan listing and the
 <code>--keep-going</code> failure summary under module headers, so a composed pipeline
 reads as module → rule instead of one long flat list (issue #887):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>DAG: 6 rules in execution order
-</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>  Preprocessing — 2 rules
-</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>    1. fastqc
-</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>    2. trim_reads
-</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a>  Alignment — 3 rules
-</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6" href="#__codelineno-42-6"></a>    3. bwa_align
-</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7" href="#__codelineno-42-7"></a>    4. sort_bam
-</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8" href="#__codelineno-42-8"></a>    5. markdup
-</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9" href="#__codelineno-42-9"></a>  Main workflow — 1 rule
-</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10" href="#__codelineno-42-10"></a>    6. report_summary
+<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>DAG: 6 rules in execution order
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  Preprocessing — 2 rules
+</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3" href="#__codelineno-43-3"></a>    1. fastqc
+</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4" href="#__codelineno-43-4"></a>    2. trim_reads
+</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5" href="#__codelineno-43-5"></a>  Alignment — 3 rules
+</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6" href="#__codelineno-43-6"></a>    3. bwa_align
+</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7" href="#__codelineno-43-7"></a>    4. sort_bam
+</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8" href="#__codelineno-43-8"></a>    5. markdup
+</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9" href="#__codelineno-43-9"></a>  Main workflow — 1 rule
+</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10" href="#__codelineno-43-10"></a>    6. report_summary
 </span></code></pre></div>
 <ul>
 <li>Rules from a module file (<code>[[include]]</code>) collect under their module's
@@ -6017,15 +6052,15 @@ reads as module → rule instead of one long flat list (issue #887):</p>
   grouping is opt-in by structure, not a flag</li>
 </ul>
 <p>The failure summary groups the same way:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>Failed rules:
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  Germline (1):
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3" href="#__codelineno-43-3"></a>    ✗ haplotype_caller — exit code 1
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4" href="#__codelineno-43-4"></a>
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5" href="#__codelineno-43-5"></a>Blocked rules (did not run):
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6" href="#__codelineno-43-6"></a>  Germline (1):
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7" href="#__codelineno-43-7"></a>    ⊘ joint_genotyper — depends on 'haplotype_caller'
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8" href="#__codelineno-43-8"></a>  Main workflow (1):
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9" href="#__codelineno-43-9"></a>    ⊘ qc_report — depends on 'joint_genotyper'
+<div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>Failed rules:
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>  Germline (1):
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a>    ✗ haplotype_caller — exit code 1
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a>
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a>Blocked rules (did not run):
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6" href="#__codelineno-44-6"></a>  Germline (1):
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7" href="#__codelineno-44-7"></a>    ⊘ joint_genotyper — depends on 'haplotype_caller'
+</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8" href="#__codelineno-44-8"></a>  Main workflow (1):
+</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9" href="#__codelineno-44-9"></a>    ⊘ qc_report — depends on 'joint_genotyper'
 </span></code></pre></div>
 <p>Per-line shapes (<code>✗ name — reason</code>, <code>⊘ name — depends on 'dep'</code>) are
 unchanged, so tooling that parses run logs keeps working.</p>
