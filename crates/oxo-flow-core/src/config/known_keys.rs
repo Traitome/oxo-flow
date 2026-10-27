@@ -210,8 +210,14 @@ const REFERENCE_KEYS: &[&str] = &[
 const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"];
 
 /// Keys of the `[engine]` table (issue #843 disk-pressure monitoring;
-/// issue #907 global temp-directory routing).
-const ENGINE_KEYS: &[&str] = &["min_free_disk", "reclaim_free_disk", "tmp_dir"];
+/// issue #907 global temp-directory routing; issue #935 protected-tree
+/// drift baselines).
+const ENGINE_KEYS: &[&str] = &[
+    "min_free_disk",
+    "protected_data_trees",
+    "reclaim_free_disk",
+    "tmp_dir",
+];
 
 /// Keys of one `[resource_groups]` entry.
 const RESOURCE_GROUP_KEYS: &[&str] = &["max", "wait"];

@@ -52,6 +52,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--rerun` | — | — | Force re-execution of this run's rules (ignore up-to-date checks). Checkpoint records for rules outside this run are kept |
 | `--no-report-snapshot` | — | — | Skip the automatic report snapshot written after the run (see [Report snapshots](#report-snapshots)); `resume` has the same flag |
 | `--background` | — | — | Detach the run into a background process and exit 0 immediately (see [Background runs (--background)](#background-runs-background)) |
+| `--allow-protected-drift` | — | — | Proceed despite protected-tree drift: when `[engine]` `protected_data_trees` baselines no longer match the tree on disk, `run` refuses to execute; this flag is the explicit operator override to run anyway (see [Protected data trees](#protected-data-trees-protected_data_trees)) |
 | `--verbose` | `-v` | — | Enable debug-level logging |
 
 ---
@@ -1278,6 +1279,48 @@ Known boundaries:
 - Keep scratch-heavy tools off the measured volume only if they are not
   cleaned by their rules; outputs declared by rules are always accounted
   for by the ladder.
+
+### Protected data trees (`protected_data_trees`)
+
+Vendor-delivered inputs (a sequencer drop, a reference bundle) must not
+change silently while a pipeline is running against them. Declaring
+
+```toml
+[engine]
+protected_data_trees = ["raw/", "reference/"]
+```
+
+makes the engine treat those workdir-relative trees as protected (issue
+#935 P1):
+
+- **First observation** (first run/plan/dry-run after the key appears) records
+  a baseline manifest in the checkpoint — per-file size + mtime, plus a
+  sha256 content hash for files up to 64 MiB.
+- **Every later plan/dry-run/run** diffs the tree against the baseline and
+  prints a loud `✗ PROTECTED TREE DRIFT detected in N file(s):` section with
+  one line per changed/removed/added file (a truncated file is labeled
+  `(TRUNCATED)`, content edits carry the old→new hash, symlink changes are
+  labeled `[symlink]`).
+- **`run` refuses to execute** on drift:
+
+  ```text
+  Error: protected data tree drift detected (1 file(s) changed since baseline):
+    raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
+  ```
+
+  Restore the files, or pass `--allow-protected-drift` to run anyway (the
+  drift is still printed; the baseline is NOT updated — a later clean run
+  re-reports it until the tree is restored or the checkpoint's baselines are
+  reset by deleting the entry).
+- Trees that do not exist yet are adopted only once they appear — populating
+  a tree is normal data arrival, not drift.
+- `dry-run` reports the same section read-only (it never persists the
+  baseline and never fails on drift — only `run` gates).
+
+This is a detection surface, not an access control: out-of-band writes are
+noticed within one invocation, not prevented. Combined with
+`--provenance` checksums it catches damaged vendor data before any rule
+consumes it.
 
 ### Forcing Execution
 

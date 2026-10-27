@@ -838,9 +838,28 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmp_dir: Option<String>,
+    /// Directory trees whose contents are baseline-manifested and watched
+    /// for out-of-band drift (issue #935, generalizing the #926 P0 input
+    /// manifests from rule inputs to whole trees). Paths are relative to
+    /// the workdir. At first observation the engine records size + mtime
+    /// (+ content hash for files under `MANIFEST_HASH_MAX_BYTES`) for
+    /// every file; each subsequent `plan`/`dry-run`/`run` preflight diffs
+    /// the tree against that baseline and prints a loud
+    /// `PROTECTED TREE DRIFT:` section when anything changed. `run`
+    /// fails on drift unless `--allow-protected-drift` is passed. This is
+    /// detection, not enforcement — the engine cannot intercept arbitrary
+    /// out-of-band writes.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protected_data_trees: Option<Vec<String>>,
 }
 
 impl EngineConfig {
+    /// Declared protected-tree paths, or an empty slice when the section
+    /// is absent / the key unset.
+    pub fn protected_data_trees(&self) -> &[String] {
+        self.protected_data_trees.as_deref().unwrap_or(&[])
+    }
     /// Resolved `(min_mb, reclaim_mb)` thresholds in MiB, or `None` when
     /// the section is absent or both keys are unset (zero behavior change).
     /// Invalid values are surfaced by [`WorkflowConfig::validate`], so this

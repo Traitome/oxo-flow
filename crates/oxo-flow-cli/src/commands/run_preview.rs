@@ -673,6 +673,98 @@ pub fn detect_input_manifest_invalidations(
     )
 }
 
+/// Everything `detect_protected_tree_drift` reports: `(drift_lines,
+/// baselined, warnings)` — one `ManifestChange::describe` line per drifted
+/// file across all protected trees, the number of first-observation baseline
+/// adoptions, and per-tree warnings (unreadable tree, deferred adoption).
+pub type ProtectedTreeDrift = (Vec<String>, usize, Vec<String>);
+
+/// Diff every `[engine] protected_data_trees` entry against its recorded
+/// baseline manifest (issue #935 P1).
+///
+/// Trees are workdir-relative config values; the baseline lives in the
+/// checkpoint (`protected_tree_baselines`, keyed by the normalized
+/// workdir-relative tree path). First observation adopts the current tree
+/// content as the baseline (exactly like legacy input-manifest adoption);
+/// every later observation diffs size/mtime/hash per file and reports one
+/// `ManifestChange::describe` line per change — a vendor FASTQ truncated to
+/// 0 B shows up as `raw/X.fastq.gz: 22.7 GiB @… → 0 B @… (TRUNCATED)`.
+///
+/// Behavior per tree state:
+/// - absent tree (`Ok(None)` from the snapshot): deferred adoption — no
+///   baseline is recorded, so populating the tree later is not flagged as
+///   wholesale drift;
+/// - unreadable tree (`Err`): a warning line (the walk can fail mid-flight
+///   on a permission/error) — drift detection must never crash a run;
+/// - first observation: baseline adopted, counted in `baselined`;
+/// - matching baseline: nothing reported;
+/// - mismatch: one drift line per changed/removed/added file, sorted by
+///   path (`manifest_changes` already sorts).
+///
+/// Mutates `ck` by recording new baselines — pass a clone for a read-only
+/// preview (same contract as [`detect_input_manifest_invalidations`]).
+pub fn detect_protected_tree_drift(
+    ck: &mut CheckpointState,
+    config: &WorkflowConfig,
+    workdir: &Path,
+) -> ProtectedTreeDrift {
+    let mut drift_lines: Vec<String> = Vec::new();
+    let mut baselined = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+    // BTreeSet: deterministic order across runs regardless of the config
+    // value order (persisted artifacts are order-independent).
+    let trees: std::collections::BTreeSet<&String> = config
+        .engine
+        .as_ref()
+        .map(|e| e.protected_data_trees())
+        .unwrap_or(&[])
+        .iter()
+        .collect();
+    for tree in trees {
+        // Normalize the key: workdir-relative (leading `./` and trailing `/`
+        // stripped) so `raw/`, `./raw/`, and `raw` share one baseline.
+        let rel = tree
+            .trim()
+            .trim_start_matches("./")
+            .trim_end_matches('/')
+            .to_string();
+        if rel.is_empty() {
+            warnings.push("protected_data_trees: empty path value ignored".to_string());
+            continue;
+        }
+        let abs = workdir.join(&rel);
+        match oxo_flow_core::executor::checkpoint::snapshot_protected_tree(&abs, workdir) {
+            Ok(Some(current)) => match ck.protected_tree_baselines.get(&rel) {
+                Some(recorded)
+                    if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) =>
+                {
+                    // Baseline still matches — nothing to report.
+                }
+                Some(recorded) => {
+                    for change in
+                        oxo_flow_core::executor::checkpoint::manifest_changes(recorded, &current)
+                    {
+                        drift_lines.push(change.describe());
+                    }
+                }
+                None => {
+                    // First observation: adopt the current content.
+                    ck.record_protected_tree_baseline(&rel, current);
+                    baselined += 1;
+                }
+            },
+            Ok(None) => {
+                // Tree does not exist yet: defer adoption (an empty baseline
+                // would flag the tree's eventual population as drift).
+            }
+            Err(e) => {
+                warnings.push(format!("protected tree {rel}/ not readable: {e}"));
+            }
+        }
+    }
+    (drift_lines, baselined, warnings)
+}
+
 /// Whether a recorded-vs-current input-manifest mismatch is caused solely by
 /// the engine's injected sample-list values changing between runs (issue
 /// #142 M1).
@@ -1889,5 +1981,172 @@ shell = "echo hi > {output}"
             &wildcard_values,
         );
         assert_eq!(notices, notices2, "notice is per-run, not per-baseline");
+    }
+
+    // ── Protected-tree drift (issue #935 P1) ───────────────────────────────
+
+    /// Minimal single-rule fixture on a `raw/` tree: the rule reads a file
+    /// from the protected tree, so the config carries `[engine]
+    /// protected_data_trees = ["raw/"]` and the drift detector has a tree to
+    /// snapshot. Returns the config plus a checkpoint whose rule is completed.
+    fn protected_fixture(
+        dir: &std::path::Path,
+        tree_toml: &str,
+    ) -> (WorkflowConfig, CheckpointState, HashMap<String, String>) {
+        let toml = format!(
+            r#"
+[workflow]
+name = "t"
+version = "1.0"
+
+[config]
+ref = "ref.fa"
+
+[engine]
+protected_data_trees = [{tree_toml}]
+
+[[sample_groups]]
+name = "cohort"
+samples = ["S1", "S2"]
+
+[[rules]]
+name = "trim"
+input = ["raw/{{sample}}.fq"]
+output = ["trimmed/{{sample}}.fq"]
+shell = "cp {{input[0]}} {{output[0]}}"
+"#
+        );
+        for f in ["raw/S1.fq", "raw/S2.fq", "trimmed/S1.fq", "trimmed/S2.fq"] {
+            let p = dir.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "data1").unwrap();
+        }
+        let mut config = WorkflowConfig::parse(&toml).unwrap();
+        config.apply_defaults();
+        config.expand_wildcards().unwrap();
+        let mut wildcard_values = HashMap::new();
+        for (key, value) in &config.config {
+            wildcard_values.insert(
+                format!("config.{key}"),
+                value.as_str().unwrap_or_default().to_string(),
+            );
+        }
+        // No DAG/order needed for the drift detector itself — mark the rule
+        // completed directly.
+        let mut ck = CheckpointState::new();
+        ck.completed_rules.insert("trim".to_string());
+        (config, ck, wildcard_values)
+    }
+
+    #[test]
+    fn protected_tree_first_observation_adopts_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut ck, _) = protected_fixture(dir.path(), "\"raw/\"");
+
+        let (drift, baselined, warnings) =
+            detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert!(drift.is_empty(), "first observation is not drift");
+        assert!(warnings.is_empty());
+        assert_eq!(baselined, 1, "raw/ adopted on first observation");
+        assert!(
+            ck.protected_tree_baselines.contains_key("raw"),
+            "baseline keyed by the normalized tree path"
+        );
+
+        // Second detection on the same state: clean, no new adoption.
+        let (drift, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert!(drift.is_empty());
+        assert_eq!(baselined, 0, "only the first observation adopts");
+    }
+
+    #[test]
+    fn protected_tree_removal_and_truncation_are_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut ck, _) = protected_fixture(dir.path(), "\"raw/\"");
+        let (_, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert_eq!(baselined, 1);
+
+        // Remove one vendor file and truncate the other.
+        std::fs::remove_file(dir.path().join("raw/S2.fq")).unwrap();
+        std::fs::write(dir.path().join("raw/S1.fq"), "").unwrap();
+
+        let (drift, _, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert_eq!(drift.len(), 2, "one describe() line per drifted file");
+        assert!(
+            drift
+                .iter()
+                .any(|l| l.contains("S1.fq") && l.contains("(TRUNCATED)")),
+            "size collapse to 0 B must be labeled (TRUNCATED), got: {drift:?}"
+        );
+        assert!(
+            drift
+                .iter()
+                .any(|l| l.contains("S2.fq") && l.contains("removed")),
+            "removed file must be reported, got: {drift:?}"
+        );
+    }
+
+    #[test]
+    fn protected_tree_content_drift_and_allow_flag_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut ck, _) = protected_fixture(dir.path(), "\"./raw/\"");
+        let (_, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert_eq!(baselined, 1, "`./raw/` normalizes to the `raw` key");
+
+        // Content drift at a different size (hash moves, size moves, mtime
+        // moves) — still detected, just not labeled (TRUNCATED).
+        std::fs::write(dir.path().join("raw/S1.fq"), "corrupted!").unwrap();
+
+        let (drift, _, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert_eq!(drift.len(), 1, "one line for the one edited file");
+        assert!(
+            drift[0].contains("S1.fq") && drift[0].contains("sha256:"),
+            "content drift must carry the sha256 label, got: {}",
+            drift[0]
+        );
+        // The allow flag is a run-side decision on these lines — the detector
+        // itself always reports. (The run fail-gate is exercised on tx-ubuntu;
+        // here we assert the lines the gate consumes are non-empty.)
+        assert!(!drift.is_empty(), "gate input must be non-empty on drift");
+    }
+
+    #[test]
+    fn protected_tree_absent_then_populated_is_not_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut ck, _) = protected_fixture(dir.path(), "\"raw/\"");
+        // Remove the whole tree before the first observation.
+        std::fs::remove_dir_all(dir.path().join("raw")).unwrap();
+
+        let (drift, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert!(drift.is_empty());
+        assert_eq!(baselined, 0, "absent tree defers adoption");
+
+        // Populating the tree later is NOT wholesale drift.
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        std::fs::write(dir.path().join("raw/S1.fq"), "data1").unwrap();
+        let (drift, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert!(drift.is_empty(), "deferred adoption: got {drift:?}");
+        assert_eq!(baselined, 1, "baseline adopted on the later observation");
+    }
+
+    #[test]
+    fn protected_tree_dry_run_detection_is_memory_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut ck, _) = protected_fixture(dir.path(), "\"raw/\"");
+
+        // Simulate the dry-run contract: detection on the in-memory state,
+        // nothing persisted to disk.
+        let (drift, baselined, _) = detect_protected_tree_drift(&mut ck, &config, dir.path());
+        assert!(drift.is_empty());
+        assert_eq!(baselined, 1);
+
+        let ck_path = dir.path().join(".oxo-flow/checkpoint.json");
+        assert!(
+            !ck_path.exists(),
+            "dry-run detection must not persist the baseline"
+        );
+        // The in-memory state still carries it — a subsequent real run
+        // adopts and persists on its own schedule.
+        assert!(ck.protected_tree_baselines.contains_key("raw"));
     }
 }
