@@ -288,7 +288,8 @@ The checkpoint file is JSON with the following structure:
   "input_manifests": {
     "align": [
       { "path": "trimmed/S1.fq.gz", "size": 48213, "mtime_nanos": 1790300000000000000,
-        "hash": "sha256:9f2a…", "remote": null }
+        "hash": "sha256:9f2a…", "remote": null,
+        "is_symlink": false, "link_target": null }
     ]
   },
   "tombstones": {
@@ -314,7 +315,13 @@ drive [precise invalidation](run.md#config-changes-and-precise-invalidation).
 distinguish when-gated skips from real failures in `status` output (issue
 #690). `input_manifests` records, per completed rule, every resolved input file
 (path, size, mtime in nanoseconds, and a content hash for files up to
-64 MiB) so later runs detect changed inputs (issue #72). `tombstones` lists
+64 MiB) so later runs detect changed inputs (issue #72). Each entry also
+carries `is_symlink` and `link_target` (the lexical link target for
+symlinked files) — display-only facts: they never influence invalidation
+by themselves, but a symlinked input is announced once per run and a
+size collapse through the link surfaces as `(TRUNCATED)` in the
+[invalidation diff](run.md#input-changes-and-manifest-invalidation)
+(issue #926). `tombstones` lists
 outputs of [`temporary`](run.md#temporary-rules-temporary-true)
 rules that were deleted after a successful run — the rule stays skipped until
 a dependent needs those outputs again. `reentries` records checkpoint

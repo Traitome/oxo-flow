@@ -1034,7 +1034,9 @@ correctly when the split values change.
 The checkpoint also records an **input manifest** for every completed rule:
 the file set its inputs resolved to at completion time, with each file's
 path, size, and modification time — plus a content hash for files up to
-64 MiB. On every run, oxo-flow re-resolves the inputs and compares:
+64 MiB. Entries also record whether the file is a **symlink** and, if so,
+its recorded target. On every run, oxo-flow re-resolves the inputs and
+compares:
 
 - **Literal glob inputs** (`data/*.txt`) detect added and removed files —
   a new file matching the glob rebuilds the rule (and its DAG downstream).
@@ -1052,6 +1054,29 @@ path, size, and modification time — plus a content hash for files up to
   invalidate the rule and cascade its producers (issue #757). If a later
   config change produces the missing files, the manifest then mismatches
   and the rule invalidates — the flip is still caught.
+
+When an invalidation is detected, the run output spells out WHAT changed,
+one line per file, using these labels:
+
+- `(TRUNCATED)` — the current size is smaller than the recorded size
+  (e.g. a write through a symlink replaced a 60 GB FASTQ with a 1 MB
+  head-extract).
+- `(removed)` — the file no longer exists.
+- `(size ±N, mtime ±Δt)` — size/mtime drift with no label above.
+- `[symlink]` / `[regular file]` — the file's symlink-ness flipped
+  between the recorded and current manifests (recorded facts are
+  display-only and never invalidate by themselves).
+- `[symlink → <target>]` — the symlink's target changed between the
+  recorded and current manifests.
+
+A run also prints one first-seen notice per symlinked input —
+`ℹ input <path> is a symlink → <target>` — collected across all completed
+rules, deduplicated and sorted, whether or not anything invalidates. A
+rewrite of identical size/mtime through a symlink leaves the manifests
+matching (so nothing re-runs) but still names the path, because writing
+to a symlinked input path writes THROUGH to its target — the exact
+hazard behind irreversible data loss in real pipelines. The notice fires
+once per run; it is not gated on the file changing.
 
 - **Missing external source inputs fail fast before any work starts**:
   a required input that no rule in the DAG produces and whose concrete
@@ -1100,7 +1125,11 @@ their outputs rebuild in the same run.
   runtime).
 - Symlinked directories are recorded as single entries, never traversed
   (cycle-safe), so changes inside a symlinked directory are tracked at the
-  symlink's own metadata level.
+  symlink's own metadata level. Symlinked *files* are recorded with their
+  symlink-ness and lexical target (see the first-seen notice above); the
+  comparison follows the link's resolved content — a retarget to an
+  identical-content file keeps the rule valid, while a write through the
+  link invalidates like any content change.
 - Rules that clean up their inputs at the end of a successful run
   (`transform.cleanup = true` chunk consumers) are not manifest-tracked:
   their inputs are engine-managed intermediates governed by the

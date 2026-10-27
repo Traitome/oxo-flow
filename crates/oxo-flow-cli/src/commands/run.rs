@@ -2553,15 +2553,21 @@ pub async fn run_command(
         let mut ck = checkpoint.lock().await;
         // Shared with dry-run's read-only preview (issue #66) — keep the
         // detection semantics in ONE place.
-        let (mismatched, missing_inputs, baselined, sample_selection_driven) =
-            crate::commands::run_preview::detect_input_manifest_invalidations(
-                &mut ck,
-                &config,
-                &dag,
-                &order,
-                workdir_actual.as_ref(),
-                &wildcard_values,
-            );
+        let (
+            mismatched,
+            missing_inputs,
+            baselined,
+            sample_selection_driven,
+            input_diffs,
+            symlink_notices,
+        ) = crate::commands::run_preview::detect_input_manifest_invalidations(
+            &mut ck,
+            &config,
+            &dag,
+            &order,
+            workdir_actual.as_ref(),
+            &wildcard_values,
+        );
         // Issue #142 M1: a rule whose only input-manifest change is the
         // engine-injected sample list is NOT invalidated — toggling
         // --samples must not overwrite cohort-level gather outputs with a
@@ -2650,6 +2656,32 @@ pub async fn run_command(
                 ),
                 Some(&run_log),
             );
+            // Issue #926 P0: say WHAT changed — one describe() line per
+            // affected file, so a size collapse to 0 B shows `(TRUNCATED)`
+            // and symlink churn shows `[symlink]` instead of a bare rule
+            // name. The diff map only carries invalidated seeds (not their
+            // cascaded dependents, whose inputs did not change on disk).
+            let mut diff_names: Vec<&String> = mismatched.iter().collect();
+            diff_names.sort();
+            for name in diff_names {
+                if let Some(lines) = input_diffs.get(name) {
+                    for line in lines {
+                        diagnostic_narrate(
+                            format_args!("    {} {}", "·".yellow(), line),
+                            Some(&run_log),
+                        );
+                    }
+                }
+            }
+        }
+        // Issue #926 P0 item 3: first-seen symlink notice — regardless of
+        // invalidation (a same-content rewrite through a symlink leaves the
+        // manifests matching, which is exactly the incident #926 documents),
+        // every first-seen symlinked input is named once per run.
+        if !symlink_notices.is_empty() {
+            for line in &symlink_notices {
+                diagnostic_narrate(format_args!("  {} {}", "ℹ".cyan(), line), Some(&run_log));
+            }
         }
         if baselined > 0 {
             diagnostic_narrate(
@@ -4377,13 +4409,15 @@ pub async fn run_command(
                                         pre, post,
                                     );
                                 if !changes.is_empty() {
+                                    let described: Vec<String> =
+                                        changes.iter().map(|c| c.describe()).collect();
                                     let note = format!(
                                         "\n[oxo-flow] WARNING: an input changed while this rule was running ({}); outputs may be inconsistent — the next run will re-execute this rule",
-                                        changes.join(", ")
+                                        described.join(", ")
                                     );
                                     tracing::warn!(
                                         rule = %rule_name,
-                                        changes = ?changes,
+                                        changes = ?described,
                                         "input changed while the rule was running; outputs may be inconsistent"
                                     );
                                     if let Some(ref mut stderr) = record.stderr {
