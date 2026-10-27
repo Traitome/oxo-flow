@@ -172,6 +172,7 @@ pub fn spawn_remote_run(
     local_workdir: PathBuf,
     max_jobs: Option<usize>,
     config_overrides: Vec<String>,
+    allow_protected_drift: bool,
 ) {
     register_remote(&run_id, &cluster.id);
     tokio::spawn(async move {
@@ -265,6 +266,13 @@ pub fn spawn_remote_run(
                 None => String::new(),
             }
         );
+        // Issue #935: forward the drift-gate escape hatch so a cluster run
+        // behaves like a local one — without it, the API answers 200 queued
+        // and the remote CLI gate then refuses the run on drift. The flag is
+        // boolean (no value), so it needs no shell quoting.
+        if allow_protected_drift {
+            run_cmd.push_str(" --allow-protected-drift");
+        }
         for kv in &config_overrides {
             run_cmd.push_str(" --arg=");
             run_cmd.push_str(&shell_quote(kv));

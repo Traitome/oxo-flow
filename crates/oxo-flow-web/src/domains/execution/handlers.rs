@@ -657,6 +657,7 @@ pub async fn create_run(
                 run_dir,
                 req.max_jobs,
                 validated_overrides,
+                req.allow_protected_drift.unwrap_or(false),
             );
             return Ok(Json(resp));
         }
@@ -676,6 +677,7 @@ pub async fn create_run(
                 samples: req.samples.unwrap_or_default(),
                 targets: req.targets.unwrap_or_default(),
                 config_overrides: validated_overrides,
+                allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
             },
         );
     }
@@ -1579,6 +1581,10 @@ pub async fn retry_run(
             resume_failed: true,
             rerun: true,
             config_overrides: retry_overrides,
+            // Retry keeps the protection gate (issue #935): only the
+            // original create request may relax it, mirroring the CLI's
+            // own resume which hardcodes false.
+            allow_protected_drift: false,
         },
     );
 
