@@ -2830,7 +2830,7 @@ fn report_workdir(ctx: &ReportContext) -> Option<std::path::PathBuf> {
 }
 
 /// Human-readable file size (binary units).
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -2857,7 +2857,7 @@ fn human_size(bytes: u64) -> String {
 /// A recorded mtime of 0 is the "unknown" sentinel (remote inputs,
 /// unreadable metadata) — rendering it as `1970-01-01T00:00:00Z` claims a
 /// fact the engine does not have.
-fn format_mtime_nanos(nanos: i128) -> String {
+pub(crate) fn format_mtime_nanos(nanos: i128) -> String {
     if nanos == 0 {
         return "-".into();
     }
@@ -4434,6 +4434,8 @@ mod tests {
                 mtime_nanos: 1_700_000_000_000_000_000,
                 hash: Some("sha256:bbbb".to_string()),
                 remote: None,
+                is_symlink: false,
+                link_target: None,
             }],
         );
         cp

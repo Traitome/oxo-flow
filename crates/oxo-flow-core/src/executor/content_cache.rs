@@ -273,6 +273,8 @@ mod tests {
             mtime_nanos: 0,
             hash: hash.map(str::to_string),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }
     }
 
@@ -334,6 +336,8 @@ mod tests {
                 size: 1,
                 etag: None,
             }),
+            is_symlink: false,
+            link_target: None,
         };
         assert!(cache_entry_key(&rule, &HashMap::new(), "cmd", &[remote]).is_none());
         // Rules without cache_key never participate.

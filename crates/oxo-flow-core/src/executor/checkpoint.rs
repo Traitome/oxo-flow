@@ -77,6 +77,18 @@ pub struct InputManifestEntry {
     /// size+mtime+sha256 policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteManifestEntry>,
+    /// Whether the path resolved through a symlink at snapshot time
+    /// (issue #926 P0). `false` for direct files, remote objects, and
+    /// legacy checkpoints — display-only, never compared by
+    /// `entry_matches`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_symlink: bool,
+    /// Resolved symlink target (lexical `read_link` result, absolute when
+    /// the link was absolute) for symlinked inputs (issue #926 P0).
+    /// `None` for direct files, remote objects, and legacy checkpoints —
+    /// display-only, never compared by `entry_matches`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
 }
 
 /// Content identity of a remote input object.
@@ -147,14 +159,124 @@ fn entry_matches(recorded: &InputManifestEntry, current: &InputManifestEntry) ->
     }
 }
 
+/// One observed change between a recorded manifest entry and the current
+/// file set — the diff unit behind [`manifest_changes`] (issue #926 P0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestChange {
+    /// Path relative to the working directory.
+    pub path: String,
+    /// What kind of change this is.
+    pub kind: ManifestChangeKind,
+}
+
+/// The kind of input-manifest change (issue #926 P0). A size collapse to
+/// zero inside `Changed` gets the loud `(TRUNCATED)` label in
+/// [`ManifestChange::describe`] — qualitatively different from a content
+/// update (the vendor-data incident #926 was four ~60 GB FASTQs truncated
+/// to 0 B by a write through a symlink).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestChangeKind {
+    /// Same path, file state no longer matches the recorded snapshot.
+    Changed {
+        /// Recorded size in bytes.
+        old_size: u64,
+        /// Current size in bytes.
+        new_size: u64,
+        /// Recorded mtime (nanoseconds; 0 = unknown sentinel).
+        old_mtime_nanos: i128,
+        /// Current mtime (nanoseconds; 0 = unknown sentinel).
+        new_mtime_nanos: i128,
+        /// Recorded content hash (`sha256:…`), when one was captured.
+        old_hash: Option<String>,
+        /// Current content hash (`sha256:…`), when one was captured.
+        new_hash: Option<String>,
+        /// The recorded path resolved through a symlink.
+        was_symlink: bool,
+        /// The current file resolves through a symlink.
+        is_symlink: bool,
+    },
+    /// The recorded path no longer exists.
+    Removed,
+    /// A new path appeared that was not in the recorded snapshot.
+    Added,
+}
+
+impl ManifestChange {
+    /// One-line human description: `raw/X.fastq.gz: 21.2 GiB
+    /// @2026-07-14T…Z → 0 B @2026-10-24T…Z (TRUNCATED) [symlink]` (issue
+    /// #926 P0).
+    ///
+    /// Sizes are rendered in binary units via the same formatter the
+    /// provenance report uses (which carries its own unit, including
+    /// "0 B" for zero); mtime 0 (the unknown sentinel) renders as `-`.
+    /// A same-size/same-mtime change (hash-only drift) appends the
+    /// truncated content hashes.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match &self.kind {
+            ManifestChangeKind::Removed => format!("{} (removed)", self.path),
+            ManifestChangeKind::Added => format!("{} (added)", self.path),
+            ManifestChangeKind::Changed {
+                old_size,
+                new_size,
+                old_mtime_nanos,
+                new_mtime_nanos,
+                old_hash,
+                new_hash,
+                was_symlink,
+                is_symlink,
+            } => {
+                let mut s = format!(
+                    "{}: {} @{} → {} @{}",
+                    self.path,
+                    crate::report::human_size(*old_size),
+                    crate::report::format_mtime_nanos(*old_mtime_nanos),
+                    crate::report::human_size(*new_size),
+                    crate::report::format_mtime_nanos(*new_mtime_nanos),
+                );
+                // Same size and mtime but flagged changed means the content
+                // hash moved (hash-aware matching) — show it, truncated.
+                // Byte-slice truncation on the known `sha256:<hex>` prefix
+                // (ASCII); a defensive fallback keeps non-ASCII future
+                // formats from panicking on a char boundary.
+                let short = |h: &Option<String>| match h {
+                    Some(h) if h.len() > 18 => {
+                        format!("{}…", h.get(..18).unwrap_or(h))
+                    }
+                    Some(h) => h.clone(),
+                    None => "none".to_string(),
+                };
+                if old_hash != new_hash && (old_hash.is_some() || new_hash.is_some()) {
+                    s.push_str(&format!(
+                        " (content {} → {})",
+                        short(old_hash),
+                        short(new_hash)
+                    ));
+                }
+                // A size collapse to zero is qualitatively different from a
+                // content update (issue #926): label it TRUNCATED.
+                if *new_size == 0 && *old_size > 0 {
+                    s.push_str(" (TRUNCATED)");
+                }
+                if *is_symlink || *was_symlink {
+                    s.push_str(" [symlink]");
+                }
+                s
+            }
+        }
+    }
+}
+
 /// Human-readable description of what changed between a recorded manifest
-/// and the current file set — `"<path> (changed)"`, `"<path> (added)"`,
-/// `"<path> (removed)"` — the explanatory side of [`manifests_match`]
+/// and the current file set — the explanatory side of [`manifests_match`]
 /// (issue #194 §2.10: post-run re-verification reports WHICH inputs moved).
+///
+/// Each [`ManifestChange`] carries the old→new size/mtime facts so callers
+/// can surface per-entry diffs; `describe()` renders them (issue #926 P0).
 pub fn manifest_changes(
     recorded: &[InputManifestEntry],
     current: &[InputManifestEntry],
-) -> Vec<String> {
+) -> Vec<ManifestChange> {
     let mut changes = Vec::new();
     let recorded_by_path: HashMap<&str, &InputManifestEntry> =
         recorded.iter().map(|e| (e.path.as_str(), e)).collect();
@@ -164,18 +286,36 @@ pub fn manifest_changes(
     for (path, recorded_entry) in &recorded_by_path {
         match current_by_path.get(path) {
             Some(current_entry) if !entry_matches(recorded_entry, current_entry) => {
-                changes.push(format!("{path} (changed)"));
+                changes.push(ManifestChange {
+                    path: (*path).to_string(),
+                    kind: ManifestChangeKind::Changed {
+                        old_size: recorded_entry.size,
+                        new_size: current_entry.size,
+                        old_mtime_nanos: recorded_entry.mtime_nanos,
+                        new_mtime_nanos: current_entry.mtime_nanos,
+                        old_hash: recorded_entry.hash.clone(),
+                        new_hash: current_entry.hash.clone(),
+                        was_symlink: recorded_entry.is_symlink,
+                        is_symlink: current_entry.is_symlink,
+                    },
+                });
             }
             Some(_) => {}
-            None => changes.push(format!("{path} (removed)")),
+            None => changes.push(ManifestChange {
+                path: (*path).to_string(),
+                kind: ManifestChangeKind::Removed,
+            }),
         }
     }
     for path in current_by_path.keys() {
         if !recorded_by_path.contains_key(path) {
-            changes.push(format!("{path} (added)"));
+            changes.push(ManifestChange {
+                path: (*path).to_string(),
+                kind: ManifestChangeKind::Added,
+            });
         }
     }
-    changes.sort();
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
     changes
 }
 
@@ -1156,6 +1296,8 @@ pub fn snapshot_input_manifest(
                                 size: stat.size,
                                 etag: stat.etag,
                             }),
+                            is_symlink: false,
+                            link_target: None,
                         },
                     );
                 }
@@ -1398,9 +1540,10 @@ fn collect_pattern_entries(
 
 /// Record one path (file or directory) in the manifest.
 ///
-/// Symlinked directories are recorded as single entries, never traversed
-/// (cycle-safe, `walkdir` semantics); real directories are walked
-/// recursively.
+/// Symlinked files are recorded with their target's size/mtime plus the
+/// symlink fact (`is_symlink`/`link_target`, issue #926 P0); symlinked
+/// directories are recorded as single entries, never traversed (cycle-safe,
+/// `walkdir` semantics); real directories are walked recursively.
 fn insert_manifest_entry(
     path: &Path,
     workdir: &Path,
@@ -1419,10 +1562,10 @@ fn insert_manifest_entry(
             rule: String::new(),
             message: format!("cannot stat symlink target {}: {}", path.display(), e),
         })?;
-        record_manifest_file(path, workdir, &md, entries);
+        record_manifest_file(path, workdir, &md, entries, symlink_target(path));
         return Ok(());
     }
-    record_manifest_file(path, workdir, &smd, entries);
+    record_manifest_file(path, workdir, &smd, entries, None);
     Ok(())
 }
 
@@ -1453,16 +1596,25 @@ fn walk_dir(
                 rule: String::new(),
                 message: format!("cannot stat symlink target {}: {}", path.display(), e),
             })?;
-            record_manifest_file(&path, workdir, &md, entries);
+            record_manifest_file(&path, workdir, &md, entries, symlink_target(&path));
         } else {
             let md = item.metadata().map_err(|e| OxoFlowError::Execution {
                 rule: String::new(),
                 message: format!("cannot stat {}: {}", path.display(), e),
             })?;
-            record_manifest_file(&path, workdir, &md, entries);
+            record_manifest_file(&path, workdir, &md, entries, None);
         }
     }
     Ok(())
+}
+
+/// The lexical symlink target (`read_link`); `None` when the path is not a
+/// symlink or the read fails (defensive — the caller only invokes this for
+/// symlinks). Used purely for the display-only manifest fields.
+fn symlink_target(path: &Path) -> Option<String> {
+    std::fs::read_link(path)
+        .ok()
+        .map(|t| t.to_string_lossy().into_owned())
 }
 
 fn record_manifest_file(
@@ -1470,6 +1622,7 @@ fn record_manifest_file(
     workdir: &Path,
     md: &std::fs::Metadata,
     entries: &mut std::collections::BTreeMap<String, InputManifestEntry>,
+    link_target: Option<String>,
 ) {
     let rel = path
         .strip_prefix(workdir)
@@ -1486,6 +1639,8 @@ fn record_manifest_file(
             mtime_nanos: mtime,
             hash,
             remote: None,
+            is_symlink: link_target.is_some(),
+            link_target,
         },
     );
 }
@@ -2515,6 +2670,8 @@ mod tests {
             mtime_nanos: 0,
             hash: None,
             remote,
+            is_symlink: false,
+            link_target: None,
         }
     }
 
@@ -2661,6 +2818,8 @@ mod tests {
             mtime_nanos: 42,
             hash: None,
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }];
         let current = vec![InputManifestEntry {
             path: "in.txt".to_string(),
@@ -2668,6 +2827,8 @@ mod tests {
             mtime_nanos: 42,
             hash: Some("sha256:abc".to_string()),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }];
         assert!(manifests_match(&recorded, &current));
 
@@ -2677,6 +2838,8 @@ mod tests {
             mtime_nanos: 42,
             hash: Some("sha256:abc".to_string()),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }];
         assert!(!manifests_match(&recorded, &current_changed));
     }
@@ -2689,6 +2852,8 @@ mod tests {
             mtime_nanos: 1,
             hash: Some("sha256:abc".to_string()),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }];
         let current = vec![InputManifestEntry {
             path: "in.txt".to_string(),
@@ -2696,6 +2861,8 @@ mod tests {
             mtime_nanos: 999,
             hash: Some("sha256:abc".to_string()),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }];
         // Content identical: an mtime-only touch no longer invalidates.
         assert!(manifests_match(&recorded, &current));
@@ -2710,6 +2877,8 @@ mod tests {
                 mtime_nanos: mtime,
                 hash: hash.map(str::to_string),
                 remote: None,
+                is_symlink: false,
+                link_target: None,
             }
         }
         let recorded = vec![
@@ -2725,11 +2894,70 @@ mod tests {
             local("new.txt", 1, 1, None),
         ];
         let changes = manifest_changes(&recorded, &current);
+        let described: Vec<String> = changes.iter().map(|c| c.describe()).collect();
+        // b.txt changed by content hash only (size/mtime equal) — describe()
+        // must surface the hash drift, not a bare "(changed)".
         assert_eq!(
-            changes,
-            vec!["b.txt (changed)", "gone.txt (removed)", "new.txt (added)"]
+            described,
+            vec![
+                "b.txt: 20 B @1970-01-01T00:00:00Z → 20 B @1970-01-01T00:00:00Z (content sha256:bbb → sha256:CHANGED)",
+                "gone.txt (removed)",
+                "new.txt (added)"
+            ]
         );
+        // The Changed variant carries the old→new facts for richer surfaces.
+        assert!(matches!(
+            changes[0].kind,
+            ManifestChangeKind::Changed {
+                was_symlink: false,
+                is_symlink: false,
+                ..
+            }
+        ));
         assert!(!manifests_match(&recorded, &current));
+    }
+
+    #[test]
+    fn manifest_change_describe_labels_truncation_and_symlinks() {
+        // Size collapse to zero is the vendor-data incident shape (issue
+        // #926): it must read as TRUNCATED, not a plain content update.
+        let truncated = ManifestChange {
+            path: "raw/X.fastq.gz".to_string(),
+            kind: ManifestChangeKind::Changed {
+                old_size: 22_730_381_448,
+                new_size: 0,
+                old_mtime_nanos: 1_700_000_000_000_000_000,
+                new_mtime_nanos: 1_760_000_000_000_000_000,
+                old_hash: Some("sha256:vendor-aaaa".to_string()),
+                new_hash: None,
+                was_symlink: true,
+                is_symlink: true,
+            },
+        };
+        let d = truncated.describe();
+        assert!(d.contains("21.2 GiB"), "human-readable old size in {d}");
+        assert!(d.contains("0 B"), "zero renders with its unit in {d}");
+        assert!(d.contains("(TRUNCATED)"), "truncation label in {d}");
+        assert!(d.contains("[symlink]"), "symlink label in {d}");
+        assert!(!d.contains(" B B"), "no doubled unit in {d}");
+
+        // A grown file is a plain diff, no TRUNCATED label.
+        let grew = ManifestChange {
+            path: "raw/Y.fastq.gz".to_string(),
+            kind: ManifestChangeKind::Changed {
+                old_size: 10,
+                new_size: 20,
+                old_mtime_nanos: 1,
+                new_mtime_nanos: 2,
+                old_hash: None,
+                new_hash: None,
+                was_symlink: false,
+                is_symlink: false,
+            },
+        };
+        let d = grew.describe();
+        assert!(!d.contains("(TRUNCATED)"));
+        assert!(!d.contains("[symlink]"));
     }
 
     #[tokio::test]
@@ -3014,6 +3242,61 @@ mod tests {
         assert!(
             compute_file_checksum(&fifo).is_err(),
             "checksum on a writer-less FIFO must error, never open it"
+        );
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    /// Issue #926 P0: a symlinked input is recorded with its symlink facts —
+    /// `is_symlink` + lexical `link_target` — while size/mtime/hash come
+    /// from the TARGET (what the rule actually reads). The facts are
+    /// display-only: manifests_match never compares them, so a same-content
+    /// rewrite through the link stays "matching" and the notice (not an
+    /// invalidation) is the mitigation.
+    #[cfg(unix)]
+    #[test]
+    fn manifest_symlink_input_records_target_facts_and_still_matches() {
+        let wd = temp_workdir("symlink");
+        write_file(&wd, "vendor/raw/S1.fq", "real-sequencing-data");
+        std::fs::create_dir_all(wd.join("raw")).unwrap();
+        std::os::unix::fs::symlink(wd.join("vendor/raw/S1.fq"), wd.join("raw/S1.fq")).unwrap();
+        let rule = list_rule("trim", &["raw/S1.fq"]);
+        let manifest = snapshot(&rule, &wd).expect("symlinked input is trackable");
+        assert_eq!(manifest.len(), 1);
+        let entry = &manifest[0];
+        assert_eq!(entry.path, "raw/S1.fq");
+        assert!(entry.is_symlink, "symlink fact recorded");
+        assert_eq!(
+            entry.link_target.as_deref(),
+            Some(wd.join("vendor/raw/S1.fq").to_str().unwrap()),
+            "lexical read_link target (not canonicalized)"
+        );
+        // Size/mtime describe the TARGET, not the link inode.
+        assert_eq!(entry.size, 20);
+        assert!(entry.mtime_nanos > 0);
+        assert!(
+            entry.hash.is_some(),
+            "the target is hashed (under the cap), so the content identity is real"
+        );
+
+        // Display-only: replacing the link with a DIFFERENT link pointing at
+        // an identical-content copy keeps manifests_match true.
+        write_file(&wd, "vendor/raw/S1-copy.fq", "real-sequencing-data");
+        std::fs::remove_file(wd.join("raw/S1.fq")).unwrap();
+        std::os::unix::fs::symlink(wd.join("vendor/raw/S1-copy.fq"), wd.join("raw/S1.fq")).unwrap();
+        let re_snapshot = snapshot(&rule, &wd).expect("re-snapshot after retarget");
+        assert!(
+            manifests_match(&manifest, &re_snapshot),
+            "symlink facts are display-only — a same-content retarget must not invalidate"
+        );
+
+        // But a genuine content change THROUGH the link still invalidates —
+        // written via the link path itself, exactly like the incident #926
+        // documents (the write lands in the target).
+        std::fs::write(wd.join("raw/S1.fq"), b"truncated!").unwrap();
+        let after_write = snapshot(&rule, &wd).expect("snapshot after content edit");
+        assert!(
+            !manifests_match(&manifest, &after_write),
+            "a real content change via the link must invalidate"
         );
         let _ = std::fs::remove_dir_all(&wd);
     }
@@ -3350,6 +3633,8 @@ mod tests {
                 mtime_nanos: 42,
                 hash: None,
                 remote: None,
+                is_symlink: false,
+                link_target: None,
             }],
         );
         let json = state.to_json().unwrap();
@@ -3362,6 +3647,8 @@ mod tests {
                 mtime_nanos: 42,
                 hash: None,
                 remote: None,
+                is_symlink: false,
+                link_target: None,
             }]
         );
         // Older checkpoints without input_manifests still load.

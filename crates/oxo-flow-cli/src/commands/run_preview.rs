@@ -233,16 +233,24 @@ pub fn preview_run_plan(
 
     // 2. Input-manifest invalidation (issue #72) — on the clone only.
     //    Missing inputs (typically tombstoned temporaries) cascade UP: the
-    //    completed producers re-execute first, exactly like run.
-    let (manifest_invalidated, missing_inputs, _baselined, sample_selection_driven) =
-        detect_input_manifest_invalidations(
-            &mut clone,
-            config,
-            dag,
-            order,
-            workdir,
-            wildcard_values,
-        );
+    //    completed producers re-execute first, exactly like run. The diff
+    //    lines and symlink notices are run-only presentation (issue #926
+    //    P0); the dry-run preview keeps the bare per-rule summary.
+    let (
+        manifest_invalidated,
+        missing_inputs,
+        _baselined,
+        sample_selection_driven,
+        _input_diffs,
+        _symlink_notices,
+    ) = detect_input_manifest_invalidations(
+        &mut clone,
+        config,
+        dag,
+        order,
+        workdir,
+        wildcard_values,
+    );
     // Issue #142 M1: rules whose ONLY input change is the engine-injected
     // sample-list stay skipped — warn (mirrors run), never invalidate.
     for name in sample_selection_driven.iter() {
@@ -486,15 +494,38 @@ pub fn rule_outputs_exist(
     oxo_flow_core::executor::checkpoint::rule_outputs_exist(rule, workdir, wildcard_values)
 }
 
+/// Everything `detect_input_manifest_invalidations` reports:
+/// `(mismatched, missing_inputs, baselined, sample_selection_driven,
+/// input_diffs, symlink_notices)` — the fields mirror the doc comment of
+/// the detect function.
+pub type ManifestInvalidations = (
+    HashSet<String>,
+    HashSet<String>,
+    usize,
+    HashSet<String>,
+    HashMap<String, Vec<String>>,
+    Vec<String>,
+);
+
 /// Compare completed rules' input manifests against the current file set.
 ///
 /// Returns (content-mismatched rule names, rules whose inputs are MISSING,
 /// number of legacy-baseline adoptions, rules whose only mismatch is the
-/// engine-injected sample-selection change). The missing set drives
-/// cascade-up: the completed producers of those inputs must re-execute
-/// first. The sample-selection set stays completed — its mismatch does not
-/// invalidate (issue #142 M1, documented run.md contract) and is surfaced
-/// as a warning by the caller.
+/// engine-injected sample-selection change, per-rule input diffs, first-seen
+/// symlink notices). The
+/// missing set drives cascade-up: the completed producers of those inputs
+/// must re-execute first. The sample-selection set stays completed — its
+/// mismatch does not invalidate (issue #142 M1, documented run.md contract)
+/// and is surfaced as a warning by the caller. The diff map (issue #926
+/// P0) holds one `ManifestChange::describe` line per changed file for
+/// every invalidated rule, so the run/preview output can say WHAT changed
+/// (size collapse → `(TRUNCATED)`, symlink churn → `[symlink]`) instead of
+/// only THAT it changed; sample-selection mismatches carry no diffs (the
+/// engine-injected sample list can be hundreds of lines of noise). The
+/// notice list (issue #926 P0 item 3) carries one deduplicated, sorted
+/// `input <path> is a symlink → <target>` line per first-seen symlinked
+/// input across ALL completed rules — display-only facts, so a notice can
+/// appear while the manifests still match; the caller prints them.
 ///
 /// Mutates `ck` by recording baselines for legacy checkpoints — exactly
 /// like `run` does; pass a clone for a read-only preview.
@@ -505,11 +536,16 @@ pub fn detect_input_manifest_invalidations(
     order: &[String],
     workdir: &Path,
     wildcard_values: &HashMap<String, String>,
-) -> (HashSet<String>, HashSet<String>, usize, HashSet<String>) {
+) -> ManifestInvalidations {
     let mut mismatched: HashSet<String> = HashSet::new();
     let mut missing_inputs: HashSet<String> = HashSet::new();
     let mut baselined = 0usize;
     let mut sample_selection_driven: HashSet<String> = HashSet::new();
+    let mut input_diffs: HashMap<String, Vec<String>> = HashMap::new();
+    // First-seen symlink notices (issue #926 P0): "input X is a symlink →
+    // <target>", deduped (a BTreeSet both dedupes and orders), collected
+    // from every rule's current manifest regardless of invalidation.
+    let mut symlink_notices: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for name in order {
         if !ck.completed_rules.contains(name) {
             continue;
@@ -529,31 +565,57 @@ pub fn detect_input_manifest_invalidations(
             wildcard_values,
             &storage_resolver(),
         ) {
-            Ok(Some(current)) => match ck.input_manifests.get(name) {
-                Some(recorded)
-                    if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) => {
-                }
-                Some(recorded) => {
-                    // The file set changed — but if the change is exactly
-                    // the engine's injected sample list (expand_inputs over
-                    // config.samples_list / samples_<group> / pairs_list),
-                    // toggling --samples must stay cheap (run.md contract):
-                    // the rule stays completed, its outputs keep reflecting
-                    // the previous run's sample set. Anything else — a
-                    // genuine file edit, a user-touched set — invalidates
-                    // as before (issue #142 M1).
-                    if manifest_mismatch_is_sample_selection(rule, recorded, &current, config) {
-                        sample_selection_driven.insert(name.clone());
-                    } else {
-                        mismatched.insert(name.clone());
+            Ok(Some(current)) => {
+                // First-seen symlink notice (issue #926 P0 item 3): the
+                // recorded facts are display-only (never compared by
+                // entry_matches), so say once per run what resolves through
+                // a symlink — the write-through-symlink hazard the issue
+                // documents lives exactly here.
+                for entry in &current {
+                    if entry.is_symlink
+                        && let Some(target) = &entry.link_target
+                    {
+                        symlink_notices
+                            .insert(format!("input {} is a symlink → {}", entry.path, target));
                     }
                 }
-                None => {
-                    // Legacy baseline: adopt the current set.
-                    ck.record_input_manifest(name, current);
-                    baselined += 1;
+                match ck.input_manifests.get(name) {
+                    Some(recorded)
+                        if oxo_flow_core::executor::checkpoint::manifests_match(
+                            recorded, &current,
+                        ) => {}
+                    Some(recorded) => {
+                        // The file set changed — but if the change is exactly
+                        // the engine's injected sample list (expand_inputs over
+                        // config.samples_list / samples_<group> / pairs_list),
+                        // toggling --samples must stay cheap (run.md contract):
+                        // the rule stays completed, its outputs keep reflecting
+                        // the previous run's sample set. Anything else — a
+                        // genuine file edit, a user-touched set — invalidates
+                        // as before (issue #142 M1).
+                        if manifest_mismatch_is_sample_selection(rule, recorded, &current, config) {
+                            sample_selection_driven.insert(name.clone());
+                        } else {
+                            // Carry WHAT changed (issue #926 P0): per-entry
+                            // old→new facts, sorted by path for deterministic
+                            // output.
+                            let diffs = oxo_flow_core::executor::checkpoint::manifest_changes(
+                                recorded, &current,
+                            )
+                            .into_iter()
+                            .map(|c| c.describe())
+                            .collect::<Vec<_>>();
+                            input_diffs.insert(name.clone(), diffs);
+                            mismatched.insert(name.clone());
+                        }
+                    }
+                    None => {
+                        // Legacy baseline: adopt the current set.
+                        ck.record_input_manifest(name, current);
+                        baselined += 1;
+                    }
                 }
-            },
+            }
             Ok(None) => {}
             Err(_) => {
                 // Inputs cannot be resolved — files are missing. If every
@@ -606,6 +668,8 @@ pub fn detect_input_manifest_invalidations(
         missing_inputs,
         baselined,
         sample_selection_driven,
+        input_diffs,
+        symlink_notices.into_iter().collect::<Vec<_>>(),
     )
 }
 
@@ -1568,6 +1632,8 @@ shell = "echo hi > {output}"
             mtime_nanos: 1000,
             hash: Some("sha256:abc".to_string()),
             remote: None,
+            is_symlink: false,
+            link_target: None,
         }
     }
 
@@ -1707,5 +1773,121 @@ shell = "echo hi > {output}"
             !manifest_mismatch_is_sample_selection(gather, &recorded, &current, &config),
             "a set the injected value cannot produce must invalidate"
         );
+    }
+
+    /// Issue #926 P0: a truncated input (size collapse to 0 — the
+    /// write-through-symlink incident) carries a `(TRUNCATED)` diff line for
+    /// the invalidated rule; a deleted input reports the producer for
+    /// cascade-up, not a diff.
+    #[test]
+    fn detect_reports_truncated_and_removed_input_diffs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let mut ck = completed_checkpoint(&config, &order, dir.path(), &wildcard_values);
+
+        // The incident shape: raw/S1.fq collapses to 0 bytes, raw/S2.fq
+        // disappears entirely.
+        std::fs::write(dir.path().join("raw/S1.fq"), b"").unwrap();
+        std::fs::remove_file(dir.path().join("raw/S2.fq")).unwrap();
+
+        let (mismatched, missing_inputs, _baselined, sample_selection, input_diffs, _notices) =
+            detect_input_manifest_invalidations(
+                &mut ck,
+                &config,
+                &dag,
+                &order,
+                dir.path(),
+                &wildcard_values,
+            );
+        assert!(
+            mismatched.contains("trim_cohort_S1"),
+            "truncated input invalidates its consumer"
+        );
+        assert!(
+            mismatched.contains("trim_cohort_S2"),
+            "deleted input invalidates its consumer"
+        );
+        let diffs = input_diffs.get("trim_cohort_S1").expect("S1 diff lines");
+        assert!(
+            diffs.iter().any(|l| l.contains("(TRUNCATED)")),
+            "size collapse to 0 must be labeled TRUNCATED, got {diffs:?}"
+        );
+        assert!(sample_selection.is_empty(), "a real edit is not selection");
+        // raw/S2.fq is an external source with NO producer rule at all — the
+        // Err(_) arm fires, which reports missing_inputs for cascade-up but
+        // carries no diff map (the file set cannot be diffed; the producer
+        // run's own missing-input warning covers it).
+        assert!(
+            missing_inputs.contains("trim_cohort_S2"),
+            "an external source file with no producer reports missing"
+        );
+    }
+
+    /// Issue #926 P0 item 3: first-seen symlink notices — collected for
+    /// every symlinked input regardless of invalidation, deduped, sorted.
+    #[cfg(unix)]
+    #[test]
+    fn detect_collects_first_seen_symlink_notices() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, dag, order, wildcard_values) = fixture(dir.path());
+        let mut ck = completed_checkpoint(&config, &order, dir.path(), &wildcard_values);
+
+        // Nothing changed: manifests match, but the notice still surfaces —
+        // display-only facts, exactly the incident #926 describes.
+        let (_, _, _, _, _, notices) = detect_input_manifest_invalidations(
+            &mut ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(notices.is_empty(), "regular files produce no notice");
+
+        // Point raw/S2.fq at a same-content copy via a symlink.
+        std::fs::copy(
+            dir.path().join("raw/S2.fq"),
+            dir.path().join("raw/S2.orig.fq"),
+        )
+        .unwrap();
+        std::fs::remove_file(dir.path().join("raw/S2.fq")).unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("raw/S2.orig.fq"),
+            dir.path().join("raw/S2.fq"),
+        )
+        .unwrap();
+
+        let (mismatched, _, _, _, _, notices) = detect_input_manifest_invalidations(
+            &mut ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &wildcard_values,
+        );
+        assert!(
+            !mismatched.contains("trim_cohort_S2"),
+            "a same-content symlink swap must not invalidate (facts are display-only)"
+        );
+        assert_eq!(
+            notices,
+            vec![format!(
+                "input raw/S2.fq is a symlink → {}",
+                dir.path().join("raw/S2.orig.fq").display()
+            )],
+            "exactly one first-seen notice, with the lexical target"
+        );
+
+        // Running detection again (same state) keeps the single notice —
+        // "once per run", not once per process lifetime.
+        let (_, _, _, _, _, notices2) = detect_input_manifest_invalidations(
+            &mut ck,
+            &config,
+            &dag,
+            &order,
+            dir.path(),
+            &wildcard_values,
+        );
+        assert_eq!(notices, notices2, "notice is per-run, not per-baseline");
     }
 }
