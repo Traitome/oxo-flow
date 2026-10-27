@@ -184,9 +184,11 @@ fn shell_quote_word(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Compute SHA-256 checksum of a file (streaming, 64KB buffer).
-pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
+/// Compute the hex digest of a file with a stat-first regular-file gate
+/// and a streaming 64KB read loop. Shared by `compute_sha256` and
+/// `verify-data`'s md5 hashing — the #714 FIFO-safety gate lives here so
+/// it can never drift from one of its call sites.
+fn hash_file_with<D: sha2::Digest>(path: &Path, mut hasher: D) -> Result<String> {
     use std::io::Read;
 
     // Stat-first regular-file gate (issue #714, pattern from #695/#706):
@@ -200,7 +202,6 @@ pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
     let mut reader = std::io::BufReader::with_capacity(65536, file);
-    let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
         let n = reader.read(&mut buf)?;
@@ -209,7 +210,14 @@ pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Compute SHA-256 checksum of a file (streaming, 64KB buffer).
+pub(crate) fn compute_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    Ok(format!("sha256:{}", hash_file_with(path, Sha256::new())?))
 }
 
 /// Wrap command with environment activation.

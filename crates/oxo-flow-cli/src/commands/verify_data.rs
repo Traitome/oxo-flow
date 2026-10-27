@@ -2,8 +2,9 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use crate::commands::hash_file_with;
 
 /// One verified file's outcome, machine-readable for `--json`.
 #[derive(Debug, Serialize)]
@@ -140,39 +141,22 @@ fn parse_md5_sidecar(content: &str) -> Result<Vec<(String, String)>> {
     Ok(entries)
 }
 
-/// Stream the md5 of one file with a stat-first regular-file gate.
+/// Stream the md5 of one file via the shared stat-first hash helper.
 ///
-/// Same gate as `compute_sha256` (issue #714): `File::open` on a
-/// writer-less FIFO blocks forever, so regularity is checked before any
-/// descriptor is opened.
+/// The regular-file gate lives in `hash_file_with` (issue #714):
+/// `File::open` on a writer-less FIFO blocks forever, so regularity is
+/// checked before any descriptor is opened.
 fn md5_of_file(path: &Path) -> Result<String> {
-    use md5::Digest;
+    use md5::{Digest, Md5};
 
-    let meta = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat for checksum: {}", path.display()))?;
-    if !meta.is_file() {
-        anyhow::bail!("cannot checksum {}: not a regular file", path.display());
-    }
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open for checksum: {}", path.display()))?;
-    let mut reader = std::io::BufReader::with_capacity(65536, file);
-    let mut hasher = md5::Md5::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
+    hash_file_with(path, Md5::new())
 }
 
 /// The pure tree-walk + classification core (unit-testable).
 ///
 /// Returns `(matched, mismatched, missing, extra, entries)` in a
 /// deterministic order: sidecar entries in sorted path order, then
-/// on-disk extras in sorted path order.
+/// on-disk extras in sorted path order (`sort_by_file_name`).
 fn verify_tree(
     expected: &[(String, String)],
     tree: &Path,
@@ -213,10 +197,12 @@ fn verify_tree(
     }
 
     // On-disk extras: files present under the tree but absent from the
-    // sidecar (or explicitly ignored). Deterministic sorted order; the
-    // walk skips engine internals and FIFOs (stat-first gate parity).
+    // sidecar (or explicitly ignored). Deterministic sorted order
+    // (`sort_by_file_name` — walkdir's default is OS readdir order);
+    // the walk skips engine internals and FIFOs (stat-first gate parity).
     for entry in walkdir::WalkDir::new(tree)
         .follow_links(false)
+        .sort_by_file_name()
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -287,7 +273,7 @@ pub fn verify_data_command(tree: PathBuf, from: PathBuf, json: bool) -> Result<(
         .with_context(|| format!("failed to parse md5 sidecar {}", from_abs.display()))?;
     if listed.is_empty() {
         eprintln!(
-            "  {} md5 sidecar lists no files — nothing to verify.",
+            "  {} md5 sidecar lists no files — nothing to verify (extras scan skipped).",
             "Note:".bold().yellow()
         );
         if json {

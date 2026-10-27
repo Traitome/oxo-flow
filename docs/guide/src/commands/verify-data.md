@@ -51,8 +51,9 @@ not list (extras).
 ## Exit Code
 
 `0` when every listed file matches and nothing is missing or extra; `1` when
-any file mismatches, is missing, or is unlisted — so the command drops
-straight into scripts and post-recovery gates.
+any listed file mismatches, is missing, or is unlisted — so the command drops
+straight into scripts and post-recovery gates. (An empty sidecar — zero
+listed files — reports a note and exits `0` without scanning for extras.)
 
 ## Examples
 
@@ -132,10 +133,10 @@ which carry a `note`), `missing` (listed in the sidecar, absent on disk), and
   [provenance](provenance.md).
 - To detect drift continuously during a run (not just as a one-shot audit),
   declare the tree under `[engine] protected_data_trees` — see
-  [run](run.md#protected-data-trees).
+  [run](run.md#protected-data-trees-protected_data_trees).
 
 ## See Also
 
 - [provenance](provenance.md) — verify run outputs against the checkpoint's stored checksums
-- [run](run.md#protected-data-trees) — whole-tree drift detection during runs
+- [run](run.md#protected-data-trees-protected_data_trees) — whole-tree drift detection during runs
 - [workflow format reference](../reference/workflow-format.md) — `[engine]` section
