@@ -2041,6 +2041,131 @@ pub async fn get_run_preview(
 
 #[utoipa::path(
     get,
+    path = "/api/runs/{id}/protected-drift",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Success", body = ProtectedDriftResponse),
+        (status = 404, description = "Error", body = ApiError),
+        (status = 503, description = "Error", body = ApiError),
+    )
+)]
+/// GET /api/runs/{id}/protected-drift — read-only protected-tree drift
+/// preview (issue #935 CLI→web parity slice 3).
+///
+/// Diffs every `[engine] protected_data_trees` entry of the run's workflow
+/// snapshot against the baseline manifest recorded in the run's checkpoint
+/// (`.oxo-flow/checkpoint.json`), reusing the exact core machinery the CLI
+/// detector drives (`snapshot_protected_tree` → `manifests_match` /
+/// `manifest_changes` → `ManifestChange::describe`). The response shape
+/// mirrors the CLI dry-run's `protected_tree_drift` object.
+///
+/// Read-only by contract: baselines are never persisted here (the CLI's
+/// `run` gate adopts them; dry-run previews don't), so repeated calls are
+/// stable. Trees without a baseline yet are counted in `new_trees` ("would
+/// be baselined"), matching the dry-run narration. Note the preview reads
+/// the tree as it exists NOW — like dry-run, it does not reserve the
+/// verdict: files can still change between this call and the actual run.
+pub async fn get_run_protected_drift(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<ProtectedDriftResponse> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
+    let workdir = run.workdir.as_deref().unwrap_or("");
+
+    // The protected trees are declared in the workflow's [engine] section —
+    // read them from the persisted snapshot, the same source the spawned
+    // CLI parses. An unparseable snapshot means no declared trees (the run
+    // would have failed before any tree could be protected).
+    let config = oxo_flow_core::config::WorkflowConfig::parse(&run.pipeline_snapshot).ok();
+    let trees: Vec<String> = config
+        .as_ref()
+        .and_then(|wf| wf.engine.as_ref())
+        .map(|e| e.protected_data_trees().to_vec())
+        .unwrap_or_default();
+    if trees.is_empty() {
+        return Ok(Json(ProtectedDriftResponse {
+            drifted_files: Vec::new(),
+            new_trees: 0,
+            warnings: Vec::new(),
+        }));
+    }
+
+    // Baselines live in the engine's checkpoint. Absent checkpoint (run
+    // staged but not started, or a fresh workdir) = no baselines yet —
+    // every existing tree then reports as new_trees, exactly the
+    // before-first-run preview.
+    let workdir_path = std::path::Path::new(workdir);
+    let ck = oxo_flow_core::executor::CheckpointState::load_from_file(
+        &oxo_flow_core::executor::CheckpointState::default_path(workdir_path),
+    )
+    .unwrap_or_else(|_| oxo_flow_core::executor::CheckpointState::new());
+
+    // Same loop contract as the CLI detector (run_preview.rs
+    // `detect_protected_tree_drift`), minus the baseline recording — the
+    // detector mutates `ck` on first observation, the web preview reports
+    // the adoption instead (dry-run semantics: nothing persisted).
+    // BTreeSet: deterministic order across calls regardless of config order.
+    let mut drifted_files: Vec<String> = Vec::new();
+    let mut new_trees = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+    for tree in trees.iter().collect::<std::collections::BTreeSet<_>>() {
+        let rel = tree
+            .trim()
+            .trim_start_matches("./")
+            .trim_end_matches('/')
+            .to_string();
+        if rel.is_empty() {
+            warnings.push("protected_data_trees: empty path value ignored".to_string());
+            continue;
+        }
+        let abs = workdir_path.join(&rel);
+        match oxo_flow_core::executor::checkpoint::snapshot_protected_tree(&abs, workdir_path) {
+            Ok(Some(current)) => match ck.protected_tree_baselines.get(&rel) {
+                Some(recorded)
+                    if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) =>
+                {
+                    // Baseline still matches — nothing to report.
+                }
+                Some(recorded) => {
+                    for change in
+                        oxo_flow_core::executor::checkpoint::manifest_changes(recorded, &current)
+                    {
+                        drifted_files.push(change.describe());
+                    }
+                }
+                None => {
+                    // First observation: the run gate would adopt this
+                    // baseline; the preview only reports it.
+                    new_trees += 1;
+                }
+            },
+            Ok(None) => {
+                // Tree does not exist yet: adoption deferred, nothing to
+                // preview.
+            }
+            Err(e) => {
+                warnings.push(format!("protected tree {rel}/ not readable: {e}"));
+            }
+        }
+    }
+
+    Ok(Json(ProtectedDriftResponse {
+        drifted_files,
+        new_trees,
+        warnings,
+    }))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/runs/{id}/ai-status",
     tag = "runs",
     responses(
@@ -2978,6 +3103,84 @@ mod bounded_subprocess_tests {
             out.stderr.contains("malformed"),
             "stderr must name the sidecar problem: {}",
             out.stderr
+        );
+    }
+
+    /// Wire-level test for `GET /api/runs/{id}/protected-drift` (issue #935
+    /// slice 3): the core diff machinery the handler drives, exercised
+    /// against a real tree + checkpoint, asserting the CLI-mirroring
+    /// contract — first observation counts as new_trees (not drift), later
+    /// mutations surface as one `describe()` line each, and NOTHING is
+    /// persisted (read-only like dry-run).
+    #[test]
+    fn protected_drift_preview_is_read_only_and_mirrors_cli() {
+        use oxo_flow_core::executor::CheckpointState;
+        use oxo_flow_core::executor::checkpoint as ckpt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().join("workdir");
+        std::fs::create_dir_all(workdir.join("raw")).unwrap();
+        std::fs::write(workdir.join("raw/S1.fq"), b"AAAA").unwrap();
+        std::fs::write(workdir.join("raw/S2.fq"), b"BBBB").unwrap();
+
+        // No checkpoint on disk → baselines map empty: first observation is
+        // reported as new_trees, never as drift.
+        let ck = CheckpointState::load_from_file(&CheckpointState::default_path(&workdir))
+            .unwrap_or_else(|_| CheckpointState::new());
+        assert!(
+            ck.protected_tree_baselines.is_empty(),
+            "absent checkpoint = no baselines"
+        );
+
+        let current = ckpt::snapshot_protected_tree(&workdir.join("raw"), &workdir)
+            .expect("tree readable")
+            .expect("tree exists");
+        assert!(
+            !ck.protected_tree_baselines.contains_key("raw"),
+            "no baseline yet → preview reports new_trees, not drift"
+        );
+        assert!(ckpt::manifests_match(&current, &current));
+
+        // Seed a baseline (what a prior run would have persisted) and
+        // confirm the diff path surfaces truncation + removal.
+        let mut ck2 = CheckpointState::new();
+        ck2.record_protected_tree_baseline("raw", current);
+        std::fs::write(workdir.join("raw/S1.fq"), b"").unwrap();
+        std::fs::remove_file(workdir.join("raw/S2.fq")).unwrap();
+
+        let recorded = ck2.protected_tree_baselines.get("raw").unwrap();
+        assert!(!ckpt::manifests_match(
+            recorded,
+            &ckpt::snapshot_protected_tree(&workdir.join("raw"), &workdir)
+                .unwrap()
+                .unwrap()
+        ));
+        let lines: Vec<String> = ckpt::manifest_changes(
+            recorded,
+            &ckpt::snapshot_protected_tree(&workdir.join("raw"), &workdir)
+                .unwrap()
+                .unwrap(),
+        )
+        .iter()
+        .map(|c| c.describe())
+        .collect();
+        assert_eq!(lines.len(), 2, "one line per drifted file: {lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("S1.fq") && l.contains("(TRUNCATED)"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("S2.fq") && l.contains("removed"))
+        );
+
+        // The read-only contract: no checkpoint file was created by any of
+        // the calls above (the run gate, not the preview, persists).
+        assert!(
+            !CheckpointState::default_path(&workdir).exists(),
+            "preview must not persist baselines"
         );
     }
 }

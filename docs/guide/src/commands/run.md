@@ -1325,7 +1325,12 @@ noticed within one invocation, not prevented. Combined with
 `--provenance` checksums it catches damaged vendor data before any rule
 consumes it. For a one-shot audit of a whole tree against the vendor's own
 `md5.txt` sidecar (post-incident audits, post-recovery verification), use
-[`oxo-flow verify-data`](verify-data.md).
+[`oxo-flow verify-data`](verify-data.md). On a web-served instance the same
+drift state is available per run as a read-only HTTP preview:
+`GET /api/runs/{id}/protected-drift` (see
+[Web API reference](../reference/web-api.md#protected-tree-drift-preview)) —
+it never records baselines, so it is safe to poll before overriding a gate
+with `allow_protected_drift` on `POST /api/runs`.
 
 ### Forcing Execution
 
