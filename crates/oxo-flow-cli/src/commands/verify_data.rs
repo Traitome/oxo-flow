@@ -200,13 +200,39 @@ fn verify_tree(
     // sidecar (or explicitly ignored). Deterministic sorted order
     // (`sort_by_file_name` — walkdir's default is OS readdir order);
     // the walk skips engine internals and FIFOs (stat-first gate parity).
+    //
+    // Traversal errors (e.g. an unreadable subdirectory) are reported as
+    // extra-error entries instead of silently skipped — an audit that
+    // couldn't fully walk the tree must not present a clean verdict (#938
+    // m5). Symlinks are neither followed nor hashed: `follow_links(false)`
+    // yields them with a non-regular file type, so they stay invisible to
+    // this audit — documented in docs/guide/src/commands/verify-data.md.
     for entry in walkdir::WalkDir::new(tree)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
     {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                // A failed directory read yields no entry; report the
+                // traversal failure itself so the summary reflects it.
+                // Fail-closed even for paths the Ok arm would skip
+                // (`ignore`-listed, `.oxo-flow/`): the walk could not see
+                // past this point, so an unreadable engine-internal
+                // directory still invalidates a clean verdict (#938 m5).
+                let rel = entry_root_relative(tree, e.path().unwrap_or(tree));
+                entries.push(VerifyDataEntry::extra_error(
+                    &rel,
+                    &format!("tree walk failed: {e}"),
+                ));
+                extra += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let rel = entry
             .path()
             .strip_prefix(tree)
@@ -236,6 +262,17 @@ fn verify_tree(
     }
 
     (matched, mismatched, missing, extra, entries)
+}
+
+/// Best-effort tree-relative rendering of a walkdir error path. Falls
+/// back to `"."` when the error carries no path (or the tree root itself
+/// failed) so the JSON never carries an empty-string `file` key.
+fn entry_root_relative(tree: &Path, path: &Path) -> String {
+    match path.strip_prefix(tree) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel.to_string_lossy().to_string(),
+        Ok(_) => ".".to_string(),
+        Err(_) => path.to_string_lossy().to_string(),
+    }
 }
 
 /// Default per-tree exclusion applied to the extras walk: the engine's
@@ -327,7 +364,7 @@ pub fn verify_data_command(tree: PathBuf, from: PathBuf, json: bool) -> Result<(
                     actual
                 ),
                 (_, Some(note)) => eprintln!(
-                    "  {} {} (not listed in sidecar, checksum error: {})",
+                    "  {} {} (not listed in sidecar, {})",
                     "!".yellow().bold(),
                     entry.file,
                     note
@@ -530,5 +567,49 @@ d41d8cd98f00b204e9800998ecf8427e  a.txt
         assert!(engine_internal(".oxo-flow/checkpoint.json"));
         assert!(!engine_internal(".oxo-flowx"));
         assert!(!engine_internal("data/.oxo-flow"));
+    }
+
+    #[test]
+    fn unreadable_subdirectory_is_reported_not_silently_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "listed.txt", "x\n");
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+
+        // Strip all permission bits so readdir on `locked/` fails; walkdir
+        // then surfaces a traversal error instead of an entry (Unix only —
+        // permission bits are advisory on some platforms, so this test
+        // only asserts when the lock actually takes effect).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&locked).unwrap();
+            let original = meta.permissions().mode() & 0o777;
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+            let listed = vec![("listed.txt".to_string(), md5_of("x\n"))];
+            let (_, _, _, extra, entries) = verify_tree(&listed, dir.path(), &[]);
+
+            // Restore first so tempdir cleanup can succeed.
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(original)).unwrap();
+
+            if extra == 0 {
+                // The walk did not fail (e.g. running as root); nothing to
+                // assert beyond the clean classification.
+                return;
+            }
+            assert_eq!(extra, 1, "expected exactly the traversal-error entry");
+            let entry = entries.last().unwrap();
+            assert_eq!(entry.status, "extra");
+            assert!(
+                entry
+                    .note
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("tree walk failed"),
+                "note should name the traversal failure: {:?}",
+                entry.note
+            );
+        }
     }
 }

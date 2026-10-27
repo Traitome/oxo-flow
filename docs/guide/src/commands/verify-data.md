@@ -36,6 +36,19 @@ not list (extras).
 - FIFOs and other non-regular files are never opened for checksumming (same
   stat-first gate as the run-time checksum helpers — `File::open` on a
   writer-less FIFO would block forever).
+- Symlinks are never followed. A symlink the sidecar does not list is not
+  reported as an extra (the walk neither follows nor hashes it); a symlink
+  the sidecar does list resolves through its target — the target's content
+  is what gets hashed, so a retargeted or corrupted target still mismatches
+  and fails the audit. Deliveries that must contain links should audit them
+  out of band; `verify-data`'s verdict covers regular files only.
+- A subdirectory that cannot be read (e.g. lost execute permission) does not
+  silently shrink the audit: the walk reports the traversal failure as an
+  extra entry with a `tree walk failed` note, and the summary's `extra`
+  count includes it, so the audit exits `1` instead of passing a tree it
+  could not fully inspect. This is deliberately fail-closed even for
+  engine-internal (`.oxo-flow/`) or ignored paths — an unreadable directory
+  means part of the tree was never seen, which invalidates a clean verdict.
 
 ## Options
 
@@ -121,7 +134,9 @@ sidecar entries in sorted path order, then extras in sorted path order):
 
 Entry statuses: `matched`, `mismatched` (including checksum-read failures,
 which carry a `note`), `missing` (listed in the sidecar, absent on disk), and
-`extra` (on disk, unlisted — `expected` is absent by definition).
+`extra` (on disk, unlisted — `expected` is absent by definition; this also
+covers unreadable-subdirectory traversal failures, which carry a
+`tree walk failed` note instead of a checksum).
 
 ## Notes
 

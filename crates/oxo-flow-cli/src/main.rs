@@ -68,8 +68,8 @@ pub struct Cli {
 
     /// Output machine-readable JSON to stdout (human-readable logs stay on stderr).
     /// Implemented by run, dry-run, validate, lint, test, status, batch, info,
-    /// schema, license, and ai; every other command rejects the flag instead
-    /// of silently ignoring it.
+    /// schema, verify-data, license, and ai; every other command rejects the
+    /// flag instead of silently ignoring it.
     #[arg(global = true, long)]
     json: bool,
 }
@@ -817,11 +817,6 @@ pub enum Commands {
             help = "md5 sidecar to verify against (md5sum text format)"
         )]
         from: PathBuf,
-        #[arg(
-            long,
-            help = "Emit a machine-readable JSON document on stdout (report stays on stderr)"
-        )]
-        json: bool,
     },
     /// Output the JSON Schema for the .oxoflow format.
     Schema,
@@ -1857,11 +1852,7 @@ async fn main() -> Result<()> {
                 provenance_verify_command(checkpoint, cli.json)?
             }
         },
-        Commands::VerifyData {
-            tree,
-            from,
-            json: _,
-        } => verify_data_command(tree, from, cli.json)?,
+        Commands::VerifyData { tree, from } => verify_data_command(tree, from, cli.json)?,
         Commands::Schema => {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
