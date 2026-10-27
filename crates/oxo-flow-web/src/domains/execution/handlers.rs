@@ -2065,6 +2065,11 @@ pub async fn get_run_preview(
 /// be baselined"), matching the dry-run narration. Note the preview reads
 /// the tree as it exists NOW — like dry-run, it does not reserve the
 /// verdict: files can still change between this call and the actual run.
+///
+/// A corrupt/unreadable checkpoint is surfaced as a `warnings` entry (not a
+/// silent all-clear) — absent checkpoint = no baselines yet, corrupt
+/// checkpoint = baselines exist but cannot be compared; the two must not
+/// look the same.
 pub async fn get_run_protected_drift(
     authenticated: Option<Extension<CurrentUser>>,
     Path(id): Path<String>,
@@ -2078,7 +2083,7 @@ pub async fn get_run_protected_drift(
     })?;
     let user = current_user::resolve(authenticated.as_ref());
     let run = load_owned_run(pool, &user, &id).await?;
-    let workdir = run.workdir.as_deref().unwrap_or("");
+    let workdir = run.workdir.as_deref().unwrap_or("").to_string();
 
     // The protected trees are declared in the workflow's [engine] section —
     // read them from the persisted snapshot, the same source the spawned
@@ -2102,66 +2107,100 @@ pub async fn get_run_protected_drift(
     // staged but not started, or a fresh workdir) = no baselines yet —
     // every existing tree then reports as new_trees, exactly the
     // before-first-run preview.
-    let workdir_path = std::path::Path::new(workdir);
-    let ck = oxo_flow_core::executor::CheckpointState::load_from_file(
-        &oxo_flow_core::executor::CheckpointState::default_path(workdir_path),
-    )
-    .unwrap_or_else(|_| oxo_flow_core::executor::CheckpointState::new());
+    let workdir_path = std::path::PathBuf::from(workdir);
+    let ck_path = oxo_flow_core::executor::CheckpointState::default_path(&workdir_path);
 
     // Same loop contract as the CLI detector (run_preview.rs
     // `detect_protected_tree_drift`), minus the baseline recording — the
     // detector mutates `ck` on first observation, the web preview reports
     // the adoption instead (dry-run semantics: nothing persisted).
     // BTreeSet: deterministic order across calls regardless of config order.
-    let mut drifted_files: Vec<String> = Vec::new();
-    let mut new_trees = 0usize;
-    let mut warnings: Vec<String> = Vec::new();
-    for tree in trees.iter().collect::<std::collections::BTreeSet<_>>() {
-        let rel = tree
-            .trim()
-            .trim_start_matches("./")
-            .trim_end_matches('/')
-            .to_string();
-        if rel.is_empty() {
-            warnings.push("protected_data_trees: empty path value ignored".to_string());
-            continue;
-        }
-        let abs = workdir_path.join(&rel);
-        match oxo_flow_core::executor::checkpoint::snapshot_protected_tree(&abs, workdir_path) {
-            Ok(Some(current)) => match ck.protected_tree_baselines.get(&rel) {
-                Some(recorded)
-                    if oxo_flow_core::executor::checkpoint::manifests_match(recorded, &current) =>
-                {
-                    // Baseline still matches — nothing to report.
+    // The checkpoint read + full tree walk + hashing is bounded disk work on
+    // a tree that can be large — run it on the blocking pool so a big tree
+    // cannot stall a tokio worker (#268 item 4 pattern).
+    let tree_set: std::collections::BTreeSet<String> = trees.into_iter().collect();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut warnings: Vec<String> = Vec::new();
+        let ck = if ck_path.exists() {
+            match oxo_flow_core::executor::CheckpointState::load_from_file(&ck_path) {
+                Ok(ck) => ck,
+                Err(e) => {
+                    // Corrupt/unreadable checkpoint: baselines exist but
+                    // cannot be compared. Never present this as a clean
+                    // result — surface it (review finding, PR #941).
+                    tracing::warn!("checkpoint unreadable at {}: {e}", ck_path.display());
+                    warnings.push(format!(
+                        "checkpoint unreadable ({}), treating as no baselines: {e}",
+                        ck_path.display()
+                    ));
+                    oxo_flow_core::executor::CheckpointState::new()
                 }
-                Some(recorded) => {
-                    for change in
-                        oxo_flow_core::executor::checkpoint::manifest_changes(recorded, &current)
-                    {
-                        drifted_files.push(change.describe());
-                    }
-                }
-                None => {
-                    // First observation: the run gate would adopt this
-                    // baseline; the preview only reports it.
-                    new_trees += 1;
-                }
-            },
-            Ok(None) => {
-                // Tree does not exist yet: adoption deferred, nothing to
-                // preview.
             }
-            Err(e) => {
-                warnings.push(format!("protected tree {rel}/ not readable: {e}"));
-            }
-        }
-    }
+        } else {
+            oxo_flow_core::executor::CheckpointState::new()
+        };
 
-    Ok(Json(ProtectedDriftResponse {
-        drifted_files,
-        new_trees,
-        warnings,
-    }))
+        let mut drifted_files: Vec<String> = Vec::new();
+        let mut new_trees = 0usize;
+        for tree in &tree_set {
+            let rel = tree
+                .trim()
+                .trim_start_matches("./")
+                .trim_end_matches('/')
+                .to_string();
+            if rel.is_empty() {
+                warnings.push("protected_data_trees: empty path value ignored".to_string());
+                continue;
+            }
+            let abs = workdir_path.join(&rel);
+            match oxo_flow_core::executor::checkpoint::snapshot_protected_tree(&abs, &workdir_path)
+            {
+                Ok(Some(current)) => match ck.protected_tree_baselines.get(&rel) {
+                    Some(recorded)
+                        if oxo_flow_core::executor::checkpoint::manifests_match(
+                            recorded, &current,
+                        ) =>
+                    {
+                        // Baseline still matches — nothing to report.
+                    }
+                    Some(recorded) => {
+                        for change in oxo_flow_core::executor::checkpoint::manifest_changes(
+                            recorded, &current,
+                        ) {
+                            drifted_files.push(change.describe());
+                        }
+                    }
+                    None => {
+                        // First observation: the run gate would adopt this
+                        // baseline; the preview only reports it.
+                        new_trees += 1;
+                    }
+                },
+                Ok(None) => {
+                    // Tree does not exist yet: adoption deferred, nothing to
+                    // preview.
+                }
+                Err(e) => {
+                    warnings.push(format!("protected tree {rel}/ not readable: {e}"));
+                }
+            }
+        }
+        ProtectedDriftResponse {
+            drifted_files,
+            new_trees,
+            warnings,
+        }
+    })
+    .await;
+
+    match outcome {
+        Ok(response) => Ok(Json(response)),
+        Err(e) => Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DRIFT_PREVIEW_FAILED",
+            format!("Protected-drift preview failed: {e}"),
+        )),
+    }
 }
 
 #[utoipa::path(
