@@ -109,12 +109,38 @@ pub struct CreateRunRequest {
     /// Proceed despite protected data tree drift (issue #935). The CLI's
     /// run gate refuses to execute when protected-tree files changed since
     /// the recorded baseline; this flag forwards `--allow-protected-drift`
-    /// to override that refusal. Web has no drift-preview surface yet, so
-    /// this is the caller's only escape hatch — the CLI still narrates the
+    /// to override that refusal. Preview the drift first via
+    /// `GET /api/runs/{id}/protected-drift` — the CLI still narrates the
     /// drift into the run log. Retry keeps the gate: only explicit create
     /// requests may set it.
     #[serde(default)]
     pub allow_protected_drift: Option<bool>,
+}
+
+/// Response of `GET /api/runs/{id}/protected-drift` — the read-only
+/// protected-tree drift preview (issue #935 slice 3). Mirrors the CLI
+/// dry-run's `protected_tree_drift` JSON object: one `describe()` line per
+/// drifted file across all `[engine] protected_data_trees`, the number of
+/// trees that would be baselined on first observation, and per-tree
+/// warnings (unreadable tree, ignored empty path values).
+///
+/// The preview is read-only: unlike `oxo-flow run` (which persists new
+/// baselines into the checkpoint) nothing is recorded here, so repeated
+/// calls are stable and a `new_trees` count is reported as "would be
+/// baselined" rather than adopted. An absent `drifted_files` list plus a
+/// non-zero `new_trees` means the trees are clean but not yet baselined —
+/// the next real run adopts them silently.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProtectedDriftResponse {
+    /// One human-readable line per drifted file (removed / added / changed,
+    /// with `(TRUNCATED)` and `sha256:` labels — `ManifestChange::describe`
+    /// rendering, identical to the CLI dry-run and the run-gate refusal).
+    pub drifted_files: Vec<String>,
+    /// Trees under `[engine] protected_data_trees` that exist but have no
+    /// baseline yet — the next real run adopts them; this preview never does.
+    pub new_trees: usize,
+    /// Per-tree warnings (unreadable tree, ignored empty path values).
+    pub warnings: Vec<String>,
 }
 
 /// The wire contract of `POST /api/data/verify` (issue #935 P2 web slice):

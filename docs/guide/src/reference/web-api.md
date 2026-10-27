@@ -425,9 +425,8 @@ Execution flags are forwarded to the CLI executor:
   same way. Web **retry** keeps the gate — only the original create
   request may relax it, mirroring the CLI's own resume. The flag only
   affects actual runs; with `dry_run: true` it is ignored (there is no
-  gate to bypass in preview). There is no web drift-preview surface yet,
-  so check drift with `oxo-flow dry-run`/`plan` or the run log before
-  overriding.
+  gate to bypass in preview). Preview the drift first with
+  `GET /api/runs/{id}/protected-drift` (see below) before overriding.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections-remote-execution)).
@@ -473,6 +472,26 @@ The full run row: `{ id, user_id, pipeline_id, pipeline_snapshot, status, phase,
 GET /api/runs/{id}/preview
 ```
 The instance-level dry-run plan (`checkpoint_preview` + execution order), persisted by the executor as `dry-run-preview.json` when a dry-run completes. Returns `404 NO_PREVIEW` for runs that never produced one — or when the workdir path is not a regular file (issue #735: a rule-writable workdir may contain special files). Files above the 16 MiB server-written maximum return `413 PREVIEW_TOO_LARGE`.
+
+### Protected-Tree Drift Preview
+```
+GET /api/runs/{id}/protected-drift
+```
+Read-only drift audit of the run's `[engine] protected_data_trees` (issue #935 slice 3). The response mirrors the CLI dry-run's `protected_tree_drift` object:
+
+```json
+{
+  "drifted_files": ["raw/S1.fq: 1024 B @2026-01-01 → 0 B @2026-01-02 (TRUNCATED)"],
+  "new_trees": 0,
+  "warnings": []
+}
+```
+
+- `drifted_files` — one human-readable line per drifted file (removed / added / changed, with `(TRUNCATED)` and `sha256:` labels — the same `ManifestChange::describe` rendering as the CLI dry-run and the run-gate refusal).
+- `new_trees` — trees declared under `[engine] protected_data_trees` that exist but have no baseline yet. The next real `oxo-flow run` adopts them; this preview never does.
+- `warnings` — per-tree problems that did not block the audit (unreadable tree, ignored empty path values).
+
+The preview is **read-only**: unlike `oxo-flow run`, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty `drifted_files` with a non-zero `new_trees`. The audit reads the tree as it exists **now**: files can still change between this call and the next run, which is exactly the window `allow_protected_drift` on Create Run covers. Returns `404` for unknown or foreign runs; `503` when runs are not available on this backend.
 
 ### AI Status
 ```
