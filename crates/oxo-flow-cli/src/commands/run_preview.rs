@@ -233,7 +233,9 @@ pub fn preview_run_plan(
 
     // 2. Input-manifest invalidation (issue #72) — on the clone only.
     //    Missing inputs (typically tombstoned temporaries) cascade UP: the
-    //    completed producers re-execute first, exactly like run.
+    //    completed producers re-execute first, exactly like run. The diff
+    //    lines and symlink notices are run-only presentation (issue #926
+    //    P0); the dry-run preview keeps the bare per-rule summary.
     let (
         manifest_invalidated,
         missing_inputs,

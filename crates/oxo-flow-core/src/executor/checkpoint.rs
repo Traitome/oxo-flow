@@ -236,8 +236,13 @@ impl ManifestChange {
                 );
                 // Same size and mtime but flagged changed means the content
                 // hash moved (hash-aware matching) — show it, truncated.
+                // Byte-slice truncation on the known `sha256:<hex>` prefix
+                // (ASCII); a defensive fallback keeps non-ASCII future
+                // formats from panicking on a char boundary.
                 let short = |h: &Option<String>| match h {
-                    Some(h) if h.len() > 18 => format!("{}…", &h[..18]),
+                    Some(h) if h.len() > 18 => {
+                        format!("{}…", h.get(..18).unwrap_or(h))
+                    }
                     Some(h) => h.clone(),
                     None => "none".to_string(),
                 };

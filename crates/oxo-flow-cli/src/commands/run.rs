@@ -4417,7 +4417,7 @@ pub async fn run_command(
                                     );
                                     tracing::warn!(
                                         rule = %rule_name,
-                                        changes = ?described,
+                                        changes = %described.join(", "),
                                         "input changed while the rule was running; outputs may be inconsistent"
                                     );
                                     if let Some(ref mut stderr) = record.stderr {

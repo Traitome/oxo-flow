@@ -1056,18 +1056,31 @@ compares:
   and the rule invalidates — the flip is still caught.
 
 When an invalidation is detected, the run output spells out WHAT changed,
-one line per file, using these labels:
+one line per affected file. Each line reads
+`path: <old size> @<old mtime> → <new size> @<new mtime>` followed by
+these labels:
 
-- `(TRUNCATED)` — the current size is smaller than the recorded size
-  (e.g. a write through a symlink replaced a 60 GB FASTQ with a 1 MB
-  head-extract).
-- `(removed)` — the file no longer exists.
-- `(size ±N, mtime ±Δt)` — size/mtime drift with no label above.
-- `[symlink]` / `[regular file]` — the file's symlink-ness flipped
-  between the recorded and current manifests (recorded facts are
-  display-only and never invalidate by themselves).
-- `[symlink → <target>]` — the symlink's target changed between the
-  recorded and current manifests.
+- `(content <h1> → <h2>)` — the content hash moved (files up to 64 MiB
+  are hashed); shown alone when a same-size/same-mtime rewrite is
+  caught by hash comparison.
+- `(TRUNCATED)` — the file collapsed to 0 B: the vendor-data incident
+  shape a write through a symlinked input path produces (the shell
+  truncates the target before the command's bytes land).
+- `(removed)` / `(added)` — the file disappeared from, or appeared in,
+  the tracked set.
+- `[symlink]` — the path resolves through a symlink on the recorded or
+  the current side (recorded symlink facts are display-only and never
+  invalidate by themselves).
+
+For example (from the verification of this feature):
+
+```
+  · raw/S1.fq: 22 B @2026-10-27T03:08:41Z → 0 B @2026-10-27T03:08:42Z (content sha256:b29f0d4b37f… → sha256:e3b0c44298f…) (TRUNCATED) [symlink]
+```
+
+A pure symlink-target flip with unchanged size/mtime/hash produces no
+diff line at all (target facts are display-only); the target surfaces
+only in the first-seen notice below.
 
 A run also prints one first-seen notice per symlinked input —
 `ℹ input <path> is a symlink → <target>` — collected across all completed
