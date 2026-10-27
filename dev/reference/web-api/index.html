@@ -4620,7 +4620,10 @@ users row is keyed by the namespaced id <code>oauth:{provider}:{provider_user_id
 unique across provider accounts — two ORCID accounts can share a given name —
 so when a display name is already taken the row is persisted under a fallback
 username derived from the unique provider id (<code>{provider}:{provider_user_id}</code>);
-the login still succeeds and the session always resolves to a real user row.</p>
+the login still succeeds and the session always resolves to a real user row.
+When the user row cannot be ensured (database unavailable or insert fails),
+the callback answers <code>503 {code:"DB_ERROR"}</code> instead of minting a session
+that would fail closed on every subsequent request.</p>
 <hr />
 <h2 id="collaboration-phase-3">Collaboration (Phase 3)<a class="headerlink" href="#collaboration-phase-3" title="Permanent link">#</a></h2>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>POST /api/pipelines/{id}/fork    # Fork into workspace (owner = session user)
