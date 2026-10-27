@@ -58,6 +58,7 @@ const ALL_ROUTES: &[&str] = &[
     "/api/data/perceive",
     "/api/data/reference/status",
     "/api/data/samplesheet/parse",
+    "/api/data/verify",
     // templates
     "/api/templates",
     "/api/templates/{id}",
