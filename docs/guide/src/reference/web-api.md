@@ -673,14 +673,14 @@ Response is HTTP 200 even when drift is found — the counts ARE the finding:
   "tree": "inputs/delivery-2026-10",
   "matched": 12, "mismatched": 1, "missing": 0, "extra": 1,
   "entries": [
-    {"file": "raw/S1.fq", "status": "matched", "actual": "d41d..."},
+    {"file": "raw/S1.fq", "status": "matched", "expected": "d41d...", "actual": "d41d..."},
     {"file": "raw/S2.fq", "status": "mismatched", "expected": "aa...", "actual": "bb..."},
     {"file": "raw/unlisted.txt", "status": "extra", "actual": "cc..."}
   ]
 }
 ```
 
-`status` vocabulary: `matched`, `mismatched` (includes unreadable files, with a `note`), `missing`, `extra` (present but unlisted — always non-compliant). An empty sidecar returns all-zero counts with `"note": "The md5 sidecar lists no files."` and no extras scan. HTTP errors are reserved for infrastructure problems: `400 INVALID_TREE` (unknown path or traversal), `400 INVALID_SIDECAR` (empty content), `500 VERIFY_ERROR` (spawn failure or unparseable CLI output). Errors use the structured `{code, message, detail, suggestion}` shape.
+`status` vocabulary: `matched`, `mismatched` (includes unreadable files, with a `note`), `missing`, `extra` (present but unlisted — always non-compliant). An empty sidecar returns all-zero counts with `"note": "The md5 sidecar lists no files."` and no extras scan. A sidecar the CLI hard-rejects (malformed line, duplicate path, traversal) yields `400 INVALID_SIDECAR` with the CLI's stderr as detail. HTTP errors are otherwise reserved for infrastructure problems: `400 INVALID_TREE` (unknown path or traversal), `500 VERIFY_ERROR` (spawn failure or unparseable CLI output). Errors use the structured `{code, message, detail, suggestion}` shape. The inline sidecar counts against the server's default ~2 MiB JSON body limit (~50k entries); larger sidecars should be split by directory.
 
 ---
 

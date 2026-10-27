@@ -2616,8 +2616,22 @@ pub async fn verify_data(
 
     // Exit policy mirrors the CLI: 0 = clean (or empty sidecar), 1 =
     // anomalies found (that is the audit's product, not a failure). Any
-    // other exit is an infrastructure error with stderr context.
+    // other exit is an infrastructure error with stderr context. The CLI
+    // also exits 1 for hard input errors (e.g. a malformed sidecar line),
+    // which it reports on stderr with an EMPTY stdout — distinguish that
+    // from a findings document so a client-input error is not masked as a
+    // 500 that invites a retry which can never succeed.
     let doc: serde_json::Value = match output.status {
+        Some(1) if output.stdout.trim().is_empty() => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_SIDECAR",
+                format!(
+                    "verify-data rejected the input: {}",
+                    output.stderr.lines().last().unwrap_or("unknown error"),
+                ),
+            ));
+        }
         Some(0) | Some(1) => serde_json::from_str(&output.stdout).map_err(|e| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2660,12 +2674,31 @@ pub async fn verify_data(
             .and_then(|v| usize::try_from(v).ok())
             .unwrap_or(0)
     };
+    let (matched, mismatched, missing, extra) = (
+        count("matched"),
+        count("mismatched"),
+        count("missing"),
+        count("extra"),
+    );
+    // The CLI guarantees every entry lands in exactly one bucket; a document
+    // whose counts do not add up is a stale/incompatible binary, not an
+    // audit result. Same degrade-loudly policy as the entries check above.
+    if matched + mismatched + missing + extra != entries.len() {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "VERIFY_ERROR",
+            format!(
+                "verify-data counts (matched {matched} + mismatched {mismatched} + missing {missing} + extra {extra}) do not sum to entries.len() ({}) — is OXO_FLOW_BIN pointing at an up-to-date binary?",
+                entries.len(),
+            ),
+        ));
+    }
     let resp = VerifyDataResponse {
         tree: req.tree,
-        matched: count("matched"),
-        mismatched: count("mismatched"),
-        missing: count("missing"),
-        extra: count("extra"),
+        matched,
+        mismatched,
+        missing,
+        extra,
         entries,
         note: doc.get("note").and_then(|v| v.as_str()).map(String::from),
     };
@@ -2909,5 +2942,42 @@ mod bounded_subprocess_tests {
         assert_eq!(doc["entries"][0]["file"], "raw/S1.fq");
         assert_eq!(doc["entries"][0]["status"], "matched");
         assert_eq!(doc["entries"][1]["status"], "extra");
+    }
+
+    /// The handler maps a hard CLI rejection (exit 1, empty stdout, error on
+    /// stderr — e.g. a malformed sidecar line) to 400 INVALID_SIDECAR, not a
+    /// 500: this test pins the stdout-empty signal the handler keys on.
+    #[tokio::test]
+    async fn verify_data_malformed_sidecar_exits_1_with_empty_stdout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("delivery");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("S1.fq"), b"AAAA").unwrap();
+
+        let sidecar_dir = tempfile::tempdir().unwrap();
+        let sidecar = sidecar_dir.path().join("md5.txt");
+        std::fs::write(&sidecar, "not-a-digest  S1.fq\n").unwrap();
+
+        let mut cmd = tokio::process::Command::new(crate::executor::find_oxo_flow_binary());
+        cmd.arg("verify-data")
+            .arg(&tree)
+            .arg("--from")
+            .arg(&sidecar)
+            .arg("--json");
+        let out = run_bounded(cmd, std::time::Duration::from_secs(120), 1024 * 1024)
+            .await
+            .expect("verify-data runs");
+
+        assert_eq!(out.status, Some(1), "stderr: {}", out.stderr);
+        assert!(
+            out.stdout.trim().is_empty(),
+            "hard input errors print nothing on stdout, got: {}",
+            out.stdout
+        );
+        assert!(
+            out.stderr.contains("malformed"),
+            "stderr must name the sidecar problem: {}",
+            out.stderr
+        );
     }
 }
