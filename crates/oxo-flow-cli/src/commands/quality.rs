@@ -393,31 +393,8 @@ pub async fn lint_command(workflow: PathBuf, strict: bool, json: bool, ai: bool)
     Ok(())
 }
 
-/// Deep pipeline health checks for `test --deep` (issue #64).
-///
-/// Checks script files (D001, error), environment definition files (D002,
-/// warning), system-backend binaries in PATH (D003, warning), and reference
-/// data paths (D004, warning). Exits 1 when any error-severity finding is
-/// reported; warnings are informational — PATH and reference data are
-/// machine-specific and can arrive later (issue #63).
-pub fn deep_check_command(workflow: &Path, workdir: Option<&Path>, json: bool) -> Result<()> {
-    let (report, document) = run_deep_check(workflow, workdir)?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&document)?);
-    }
-
-    if report.error_count > 0 {
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
 /// Run the deep checks, print the human report to stderr, and build the JSON
 /// document.
-///
-/// Shared by `deep-check --json` and the `test --json` aggregate (which
-/// embeds the document instead of printing a second one — audit finding).
 pub fn run_deep_check(
     workflow: &Path,
     workdir: Option<&Path>,
