@@ -25,6 +25,7 @@ use crate::commands::quality::{format_command, lint_command, touch_command, vali
 use crate::commands::run::{
     debug_command, dry_run_command, handle_status, resume_command, run_command,
 };
+use crate::commands::verify_data::verify_data_command;
 use crate::commands::web::ServeMode;
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -806,6 +807,22 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProvenanceAction,
     },
+    /// Verify a data tree against a vendor md5 sidecar (md5sum format).
+    VerifyData {
+        #[arg(value_name = "TREE", help = "Directory to verify")]
+        tree: PathBuf,
+        #[arg(
+            long,
+            value_name = "MD5_FILE",
+            help = "md5 sidecar to verify against (md5sum text format)"
+        )]
+        from: PathBuf,
+        #[arg(
+            long,
+            help = "Emit a machine-readable JSON document on stdout (report stays on stderr)"
+        )]
+        json: bool,
+    },
     /// Output the JSON Schema for the .oxoflow format.
     Schema,
     /// Run a workflow in test mode, validating and verifying outputs.
@@ -1131,6 +1148,7 @@ fn json_supported(command: &Commands) -> bool {
         | Commands::License { .. }
         | Commands::Ai { .. } => true,
         Commands::Provenance { action } => matches!(action, ProvenanceAction::Verify { .. }),
+        Commands::VerifyData { .. } => true,
         _ => false,
     }
 }
@@ -1278,7 +1296,8 @@ async fn main() -> Result<()> {
             "`oxo-flow {name}` does not support --json yet{hint}.\n  \
              Drop --json to run it normally, or use a command whose JSON \
              document is implemented (run, dry-run, validate, lint, test, \
-             status, batch, info, schema, license, ai, provenance verify)."
+             status, batch, info, schema, license, ai, provenance verify, \
+             verify-data)."
         );
     }
     // A background run never executes the workflow in the foreground
@@ -1838,6 +1857,11 @@ async fn main() -> Result<()> {
                 provenance_verify_command(checkpoint, cli.json)?
             }
         },
+        Commands::VerifyData {
+            tree,
+            from,
+            json: _,
+        } => verify_data_command(tree, from, cli.json)?,
         Commands::Schema => {
             let schema = include_str!("../schema/oxoflow-v1.schema.json");
             println!("{schema}");
