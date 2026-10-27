@@ -234,15 +234,29 @@ impl OAuthConfig {
                     .await
                     .map_err(|e| format!("GitHub identity request failed: {e}"))?;
 
+                // Error bodies are not user records; parsing them below
+                // would yield no usable id. Fail with the status instead.
+                let status = resp.status();
+                if !status.is_success() {
+                    return Err(format!("GitHub identity request returned HTTP {status}"));
+                }
+
                 let body: serde_json::Value = resp
                     .json()
                     .await
                     .map_err(|e| format!("GitHub identity parse failed: {e}"))?;
 
+                // A response without a numeric id cannot be resolved; the
+                // empty fallback would namespace to `oauth:github:`
+                // (non-empty, so the ensure_oauth_user guard passes) and
+                // make every malformed response share one user row (#944).
                 let github_id = body["id"]
                     .as_u64()
                     .map(|id| id.to_string())
-                    .unwrap_or_default();
+                    .ok_or_else(|| {
+                        "GitHub user response did not include a numeric id; cannot resolve the identity"
+                            .to_string()
+                    })?;
                 let login = body["login"].as_str().unwrap_or("unknown").to_string();
 
                 Ok((github_id, login))
