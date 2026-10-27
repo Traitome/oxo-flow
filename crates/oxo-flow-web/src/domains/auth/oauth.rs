@@ -202,9 +202,19 @@ impl OAuthConfig {
                     .await
                     .map_err(|e| format!("ORCID identity parse failed: {e}"))?;
 
+                // A record response without the identifier path cannot be
+                // resolved; falling back to the literal "unknown" would make
+                // every malformed record collide on the same namespaced id
+                // (`oauth:orcid:unknown`) and silently share one user row.
+                // An empty path is rejected for the same reason (it would
+                // namespace to `oauth:orcid:`).
                 let orcid_id_result = body["orcid-identifier"]["path"]
                     .as_str()
-                    .unwrap_or("unknown")
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        "ORCID record response did not include the ORCID iD path; cannot resolve the identity"
+                            .to_string()
+                    })?
                     .to_string();
 
                 let name = body["person"]["name"]["given-names"]["value"]
