@@ -1243,7 +1243,7 @@ pub async fn snapshot_input_manifest_async(
 /// Snapshot a protected tree's file manifest (issue #935): the sorted,
 /// deduplicated (relative path, size, mtime, optional content-hash) entry
 /// list for every file under `tree`, reusing the exact machinery the rule
-/// input manifests use ([`insert_manifest_entry`] semantics — symlinked
+/// input manifests use (`insert_manifest_entry` semantics — symlinked
 /// files recorded with target stats, symlinked directories as single
 /// entries, real directories walked recursively).
 ///
