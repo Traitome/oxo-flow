@@ -162,18 +162,22 @@ pub async fn cancel_remote(cluster: &ClusterRow, run_id: &str) -> std::io::Resul
     Ok(())
 }
 
+/// Run-launch parameters staged by `POST /api/runs` and replayed by retry:
+/// the local staging directory plus the CLI flag set forwarded to the
+/// remote wrapper script.
+pub struct RunStaging {
+    pub local_workdir: PathBuf,
+    pub max_jobs: Option<usize>,
+    pub config_overrides: Vec<String>,
+    pub allow_protected_drift: bool,
+    pub provenance: bool,
+}
+
 /// Spawn a remote run: stage → launch → poll → pull → finalize. Mirrors
 /// spawn_background_run's DB transitions (running on launch, terminal
-/// write + SSE at the end).
-pub fn spawn_remote_run(
-    run_id: String,
-    username: String,
-    cluster: ClusterRow,
-    local_workdir: PathBuf,
-    max_jobs: Option<usize>,
-    config_overrides: Vec<String>,
-    allow_protected_drift: bool,
-) {
+/// write + SSE at the end). Callers stage a `RunStaging` bundle rather
+/// than passing loose flags (clippy too_many_arguments at 8).
+pub fn spawn_remote_run(run_id: String, username: String, cluster: ClusterRow, staged: RunStaging) {
     register_remote(&run_id, &cluster.id);
     tokio::spawn(async move {
         let remote_root = cluster
@@ -181,6 +185,13 @@ pub fn spawn_remote_run(
             .clone()
             .unwrap_or_else(|| "oxo-flow-runs".into());
         let remote_dir = format!("{}/runs/{}", remote_root.trim_end_matches('/'), run_id);
+        let RunStaging {
+            local_workdir,
+            max_jobs,
+            config_overrides,
+            allow_protected_drift,
+            provenance,
+        } = staged;
 
         // All bookkeeping below uses the legacy SQLite pool, which PostgreSQL
         // deployments never initialize — degrade instead of panicking mid-task.
@@ -272,6 +283,13 @@ pub fn spawn_remote_run(
         // boolean (no value), so it needs no shell quoting.
         if allow_protected_drift {
             run_cmd.push_str(" --allow-protected-drift");
+        }
+        // Record output checksums remotely too (issue #276): a cluster run
+        // with provenance enabled behaves like a local one — `provenance
+        // verify` can audit its outputs after the pull. Boolean flag, no
+        // shell quoting.
+        if provenance {
+            run_cmd.push_str(" --provenance");
         }
         for kv in &config_overrides {
             run_cmd.push_str(" --arg=");

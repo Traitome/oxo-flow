@@ -654,10 +654,13 @@ pub async fn create_run(
                 resp.run_id.clone(),
                 user.id.clone(),
                 cluster_row,
-                run_dir,
-                req.max_jobs,
-                validated_overrides,
-                req.allow_protected_drift.unwrap_or(false),
+                crate::domains::clusters::remote::RunStaging {
+                    local_workdir: run_dir,
+                    max_jobs: req.max_jobs,
+                    config_overrides: validated_overrides,
+                    allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
+                    provenance: req.provenance.unwrap_or(false),
+                },
             );
             return Ok(Json(resp));
         }
@@ -678,6 +681,7 @@ pub async fn create_run(
                 targets: req.targets.unwrap_or_default(),
                 config_overrides: validated_overrides,
                 allow_protected_drift: req.allow_protected_drift.unwrap_or(false),
+                provenance: req.provenance.unwrap_or(false),
             },
         );
     }
@@ -1585,6 +1589,9 @@ pub async fn retry_run(
             // original create request may relax it, mirroring the CLI's
             // own resume which hardcodes false.
             allow_protected_drift: false,
+            // Checksums are recorded by the original create request only;
+            // resume inherits whatever the checkpoint carries.
+            provenance: false,
         },
     );
 
@@ -2876,6 +2883,191 @@ pub async fn verify_data(
 /// error branches above share code/message shape).
 fn internal_verify_error(message: String) -> (StatusCode, Json<ApiError>) {
     err(StatusCode::INTERNAL_SERVER_ERROR, "VERIFY_ERROR", message)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/provenance-verify",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Verification finished — drift findings are in the body", body = ProvenanceVerifyResponse),
+        (status = 404, description = "Error", body = ApiError),
+        (status = 500, description = "Error", body = ApiError),
+        (status = 503, description = "Error", body = ApiError),
+    )
+)]
+/// GET /api/runs/{id}/provenance-verify — re-hash a run's recorded output
+/// checksums via the CLI's `provenance verify` (issue #276, web surface).
+///
+/// Read-only: the CLI subprocess is spawned with the run's checkpoint in
+/// read mode only — it never mutates the checkpoint. The response mirrors
+/// the CLI's `--json` document (entries nested under `verify`); `ok` is
+/// false exactly when the CLI would exit 1 (mismatched or missing > 0).
+/// HTTP 200 carries drift findings — like verify-data, drift is data, not
+/// an error; HTTP errors are reserved for a missing run, infrastructure
+/// failures, and unparseable CLI output.
+///
+/// A run spawned without `provenance: true` has no recorded checksums — the
+/// CLI reports that as a `note` (with `matched` = 0), which this endpoint
+/// forwards verbatim.
+pub async fn verify_run_provenance(
+    authenticated: Option<Extension<CurrentUser>>,
+    Path(id): Path<String>,
+) -> ApiResult<ProvenanceVerifyResponse> {
+    let pool = crate::infra::db::sqlite::try_pool().map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DB_ERROR",
+            "Database not available".into(),
+        )
+    })?;
+    let user = current_user::resolve(authenticated.as_ref());
+    let run = load_owned_run(pool, &user, &id).await?;
+
+    let workdir = run.workdir.clone().ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "NO_WORKDIR",
+            "Run has no workdir".into(),
+        )
+    })?;
+    // Same default checkpoint path the CLI resolve logic uses when the
+    // checkpoint argument is omitted (`CheckpointState::default_path`).
+    let checkpoint = std::path::Path::new(&workdir)
+        .join(".oxo-flow")
+        .join("checkpoint.json");
+    if !checkpoint.exists() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "NO_CHECKPOINT",
+            format!("No checkpoint at {}", checkpoint.display()),
+        ));
+    }
+
+    // Top-level `--json` (a global flag before the subcommand) drives the
+    // machine-readable document on stdout; the human report stays on
+    // stderr. Checksums are re-hashed over every recorded output — the
+    // same bounded-disk-work shape as verify-data, so reuse its timeout and
+    // capture cap.
+    let bin = crate::executor::find_oxo_flow_binary();
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--json")
+        .arg("provenance")
+        .arg("verify")
+        .arg(&checkpoint);
+    let output = run_bounded(cmd, VERIFY_TIMEOUT, VERIFY_OUTPUT_CAP_BYTES)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PROVENANCE_VERIFY_ERROR",
+                format!("Failed to run provenance verify: {e}"),
+            )
+        })?;
+
+    // Exit policy mirrors the CLI: 0 = all matched (or the empty-checksum
+    // fallbacks, which print a note document and exit 0), 1 = drift found
+    // (mismatched or missing > 0) — that is the finding, not a failure. The
+    // CLI also exits 1 for unreadable/unparseable checkpoints with an EMPTY
+    // stdout — map that to a 400 so a caller-input problem is not masked as
+    // a retryable 500.
+    let doc: serde_json::Value = match output.status {
+        Some(1) if output.stdout.trim().is_empty() => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "INVALID_CHECKPOINT",
+                format!(
+                    "provenance verify rejected the checkpoint: {}",
+                    output.stderr.lines().last().unwrap_or("unknown error"),
+                ),
+            ));
+        }
+        Some(0) | Some(1) => serde_json::from_str(&output.stdout).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PROVENANCE_VERIFY_ERROR",
+                format!(
+                    "provenance verify produced unparseable JSON (exit {:?}): {e} — stderr: {}",
+                    output.status,
+                    output.stderr.lines().last().unwrap_or(""),
+                ),
+            )
+        })?,
+        other => {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PROVENANCE_VERIFY_ERROR",
+                format!(
+                    "provenance verify exited unexpectedly ({other:?}): {}",
+                    output.stderr.lines().last().unwrap_or(""),
+                ),
+            ));
+        }
+    };
+
+    // Shape-check the CLI document — entries are NESTED under "verify"
+    // (unlike verify-data's flat document). Args were ours, but the binary
+    // can be a stale PATH fallback — degrade loudly, never lie.
+    let verify = doc.get("verify").ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PROVENANCE_VERIFY_ERROR",
+            "provenance verify output missing 'verify' section — is OXO_FLOW_BIN pointing at an up-to-date binary?"
+                .to_string(),
+        )
+    })?;
+    let entries: Vec<ProvenanceVerifyEntry> = verify
+        .get("entries")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PROVENANCE_VERIFY_ERROR",
+                "provenance verify output missing 'verify.entries' — is OXO_FLOW_BIN pointing at an up-to-date binary?"
+                    .to_string(),
+            )
+        })?;
+    let count = |key: &str| -> usize {
+        verify
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(0)
+    };
+    let (matched, mismatched, missing, cleaned) = (
+        count("matched"),
+        count("mismatched"),
+        count("missing"),
+        count("cleaned"),
+    );
+    // The CLI guarantees every entry lands in exactly one bucket; a document
+    // whose counts do not add up is a stale/incompatible binary, not an
+    // audit result. Same degrade-loudly policy as the entries check above.
+    if matched + mismatched + missing + cleaned != entries.len() {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PROVENANCE_VERIFY_ERROR",
+            format!(
+                "provenance verify counts (matched {matched} + mismatched {mismatched} + missing {missing} + cleaned {cleaned}) do not sum to entries.len() ({}) — is OXO_FLOW_BIN pointing at an up-to-date binary?",
+                entries.len(),
+            ),
+        ));
+    }
+    let note = verify
+        .get("note")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    Ok(Json(ProvenanceVerifyResponse {
+        checkpoint: checkpoint.display().to_string(),
+        matched,
+        mismatched,
+        missing,
+        cleaned,
+        entries,
+        note,
+        // Mirror the CLI exit policy: drift found = not ok.
+        ok: mismatched == 0 && missing == 0,
+    }))
 }
 
 #[utoipa::path(

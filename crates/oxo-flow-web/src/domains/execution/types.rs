@@ -115,6 +115,13 @@ pub struct CreateRunRequest {
     /// requests may set it.
     #[serde(default)]
     pub allow_protected_drift: Option<bool>,
+    /// Record output checksums for later integrity verification (CLI
+    /// `--provenance`, run-only). Affects the spawned run only — dry runs
+    /// reject the flag inside the CLI. Verify recorded outputs afterwards
+    /// via `GET /api/runs/{id}/provenance-verify`. Retry does not set it
+    /// (the checkpoint either already carries checksums or never will).
+    #[serde(default)]
+    pub provenance: Option<bool>,
 }
 
 /// Response of `GET /api/runs/{id}/protected-drift` — the read-only
@@ -195,6 +202,50 @@ pub struct VerifyDataResponse {
     /// skipped (mirrors the CLI's `"note"` field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// One classified file from a provenance verification — mirrors the CLI's
+/// `--json` entries (`VerifyEntry`, oxo-flow-cli `provenance.rs`).
+/// `expected`/`actual` checksums are present only for mismatched files;
+/// `note` carries free-form context on the fallback paths.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProvenanceVerifyEntry {
+    pub file: String,
+    /// `matched` | `mismatched` | `missing` | `cleaned`
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Response of `GET /api/runs/{id}/provenance-verify` — the parsed CLI
+/// `--json` document (`provenance verify`, issue #276). Read-only over the
+/// run's recorded output checksums: HTTP 200 even with drift (a non-zero
+/// `mismatched`/`missing` count IS the finding); the `ok` flag collapses
+/// the CLI's exit code (1 = drift found). HTTP errors are reserved for
+/// infrastructure failures (spawn, parse of the CLI output) and a missing
+/// run.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProvenanceVerifyResponse {
+    /// Absolute path of the verified checkpoint (echoed for correlation).
+    pub checkpoint: String,
+    pub matched: usize,
+    pub mismatched: usize,
+    pub missing: usize,
+    /// Outputs removed by cleanup rules (`temporary = true`) — not a drift
+    /// finding.
+    pub cleaned: usize,
+    pub entries: Vec<ProvenanceVerifyEntry>,
+    /// Set only on the fallback paths: no stored checksums (run without
+    /// `--provenance`) or no completed rules — mirrors the CLI's `note`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// True when no drift was found (mirrors the CLI exit code: 1 =
+    /// mismatched or missing > 0).
+    pub ok: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

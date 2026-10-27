@@ -427,6 +427,15 @@ Execution flags are forwarded to the CLI executor:
   affects actual runs; with `dry_run: true` it is ignored (there is no
   gate to bypass in preview). Preview the drift first with
   `GET /api/runs/{id}/protected-drift` (see below) before overriding.
+- `provenance` (boolean, optional, default `false`) forwards
+  `--provenance` to the spawned run: the CLI records `sha256` checksums of
+  every rule output into the checkpoint so the run can later be audited
+  with `GET /api/runs/{id}/provenance-verify` (see below) or the CLI's
+  `provenance verify`. Run-only — ignored for `dry_run: true` (the CLI
+  rejects the flag there). Cluster (`cluster_id`) runs carry the flag
+  into the remote wrapper command the same way. Web **retry** does not
+  re-apply it (checksums are recorded by the original create request
+  only).
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections-remote-execution)).
@@ -492,6 +501,33 @@ Read-only drift audit of the run's `[engine] protected_data_trees` (issue #935 s
 - `warnings` — per-tree problems that did not block the audit (unreadable tree, ignored empty path values).
 
 The preview is **read-only**: unlike `oxo-flow run`, which persists new baselines into the checkpoint, nothing is recorded here — repeated calls are stable, and the checkpoint file is never created or modified. A run that is clean but not yet baselined reports empty `drifted_files` with a non-zero `new_trees`. The audit reads the tree as it exists **now**: files can still change between this call and the next run, which is exactly the window `allow_protected_drift` on Create Run covers. Returns `404` for unknown or foreign runs; `503` when runs are not available on this backend.
+
+### Provenance Verify
+```
+GET /api/runs/{id}/provenance-verify
+```
+Audit the output-file checksums a run recorded into its checkpoint (CLI→web parity, `oxo-flow --json provenance verify <checkpoint>`). The endpoint shells out to the CLI binary against the run's `workdir/.oxo-flow/checkpoint.json` and forwards the verdict:
+
+```json
+{
+  "checkpoint": "/abs/workdir/.oxo-flow/checkpoint.json",
+  "matched": 1,
+  "mismatched": 0,
+  "missing": 1,
+  "cleaned": 0,
+  "ok": false,
+  "entries": [
+    {"file": "gone.txt", "status": "missing"},
+    {"file": "out.txt", "status": "matched", "expected": "sha256:…", "actual": "sha256:…"}
+  ]
+}
+```
+
+- `entries` — one per audited file, flat (the CLI nests them under `verify` in its `--json` document); `status` is `matched`, `mismatched`, `missing` (vanished output), or `cleaned` (temporary output swept by the end-of-run gate). Checksums use the CLI's `sha256:<hex>` form.
+- `ok` — `true` only when `mismatched == 0 && missing == 0` (mirrors the CLI's exit 1 = drift policy; drift is a 200 finding here, not an HTTP error).
+- `note` — present only when the checkpoint carries no stored checksums (the run was created without `provenance: true`): the CLI's hint to re-run with `--provenance`, plus `matched: 0` and empty `entries` (`ok: true`).
+
+Checksum tracking is opt-in: pass `"provenance": true` on Create Run (forwarded as the CLI's `--provenance`) so the run records `sha256` checksums of its outputs into the checkpoint. The endpoint is **read-only** — verification never mutates the checkpoint. Errors: `404 NOT_FOUND` (unknown/foreign run), `404 NO_WORKDIR` (run has no workdir), `404 NO_CHECKPOINT` (no checkpoint under the workdir), `400 INVALID_CHECKPOINT` (the CLI rejected the checkpoint as malformed), `500 PROVENANCE_VERIFY_ERROR` (CLI output unparseable — usually a stale binary; set `OXO_FLOW_BIN` to the current one), `503` when runs are not available on this backend.
 
 ### AI Status
 ```
