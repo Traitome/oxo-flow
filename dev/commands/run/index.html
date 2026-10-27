@@ -2824,21 +2824,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#forcing-execution" class="md-nav__link">
+  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Forcing Execution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Checkpoint re-entry (checkpoint = true)
+        Protected data trees (protected_data_trees)
       
     </span>
   </a>
@@ -2847,45 +2836,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#output" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Output">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#module-grouped-output" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Module-grouped output
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
-      
-    </span>
-  </a>
   
 </li>
       
@@ -4641,21 +4591,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#forcing-execution" class="md-nav__link">
+  <a href="#protected-data-trees-protected_data_trees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Forcing Execution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#checkpoint-re-entry-checkpoint-true" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Checkpoint re-entry (checkpoint = true)
+        Protected data trees (protected_data_trees)
       
     </span>
   </a>
@@ -4664,45 +4603,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#output" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Output">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#module-grouped-output" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Module-grouped output
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
-      
-    </span>
-  </a>
   
 </li>
       
@@ -4930,6 +4830,12 @@
 <td>—</td>
 <td>—</td>
 <td>Detach the run into a background process and exit 0 immediately (see <a href="#background-runs-background">Background runs (--background)</a>)</td>
+</tr>
+<tr>
+<td><code>--allow-protected-drift</code></td>
+<td>—</td>
+<td>—</td>
+<td>Proceed despite protected-tree drift: when <code>[engine]</code> <code>protected_data_trees</code> baselines no longer match the tree on disk, <code>run</code> refuses to execute; this flag is the explicit operator override to run anyway (see <a href="#protected-data-trees-protected_data_trees">Protected data trees</a>)</td>
 </tr>
 <tr>
 <td><code>--verbose</code></td>
@@ -5983,6 +5889,43 @@ for the full field table and edge cases.</p>
   cleaned by their rules; outputs declared by rules are always accounted
   for by the ladder.</li>
 </ul>
+<h3 id="protected-data-trees-protected_data_trees">Protected data trees (<code>protected_data_trees</code>)<a class="headerlink" href="#protected-data-trees-protected_data_trees" title="Permanent link">#</a></h3>
+<p>Vendor-delivered inputs (a sequencer drop, a reference bundle) must not
+change silently while a pipeline is running against them. Declaring</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="k">[engine]</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="n">protected_data_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reference/"</span><span class="p">]</span>
+</span></code></pre></div>
+<p>makes the engine treat those workdir-relative trees as protected (issue</p>
+<h1 id="935-p1">935 P1):<a class="headerlink" href="#935-p1" title="Permanent link">#</a></h1>
+<ul>
+<li><strong>First observation</strong> (first run/plan/dry-run after the key appears) records
+  a baseline manifest in the checkpoint — per-file size + mtime, plus a
+  sha256 content hash for files up to 64 MiB.</li>
+<li><strong>Every later plan/dry-run/run</strong> diffs the tree against the baseline and
+  prints a loud <code>✗ PROTECTED TREE DRIFT detected in N file(s):</code> section with
+  one line per changed/removed/added file (a truncated file is labeled
+  <code>(TRUNCATED)</code>, content edits carry the old→new hash, symlink changes are
+  labeled <code>[symlink]</code>).</li>
+<li><strong><code>run</code> refuses to execute</strong> on drift:</li>
+</ul>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>Error: protected data tree drift detected (1 file(s) changed since baseline):
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  raw/S1.fq: 4.0 B @2026-10-27 10:00:00 → 0 B @2026-10-27 10:05:00 (TRUNCATED)
+</span></code></pre></div>
+<p>Restore the files, or pass <code>--allow-protected-drift</code> to run anyway (the
+  drift is still printed; the baseline is NOT updated — a later clean run
+  re-reports it until the tree is restored or the checkpoint's baselines are
+  reset by deleting the entry). To re-baseline after an intentional change,
+  remove the <code>protected_tree_baselines</code> entry from <code>.oxo-flow/checkpoint.json</code>
+  (or the checkpoint file itself) — the next invocation adopts the current
+  tree content as the new baseline.
+- Trees that do not exist yet are adopted only once they appear — populating
+  a tree is normal data arrival, not drift.
+- <code>dry-run</code> reports the same section read-only (it never persists the
+  baseline and never fails on drift — only <code>run</code> gates).</p>
+<p>This is a detection surface, not an access control: out-of-band writes are
+noticed within one invocation, not prevented. Combined with
+<code>--provenance</code> checksums it catches damaged vendor data before any rule
+consumes it.</p>
 <h3 id="forcing-execution">Forcing Execution<a class="headerlink" href="#forcing-execution" title="Permanent link">#</a></h3>
 <p>To bypass checkpoints and re-execute rules that have already completed, use
 <a href="../clean/"><code>oxo-flow clean</code></a> to remove outputs and the checkpoint file
@@ -5999,22 +5942,22 @@ re-runs. A missing or unparsable manifest fails the checkpoint rule. See
 <a href="../../reference/workflow-format/#checkpoint-re-entry">Workflow Format</a> for
 the config surface.</p>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">#</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
-</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>DAG: 5 rules in execution order
-</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>  1. fastqc
-</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>  2. trim_reads
-</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a>  3. bwa_align
-</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6" href="#__codelineno-42-6"></a>  4. sort_bam
-</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7" href="#__codelineno-42-7"></a>  5. call_variants
-</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8" href="#__codelineno-42-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
-</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9" href="#__codelineno-42-9"></a>  ✓ fastqc (2.1s)
-</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10" href="#__codelineno-42-10"></a>  ✓ trim_reads (15.0s)
-</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11" href="#__codelineno-42-11"></a>  ✓ bwa_align (42.3s)
-</span><span id="__span-42-12"><a id="__codelineno-42-12" name="__codelineno-42-12" href="#__codelineno-42-12"></a>  ✓ sort_bam (10.2s)
-</span><span id="__span-42-13"><a id="__codelineno-42-13" name="__codelineno-42-13" href="#__codelineno-42-13"></a>  ✓ call_variants (8.4s)
-</span><span id="__span-42-14"><a id="__codelineno-42-14" name="__codelineno-42-14" href="#__codelineno-42-14"></a>
-</span><span id="__span-42-15"><a id="__codelineno-42-15" name="__codelineno-42-15" href="#__codelineno-42-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
-</span><span id="__span-42-16"><a id="__codelineno-42-16" name="__codelineno-42-16" href="#__codelineno-42-16"></a>✓ 5 output files verified (118.3MB total)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>oxo-flow v0.24.1 — Rust-native bioinformatics pipeline engine
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>DAG: 5 rules in execution order
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a>  1. fastqc
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a>  2. trim_reads
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a>  3. bwa_align
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6" href="#__codelineno-44-6"></a>  4. sort_bam
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7" href="#__codelineno-44-7"></a>  5. call_variants
+</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8" href="#__codelineno-44-8"></a>⠋ [00:15] [████████████░░░░░░░░] 3/5 ETA:0:00:42 (executing sort_bam)
+</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9" href="#__codelineno-44-9"></a>  ✓ fastqc (2.1s)
+</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10" href="#__codelineno-44-10"></a>  ✓ trim_reads (15.0s)
+</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11" href="#__codelineno-44-11"></a>  ✓ bwa_align (42.3s)
+</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12" href="#__codelineno-44-12"></a>  ✓ sort_bam (10.2s)
+</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13" href="#__codelineno-44-13"></a>  ✓ call_variants (8.4s)
+</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14" href="#__codelineno-44-14"></a>
+</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15" href="#__codelineno-44-15"></a>Done: 5 succeeded, 0 skipped, 0 failed
+</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16" href="#__codelineno-44-16"></a>✓ 5 output files verified (118.3MB total)
 </span></code></pre></div>
 <p>A progress bar shows execution progress with:</p>
 <ul>
@@ -6027,16 +5970,16 @@ the config surface.</p>
 <p>Workflows composed from <code>[[include]]</code> modules group the plan listing and the
 <code>--keep-going</code> failure summary under module headers, so a composed pipeline
 reads as module → rule instead of one long flat list (issue #887):</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>DAG: 6 rules in execution order
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  Preprocessing — 2 rules
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3" href="#__codelineno-43-3"></a>    1. fastqc
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4" href="#__codelineno-43-4"></a>    2. trim_reads
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5" href="#__codelineno-43-5"></a>  Alignment — 3 rules
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6" href="#__codelineno-43-6"></a>    3. bwa_align
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7" href="#__codelineno-43-7"></a>    4. sort_bam
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8" href="#__codelineno-43-8"></a>    5. markdup
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9" href="#__codelineno-43-9"></a>  Main workflow — 1 rule
-</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10" href="#__codelineno-43-10"></a>    6. report_summary
+<div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>DAG: 6 rules in execution order
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>  Preprocessing — 2 rules
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3" href="#__codelineno-45-3"></a>    1. fastqc
+</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4" href="#__codelineno-45-4"></a>    2. trim_reads
+</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5" href="#__codelineno-45-5"></a>  Alignment — 3 rules
+</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6" href="#__codelineno-45-6"></a>    3. bwa_align
+</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7" href="#__codelineno-45-7"></a>    4. sort_bam
+</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8" href="#__codelineno-45-8"></a>    5. markdup
+</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9" href="#__codelineno-45-9"></a>  Main workflow — 1 rule
+</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10" href="#__codelineno-45-10"></a>    6. report_summary
 </span></code></pre></div>
 <ul>
 <li>Rules from a module file (<code>[[include]]</code>) collect under their module's
@@ -6052,15 +5995,15 @@ reads as module → rule instead of one long flat list (issue #887):</p>
   grouping is opt-in by structure, not a flag</li>
 </ul>
 <p>The failure summary groups the same way:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>Failed rules:
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>  Germline (1):
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a>    ✗ haplotype_caller — exit code 1
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a>Blocked rules (did not run):
-</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6" href="#__codelineno-44-6"></a>  Germline (1):
-</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7" href="#__codelineno-44-7"></a>    ⊘ joint_genotyper — depends on 'haplotype_caller'
-</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8" href="#__codelineno-44-8"></a>  Main workflow (1):
-</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9" href="#__codelineno-44-9"></a>    ⊘ qc_report — depends on 'joint_genotyper'
+<div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>Failed rules:
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a>  Germline (1):
+</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a>    ✗ haplotype_caller — exit code 1
+</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a>
+</span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5" href="#__codelineno-46-5"></a>Blocked rules (did not run):
+</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6" href="#__codelineno-46-6"></a>  Germline (1):
+</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7" href="#__codelineno-46-7"></a>    ⊘ joint_genotyper — depends on 'haplotype_caller'
+</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8" href="#__codelineno-46-8"></a>  Main workflow (1):
+</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9" href="#__codelineno-46-9"></a>    ⊘ qc_report — depends on 'joint_genotyper'
 </span></code></pre></div>
 <p>Per-line shapes (<code>✗ name — reason</code>, <code>⊘ name — depends on 'dep'</code>) are
 unchanged, so tooling that parses run logs keeps working.</p>

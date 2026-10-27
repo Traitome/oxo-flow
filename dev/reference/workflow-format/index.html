@@ -6463,7 +6463,7 @@
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[citation]</span><span class="w">          </span><span class="c1"># Optional: citation metadata (DOI, authors, etc.)</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">[plugins]</span><span class="w">           </span><span class="c1"># Optional: plugin configuration</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">[webhook]</span><span class="w">           </span><span class="c1"># Optional: workflow-level webhook notifications (issue #227)</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">[engine]</span><span class="w">            </span><span class="c1"># Optional: runtime disk-pressure guard (issue #843) + global scratch dir (#907) + protected data trees (#935)</span>
 </span></code></pre></div>
 <p><code>reference_dir</code> is a bare top-level key, so it must appear before the first
 <code>[table]</code> header; it is also accepted inside <code>[config]</code>. See
@@ -10134,6 +10134,7 @@ measures free space mid-run and behavior is unchanged.</p>
 </span><span id="__span-107-2"><a id="__codelineno-107-2" name="__codelineno-107-2" href="#__codelineno-107-2"></a><span class="n">min_free_disk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50G"</span><span class="w">        </span><span class="c1"># required to enable: abort/park floor</span>
 </span><span id="__span-107-3"><a id="__codelineno-107-3" name="__codelineno-107-3" href="#__codelineno-107-3"></a><span class="c1"># reclaim_free_disk = "100G" # optional: reclaim trigger; defaults to min_free_disk</span>
 </span><span id="__span-107-4"><a id="__codelineno-107-4" name="__codelineno-107-4" href="#__codelineno-107-4"></a><span class="c1"># tmp_dir = "/data/scratch"  # optional: global scratch dir injected as TMPDIR into every rule</span>
+</span><span id="__span-107-5"><a id="__codelineno-107-5" name="__codelineno-107-5" href="#__codelineno-107-5"></a><span class="c1"># protected_data_trees = ["raw/"]  # optional: drift-detection baselines for vendor data (issue #935)</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -10162,6 +10163,12 @@ measures free space mid-run and behavior is unchanged.</p>
 <td>String</td>
 <td>—</td>
 <td>Global scratch directory (issue #907). Injected as <code>TMPDIR</code>/<code>TMP</code>/<code>TEMP</code> into every rule shell and into rule-level (<code>pre_exec</code>, <code>on_success</code>, <code>on_failure</code>) and workflow-level (<code>on_complete</code>, <code>on_error</code>) hooks, so tools that spill caches into the system temp directory (aligners, variant callers, assemblies) write to a volume with room instead. Relative paths resolve against the workflow file's directory; the directory is created on demand at run start. The environment variable <code>OXO_FLOW_TMPDIR</code> overrides this value per invocation (set it to redirect temp traffic without editing the workflow)</td>
+</tr>
+<tr>
+<td><code>protected_data_trees</code></td>
+<td>Array of String</td>
+<td>—</td>
+<td>Workdir-relative data trees whose content must not change behind the engine's back (issue #935 P1) — e.g. <code>["raw/", "reference/"]</code>. At first observation a baseline manifest (per-file size + mtime + sha256 for files ≤ 64 MiB) is recorded in the checkpoint; every later plan/dry-run/run diffs the tree and prints a loud <code>PROTECTED TREE DRIFT:</code> section when a file changed, was removed, or appeared. <code>run</code> <strong>refuses to execute</strong> on drift unless <code>--allow-protected-drift</code> is passed. Trees that do not exist yet are adopted only once populated (populating is not drift). This is a detection surface, not an access control: out-of-band writes are noticed, not prevented</td>
 </tr>
 </tbody>
 </table>
