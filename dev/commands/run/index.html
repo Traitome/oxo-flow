@@ -5957,7 +5957,12 @@ noticed within one invocation, not prevented. Combined with
 <code>--provenance</code> checksums it catches damaged vendor data before any rule
 consumes it. For a one-shot audit of a whole tree against the vendor's own
 <code>md5.txt</code> sidecar (post-incident audits, post-recovery verification), use
-<a href="../verify-data/"><code>oxo-flow verify-data</code></a>.</p>
+<a href="../verify-data/"><code>oxo-flow verify-data</code></a>. On a web-served instance the same
+drift state is available per run as a read-only HTTP preview:
+<code>GET /api/runs/{id}/protected-drift</code> (see
+<a href="../../reference/web-api/#protected-tree-drift-preview">Web API reference</a>) —
+it never records baselines, so it is safe to poll before overriding a gate
+with <code>allow_protected_drift</code> on <code>POST /api/runs</code>.</p>
 <h3 id="forcing-execution">Forcing Execution<a class="headerlink" href="#forcing-execution" title="Permanent link">#</a></h3>
 <p>To bypass checkpoints and re-execute rules that have already completed, use
 <a href="../clean/"><code>oxo-flow clean</code></a> to remove outputs and the checkpoint file
