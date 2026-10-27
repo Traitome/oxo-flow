@@ -446,7 +446,8 @@ pub fn build_router(mode: &str) -> Router {
         .route(
             "/api/data/samplesheet/parse",
             post(workflow::handlers::parse_samplesheet),
-        );
+        )
+        .route("/api/data/verify", post(execution::handlers::verify_data));
 
     // ---- Template routes ----
     let template_routes = Router::new()

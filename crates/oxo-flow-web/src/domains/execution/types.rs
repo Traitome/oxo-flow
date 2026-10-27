@@ -117,6 +117,60 @@ pub struct CreateRunRequest {
     pub allow_protected_drift: Option<bool>,
 }
 
+/// The wire contract of `POST /api/data/verify` (issue #935 P2 web slice):
+/// a workspace-relative tree to audit plus the vendor md5 sidecar content
+/// inline — the server stages it for the CLI subprocess, so the caller
+/// never needs filesystem access to the delivery.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VerifyDataRequest {
+    /// Directory to verify, relative to the acting user's workspace root
+    /// (`workspace/users/<user>/...` — uploaded inputs and run workdirs
+    /// both live there). Absolute paths and `..` are rejected.
+    pub tree: String,
+    /// Full md5 sidecar text in the standard `md5sum` format
+    /// (`<32-hex md5> <path>`), as shipped by vendors.
+    pub md5_content: String,
+}
+
+/// One classified file from a verify-data audit — mirrors the CLI's
+/// `--json` entries (`VerifyDataEntry`, oxo-flow-cli `verify_data.rs`).
+/// `expected` is absent for extras, `actual` for missing files; `note`
+/// carries free-form context (checksum read errors, the empty-sidecar
+/// notice).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VerifyDataEntry {
+    pub file: String,
+    /// `matched` | `mismatched` | `missing` | `extra`
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Response of `POST /api/data/verify` — the parsed CLI `--json` document.
+/// The audit operation itself always succeeds here (HTTP 200) even when it
+/// finds drift: `mismatched`/`missing`/`extra` > 0 IS the finding, not an
+/// error. HTTP errors are reserved for infrastructure failures (spawn,
+/// parse of the CLI output) and request problems (bad tree).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VerifyDataResponse {
+    /// Workspace-relative tree as requested (echoed for correlation).
+    pub tree: String,
+    pub matched: usize,
+    pub mismatched: usize,
+    pub missing: usize,
+    /// Files present under the tree but not listed in the sidecar.
+    pub extra: usize,
+    pub entries: Vec<VerifyDataEntry>,
+    /// Set only for the empty-sidecar case: nothing to verify, extras scan
+    /// skipped (mirrors the CLI's `"note"` field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunConfig {
     pub max_jobs: Option<usize>,
@@ -399,6 +453,63 @@ mod tests {
                 .unwrap();
         assert!(back.include_files.is_none());
         assert!(back.config_overrides.is_none());
+    }
+
+    #[test]
+    fn test_verify_data_request_roundtrip() {
+        // The WIRE contract of POST /api/data/verify (issue #935 P2): a
+        // workspace-relative tree plus the inline sidecar text.
+        let back: VerifyDataRequest = serde_json::from_value(serde_json::json!({
+            "tree": "inputs/delivery-2026-10",
+            "md5_content": "d41d8cd98f00b204e9800998ecf8427e  raw/S1.fq\n"
+        }))
+        .unwrap();
+        assert_eq!(back.tree, "inputs/delivery-2026-10");
+        assert!(back.md5_content.contains("raw/S1.fq"));
+    }
+
+    #[test]
+    fn test_verify_data_response_roundtrip() {
+        // Must parse the CLI's `--json` document shape: statuses are
+        // free-form strings here (the CLI owns the vocabulary), optional
+        // fields skip when absent, `note` only appears when set.
+        let cli_doc = serde_json::json!({
+            "tree": "inputs/delivery-2026-10",
+            "matched": 1,
+            "mismatched": 1,
+            "missing": 1,
+            "extra": 1,
+            "entries": [
+                {"file": "raw/S1.fq", "status": "matched", "expected": "aa", "actual": "aa"},
+                {"file": "raw/S2.fq", "status": "mismatched", "expected": "bb", "actual": "cc"},
+                {"file": "raw/S3.fq", "status": "missing", "expected": "dd"},
+                {"file": "raw/unlisted.txt", "status": "extra", "actual": "ee"}
+            ]
+        });
+        let resp: VerifyDataResponse = serde_json::from_value(cli_doc).unwrap();
+        assert_eq!(resp.matched, 1);
+        assert_eq!(resp.mismatched, 1);
+        assert_eq!(resp.missing, 1);
+        assert_eq!(resp.extra, 1);
+        assert_eq!(resp.entries.len(), 4);
+        assert_eq!(resp.entries[0].status, "matched");
+        assert!(resp.entries[2].actual.is_none());
+        assert!(resp.entries[3].expected.is_none());
+        assert!(resp.note.is_none());
+
+        // Empty-sidecar document: counts zero, note present.
+        let empty: VerifyDataResponse = serde_json::from_value(serde_json::json!({
+            "tree": "inputs/delivery",
+            "matched": 0, "mismatched": 0, "missing": 0, "extra": 0,
+            "entries": [],
+            "note": "The md5 sidecar lists no files."
+        }))
+        .unwrap();
+        assert_eq!(
+            empty.note.as_deref(),
+            Some("The md5 sidecar lists no files.")
+        );
+        assert!(empty.entries.is_empty());
     }
 
     #[test]

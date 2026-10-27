@@ -657,6 +657,31 @@ Content-Type: application/json
 ```
 Parses pasted CSV/TSV samplesheet content into the standard column structure (`sample`, `fastq_r1`, `fastq_r2`, `condition`). Returns `{ format, samples: [...] }` — the bridge from a spreadsheet to `[[sample_groups]]`.
 
+### Verify Data
+```
+POST /api/data/verify
+Content-Type: application/json
+
+{"tree": "inputs/delivery-2026-10", "md5_content": "d41d8cd98f00b204e9800998ecf8427e  raw/S1.fq\nd41d8cd98f00b204e9800998ecf8427e  raw/S2.fq\n"}
+```
+Audits a delivered data tree against a vendor md5 sidecar — the web slice of the CLI's `oxo-flow verify-data` command (issue #935 P2). `tree` is workspace-relative (uploads live under `inputs/`, run workdirs under `runs/<id>/`; absolute paths and `..` are rejected). The sidecar arrives inline in the standard `md5sum` text format and is staged server-side; the CLI subprocess streams an md5 over every file.
+
+Response is HTTP 200 even when drift is found — the counts ARE the finding:
+
+```
+{
+  "tree": "inputs/delivery-2026-10",
+  "matched": 12, "mismatched": 1, "missing": 0, "extra": 1,
+  "entries": [
+    {"file": "raw/S1.fq", "status": "matched", "expected": "d41d...", "actual": "d41d..."},
+    {"file": "raw/S2.fq", "status": "mismatched", "expected": "aa...", "actual": "bb..."},
+    {"file": "raw/unlisted.txt", "status": "extra", "actual": "cc..."}
+  ]
+}
+```
+
+`status` vocabulary: `matched`, `mismatched` (includes unreadable files, with a `note`), `missing`, `extra` (present but unlisted — always non-compliant). An empty sidecar returns all-zero counts with `"note": "The md5 sidecar lists no files."` and no extras scan. A sidecar the CLI hard-rejects (malformed line, duplicate path, traversal) yields `400 INVALID_SIDECAR` with the CLI's stderr as detail. HTTP errors are otherwise reserved for infrastructure problems: `400 INVALID_TREE` (unknown path or traversal), `500 VERIFY_ERROR` (spawn failure or unparseable CLI output). Errors use the structured `{code, message, detail, suggestion}` shape. The inline sidecar counts against the server's default ~2 MiB JSON body limit (~50k entries); larger sidecars should be split by directory.
+
 ---
 
 ## Templates
