@@ -1682,6 +1682,8 @@
       
         
       
+        
+      
     
     
     
@@ -3059,6 +3061,34 @@
     
   
     validate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../verify-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    verify-data
   
 
     
@@ -5925,7 +5955,9 @@ change silently while a pipeline is running against them. Declaring</p>
 <p>This is a detection surface, not an access control: out-of-band writes are
 noticed within one invocation, not prevented. Combined with
 <code>--provenance</code> checksums it catches damaged vendor data before any rule
-consumes it.</p>
+consumes it. For a one-shot audit of a whole tree against the vendor's own
+<code>md5.txt</code> sidecar (post-incident audits, post-recovery verification), use
+<a href="../verify-data/"><code>oxo-flow verify-data</code></a>.</p>
 <h3 id="forcing-execution">Forcing Execution<a class="headerlink" href="#forcing-execution" title="Permanent link">#</a></h3>
 <p>To bypass checkpoints and re-execute rules that have already completed, use
 <a href="../clean/"><code>oxo-flow clean</code></a> to remove outputs and the checkpoint file
