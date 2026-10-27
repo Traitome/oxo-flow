@@ -110,8 +110,8 @@ pub struct CreateRunRequest {
     /// run gate refuses to execute when protected-tree files changed since
     /// the recorded baseline; this flag forwards `--allow-protected-drift`
     /// to override that refusal. Web has no drift-preview surface yet, so
-    /// this is the caller's only escape hatch — the CLI still records the
-    /// drift in the run report. Retry keeps the gate: only explicit create
+    /// this is the caller's only escape hatch — the CLI still narrates the
+    /// drift into the run log. Retry keeps the gate: only explicit create
     /// requests may set it.
     #[serde(default)]
     pub allow_protected_drift: Option<bool>,

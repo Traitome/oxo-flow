@@ -657,6 +657,7 @@ pub async fn create_run(
                 run_dir,
                 req.max_jobs,
                 validated_overrides,
+                req.allow_protected_drift.unwrap_or(false),
             );
             return Ok(Json(resp));
         }

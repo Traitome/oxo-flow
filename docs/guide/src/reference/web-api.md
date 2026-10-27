@@ -420,10 +420,14 @@ Execution flags are forwarded to the CLI executor:
   run gate refuses to execute when files under a
   [`protected_data_trees`](workflow-format.md) tree changed since the
   recorded baseline; this flag is the web escape hatch to proceed anyway
-  (the CLI still reports the drift). Web **retry** keeps the gate — only
-  the original create request may relax it, mirroring the CLI's own
-  resume. There is no web drift-preview surface yet, so check drift with
-  the CLI (`oxo-flow status`/`run` output) before overriding.
+  (the CLI still narrates the drift into the run log). Cluster
+  (`cluster_id`) runs carry the flag into the remote wrapper command the
+  same way. Web **retry** keeps the gate — only the original create
+  request may relax it, mirroring the CLI's own resume. The flag only
+  affects actual runs; with `dry_run: true` it is ignored (there is no
+  gate to bypass in preview). There is no web drift-preview surface yet,
+  so check drift with `oxo-flow dry-run`/`plan` or the run log before
+  overriding.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections-remote-execution)).
