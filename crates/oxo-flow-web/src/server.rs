@@ -381,6 +381,10 @@ pub fn build_router(mode: &str) -> Router {
             get(execution::handlers::get_run_protected_drift),
         )
         .route(
+            "/api/runs/{id}/provenance-verify",
+            get(execution::handlers::verify_run_provenance),
+        )
+        .route(
             "/api/runs/{id}/ai-status",
             get(execution::handlers::get_ai_status),
         )

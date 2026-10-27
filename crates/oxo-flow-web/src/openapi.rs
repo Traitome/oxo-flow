@@ -98,6 +98,7 @@ impl Modify for SecurityAddon {
         crate::domains::execution::handlers::resume_run,
         crate::domains::execution::handlers::get_run_preview,
         crate::domains::execution::handlers::get_run_protected_drift,
+        crate::domains::execution::handlers::verify_run_provenance,
         crate::domains::execution::handlers::get_ai_status,
         crate::domains::execution::handlers::get_run_report,
         crate::domains::execution::handlers::ask_report_question,

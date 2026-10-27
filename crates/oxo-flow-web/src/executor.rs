@@ -304,6 +304,11 @@ pub struct RunFlags {
     /// Run-only — the dry-run branch never carries it (there is no gate
     /// to bypass in preview). Web retry/resume keep the gate.
     pub allow_protected_drift: bool,
+    /// Forward `--provenance`: record output checksums into the checkpoint
+    /// so `provenance verify` (and `GET /api/runs/{id}/provenance-verify`)
+    /// can later audit output integrity. Run-only — the dry-run branch
+    /// never carries it (the CLI rejects the flag for dry-run).
+    pub provenance: bool,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -360,6 +365,12 @@ pub fn build_cli_args(
             // this is the web escape hatch (create requests only — retry
             // and resume keep the gate, matching the CLI's own resume).
             args.push("--allow-protected-drift".into());
+        }
+        if flags.provenance {
+            // Record output checksums into the checkpoint (issue #276) so
+            // `provenance verify` (web: GET .../provenance-verify) can later
+            // audit output integrity.
+            args.push("--provenance".into());
         }
         if let Some(jobs) = flags.max_jobs {
             args.push("-j".into());
@@ -1154,6 +1165,7 @@ mod tests {
             targets: vec!["align".into()],
             config_overrides: vec!["min_quality=30".into()],
             allow_protected_drift: false,
+            provenance: false,
         };
         let args = build_cli_args(
             std::path::Path::new("wf.oxoflow"),
@@ -1266,6 +1278,49 @@ mod tests {
                 .iter()
                 .any(|a| a.to_string_lossy() == "--allow-protected-drift"),
             "default must not emit --allow-protected-drift: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_cli_args_provenance_run_only() {
+        // Issue #276: the flag forwards only on the run branch; dry-run
+        // rejects it inside the CLI ("not supported by dry-run"), and
+        // Default keeps it off for retry/resume.
+        let flags = RunFlags {
+            provenance: true,
+            ..RunFlags::default()
+        };
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &flags,
+        );
+        let strs: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(strs[0], "run");
+        assert!(strs.contains(&"--provenance".to_string()));
+
+        let dry = RunFlags {
+            dry_run: true,
+            ..flags
+        };
+        let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);
+        assert!(
+            !args.iter().any(|a| a.to_string_lossy() == "--provenance"),
+            "dry-run must not carry --provenance: {args:?}"
+        );
+
+        let off = RunFlags::default();
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &off,
+        );
+        assert!(
+            !args.iter().any(|a| a.to_string_lossy() == "--provenance"),
+            "default must not emit --provenance: {args:?}"
         );
     }
 
