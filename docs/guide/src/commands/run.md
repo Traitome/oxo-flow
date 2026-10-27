@@ -1323,7 +1323,9 @@ makes the engine treat those workdir-relative trees as protected (issue
 This is a detection surface, not an access control: out-of-band writes are
 noticed within one invocation, not prevented. Combined with
 `--provenance` checksums it catches damaged vendor data before any rule
-consumes it.
+consumes it. For a one-shot audit of a whole tree against the vendor's own
+`md5.txt` sidecar (post-incident audits, post-recovery verification), use
+[`oxo-flow verify-data`](verify-data.md).
 
 ### Forcing Execution
 

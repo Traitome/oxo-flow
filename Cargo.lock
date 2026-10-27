@@ -2745,6 +2745,7 @@ dependencies = [
  "glob",
  "hex",
  "indicatif",
+ "md-5",
  "oxo-flow-ai",
  "oxo-flow-core",
  "oxo-flow-web",

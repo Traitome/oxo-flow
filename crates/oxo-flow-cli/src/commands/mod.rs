@@ -289,6 +289,7 @@ pub mod run;
 pub mod run_cluster;
 pub mod run_preview;
 pub mod samples;
+pub mod verify_data;
 pub mod web;
 pub mod workdir_sources;
 
