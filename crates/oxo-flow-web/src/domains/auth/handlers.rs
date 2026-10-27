@@ -59,7 +59,7 @@ async fn validate_token(
     })?;
 
     // Check expiry
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_iso();
     if session.expires_at <= now {
         return Err(err(
             StatusCode::UNAUTHORIZED,
@@ -713,6 +713,7 @@ pub async fn oauth_authorize(
     responses(
         (status = 200, description = "Success", body = OAuthCallbackResponse),
         (status = 400, description = "Error", body = ApiError),
+        (status = 503, description = "User row could not be ensured (database failure)", body = ApiError),
     )
 )]
 /// POST /api/auth/oauth/callback
@@ -1060,7 +1061,7 @@ async fn resolve_api_key_in(
     .unwrap_or(None);
     let (user_id, role) = row?;
     let _ = sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
-        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(now_iso())
         .bind(&hash)
         .execute(pool)
         .await;

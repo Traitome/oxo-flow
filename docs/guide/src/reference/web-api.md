@@ -833,6 +833,9 @@ unique across provider accounts â€” two ORCID accounts can share a given name â€
 so when a display name is already taken the row is persisted under a fallback
 username derived from the unique provider id (`{provider}:{provider_user_id}`);
 the login still succeeds and the session always resolves to a real user row.
+When the user row cannot be ensured (database unavailable or insert fails),
+the callback answers `503 {code:"DB_ERROR"}` instead of minting a session
+that would fail closed on every subsequent request.
 
 ---
 
