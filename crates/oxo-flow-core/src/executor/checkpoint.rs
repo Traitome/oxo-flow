@@ -1262,22 +1262,6 @@ pub fn snapshot_protected_tree(tree: &Path, workdir: &Path) -> Result<Option<Inp
     Ok(Some(entries.into_values().collect()))
 }
 
-/// Blocking-pool wrapper for [`snapshot_protected_tree`]: tree walks hash
-/// every small file — keep them off the tokio workers (#527).
-pub async fn snapshot_protected_tree_async(
-    tree: &Path,
-    workdir: &Path,
-) -> Result<Option<InputManifest>> {
-    let owned_tree = tree.to_path_buf();
-    let owned_workdir = workdir.to_path_buf();
-    tokio::task::spawn_blocking(move || snapshot_protected_tree(&owned_tree, &owned_workdir))
-        .await
-        .map_err(|e| crate::error::OxoFlowError::Execution {
-            rule: String::new(),
-            message: format!("protected-tree manifest task failed: {e}"),
-        })?
-}
-
 pub fn snapshot_input_manifest(
     rule: &Rule,
     workdir: &Path,

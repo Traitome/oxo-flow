@@ -1311,7 +1311,10 @@ makes the engine treat those workdir-relative trees as protected (issue
   Restore the files, or pass `--allow-protected-drift` to run anyway (the
   drift is still printed; the baseline is NOT updated — a later clean run
   re-reports it until the tree is restored or the checkpoint's baselines are
-  reset by deleting the entry).
+  reset by deleting the entry). To re-baseline after an intentional change,
+  remove the `protected_tree_baselines` entry from `.oxo-flow/checkpoint.json`
+  (or the checkpoint file itself) — the next invocation adopts the current
+  tree content as the new baseline.
 - Trees that do not exist yet are adopted only once they appear — populating
   a tree is normal data arrival, not drift.
 - `dry-run` reports the same section read-only (it never persists the

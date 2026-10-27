@@ -2721,8 +2721,12 @@ pub async fn run_command(
         if protected_baselined > 0 {
             diagnostic_narrate(
                 format_args!(
-                    "  Note: recorded baseline manifest for protected tree{}: future changes will be flagged by plan/dry-run/run",
-                    oxo_flow_core::plural(protected_baselined, "", "s")
+                    "  Note: {} — future changes will be flagged by plan/dry-run/run",
+                    oxo_flow_core::plural(
+                        protected_baselined,
+                        "baseline recorded for protected tree",
+                        "baselines recorded for protected trees"
+                    )
                 ),
                 Some(&run_log),
             );
