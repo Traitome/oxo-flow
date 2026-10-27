@@ -140,3 +140,4 @@ which carry a `note`), `missing` (listed in the sidecar, absent on disk), and
 - [provenance](provenance.md) — verify run outputs against the checkpoint's stored checksums
 - [run](run.md#protected-data-trees-protected_data_trees) — whole-tree drift detection during runs
 - [workflow format reference](../reference/workflow-format.md) — `[engine]` section
+- [web API reference](../reference/web-api.md) — `POST /api/data/verify` runs this audit over HTTP on a user-workspace tree

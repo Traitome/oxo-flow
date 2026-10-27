@@ -2531,6 +2531,156 @@ async fn run_bounded(
     }
 }
 
+/// Hard limit on the `verify-data` subprocess. Unlike `clean`, the audit
+/// streams an md5 over EVERY file in the tree — a multi-GiB delivery on
+/// spinning storage plausibly takes minutes; 10 minutes keeps the bound
+/// generous without ever wedging a connection forever.
+const VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// Per-stream capture cap for `verify-data --json`. The JSON document is
+/// one entry per file; 4 MiB covers ~30k entries and anything beyond it
+/// means the caller staged a sidecar far too large for a synchronous
+/// request anyway.
+const VERIFY_OUTPUT_CAP_BYTES: u64 = 4 * 1024 * 1024;
+
+#[utoipa::path(
+    post,
+    path = "/api/data/verify",
+    tag = "data",
+    request_body = VerifyDataRequest,
+    responses(
+        (status = 200, description = "Audit finished — findings are in the body", body = VerifyDataResponse),
+        (status = 400, description = "Error", body = ApiError),
+        (status = 500, description = "Error", body = ApiError),
+    )
+)]
+/// POST /api/data/verify — audit a workspace-relative data tree against a
+/// vendor md5 sidecar (issue #935 P2, web slice of the CLI's
+/// `verify-data` command).
+///
+/// The tree is sandboxed to the acting user's workspace (#521 vocabulary —
+/// same containment as `/api/data/analyze`); the sidecar arrives inline and
+/// is staged to a temp file for the CLI subprocess. HTTP 200 carries the
+/// audit findings (anomalies are data, not errors); 4xx/5xx is reserved for
+/// bad requests and infrastructure failures.
+pub async fn verify_data(
+    authenticated: Option<Extension<CurrentUser>>,
+    ApiJson(req): ApiJson<VerifyDataRequest>,
+) -> ApiResult<VerifyDataResponse> {
+    let user = current_user::resolve(authenticated.as_ref());
+
+    // Containment: the tree must resolve inside the acting user's
+    // workspace root (absolute paths, `..`, trailing slash → 400).
+    let tree_abs = crate::workspace::resolve_user_scoped_path(&user.id, &req.tree)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "INVALID_TREE", e))?;
+    if !tree_abs.is_dir() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_TREE",
+            format!("tree '{}' does not exist or is not a directory", req.tree),
+        ));
+    }
+    if req.md5_content.trim().is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "INVALID_SIDECAR",
+            "md5_content is empty — provide the vendor sidecar text".into(),
+        ));
+    }
+
+    // Stage the inline sidecar for the CLI (`--from` takes a path, not
+    // stdin). The temp file lives OUTSIDE the tree, so the CLI's own
+    // sidecar-self exclusion never even triggers.
+    let sidecar_dir = tempfile::tempdir()
+        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+    let sidecar_path = sidecar_dir.path().join("md5.txt");
+    tokio::fs::write(&sidecar_path, &req.md5_content)
+        .await
+        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+
+    let bin = crate::executor::find_oxo_flow_binary();
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("verify-data")
+        .arg(&tree_abs)
+        .arg("--from")
+        .arg(&sidecar_path)
+        .arg("--json");
+    let output = run_bounded(cmd, VERIFY_TIMEOUT, VERIFY_OUTPUT_CAP_BYTES)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "VERIFY_ERROR",
+                format!("Failed to run verify-data: {e}"),
+            )
+        })?;
+
+    // Exit policy mirrors the CLI: 0 = clean (or empty sidecar), 1 =
+    // anomalies found (that is the audit's product, not a failure). Any
+    // other exit is an infrastructure error with stderr context.
+    let doc: serde_json::Value = match output.status {
+        Some(0) | Some(1) => serde_json::from_str(&output.stdout).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "VERIFY_ERROR",
+                format!(
+                    "verify-data produced unparseable JSON (exit {:?}): {e} — stderr: {}",
+                    output.status,
+                    output.stderr.lines().last().unwrap_or(""),
+                ),
+            )
+        })?,
+        other => {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "VERIFY_ERROR",
+                format!(
+                    "verify-data exited unexpectedly ({other:?}): {}",
+                    output.stderr.lines().last().unwrap_or(""),
+                ),
+            ));
+        }
+    };
+
+    // Shape-check the CLI document (args were ours, but the binary can be
+    // a stale PATH fallback — degrade loudly, never lie to the caller).
+    let entries: Vec<VerifyDataEntry> = doc
+        .get("entries")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "VERIFY_ERROR",
+                "verify-data output missing 'entries' — is OXO_FLOW_BIN pointing at an up-to-date binary?"
+                    .to_string(),
+            )
+        })?;
+    let count = |key: &str| -> usize {
+        doc.get(key)
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(0)
+    };
+    let resp = VerifyDataResponse {
+        tree: req.tree,
+        matched: count("matched"),
+        mismatched: count("mismatched"),
+        missing: count("missing"),
+        extra: count("extra"),
+        entries,
+        note: doc.get("note").and_then(|v| v.as_str()).map(String::from),
+    };
+    // Temp sidecar is dropped with `sidecar_dir` (it lives outside the
+    // tree, so no cleanup inside it is needed).
+    drop(sidecar_dir);
+    Ok(Json(resp))
+}
+
+/// Internal-server-error helper for the verify-data handler (the two
+/// error branches above share code/message shape).
+fn internal_verify_error(message: String) -> (StatusCode, Json<ApiError>) {
+    err(StatusCode::INTERNAL_SERVER_ERROR, "VERIFY_ERROR", message)
+}
+
 #[utoipa::path(
     post,
     path = "/api/runs/{id}/resume-checkpoint",
@@ -2715,5 +2865,49 @@ mod bounded_subprocess_tests {
             .await
             .expect_err("timeout must be an error");
         assert!(err.contains("timed out"), "unexpected error: {err}");
+    }
+
+    /// Wire-level argv test for `POST /api/data/verify` (issue #935 P2):
+    /// the exact CLI invocation the handler must produce, exercised
+    /// against a real tree + staged sidecar. Mirrors the handler's
+    /// construction: `verify-data <tree> --from <sidecar> --json`.
+    #[tokio::test]
+    async fn verify_data_argv_produces_json_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("delivery");
+        std::fs::create_dir_all(tree.join("raw")).unwrap();
+        std::fs::write(tree.join("raw/S1.fq"), b"AAAA").unwrap();
+        std::fs::write(tree.join("raw/STRAY.txt"), b"stray").unwrap();
+
+        // Stage the sidecar OUTSIDE the tree, exactly like the handler.
+        let sidecar_dir = tempfile::tempdir().unwrap();
+        let sidecar = sidecar_dir.path().join("md5.txt");
+        let digest = {
+            use md5::{Digest, Md5};
+            let mut h = Md5::new();
+            h.update(b"AAAA");
+            hex::encode(h.finalize())
+        };
+        std::fs::write(&sidecar, format!("{digest}  raw/S1.fq\n")).unwrap();
+
+        let mut cmd = tokio::process::Command::new(crate::executor::find_oxo_flow_binary());
+        cmd.arg("verify-data")
+            .arg(&tree)
+            .arg("--from")
+            .arg(&sidecar)
+            .arg("--json");
+        let out = run_bounded(cmd, std::time::Duration::from_secs(120), 1024 * 1024)
+            .await
+            .expect("verify-data runs");
+
+        // 1 matched + 1 extra → exit 1 (findings, not failure).
+        assert_eq!(out.status, Some(1), "stderr: {}", out.stderr);
+        let doc: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+        assert_eq!(doc["matched"], 1);
+        assert_eq!(doc["extra"], 1);
+        assert_eq!(doc["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(doc["entries"][0]["file"], "raw/S1.fq");
+        assert_eq!(doc["entries"][0]["status"], "matched");
+        assert_eq!(doc["entries"][1]["status"], "extra");
     }
 }

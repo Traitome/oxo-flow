@@ -2817,6 +2817,8 @@ dependencies = [
  "crc32fast",
  "dashmap",
  "futures",
+ "hex",
+ "md-5",
  "nix",
  "num_cpus",
  "oxo-flow-ai",

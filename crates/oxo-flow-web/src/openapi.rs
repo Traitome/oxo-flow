@@ -74,6 +74,7 @@ impl Modify for SecurityAddon {
         crate::domains::workflow::handlers::perceive_data,
         crate::domains::workflow::handlers::reference_status,
         crate::domains::workflow::handlers::parse_samplesheet,
+        crate::domains::execution::handlers::verify_data,
         // templates
         crate::domains::workflow::handlers::list_templates,
         crate::domains::workflow::handlers::get_template,
