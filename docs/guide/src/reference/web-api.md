@@ -347,12 +347,12 @@ file on disk defines the version.
 POST /api/runs
 Content-Type: application/json
 
-{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>", "cluster_id": "<cluster-id>", "samples": ["S1", "S2"], "targets": ["rule_name"], "include_files": {"envs/clinical/pixi.toml": "[env] ..."}, "config_overrides": ["min_quality=30"]}
+{"toml_content": "<workflow TOML>", "max_jobs": 4, "dry_run": false, "keep_going": false, "pipeline_id": "<uuid>", "cluster_id": "<cluster-id>", "samples": ["S1", "S2"], "targets": ["rule_name"], "include_files": {"envs/clinical/pixi.toml": "[env] ..."}, "config_overrides": ["min_quality=30"], "allow_protected_drift": false}
 ```
 `toml_content` is the workflow source (required — the run is created from
 it, not from a saved pipeline); `max_jobs`, `dry_run`, `keep_going`,
-`pipeline_id`, `cluster_id`, `samples`, `targets`, `include_files`, and
-`config_overrides` are top-level fields
+`pipeline_id`, `cluster_id`, `samples`, `targets`, `include_files`,
+`config_overrides`, and `allow_protected_drift` are top-level fields
 (not nested under a `config` object). Run-mutating endpoints
 (create/cancel/pause/resume/retry/clean/resume-checkpoint) require the
 `user` role or above — the viewer role is read-only — and a `pipeline_id`
@@ -415,6 +415,15 @@ Execution flags are forwarded to the CLI executor:
   wrapper command. Overrides and include-file keys are validated **before**
   the run row is persisted, so a `400` never leaves a ghost `queued` run
   behind (PR #930 NIT-3).
+- `allow_protected_drift` (boolean, optional, default `false`) forwards
+  `--allow-protected-drift` to the spawned run (issue #935): the CLI's
+  run gate refuses to execute when files under a
+  [`protected_data_trees`](workflow-format.md) tree changed since the
+  recorded baseline; this flag is the web escape hatch to proceed anyway
+  (the CLI still reports the drift). Web **retry** keeps the gate — only
+  the original create request may relax it, mirroring the CLI's own
+  resume. There is no web drift-preview surface yet, so check drift with
+  the CLI (`oxo-flow status`/`run` output) before overriding.
 - `cluster_id` (optional) names a configured SSH cluster connection: the
   workdir is staged to that host and executed there (see
   [Cluster Connections](#cluster-connections-remote-execution)).

@@ -299,6 +299,11 @@ pub struct RunFlags {
     /// entries — all override semantics (declared-key gate, canonicalization,
     /// unknown-key warnings) live inside the CLI. Empty = none.
     pub config_overrides: Vec<String>,
+    /// Forward `--allow-protected-drift` (issue #935): proceed despite
+    /// protected data tree drift instead of refusing at the CLI gate.
+    /// Run-only — the dry-run branch never carries it (there is no gate
+    /// to bypass in preview). Web retry/resume keep the gate.
+    pub allow_protected_drift: bool,
 }
 
 /// Build the CLI argument vector for a run (pure — unit-tested).
@@ -349,6 +354,12 @@ pub fn build_cli_args(
         }
         if flags.rerun {
             args.push("--rerun".into());
+        }
+        if flags.allow_protected_drift {
+            // Issue #935: the CLI's run gate refuses protected-tree drift;
+            // this is the web escape hatch (create requests only — retry
+            // and resume keep the gate, matching the CLI's own resume).
+            args.push("--allow-protected-drift".into());
         }
         if let Some(jobs) = flags.max_jobs {
             args.push("-j".into());
@@ -1142,6 +1153,7 @@ mod tests {
             samples: vec!["S1".into(), "S2".into()],
             targets: vec!["align".into()],
             config_overrides: vec!["min_quality=30".into()],
+            allow_protected_drift: false,
         };
         let args = build_cli_args(
             std::path::Path::new("wf.oxoflow"),
@@ -1208,6 +1220,52 @@ mod tests {
                 .iter()
                 .any(|a| a.to_string_lossy().starts_with("--arg")),
             "empty overrides must not emit --arg: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_cli_args_allow_protected_drift_run_only() {
+        // Issue #935: the flag forwards only on the run branch; dry-run has
+        // no gate to bypass, and Default keeps it off for retry/resume.
+        let flags = RunFlags {
+            allow_protected_drift: true,
+            ..RunFlags::default()
+        };
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &flags,
+        );
+        let strs: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(strs[0], "run");
+        assert!(strs.contains(&"--allow-protected-drift".to_string()));
+
+        let dry = RunFlags {
+            dry_run: true,
+            ..flags
+        };
+        let args = build_cli_args(std::path::Path::new("w"), std::path::Path::new("d"), &dry);
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy() == "--allow-protected-drift"),
+            "dry-run must not carry --allow-protected-drift: {args:?}"
+        );
+
+        let off = RunFlags::default();
+        let args = build_cli_args(
+            std::path::Path::new("wf.oxoflow"),
+            std::path::Path::new("dir"),
+            &off,
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.to_string_lossy() == "--allow-protected-drift"),
+            "default must not emit --allow-protected-drift: {args:?}"
         );
     }
 

@@ -190,8 +190,8 @@ export const api = {
   // ── Execution ──
   createRun: (
     toml_content: string,
-    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string; cluster_id?: string; include_files?: Record<string, string>; config_overrides?: string[] } = {},
-  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null, cluster_id: options.cluster_id ?? null, ...(options.include_files ? { include_files: options.include_files } : {}), ...(options.config_overrides ? { config_overrides: options.config_overrides } : {}) }),
+    options: { max_jobs?: number; dry_run?: boolean; keep_going?: boolean; samples?: string[]; targets?: string[]; pipeline_id?: string; cluster_id?: string; include_files?: Record<string, string>; config_overrides?: string[]; allow_protected_drift?: boolean } = {},
+  ) => post<RunResponse>('/api/runs', { toml_content, max_jobs: options.max_jobs ?? 4, dry_run: options.dry_run ?? false, keep_going: options.keep_going ?? false, samples: options.samples ?? [], targets: options.targets ?? [], pipeline_id: options.pipeline_id ?? null, cluster_id: options.cluster_id ?? null, ...(options.include_files ? { include_files: options.include_files } : {}), ...(options.config_overrides ? { config_overrides: options.config_overrides } : {}), ...(options.allow_protected_drift ? { allow_protected_drift: true } : {}) }),
   listRuns: (params: { limit?: number; cursor?: string; status?: string; q?: string } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));
