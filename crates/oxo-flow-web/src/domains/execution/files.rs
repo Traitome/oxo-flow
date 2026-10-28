@@ -235,10 +235,11 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
             let bytes = match read_capped(path, PREVIEW_MAX_BYTES as u64 + 1).await {
                 Ok(b) => b,
                 Err(e) => {
+                    tracing::error!("Failed to read preview file {path:?}: {e}");
                     return err(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "READ_ERROR",
-                        format!("Failed to read file: {e}"),
+                        "Failed to read file".to_string(),
                     )
                     .into_response();
                 }
@@ -272,10 +273,11 @@ async fn serve_file(path: &FsPath, preview: bool, range: Option<String>) -> Resp
             let data = match read_capped(path, PREVIEW_MAX_BYTES as u64 + 1).await {
                 Ok(d) => d,
                 Err(e) => {
+                    tracing::error!("Failed to read image {path:?}: {e}");
                     return err(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "READ_ERROR",
-                        format!("Failed to read image: {e}"),
+                        "Failed to read image".to_string(),
                     )
                     .into_response();
                 }
@@ -793,10 +795,11 @@ pub async fn upload_files(
         let mut file = match tokio::fs::File::create(&dest).await {
             Ok(f) => f,
             Err(e) => {
+                tracing::error!("Failed to create file {dest:?}: {e}");
                 return err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "IO_ERROR",
-                    format!("Failed to create file: {e}"),
+                    "Failed to create file".to_string(),
                 )
                 .into_response();
             }

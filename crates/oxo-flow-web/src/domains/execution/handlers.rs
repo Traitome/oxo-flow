@@ -575,10 +575,11 @@ pub async fn create_run(
             if let Some(parent) = dest.parent()
                 && let Err(e) = tokio::fs::create_dir_all(parent).await
             {
+                tracing::error!("Failed to create include directory {:?}: {e}", parent);
                 return Err(err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "RUN_ERROR",
-                    format!("Failed to create include directory: {e}"),
+                    "Failed to stage include files".to_string(),
                 ));
             }
             if let Err(e) = tokio::fs::write(&dest, content).await {
@@ -586,7 +587,7 @@ pub async fn create_run(
                 return Err(err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "RUN_ERROR",
-                    format!("Failed to write include file '{rel}': {e}"),
+                    format!("Failed to stage include file '{rel}'"),
                 ));
             }
         }
@@ -637,10 +638,11 @@ pub async fn create_run(
                     .fetch_optional(pool)
                     .await
                     .map_err(|e| {
+                        tracing::error!("DB error loading cluster {cid}: {e}");
                         err(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "DB_ERROR",
-                            format!("DB error loading cluster {cid}: {e}"),
+                            "Internal database error".to_string(),
                         )
                     })?;
             let cluster_row = cluster_row.ok_or_else(|| {
@@ -1979,10 +1981,11 @@ pub async fn get_run_preview(
             )
         })?;
     let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        tracing::error!("Failed to parse preview file: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "PREVIEW_PARSE_ERROR",
-            format!("Preview file unreadable: {e}"),
+            "Preview file unreadable".to_string(),
         )
     })?;
     Ok(Json(value))
@@ -2144,11 +2147,14 @@ pub async fn get_run_protected_drift(
 
     match outcome {
         Ok(response) => Ok(Json(response)),
-        Err(e) => Err(err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DRIFT_PREVIEW_FAILED",
-            format!("Protected-drift preview failed: {e}"),
-        )),
+        Err(e) => {
+            tracing::error!("protected-drift preview join failed: {e}");
+            Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DRIFT_PREVIEW_FAILED",
+                "Protected-drift preview failed".to_string(),
+            ))
+        }
     }
 }
 
@@ -2547,10 +2553,11 @@ pub async fn clean_run(
     let output = run_bounded(cmd, CLEAN_TIMEOUT, CLEAN_OUTPUT_CAP_BYTES)
         .await
         .map_err(|e| {
+            tracing::error!("clean subprocess failed for run {id}: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "CLEAN_ERROR",
-                format!("Failed to run clean: {e}"),
+                "Failed to run clean".to_string(),
             )
         })?;
     Ok(Json(serde_json::json!({
@@ -2703,12 +2710,17 @@ pub async fn verify_data(
     // Stage the inline sidecar for the CLI (`--from` takes a path, not
     // stdin). The temp file lives OUTSIDE the tree, so the CLI's own
     // sidecar-self exclusion never even triggers.
-    let sidecar_dir = tempfile::tempdir()
-        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+    let sidecar_dir = tempfile::tempdir().map_err(|e| {
+        tracing::error!("failed to stage verify-data sidecar tempdir: {e}");
+        internal_verify_error("failed to stage sidecar".to_string())
+    })?;
     let sidecar_path = sidecar_dir.path().join("md5.txt");
     tokio::fs::write(&sidecar_path, &req.md5_content)
         .await
-        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+        .map_err(|e| {
+            tracing::error!("failed to write verify-data sidecar file: {e}");
+            internal_verify_error("failed to stage sidecar".to_string())
+        })?;
 
     let bin = crate::executor::find_oxo_flow_binary();
     let mut cmd = tokio::process::Command::new(bin);
@@ -2720,10 +2732,11 @@ pub async fn verify_data(
     let output = run_bounded(cmd, VERIFY_TIMEOUT, VERIFY_OUTPUT_CAP_BYTES)
         .await
         .map_err(|e| {
+            tracing::error!("verify-data subprocess failed: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "VERIFY_ERROR",
-                format!("Failed to run verify-data: {e}"),
+                "Failed to run verify-data".to_string(),
             )
         })?;
 
@@ -2746,24 +2759,26 @@ pub async fn verify_data(
             ));
         }
         Some(0) | Some(1) => serde_json::from_str(&output.stdout).map_err(|e| {
+            tracing::error!(
+                "verify-data produced unparseable JSON (exit {:?}): {e} — stderr: {}",
+                output.status,
+                output.stderr.lines().last().unwrap_or(""),
+            );
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "VERIFY_ERROR",
-                format!(
-                    "verify-data produced unparseable JSON (exit {:?}): {e} — stderr: {}",
-                    output.status,
-                    output.stderr.lines().last().unwrap_or(""),
-                ),
+                "verify-data produced unparseable JSON".to_string(),
             )
         })?,
         other => {
+            tracing::error!(
+                "verify-data exited unexpectedly ({other:?}): {}",
+                output.stderr.lines().last().unwrap_or(""),
+            );
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "VERIFY_ERROR",
-                format!(
-                    "verify-data exited unexpectedly ({other:?}): {}",
-                    output.stderr.lines().last().unwrap_or(""),
-                ),
+                "verify-data exited unexpectedly".to_string(),
             ));
         }
     };
@@ -2902,10 +2917,11 @@ pub async fn verify_run_provenance(
     let output = run_bounded(cmd, VERIFY_TIMEOUT, VERIFY_OUTPUT_CAP_BYTES)
         .await
         .map_err(|e| {
+            tracing::error!("provenance verify subprocess failed: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "PROVENANCE_VERIFY_ERROR",
-                format!("Failed to run provenance verify: {e}"),
+                "Failed to run provenance verify".to_string(),
             )
         })?;
 
@@ -2927,24 +2943,22 @@ pub async fn verify_run_provenance(
             ));
         }
         Some(0) | Some(1) => serde_json::from_str(&output.stdout).map_err(|e| {
+            tracing::error!("provenance verify produced unparseable JSON: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "PROVENANCE_VERIFY_ERROR",
-                format!(
-                    "provenance verify produced unparseable JSON (exit {:?}): {e} — stderr: {}",
-                    output.status,
-                    output.stderr.lines().last().unwrap_or(""),
-                ),
+                "provenance verify produced unparseable JSON".to_string(),
             )
         })?,
         other => {
+            tracing::error!(
+                "provenance verify exited unexpectedly ({other:?}): {}",
+                output.stderr.lines().last().unwrap_or(""),
+            );
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "PROVENANCE_VERIFY_ERROR",
-                format!(
-                    "provenance verify exited unexpectedly ({other:?}): {}",
-                    output.stderr.lines().last().unwrap_or(""),
-                ),
+                "provenance verify exited unexpectedly".to_string(),
             ));
         }
     };
@@ -3124,11 +3138,11 @@ pub async fn resume_checkpoint(
     .execute(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error inserting resume run: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB_ERROR",
-            format!("DB error inserting resume run: {e}"),
-        )
+            "Internal database error".to_string(),        )
     })?;
 
     let args: Vec<std::ffi::OsString> = vec![

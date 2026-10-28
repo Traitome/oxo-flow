@@ -332,10 +332,11 @@ pub async fn diff_pipelines(
                     .fetch_optional(pool)
                     .await
                     .map_err(|e| {
+                        tracing::error!("DB error loading pipeline {pid}: {e}");
                         err(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "DB_ERROR",
-                            format!("DB error loading pipeline {pid}: {e}"),
+                            "Internal database error".to_string(),
                         )
                     })?;
             // A diff of another user's private pipeline leaks its TOML —
@@ -390,10 +391,11 @@ pub async fn export_pipeline(
                 .fetch_optional(pool)
                 .await
                 .map_err(|e| {
+                    tracing::error!("DB error loading pipeline {id}: {e}");
                     err(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "DB_ERROR",
-                        format!("Failed to load pipeline '{id}': {e}"),
+                        "Internal database error".to_string(),
                     )
                 })?;
         match row.filter(|r| can_read_pipeline(&user, r)) {
@@ -1598,10 +1600,11 @@ pub async fn list_revisions(
             .fetch_optional(pool)
             .await
             .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id}: {e}");
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
-                    format!("DB error fetching pipeline {id}: {e}"),
+                    "Internal database error".to_string(),
                 )
             })?;
     let pipeline = pipeline.ok_or_else(|| {
@@ -1627,10 +1630,11 @@ pub async fn list_revisions(
     .fetch_all(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error listing revisions: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB_ERROR",
-            format!("DB error listing revisions: {e}"),
+            "Internal database error".to_string(),
         )
     })?;
 
@@ -1671,10 +1675,11 @@ pub async fn get_revision(
             .fetch_optional(pool)
             .await
             .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id}: {e}");
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
-                    format!("DB error fetching pipeline {id}: {e}"),
+                    "Internal database error".to_string(),
                 )
             })?;
     let pipeline = pipeline.ok_or_else(|| {
@@ -1701,10 +1706,11 @@ pub async fn get_revision(
     .fetch_optional(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error fetching revision: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB_ERROR",
-            format!("DB error fetching revision: {e}"),
+            "Internal database error".to_string(),
         )
     })?;
     let (rid, version, actor, toml_content) = row.ok_or_else(|| {
@@ -1751,10 +1757,11 @@ pub async fn rollback_pipeline(
             .fetch_optional(pool)
             .await
             .map_err(|e| {
+                tracing::error!("DB error fetching pipeline {id}: {e}");
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DB_ERROR",
-                    format!("DB error fetching pipeline {id}: {e}"),
+                    "Internal database error".to_string(),
                 )
             })?;
     let pipeline = pipeline.ok_or_else(|| {
@@ -1790,10 +1797,11 @@ pub async fn rollback_pipeline(
     .fetch_optional(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error fetching revision: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB_ERROR",
-            format!("DB error fetching revision: {e}"),
+            "Internal database error".to_string(),
         )
     })?;
     let toml_content = rev.map(|r| r.0).ok_or_else(|| {
