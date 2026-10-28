@@ -5009,6 +5009,11 @@ repository.</p>
 <td>Ollama server address (explicit opt-in — no key needed)</td>
 <td><code>http://localhost:11434</code></td>
 </tr>
+<tr>
+<td><code>OLLAMA_MODEL</code></td>
+<td>Ollama model override</td>
+<td><code>llama3</code></td>
+</tr>
 </tbody>
 </table>
 <p><strong>Zero-config auto-detection</strong>: when <code>OXO_FLOW_AI_PROVIDER</code> is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — <code>ANTHROPIC_AUTH_TOKEN</code> / <code>ANTHROPIC_API_KEY</code> / <code>CLAUDE_API_KEY</code> → claude, <code>OPENAI_API_KEY</code> → openai, <code>DEEPSEEK_API_KEY</code> → deepseek, <code>OLLAMA_HOST</code> → ollama. Gateway setups that only export <code>ANTHROPIC_AUTH_TOKEN</code> + <code>ANTHROPIC_BASE_URL</code> + <code>ANTHROPIC_MODEL</code> therefore work without any oxo-flow-specific configuration. An explicit <code>OXO_FLOW_AI_PROVIDER</code> (including <code>disabled</code>) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests, and a whitespace-only credential value counts as absent.</p>
