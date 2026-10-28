@@ -100,7 +100,10 @@ fn spa_index_carries_no_inline_script() {
 /// `oxo-base` meta tag right after `<head>`. This pins the injection
 /// contract end-to-end — the injected markup must stay CSP-clean (no
 /// inline script sneaking back in) and must carry the mount prefix the
-/// frontend reads via `oxoBase()`.
+/// frontend reads via `oxoBase()`. The served page may legitimately be
+/// the "SPA not built" fallback (CI never builds the frontend), so the
+/// fallback itself must satisfy the same injection contract — it carries
+/// a `<head>` for exactly that reason.
 ///
 /// SAFETY: `set_base_path`/`set_running_mode` are process-global
 /// first-call-wins statics; the other tests in this binary never set them

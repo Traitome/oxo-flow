@@ -57,7 +57,11 @@ pub async fn spa_index() -> impl IntoResponse {
 /// (issue #276). When the referenced assets directory is missing, fall
 /// back to the actionable "SPA not built" page instead.
 fn load_spa_index_html() -> String {
-    let fallback = r#"<!doctype html><html><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
+    // The fallback carries a <head> so the <base>/<meta> injection below
+    // stays unconditional — including under sub-path mounts, where the
+    // fallback's relative URLs would otherwise resolve against the current
+    // route (the same reason the built SPA gets the tags).
+    let fallback = r#"<!doctype html><html><head></head><body><h1>oxo-flow</h1><p>SPA not built. Run <code>npm run build</code> in frontend/ first.</p></body></html>"#;
 
     let read_index = |dir: &std::path::Path| -> Option<String> {
         let html = std::fs::read_to_string(dir.join("index.html")).ok()?;
