@@ -20,9 +20,12 @@ Variants
                   measures a bare prompt baseline and is named for it.
 
 Success is judged ONLY by the deterministic gates (never by an LLM judge),
-so the numbers are reproducible and cheap. Token usage comes from the AI
-session archives (cli) or the provider response (naive-prompt); cost is
-derived from a configurable price table.
+so the numbers are cheap and the judging is deterministic; the naive-prompt
+arm is pinned to temperature 0 where the provider honors it but is not
+fully reproducible across providers/runs (the cli arm inherits the engine's
+[ai] temperature config, unset = provider default). Token usage comes from
+the AI session archives (cli) or the provider response (naive-prompt); cost
+is derived from a configurable price table.
 
 Usage
     # pilot: all intents, both variants, the model configured in the env
@@ -33,8 +36,9 @@ Usage
         --models deepseek-chat --out results/pilot2
 
 Credentials are read from the environment (ANTHROPIC_BASE_URL /
-ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL) or, as a fallback, parsed silently
-from ~/.zshrc. Values are never printed.
+ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL) or, as a fallback, from the
+dedicated ~/.oxo-flow/ai_config.json (never from shell rc files; values
+are never printed).
 """
 
 from __future__ import annotations
@@ -42,7 +46,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -62,8 +65,8 @@ PRICE_PER_MTOK = {
     "*": (0.28, 1.10),
 }
 
-ZSHRC = Path.home() / ".zshrc"
-ZSHRC_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
+CFG_PATH = Path.home() / ".oxo-flow" / "ai_config.json"
+CREDS_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
 
 NAIVE_SYSTEM = """You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.
 
@@ -80,21 +83,36 @@ Rules:
 
 
 def load_credentials() -> dict[str, str]:
-    """ANTHROPIC_* from the environment, falling back to ~/.zshrc exports."""
-    creds = {k: os.environ.get(k, "") for k in ZSHRC_KEYS}
+    """ANTHROPIC_* from the environment, falling back to ~/.oxo-flow/ai_config.json.
+
+    No shell-rc harvesting (#948 P3-12): sourcing a user's dotfile from an
+    eval script pulls every exported secret into the process. The fallback
+    reads only the dedicated oxo-flow config file, whose `api_key` /
+    `api_url` / `model` fields mirror the CLI's own fallback chain
+    (eval/scripts/common.py resolve_provider).
+    """
+    creds = {k: os.environ.get(k, "") for k in CREDS_KEYS}
     if all(creds.values()):
         return creds
-    if ZSHRC.exists():
-        for line in ZSHRC.read_text().splitlines():
-            m = re.match(r"\s*export\s+(ANTHROPIC_[A-Z_]+)=(.*)$", line)
-            if not m:
-                continue
-            key, val = m.group(1), m.group(2).strip().strip("\"'")
-            if not creds.get(key):
-                creds[key] = val
-    missing = [k for k in ZSHRC_KEYS if not creds.get(k)]
+    if CFG_PATH.exists():
+        try:
+            cfg = json.loads(CFG_PATH.read_text())
+        except json.JSONDecodeError:
+            cfg = {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        alias = {"ANTHROPIC_AUTH_TOKEN": "api_key",
+                 "ANTHROPIC_BASE_URL": "api_url",
+                 "ANTHROPIC_MODEL": "model"}
+        for env_key, cfg_key in alias.items():
+            if not creds.get(env_key):
+                # `or ""` collapses JSON null/empty to ""; .strip() treats
+                # blank as absent, matching resolve_provider's semantics.
+                creds[env_key] = str(cfg.get(cfg_key) or "").strip()
+    missing = [k for k in CREDS_KEYS if not creds.get(k)]
     if missing:
-        sys.exit(f"missing credentials: {', '.join(missing)} (env or {ZSHRC})")
+        sys.exit(f"missing credentials: {', '.join(missing)} "
+                 f"(env or {CFG_PATH})")
     return creds
 
 
@@ -134,17 +152,27 @@ def extract_toml(text: str) -> str | None:
 
 
 def anthropic_chat(creds: dict, model: str, system: str, user: str,
-                   max_tokens: int, timeout: float) -> tuple[str | None, dict, str | None]:
-    """One Anthropic-messages call. Returns (text, usage, error)."""
+                   max_tokens: int, timeout: float,
+                   temperature: float | None = 0.0) -> tuple[str | None, dict, str | None]:
+    """One Anthropic-messages call. Returns (text, usage, error).
+
+    temperature defaults to 0 so naive-prompt draws are as deterministic as
+    the provider allows; the Anthropic Messages API has no seed field, so
+    providers behind an Anthropic-compatible endpoint may still vary (#948
+    P3-12 — only the *judging* is deterministic, never the sampling).
+    """
     base = creds["ANTHROPIC_BASE_URL"].rstrip("/")
-    body = json.dumps({
+    body: dict = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
-    }).encode()
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
-        f"{base}/v1/messages", data=body, method="POST",
+        f"{base}/v1/messages", data=payload, method="POST",
         headers={
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",

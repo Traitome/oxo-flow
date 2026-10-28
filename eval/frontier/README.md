@@ -2,8 +2,12 @@
 
 Measures the **quality/cost frontier** of the AI pipeline-generation paths
 against the engine's three deterministic static gates. Success is judged
-**only** by the gates — never by an LLM judge — so numbers are reproducible
-and cheap.
+**only** by the gates — never by an LLM judge — so numbers are cheap and
+the judging is deterministic; the naive-prompt arm is pinned to
+temperature 0 where the provider honors it but is not fully reproducible
+across providers or runs. The `cli` arm runs the real binary and inherits
+the engine's `[ai] temperature` config (unset = provider default), so the
+two arms may sample at different temperatures.
 
 This complements the gold-set evaluation in [`eval/`](../README.md) and
 [docs/guide/src/reference/ai-eval.md](https://traitome.github.io/oxo-flow/latest/reference/ai-eval/):
@@ -34,7 +38,8 @@ provider response usage. Cost is derived from the price table in
 
 ```bash
 # credentials: ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL
-# from env, or parsed silently from ~/.zshrc (never printed)
+# from env, or from ~/.oxo-flow/ai_config.json (never from shell rc files;
+# values are never printed)
 
 python3 run_eval.py                          # 29 intents x naive-prompt,cli
 python3 run_eval.py --filter rnaseq-star     # subset
@@ -80,6 +85,13 @@ tokens, cost, latency).
 
 - Intent set is 29 (3 of them deliberately vague); still small enough that
   single-seed absolute numbers wobble — quote the multi-seed aggregates.
+- Judging is deterministic (the three gates + substring fidelity), but
+  only the naive-prompt arm is pinned to temperature 0 — the `cli` arm
+  inherits the engine's `[ai] temperature` (unset = provider default), and
+  an Anthropic-compatible endpoint may still sample non-deterministically,
+  so identical reruns can produce different workflows. Naive-prompt numbers
+  in PILOT_FINDINGS.md were drawn at provider default temperature
+  (pre-pinning), so they are not strictly comparable to post-pinning runs.
 - Since the #342 unification, `--ai-max-retries` sizes the orchestrator's
   combined tool + correction-round budget, and engine validation feeds the
   loop; numbers above the unification marker in PILOT_FINDINGS.md were
