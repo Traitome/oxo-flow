@@ -210,8 +210,8 @@ pub(crate) fn normalize_dots(path: PathBuf) -> PathBuf {
     }
 }
 
-/// Long-form names of `oxo-flow run` flags (plus clap's global --help/
-/// --version). Keep in sync with the `Run` variant in main.rs.
+// Long-form names of `oxo-flow run` flags (plus clap's global --help/
+// --version). Keep in sync with the `Run` variant in main.rs.
 #[cfg(test)]
 mod tmp_dir_tests {
     //! `[engine] tmp_dir` resolution (issue #907): env override wins,
