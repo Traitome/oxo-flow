@@ -16,7 +16,7 @@ use crate::provider::ProviderKind;
 // ── AiConfig ───────────────────────────────────────────────────────────────
 
 /// AI configuration resolved from all sources.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AiConfig {
     /// Whether AI features are enabled for this scope.
     #[serde(default)]
@@ -30,7 +30,9 @@ pub struct AiConfig {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// API key — NEVER serialized to logs.
+    /// API key — NEVER serialized to logs. `skip_serializing` scrubs serde
+    /// output only, so `Debug` is deliberately manual: the derived impl would
+    /// print the key verbatim and a one-line log statement becomes a leak.
     #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
 
@@ -61,6 +63,23 @@ pub struct AiConfig {
     /// an independent review pass). `None` = compact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_profile: Option<crate::agent::team::TeamProfile>,
+}
+
+impl std::fmt::Debug for AiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AiConfig")
+            .field("enabled", &self.enabled)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("api_url", &self.api_url)
+            .field("max_retries", &self.max_retries)
+            .field("auto_fix", &self.auto_fix)
+            .field("temperature", &self.temperature)
+            .field("skills", &self.skills)
+            .field("team_profile", &self.team_profile)
+            .finish()
+    }
 }
 
 /// The shipped round-budget default. Single source for every consumer that
@@ -354,6 +373,19 @@ mod tests {
         let config = AiConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.team_profile, None, "compact is the shipped default");
+    }
+
+    #[test]
+    fn debug_output_redacts_api_key() {
+        // P3-8: the derived Debug would have printed the API key verbatim —
+        // one log statement away from leaking it into archived output.
+        let config = AiConfig {
+            api_key: Some("sk-super-secret".into()),
+            ..AiConfig::default()
+        };
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("sk-super-secret"), "leaked: {rendered}");
+        assert!(rendered.contains("[redacted]"), "must redact: {rendered}");
     }
 
     #[test]
