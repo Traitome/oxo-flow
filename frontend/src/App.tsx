@@ -49,11 +49,14 @@ export default function App() {
       <Routes>
         {/* Public share landing (issue #82 P0-6): no session, no app chrome */}
         <Route path="/share/:token" element={route('share', <Share />)} />
+        {/* Sign-in is a bare centered card (issue #947): showing it inside the
+            app shell leaked nav chrome the visitor cannot use yet. Same
+            standalone pattern as /share. */}
+        <Route path="/login" element={route('login', <Login />)} />
         <Route element={<Layout />}>
           <Route path="/" element={route('dashboard', <Dashboard />)} />
           <Route path="/editor" element={route('pipelineeditor', <PipelineEditor />)} />
           <Route path="/pipelines" element={route('pipelines', <Pipelines />)} />
-          <Route path="/login" element={route('login', <Login />)} />
           <Route path="/templates" element={<Navigate to="/pipelines" replace />} />
           <Route path="/runs" element={route('monitorreport', <MonitorReport />)} />
           <Route path="/runs/:id" element={route('monitorreport', <MonitorReport />)} />

@@ -31,10 +31,11 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
   test('Mobile menu toggle works', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto('/');
-    const menuBtn = page.locator('button[aria-label="Toggle menu"]');
+    // Issue #947: <1024px the sidebar becomes a drawer driven by the header toggle.
+    const menuBtn = page.locator('button[aria-label="Open navigation menu"]');
     await expect(menuBtn).toBeVisible();
     await menuBtn.click();
-    await expect(page.locator('.header-nav.open')).toBeVisible();
+    await expect(page.locator('.sidebar.drawer')).toBeVisible();
   });
 
   // ── Pipeline Editor ──
