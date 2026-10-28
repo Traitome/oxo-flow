@@ -143,6 +143,10 @@ impl AiPluginRegistry {
         Self::default()
     }
 
+    pub fn register_tool(&mut self, plugin: Box<dyn AiToolPlugin>) {
+        self.tools.push(plugin);
+    }
+
     pub fn register_knowledge(&mut self, plugin: Box<dyn AiKnowledgePlugin>) {
         self.knowledge.push(plugin);
     }
@@ -192,6 +196,24 @@ mod tests {
         }
     }
 
+    struct TestToolPlugin;
+    #[async_trait]
+    impl AiToolPlugin for TestToolPlugin {
+        fn tool_name(&self) -> &str {
+            "test-tool"
+        }
+        fn tool_def(&self) -> ToolDef {
+            ToolDef {
+                name: "test-tool".into(),
+                description: "test tool".into(),
+                parameters: serde_json::json!({}),
+            }
+        }
+        async fn execute(&self, _arguments: &str) -> Result<String, AiError> {
+            Ok("ok".into())
+        }
+    }
+
     #[test]
     fn knowledge_plugin_provides_context() {
         let plugin = TestKnowledgePlugin;
@@ -218,9 +240,13 @@ mod tests {
     #[test]
     fn plugin_registry_registration() {
         let mut reg = AiPluginRegistry::new();
+        reg.register_tool(Box::new(TestToolPlugin));
         reg.register_knowledge(Box::new(TestKnowledgePlugin));
         reg.register_validator(Box::new(TestValidatorPlugin));
+        assert_eq!(reg.tools.len(), 1);
         assert_eq!(reg.knowledge.len(), 1);
         assert_eq!(reg.validators.len(), 1);
+        assert_eq!(reg.tools[0].tool_name(), "test-tool");
+        assert!(reg.tools[0].is_read_only(), "default must stay read-only");
     }
 }

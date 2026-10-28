@@ -259,7 +259,7 @@ pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
     // of it on shared HPC homes (ai_config.json already gets 0600).
     restrict_to_owner(&path);
 
-    prune_old_sessions(&dir, MAX_SESSION_ARCHIVES);
+    prune_oldest(&dir, "json", MAX_SESSION_ARCHIVES);
 
     tracing::info!(session = %session.id, "AI session saved to {}", path.display());
     Ok(path)
@@ -268,6 +268,11 @@ pub fn save_session(session: &AiSession) -> Result<PathBuf, AiError> {
 /// Archives kept per directory: the oldest sessions are pruned after each
 /// save so the archive cannot grow unbounded (#544).
 const MAX_SESSION_ARCHIVES: usize = 200;
+
+/// Archive snapshots kept per workflow: same unbounded-growth rationale as
+/// the session cap (#544, P3-10) — snapshots carry the full pre-modification
+/// workflow content, so the oldest are pruned after each write.
+const MAX_WORKFLOW_ARCHIVES: usize = 200;
 
 /// chmod 0600 — best-effort (non-unix targets skip).
 fn restrict_to_owner(path: &Path) {
@@ -280,14 +285,16 @@ fn restrict_to_owner(path: &Path) {
     let _ = path;
 }
 
-/// Delete the oldest session archives beyond `keep` (best-effort).
-fn prune_old_sessions(dir: &Path, keep: usize) {
+/// Delete the oldest files with `extension` in `dir` beyond `keep`
+/// (best-effort). Shared by session saves (`.json` at one level) and
+/// workflow archives (`.oxoflow` inside per-workflow subdirectories, P3-10).
+fn prune_oldest(dir: &Path, extension: &str, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let mut sessions: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter(|e| e.path().extension().is_some_and(|x| x == extension))
         .filter_map(|e| {
             let modified = e.metadata().and_then(|m| m.modified()).ok()?;
             Some((modified, e.path()))
@@ -300,7 +307,7 @@ fn prune_old_sessions(dir: &Path, keep: usize) {
     let excess = sessions.len() - keep;
     for (_, path) in sessions.into_iter().take(excess) {
         if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!(error = %e, path = %path.display(), "session prune failed");
+            tracing::warn!(error = %e, path = %path.display(), "prune failed");
         }
     }
 }
@@ -365,6 +372,13 @@ pub fn archive_before_modify(
         path: path.clone(),
         message: e.to_string(),
     })?;
+    // Same exposure surface as sessions (#544): snapshots carry the full
+    // pre-modification workflow content, so archives stay owner-only too.
+    restrict_to_owner(&path);
+
+    // P3-10: one snapshot per applied modification previously grew without
+    // bound — prune the per-workflow archive dir like the session dir.
+    prune_oldest(&dir, "oxoflow", MAX_WORKFLOW_ARCHIVES);
 
     tracing::info!("Workflow archived before modification: {}", path.display());
     Ok(path)
@@ -384,7 +398,7 @@ fn prune_keeps_the_newest_sessions() {
         std::fs::write(&p, "{}").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    prune_old_sessions(dir.path(), 3);
+    prune_oldest(dir.path(), "json", 3);
     let remaining: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -502,6 +516,65 @@ mod tests {
         let dir = archive_dir();
         assert!(dir.to_string_lossy().contains("oxo-flow"));
         assert!(dir.to_string_lossy().contains("ai_archive"));
+    }
+
+    #[test]
+    fn archive_prune_keeps_the_newest_snapshots_per_workflow() {
+        // P3-10: archives live in per-<stem> subdirectories with an
+        // .oxoflow extension; the prune must cap them there without
+        // touching other subdirectories or the session dir layout.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("wf-a");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..6 {
+            let p = dir.join(format!("20260101-0{i}0000-sess{i}-before.oxoflow"));
+            std::fs::write(&p, "workflow").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // A sibling workflow's archive dir and an unrelated file: neither
+        // may be counted or removed.
+        let sibling = root.path().join("wf-b");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("keep.oxoflow"), "other").unwrap();
+        std::fs::write(root.path().join("stray.json"), "{}").unwrap();
+
+        prune_oldest(&dir, "oxoflow", 3);
+
+        let remaining: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(remaining.len(), 3, "keep exactly 3: {remaining:?}");
+        assert!(
+            remaining.contains(&"20260101-050000-sess5-before.oxoflow".to_string()),
+            "the newest snapshot must survive: {remaining:?}"
+        );
+        assert!(
+            sibling.join("keep.oxoflow").exists(),
+            "sibling workflow archives are separate"
+        );
+        assert!(root.path().join("stray.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archived_snapshot_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        // P3-10: archives carry the full pre-modification workflow content,
+        // so they get the same 0600 treatment as session JSON (#544).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("20260101-000000-s1-before.oxoflow");
+        std::fs::write(&path, "workflow").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        restrict_to_owner(&path);
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "archive must be owner-only"
+        );
     }
 
     #[test]
