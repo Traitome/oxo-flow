@@ -199,8 +199,10 @@ pub struct RunListFilters {
     /// bound, NOT a filter: it applies to the row SELECT but never the
     /// COUNT (audit #665).
     pub cursor: Option<String>,
-    /// Row cap. Clamped by the caller to 1..=500; the SELECT fetches
-    /// `limit + 1` to detect a next page without a COUNT.
+    /// Row cap, clamped by the caller to 1..=500 (default 100). Consumed by
+    /// the CALLER — it formats the SELECT's `LIMIT` and fetches `limit + 1`
+    /// to detect a next page; the assembled WHERE fragments stay cap-agnostic.
+    #[allow(dead_code)]
     pub limit: i64,
 }
 
@@ -231,7 +233,9 @@ pub struct RunListQuery {
 /// `user_id = ?` (ownership, issue #82 P0-4) → `status = ?` →
 /// `(workflow_name LIKE ? OR id LIKE ?)` → page-only `created_at < ?`.
 /// An unrecognized `status` is silently dropped (the handler's long-standing
-/// contract), as is a whitespace-only `q`.
+/// contract), as is a whitespace-only `q`. The row cap is NOT folded in
+/// here — the caller formats the numeric `LIMIT` itself (fetching
+/// `limit + 1`), so the fragments stay cap-agnostic.
 pub fn assemble_run_list_query(filters: &RunListFilters) -> RunListQuery {
     let mut where_clauses: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
@@ -1031,5 +1035,24 @@ mod run_list_query_tests {
             run_row_to_list_item(&open)["duration_secs"],
             serde_json::Value::Null
         );
+        // Clock skew (finished_at before started_at) clamps at 0, never
+        // goes negative.
+        let skewed = models::RunRow {
+            started_at: Some("2026-01-01T00:01:10Z".into()),
+            finished_at: Some("2026-01-01T00:00:00Z".into()),
+            ..open
+        };
+        assert_eq!(run_row_to_list_item(&skewed)["duration_secs"], 0);
+    }
+
+    #[test]
+    fn cursor_only_yields_bare_page_clause() {
+        // The one filter-shape the other tests don't pin: a cursor with no
+        // other filters — the admin's Load-More path.
+        let q = assemble_run_list_query(&filters(None, None, None, Some("2026-01-01T00:00:00Z")));
+        assert_eq!(q.page_where_sql, " WHERE created_at < ?");
+        assert_eq!(q.page_binds, vec!["2026-01-01T00:00:00Z"]);
+        assert_eq!(q.filter_where_sql, "");
+        assert!(q.filter_binds.is_empty());
     }
 }
