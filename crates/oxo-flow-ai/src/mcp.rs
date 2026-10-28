@@ -159,6 +159,67 @@ impl Tool for McpToolBridge {
 
 // ── Streamable HTTP transport ──────────────────────────────────────────────
 
+/// Latest MCP protocol version this client speaks (#948 P3-7a): proposed
+/// at `initialize`. The server answers with the version it wants — one we
+/// don't understand fails the session closed (spec: the client SHOULD
+/// disconnect). Newer revisions can be appended as the transport needs
+/// them; the request handling below is identical across all of them.
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+/// Versions this client can work with. The transport (JSON-RPC over POST,
+/// JSON or SSE bodies, `mcp-session-id`) is identical across them.
+const MCP_UNDERSTOOD_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Pure precedence core for the MCP bearer token (#948 P3-7d): the
+/// per-server token wins over the generic one — a credential pinned to
+/// this server must never be shadowed by the shared default. Blank or
+/// whitespace values count as unset; the picked value is trimmed so
+/// embedded/trailing whitespace cannot poison the `Authorization` header.
+fn pick_bearer_token<'a>(generic: &'a str, specific: &'a str) -> Option<&'a str> {
+    let specific = specific.trim();
+    if !specific.is_empty() {
+        return Some(specific);
+    }
+    let generic = generic.trim();
+    if !generic.is_empty() {
+        return Some(generic);
+    }
+    None
+}
+
+/// Resolve the MCP bearer token for a server (#948 P3-7d): the per-server
+/// `OXO_FLOW_MCP_TOKEN_<SERVER>` first, then the generic
+/// `OXO_FLOW_MCP_TOKEN`. Auth material lives in the environment, never in
+/// a skill manifest — the manifest is attacker-influenced text (#518).
+/// Returns `None` when nothing is set.
+fn resolve_bearer_token(server_name: &str) -> Option<String> {
+    let specific_var = token_env_var(server_name);
+    let specific = std::env::var(&specific_var).unwrap_or_default();
+    let generic = std::env::var("OXO_FLOW_MCP_TOKEN").unwrap_or_default();
+    // Log the variable NAMES only — never the values (single log site for
+    // the whole consult, per the re-review NIT: the constructor no longer
+    // duplicates it).
+    tracing::debug!(
+        var = %specific_var,
+        generic_var = "OXO_FLOW_MCP_TOKEN",
+        "MCP auth: token variables consulted (names only, never values)"
+    );
+    pick_bearer_token(&generic, &specific).map(str::to_string)
+}
+
+/// Environment variable name for a server's bearer token: the server name
+/// uppercased with non-alphanumeric characters folded to `_` (pure —
+/// unit-testable without touching process env, which tests may not do).
+fn token_env_var(server_name: &str) -> String {
+    format!(
+        "OXO_FLOW_MCP_TOKEN_{}",
+        server_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>()
+            .to_ascii_uppercase()
+    )
+}
+
 /// MCP client over the Streamable HTTP transport: JSON-RPC over POST,
 /// with optional SSE response framing and `mcp-session-id` headers.
 ///
@@ -169,6 +230,19 @@ impl Tool for McpToolBridge {
 pub struct McpHttpClient {
     base_url: String,
     session_id: std::sync::Mutex<Option<String>>,
+    /// Protocol version the server negotiated at initialize (#948 P3-7a),
+    /// attached as `MCP-Protocol-Version` on every subsequent request.
+    protocol_version: std::sync::Mutex<Option<String>>,
+    /// Monotonic JSON-RPC request-id source (#948 P3-7c): hardcoded ids
+    /// collided with the pagination ids and defeated the replay guard.
+    next_id: std::sync::atomic::AtomicU64,
+    /// Optional bearer token sent as `Authorization: Bearer …` on every
+    /// request (#948 P3-7d). Resolved from the per-server
+    /// `<OXO_FLOW_MCP_TOKEN_<SERVER>>` first, then the generic
+    /// `<OXO_FLOW_MCP_TOKEN>` (server name uppercased, non-word runs →
+    /// `_`) so per-server credentials stay out of skill manifests.
+    /// Never logged; empty = no header.
+    bearer_token: Option<String>,
     http: reqwest::Client,
     server_name: String,
     /// Exemptions for per-hop SSRF screening of redirect targets (#642).
@@ -309,6 +383,12 @@ impl McpHttpClient {
         // with the client (#948 P2-1): DNS-resolved endpoints connect to
         // the exact address that was screened.
         let pin = screen_mcp_endpoint(&base_url, &allow)?;
+        // Identity used for the per-server token variable and error
+        // messages: the URL minus scheme and trailing slash, with `:` and
+        // `/` folded to `_`. The whole tail — host, port AND path — is
+        // part of the identity (two MCP servers can share a host on
+        // different paths), so `mcp://fs-gdrive:9000/v1` consults
+        // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
         let server_name = url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
@@ -328,14 +408,27 @@ impl McpHttpClient {
         // gets its pin baked into the shared client; redirect hops rebuild
         // short-lived clients in `rpc` for their own (re-screened) pins.
         let http = pinned_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)))?;
+        let bearer_token = resolve_bearer_token(&server_name);
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
+            protocol_version: std::sync::Mutex::new(None),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+            bearer_token,
             http,
             server_name,
             allow,
             pin,
         })
+    }
+
+    /// Reserve the next monotonically increasing request id. A fresh id per
+    /// call keeps the replay guard (`extract_rpc_result` id check) sound:
+    /// hardcoded ids collided with the `tools/list` pagination ids and let
+    /// a stale body for a previous same-id request be accepted (#948 P3-7c).
+    fn reserve_id(&self) -> u64 {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Send one JSON-RPC request, returning the `result` value.
@@ -356,6 +449,12 @@ impl McpHttpClient {
         // the next hop so it connects to exactly what was screened (#948
         // P2-1) — a DNS change mid-chain cannot re-point the connection.
         const MAX_REDIRECTS: usize = 5;
+        // The endpoint's origin governs which credentials may cross a
+        // redirect: `Authorization` is only sent to the origin the token
+        // was minted for (RFC 6265bis §5.5 §7.1 spirit; the MCP spec does
+        // not bless forwarding auth cross-origin), and the session id is
+        // scoped to that origin's server too.
+        let base_origin = origin_of(&self.base_url);
         let mut current_url = self.base_url.clone();
         let mut current_pin = self.pin.clone();
         for _hop in 0..=MAX_REDIRECTS {
@@ -372,12 +471,31 @@ impl McpHttpClient {
                 }
                 None => &self.http,
             };
+            let same_origin = origin_of(&current_url) == base_origin;
             let mut req = send_client
                 .post(&current_url)
                 .header("Accept", "application/json, text/event-stream")
                 .json(&body);
-            if let Some(sid) = self.session_id.lock().unwrap().clone() {
-                req = req.header("mcp-session-id", sid);
+            if same_origin {
+                if let Some(sid) = self.session_id.lock().unwrap().clone() {
+                    req = req.header("mcp-session-id", sid);
+                }
+                // Post-initialize requests announce the negotiated version
+                // (#948 P3-7a) so version-strict servers can validate it.
+                let pv = self.protocol_version.lock().unwrap().clone();
+                if let Some(pv) = pv {
+                    req = req.header("MCP-Protocol-Version", pv);
+                }
+                // Bearer auth (#948 P3-7d): token resolved from the
+                // environment at construction — never logged, never stored
+                // in manifests. Cross-origin redirect hops get nothing.
+                if let Some(token) = &self.bearer_token {
+                    req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+                }
+            } else {
+                tracing::info!(
+                    "MCP redirect hop {current_url} crosses origins — auth, session and protocol headers omitted"
+                );
             }
             let response = req.send().await.map_err(|e| AiError::Transport {
                 message: format!("MCP request to {current_url} failed: {e}"),
@@ -405,7 +523,13 @@ impl McpHttpClient {
                 continue;
             }
 
-            if let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str()) {
+            // Response-direction twin of the request-side gate: a session
+            // id minted by a cross-origin hop's server must never be
+            // adopted, or the next request to the base origin would hand
+            // it a credential from a different origin.
+            if same_origin
+                && let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str())
+            {
                 *self.session_id.lock().unwrap() = Some(v.to_string());
             }
             let text = response.text().await.map_err(|e| AiError::Transport {
@@ -417,6 +541,25 @@ impl McpHttpClient {
             message: format!("MCP endpoint {current_url} exceeded {MAX_REDIRECTS} redirects"),
         })
     }
+}
+
+/// Origin of an endpoint URL: `scheme://host[:port]`, with the default
+/// port omitted (`https` → 443, `http` → 80) so redirects that only
+/// re-spell the default port stay same-origin. The path is not part of an
+/// origin. Used to decide which redirect hops may carry credentials.
+fn origin_of(url: &str) -> Option<String> {
+    let u = reqwest::Url::parse(url).ok()?;
+    let scheme = u.scheme();
+    let port = match u.port_or_known_default() {
+        Some(80) if scheme == "http" => None,
+        Some(443) if scheme == "https" => None,
+        p => p,
+    };
+    let host = u.host_str()?;
+    Some(match port {
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    })
 }
 
 /// Whether a JSON-RPC response carries the id of the request we sent.
@@ -519,9 +662,17 @@ fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, Ai
         }
     }
     if text.is_none()
-        && let Some(structured) = result.get("structuredContent").and_then(|t| t.as_str())
+        && let Some(structured) = result.get("structuredContent")
     {
-        text = Some(structured.to_string());
+        // Spec: structuredContent is a JSON object, not a string — the old
+        // `as_str()` peek made the branch dead and every structured result
+        // degraded to the whole-envelope `to_string()` (#948 P3-7b).
+        // Serialize it losslessly. Note: `serde_json::Value::to_string`
+        // emits keys sorted (no preserve_order here), so the output is
+        // deterministic even when the server varies key order.
+        if !structured.is_null() {
+            text = Some(structured.to_string());
+        }
     }
     let text = text.unwrap_or_else(|| result.to_string());
     if result
@@ -541,19 +692,52 @@ fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, Ai
 impl McpClient for McpHttpClient {
     async fn list_tools(&self) -> Result<Vec<McpToolDef>, AiError> {
         // initialize → notifications/initialized → tools/list
-        self.rpc(
-            1,
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
-            }),
-        )
-        .await?;
+        //
+        // Protocol negotiation (#948 P3-7a): propose the newest version we
+        // speak; the server answers with the one it wants. A version we
+        // don't understand fails the session closed — silently continuing
+        // let two sides talk past each other with different framing
+        // assumptions (the old client hardcoded "2024-11-05" and never
+        // looked at the answer).
+        let init_id = self.reserve_id();
+        let init = self
+            .rpc(
+                init_id,
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
+                }),
+            )
+            .await?;
+        let server_version = init
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !MCP_UNDERSTOOD_VERSIONS.contains(&server_version.as_str()) {
+            return Err(AiError::Protocol {
+                message: format!(
+                    "MCP server '{}' negotiated protocol version {server_version:?}, but this client speaks only {}",
+                    self.server_name,
+                    MCP_UNDERSTOOD_VERSIONS.join(", ")
+                ),
+            });
+        }
+        tracing::debug!(
+            server = %self.server_name,
+            version = %server_version,
+            "MCP protocol version negotiated"
+        );
+        *self.protocol_version.lock().unwrap() = Some(server_version);
         // Spec: once initialize returns an mcp-session-id, every
         // subsequent request — the initialized notification included —
-        // must carry it.
+        // must carry it. This is a fire-and-forget notification (no id,
+        // response discarded), but it still rides the same header set as
+        // any other request to this origin: session id, negotiated
+        // protocol version and bearer token. (The version is stored just
+        // above, so it is already available here.)
         let mut note_req = self
             .http
             .post(&self.base_url)
@@ -565,6 +749,12 @@ impl McpClient for McpHttpClient {
         if let Some(sid) = self.session_id.lock().unwrap().clone() {
             note_req = note_req.header("mcp-session-id", sid);
         }
+        if let Some(pv) = self.protocol_version.lock().unwrap().clone() {
+            note_req = note_req.header("MCP-Protocol-Version", pv);
+        }
+        if let Some(token) = &self.bearer_token {
+            note_req = note_req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
         let _ = note_req.send().await;
 
         // tools/list is paginated: the first page carries `nextCursor` when
@@ -573,7 +763,9 @@ impl McpClient for McpHttpClient {
         // cannot spin forever.
         let mut tools: Vec<McpToolDef> = Vec::new();
         let mut cursor: Option<String> = None;
-        for request_id in (2_u64..).take(MAX_TOOL_PAGES) {
+        let mut pages = 0_usize;
+        loop {
+            let request_id = self.reserve_id();
             let params = match &cursor {
                 Some(c) => serde_json::json!({ "cursor": c }),
                 None => serde_json::json!({}),
@@ -589,11 +781,18 @@ impl McpClient for McpHttpClient {
                 message: format!("invalid tools/list payload: {e}"),
             })?;
             tools.extend(page);
+            pages += 1;
             cursor = result
                 .get("nextCursor")
                 .and_then(|c| c.as_str())
                 .map(String::from);
             if cursor.is_none() {
+                break;
+            }
+            // Bounded so a looping server cannot spin forever (and, since
+            // #948 P3-7c, ids stay monotonic across pages — no collision
+            // with a later call's id).
+            if pages >= MAX_TOOL_PAGES {
                 break;
             }
         }
@@ -613,9 +812,14 @@ impl McpClient for McpHttpClient {
             serde_json::from_str(arguments).map_err(|e| AiError::Protocol {
                 message: format!("invalid tool arguments: {e}"),
             })?;
+        // Monotonic id (#948 P3-7c): the old hardcoded id 3 collided with
+        // the tools/list pagination range, so after a paginated discover
+        // every call reused an id and the replay guard could not tell a
+        // fresh answer from a stale same-id body.
+        let request_id = self.reserve_id();
         let result = self
             .rpc(
-                3,
+                request_id,
                 "tools/call",
                 serde_json::json!({ "name": name, "arguments": args }),
             )
@@ -735,6 +939,31 @@ mod tests {
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
+    }
+
+    #[test]
+    fn tool_result_text_structured_content_object_is_serialized() {
+        // Spec: structuredContent is a JSON object. The old `.as_str()` peek
+        // made the branch dead, so a structured-only result degraded to the
+        // whole-envelope dump including isError/content (#948 P3-7b).
+        let result = serde_json::json!({
+            "content": [],
+            "structuredContent": {"result": 42, "unit": "bp"},
+        });
+        let text = tool_result_text("q", &result).unwrap();
+        assert_eq!(text, r#"{"result":42,"unit":"bp"}"#);
+
+        // Non-object structured values (legacy servers) are serialized too —
+        // anything beats the envelope dump.
+        let scalar = serde_json::json!({"structuredContent": 7});
+        assert_eq!(tool_result_text("q", &scalar).unwrap(), "7");
+
+        // content text still wins over structuredContent.
+        let both = serde_json::json!({
+            "content": [{"type": "text", "text": "plain"}],
+            "structuredContent": {"hidden": true},
+        });
+        assert_eq!(tool_result_text("q", &both).unwrap(), "plain");
     }
 
     #[test]
@@ -999,6 +1228,10 @@ mod tests {
         let (url, calls) = json_rpc_fixture(|req| {
             let id = req["id"].clone();
             match req["method"].as_str().unwrap_or("") {
+                // initialize with a version the client understands —
+                // negotiation must succeed against an old-style server.
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2024-11-05"}}),
                 "tools/list" => {
                     let cursor = req["params"]["cursor"].as_str().unwrap_or("");
                     if cursor.is_empty() {
@@ -1026,16 +1259,367 @@ mod tests {
     #[tokio::test]
     async fn mcp_http_client_rejects_a_response_for_another_request() {
         let (url, _calls) = json_rpc_fixture(|req| {
-            if req["method"].as_str() == Some("tools/list") {
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{
+                    "protocolVersion":"2024-11-05"}})
+                }
+                "tools/list" =>
                 // A stale/replayed body: this id belongs to another request.
-                serde_json::json!({"jsonrpc":"2.0","id":99,"result":{"tools":[]}})
-            } else {
-                serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}})
+                {
+                    serde_json::json!({"jsonrpc":"2.0","id":99,"result":{"tools":[]}})
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}}),
             }
         });
         let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
         let err = client.list_tools().await.unwrap_err().to_string();
         assert!(err.contains("id mismatch"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_ids_stay_monotonic_across_paginated_discovery_and_call() {
+        // #948 P3-7c: the old client hardcoded tools/call id 3, colliding
+        // with the pagination id range — after a paginated discover, the
+        // replay guard could not distinguish a fresh answer from a stale
+        // same-id body. Record every id the server sees; they must be
+        // unique per request and a tools/call after pagination must use a
+        // brand-new id.
+        let seen_ids = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen_for_server = seen_ids.clone();
+        let (url, _calls) = json_rpc_fixture(move |req| {
+            let id = req["id"].as_u64().unwrap_or(0);
+            if req["method"].as_str() != Some("notifications/initialized") {
+                seen_for_server.lock().unwrap().push(id);
+            }
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":{"protocolVersion":"2025-06-18"}
+                }),
+                "tools/list" => {
+                    let cursor = req["params"]["cursor"].as_str().unwrap_or("");
+                    if cursor.is_empty() {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"p1","description":"p1","inputSchema":{"type":"object"}}],
+                            "nextCursor":"page-2"}})
+                    } else {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"p2","description":"p2","inputSchema":{"type":"object"}}]}})
+                    }
+                }
+                "tools/call" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "content":[{"type":"text","text":"call-ok"}]}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 2);
+        let result = client
+            .call_tool("p1", r#"{"x":1}"#)
+            .await
+            .expect("tools/call with a fresh id must succeed");
+        assert_eq!(
+            result, "call-ok",
+            "the call's own text result must come back"
+        );
+
+        let ids = seen_ids.lock().unwrap().clone();
+        // initialize + 2 pagination pages + tools/call.
+        assert_eq!(ids, vec![1, 2, 3, 4], "ids must be exactly 1..=4: {ids:?}");
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_fails_closed_on_unsupported_protocol_version() {
+        // #948 P3-7a: the old client hardcoded its version and never read
+        // the server's answer — a server negotiating a future protocol
+        // would be talked to with mismatched framing assumptions.
+        let (url, _calls) = json_rpc_fixture(|req| {
+            let id = req["id"].clone();
+            if req["method"].as_str() == Some("initialize") {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2999-01-01"}})
+            } else {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}})
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let err = client.list_tools().await.unwrap_err().to_string();
+        assert!(
+            err.contains("protocol version") && err.contains("2999-01-01"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_announces_negotiated_version_after_initialize() {
+        // #948 P3-7a: initialize persists the server's chosen version for
+        // the MCP-Protocol-Version header path.
+        let (url, _calls) = json_rpc_fixture(move |req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2025-03-26"}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        client.list_tools().await.unwrap();
+        // The fixture thread can't see headers, so assert on client state:
+        // the negotiated version must be stored for the header path.
+        assert_eq!(
+            client.protocol_version.lock().unwrap().as_deref(),
+            Some("2025-03-26")
+        );
+    }
+
+    /// Raw-socket JSON-RPC fixture: like `json_rpc_fixture`, but every
+    /// request's header block is recorded so tests can assert on
+    /// `MCP-Protocol-Version` / `Authorization` / `mcp-session-id`
+    /// emission (#948 P3-7 review finding: state-only assertions never
+    /// proved the headers hit the wire).
+    fn raw_header_fixture(
+        respond: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let headers: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let headers_for_server = headers.clone();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            loop {
+                let mut buf = [0u8; 65536];
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                        // Capture every header line of this request
+                        // (everything between the request line and the
+                        // blank line), lowercased for stable matching.
+                        let head = req.split("\r\n\r\n").next().unwrap_or("");
+                        let lines: Vec<String> = head
+                            .lines()
+                            .skip(1)
+                            .filter_map(|l| {
+                                l.split_once(':').map(|(k, v)| {
+                                    format!("{}:{}", k.trim().to_ascii_lowercase(), v.trim())
+                                })
+                            })
+                            .collect();
+                        headers_for_server.lock().unwrap().extend(lines);
+                        let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                        let json: serde_json::Value =
+                            serde_json::from_str(&body).unwrap_or_default();
+                        let response_body = respond(&json).to_string();
+                        // Issue a session id like a real MCP server, so
+                        // capture tests can assert it is forwarded.
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nmcp-session-id: sess-1\r\nContent-Length: {}\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        if stream.write_all(response.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        (format!("mcp://{addr}"), headers)
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_post_initialize_requests_carry_protocol_and_auth_headers() {
+        // #948 P3-7 review finding: the negotiated `MCP-Protocol-Version`
+        // header (and the bearer token, when configured) must actually hit
+        // the wire on requests after initialize — client state alone proves
+        // nothing. Also covers the `notifications/initialized` hop: it
+        // rides the same header set.
+        let (url, headers) = raw_header_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2025-03-26"}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        client.list_tools().await.unwrap();
+        let hdrs = headers.lock().unwrap().clone();
+        // Exactly one MCP-Protocol-Version header, on the post-initialize
+        // requests (tools/list and the notification), with the negotiated
+        // version.
+        let pv: Vec<&String> = hdrs
+            .iter()
+            .filter(|h| h.starts_with("mcp-protocol-version:"))
+            .collect();
+        assert_eq!(
+            pv.len(),
+            2,
+            "protocol version on tools/list + notification, exactly once each: {hdrs:?}"
+        );
+        assert!(
+            pv.iter().all(|h| h.ends_with("2025-03-26")),
+            "negotiated version must be announced: {pv:?}"
+        );
+        // No Authorization header — but only meaningful when no token is
+        // configured for this server; an exported OXO_FLOW_MCP_TOKEN in the
+        // developer's shell would legitimately add one (re-review NIT-3).
+        if client.bearer_token.is_none() {
+            assert!(
+                !hdrs.iter().any(|h| h.starts_with("authorization:")),
+                "bearer token must be absent when none is configured: {hdrs:?}"
+            );
+        }
+        // The session id, once issued, rides the post-initialize requests.
+        assert!(
+            hdrs.iter().any(|h| h.starts_with("mcp-session-id:")),
+            "session id must be forwarded after initialize: {hdrs:?}"
+        );
+    }
+
+    /// Second raw-socket fixture for cross-origin tests: serves a 302 to
+    /// `redirect_to` on the first request, then answers normally.
+    fn redirect_then_answer_fixture(
+        redirect_to: &str,
+        respond: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let redirect_to = redirect_to.to_string();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let mut redirected = false;
+            loop {
+                let mut buf = [0u8; 65536];
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let response = if !redirected {
+                            redirected = true;
+                            "HTTP/1.1 302 Found\r\nLocation: REDIRECT_TARGET\r\nContent-Length: 0\r\n\r\n"
+                                .replace("REDIRECT_TARGET", &redirect_to)
+                        } else {
+                            let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
+                            let json: serde_json::Value =
+                                serde_json::from_str(body).unwrap_or_default();
+                            let response_body = respond(&json).to_string();
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                response_body.len(),
+                                response_body
+                            )
+                        };
+                        if stream.write_all(response.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        format!("mcp://{addr}")
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_redirect_hop_carries_no_auth_session_or_protocol_headers() {
+        // #948 P3-7 review MAJOR-2: a cross-origin redirect hop must go out
+        // without `Authorization`, `mcp-session-id` or `MCP-Protocol-Version`
+        // — and its own session id must not be adopted for the base origin.
+        let (target_url, target_headers) = raw_header_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2025-03-26"}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+            }
+        });
+        // The fixture hands back `mcp://`; the redirect Location must be
+        // the http form — the constructor rewrites the endpoint scheme
+        // once, but `rpc` follows Location values verbatim and reqwest
+        // cannot issue requests with an `mcp://` scheme.
+        let target_http = target_url.replacen("mcp://", "http://", 1);
+        let origin_url = redirect_then_answer_fixture(&target_http, |req| {
+            let id = req["id"].clone();
+            serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}})
+        });
+        // The base origin 302s to the second fixture (different port =
+        // different origin). The client must follow it, but stripped.
+        let client = client_with_allow(&origin_url, &["127.0.0.1"]).unwrap();
+        client.list_tools().await.unwrap();
+        let hdrs = target_headers.lock().unwrap().clone();
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("authorization:")),
+            "cross-origin hop must carry no Authorization header: {hdrs:?}"
+        );
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("mcp-protocol-version:")),
+            "cross-origin hop must carry no MCP-Protocol-Version header: {hdrs:?}"
+        );
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("mcp-session-id:")),
+            "cross-origin hop must carry no session id (and none from the origin may leak to it): {hdrs:?}"
+        );
+    }
+
+    #[test]
+    fn pick_bearer_token_prefers_the_per_server_value() {
+        // #948 P3-7 review MAJOR-1: the docs promise per-server wins; the
+        // resolver must implement that order, and blank values count as
+        // unset.
+        assert_eq!(pick_bearer_token("generic", "specific"), Some("specific"));
+        assert_eq!(pick_bearer_token("generic", "  "), Some("generic"));
+        assert_eq!(pick_bearer_token("generic", ""), Some("generic"));
+        assert_eq!(pick_bearer_token("  ", "specific"), Some("specific"));
+        assert_eq!(pick_bearer_token("  ", ""), None);
+        // Whitespace is trimmed off the winner.
+        assert_eq!(pick_bearer_token("  tok  ", ""), Some("tok"));
+    }
+
+    #[test]
+    fn origin_of_normalizes_default_ports_and_ignores_paths() {
+        assert_eq!(
+            origin_of("http://example.com/mcp").as_deref(),
+            Some("http://example.com")
+        );
+        assert_eq!(
+            origin_of("http://example.com:80/mcp").as_deref(),
+            Some("http://example.com")
+        );
+        assert_eq!(
+            origin_of("https://example.com:443/a").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            origin_of("http://example.com:8080/x").as_deref(),
+            Some("http://example.com:8080")
+        );
+        assert_eq!(
+            origin_of("https://example.com").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(origin_of("not a url"), None);
+    }
+
+    #[test]
+    fn token_env_var_folds_server_names() {
+        // #948 P3-7d: per-server token vars fold the name to upper snake.
+        assert_eq!(token_env_var("fs"), "OXO_FLOW_MCP_TOKEN_FS");
+        assert_eq!(token_env_var("fs-gdrive"), "OXO_FLOW_MCP_TOKEN_FS_GDRIVE");
+        assert_eq!(
+            token_env_var("genomics.tools"),
+            "OXO_FLOW_MCP_TOKEN_GENOMICS_TOOLS"
+        );
     }
 
     #[test]
