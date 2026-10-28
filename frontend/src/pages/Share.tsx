@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api, ApiError } from '../api/client';
+import { api, ApiError, oxoBase } from '../api/client';
 import type { ShareLanding } from '../api/types';
 import { useI18n, getLocale } from '../context/I18n';
 
@@ -44,7 +44,7 @@ export default function Share() {
       // the token locally. Scheme + base path mirror how THIS page was
       // actually served — hardcoding oxo+https:// produced URLs the server
       // itself could not have minted on plain-HTTP deployments (#907 R16).
-      const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
+      const base = oxoBase();
       const prefix = base.replace(/\/$/, '');
       const scheme = window.location.protocol === 'https:' ? 'oxo+https' : 'oxo+http';
       const url = `${scheme}://${window.location.host}${prefix}/share/${token}`;

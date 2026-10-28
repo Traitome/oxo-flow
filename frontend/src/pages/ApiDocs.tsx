@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiUrl } from '../api/client';
+import { apiUrl, oxoBase } from '../api/client';
 import { useI18n } from '../context/I18n';
 
 interface Endpoint {
@@ -10,11 +10,10 @@ interface Endpoint {
 // (base-path prefix + bearer token, see api/client.ts) so deployments under
 // a sub-path or with auth enabled still load the spec.
 function fetchOpenApiSpec(): Promise<Record<string, unknown>> {
-  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
   const token = localStorage.getItem('oxo_token');
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(`${base}/api/openapi.json`, { headers }).then((r) => {
+  return fetch(`${oxoBase()}/api/openapi.json`, { headers }).then((r) => {
     if (!r.ok) throw new Error(`openapi: ${r.status}`);
     return r.json() as Promise<Record<string, unknown>>;
   });

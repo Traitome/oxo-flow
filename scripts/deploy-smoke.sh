@@ -101,7 +101,9 @@ start_server "$D/srv.log" -p "$P" --base-path /oxoflow || bad "server start"
 check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/runs")" "200" "API under mount"
 check "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$P/api/runs")" "404" "root is NOT mounted"
 SPA_HTML=$(curl -s "$BASE/" || true)
-case "$SPA_HTML" in *"__OXO_BASE__"*) ok "SPA base injection";; *) bad "SPA base injection";; esac
+# P3-2 dropped the inline `window.__OXO_BASE__` script (CSP: no inline
+# script); the mount prefix now arrives as a <meta name="oxo-base"> tag.
+case "$SPA_HTML" in *"oxo-base"*) ok "SPA base injection";; *) bad "SPA base injection";; esac
 ASSET=$(printf '%s' "$SPA_HTML" | grep -o 'src="[^"]*\.js"' | head -1 | sed 's/src="//;s/"//')
 ASSET="${ASSET#./}"; ASSET="${ASSET#/}"
 check "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$ASSET")" "200" "asset under mount"

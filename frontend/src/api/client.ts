@@ -35,12 +35,16 @@ export function describeApiError(err: unknown, fallback: string): string {
   return parts.filter((p) => p.trim() !== '').join('\n');
 }
 
-// The server injects window.__OXO_BASE__ when serving under a sub-path
-// (--base-path); every API URL must be prefixed or the request misses the
-// mount point.
+// The server injects a `<meta name="oxo-base">` tag (and a matching
+// `<base href>`) when serving under a sub-path (--base-path); every API
+// URL must be prefixed or the request misses the mount point. Dev mode
+// (vite on :5173) has no injection, so absence means root: ''.
+export function oxoBase(): string {
+  return document.querySelector('meta[name="oxo-base"]')?.getAttribute('content') ?? '';
+}
+
 export function apiUrl(url: string): string {
-  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
-  return `${base}${url}`;
+  return `${oxoBase()}${url}`;
 }
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -62,8 +66,7 @@ async function toApiError(res: Response): Promise<ApiError> {
 function redirectToLoginOn401(): never {
   const hadToken = !!localStorage.getItem('oxo_token');
   localStorage.removeItem('oxo_token');
-  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
-  window.location.assign(`${base}/login?reason=${hadToken ? 'expired' : 'invalid'}`);
+  window.location.assign(`${oxoBase()}/login?reason=${hadToken ? 'expired' : 'invalid'}`);
   throw new ApiError('SESSION_EXPIRED', 'Session expired — sign in again');
 }
 
