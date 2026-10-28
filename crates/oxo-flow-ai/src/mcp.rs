@@ -195,8 +195,14 @@ fn resolve_bearer_token(server_name: &str) -> Option<String> {
     let specific_var = token_env_var(server_name);
     let specific = std::env::var(&specific_var).unwrap_or_default();
     let generic = std::env::var("OXO_FLOW_MCP_TOKEN").unwrap_or_default();
-    // Log the variable NAME only — never the value.
-    tracing::debug!(var = %specific_var, "consulted per-server MCP token variable");
+    // Log the variable NAMES only — never the values (single log site for
+    // the whole consult, per the re-review NIT: the constructor no longer
+    // duplicates it).
+    tracing::debug!(
+        var = %specific_var,
+        generic_var = "OXO_FLOW_MCP_TOKEN",
+        "MCP auth: token variables consulted (names only, never values)"
+    );
     pick_bearer_token(&generic, &specific).map(str::to_string)
 }
 
@@ -382,9 +388,7 @@ impl McpHttpClient {
         // `/` folded to `_`. The whole tail — host, port AND path — is
         // part of the identity (two MCP servers can share a host on
         // different paths), so `mcp://fs-gdrive:9000/v1` consults
-        // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`. Also surfaced below via
-        // `tracing::debug!` (name only — never the token value) so an
-        // operator can see which variable was consulted.
+        // `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`.
         let server_name = url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
@@ -405,12 +409,6 @@ impl McpHttpClient {
         // short-lived clients in `rpc` for their own (re-screened) pins.
         let http = pinned_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)))?;
         let bearer_token = resolve_bearer_token(&server_name);
-        tracing::debug!(
-            server = %server_name,
-            var = %token_env_var(&server_name),
-            generic_var = "OXO_FLOW_MCP_TOKEN",
-            "MCP auth: token variables consulted (names only, never values)"
-        );
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
@@ -525,7 +523,13 @@ impl McpHttpClient {
                 continue;
             }
 
-            if let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str()) {
+            // Response-direction twin of the request-side gate: a session
+            // id minted by a cross-origin hop's server must never be
+            // adopted, or the next request to the base origin would hand
+            // it a credential from a different origin.
+            if same_origin
+                && let Some(Ok(v)) = response.headers().get("mcp-session-id").map(|s| s.to_str())
+            {
                 *self.session_id.lock().unwrap() = Some(v.to_string());
             }
             let text = response.text().await.map_err(|e| AiError::Transport {
@@ -1464,15 +1468,107 @@ mod tests {
             pv.iter().all(|h| h.ends_with("2025-03-26")),
             "negotiated version must be announced: {pv:?}"
         );
-        // No Authorization header: no token was configured.
-        assert!(
-            !hdrs.iter().any(|h| h.starts_with("authorization:")),
-            "bearer token must be absent when none is configured: {hdrs:?}"
-        );
+        // No Authorization header — but only meaningful when no token is
+        // configured for this server; an exported OXO_FLOW_MCP_TOKEN in the
+        // developer's shell would legitimately add one (re-review NIT-3).
+        if client.bearer_token.is_none() {
+            assert!(
+                !hdrs.iter().any(|h| h.starts_with("authorization:")),
+                "bearer token must be absent when none is configured: {hdrs:?}"
+            );
+        }
         // The session id, once issued, rides the post-initialize requests.
         assert!(
             hdrs.iter().any(|h| h.starts_with("mcp-session-id:")),
             "session id must be forwarded after initialize: {hdrs:?}"
+        );
+    }
+
+    /// Second raw-socket fixture for cross-origin tests: serves a 302 to
+    /// `redirect_to` on the first request, then answers normally.
+    fn redirect_then_answer_fixture(
+        redirect_to: &str,
+        respond: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let redirect_to = redirect_to.to_string();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let mut redirected = false;
+            loop {
+                let mut buf = [0u8; 65536];
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let response = if !redirected {
+                            redirected = true;
+                            "HTTP/1.1 302 Found\r\nLocation: REDIRECT_TARGET\r\nContent-Length: 0\r\n\r\n"
+                                .replace("REDIRECT_TARGET", &redirect_to)
+                        } else {
+                            let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
+                            let json: serde_json::Value =
+                                serde_json::from_str(body).unwrap_or_default();
+                            let response_body = respond(&json).to_string();
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                response_body.len(),
+                                response_body
+                            )
+                        };
+                        if stream.write_all(response.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        format!("mcp://{addr}")
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_redirect_hop_carries_no_auth_session_or_protocol_headers() {
+        // #948 P3-7 review MAJOR-2: a cross-origin redirect hop must go out
+        // without `Authorization`, `mcp-session-id` or `MCP-Protocol-Version`
+        // — and its own session id must not be adopted for the base origin.
+        let (target_url, target_headers) = raw_header_fixture(|req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2025-03-26"}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+            }
+        });
+        // The fixture hands back `mcp://`; the redirect Location must be
+        // the http form — the constructor rewrites the endpoint scheme
+        // once, but `rpc` follows Location values verbatim and reqwest
+        // cannot issue requests with an `mcp://` scheme.
+        let target_http = target_url.replacen("mcp://", "http://", 1);
+        let origin_url = redirect_then_answer_fixture(&target_http, |req| {
+            let id = req["id"].clone();
+            serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}})
+        });
+        // The base origin 302s to the second fixture (different port =
+        // different origin). The client must follow it, but stripped.
+        let client = client_with_allow(&origin_url, &["127.0.0.1"]).unwrap();
+        client.list_tools().await.unwrap();
+        let hdrs = target_headers.lock().unwrap().clone();
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("authorization:")),
+            "cross-origin hop must carry no Authorization header: {hdrs:?}"
+        );
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("mcp-protocol-version:")),
+            "cross-origin hop must carry no MCP-Protocol-Version header: {hdrs:?}"
+        );
+        assert!(
+            !hdrs.iter().any(|h| h.starts_with("mcp-session-id:")),
+            "cross-origin hop must carry no session id (and none from the origin may leak to it): {hdrs:?}"
         );
     }
 
