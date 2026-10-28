@@ -785,9 +785,25 @@ fn parse_claude_response(json: &serde_json::Value) -> Result<AiResponse, AiError
         }
     }
 
+    // Anthropic splits the prompt bill three ways: `input_tokens` excludes
+    // cache traffic, which arrives as `cache_read_input_tokens` (billed
+    // below input rate) and `cache_creation_input_tokens` (billed above it).
+    // Dropping them undercounted real spend on caching-enabled endpoints.
     let usage = Usage {
-        prompt_tokens: json["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        prompt_tokens: json["usage"]["input_tokens"].as_u64().unwrap_or(0)
+            + json["usage"]["cache_read_input_tokens"]
+                .as_u64()
+                .unwrap_or(0)
+            + json["usage"]["cache_creation_input_tokens"]
+                .as_u64()
+                .unwrap_or(0),
         completion_tokens: json["usage"]["output_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: json["usage"]["cache_read_input_tokens"]
+            .as_u64()
+            .unwrap_or(0),
+        cache_creation_tokens: json["usage"]["cache_creation_input_tokens"]
+            .as_u64()
+            .unwrap_or(0),
     };
 
     let finish_reason = if !tool_calls.is_empty() {
@@ -996,6 +1012,7 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
     let usage = Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
         completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+        ..Usage::default()
     };
 
     Ok(AiResponse {
@@ -1142,6 +1159,7 @@ fn parse_ollama_response(json: &serde_json::Value) -> Result<AiResponse, AiError
     let usage = Usage {
         prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0),
         completion_tokens: json["eval_count"].as_u64().unwrap_or(0),
+        ..Usage::default()
     };
 
     // Ollama reports truncation via `done_reason: "length"` while `done`
@@ -1361,6 +1379,7 @@ fn usage_from_frame(frame: &str) -> Option<Usage> {
     Some(Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64()?,
         completion_tokens: json["usage"]["completion_tokens"].as_u64()?,
+        ..Usage::default()
     })
 }
 
@@ -3209,6 +3228,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_claude_response_folds_cache_tokens_into_usage() {
+        // Anthropic reports cache traffic as separate counters; dropping
+        // them undercounted real spend on caching-enabled endpoints. The
+        // full prompt bill (input + cache read + cache creation) rolls into
+        // prompt_tokens, with the split preserved for below-rate billing.
+        let json = serde_json::json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 8000,
+                "cache_creation_input_tokens": 2000
+            }
+        });
+        let response = parse_claude_response(&json).unwrap();
+        assert_eq!(response.usage.prompt_tokens, 10_100);
+        assert_eq!(response.usage.completion_tokens, 50);
+        assert_eq!(response.usage.cache_read_tokens, 8_000);
+        assert_eq!(response.usage.cache_creation_tokens, 2_000);
+    }
+
+    #[test]
+    fn parse_claude_response_without_cache_counters_defaults_to_zero() {
+        // Endpoints that never enable caching omit the cache counters —
+        // the parse must not invent tokens.
+        let json = serde_json::json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 100, "output_tokens": 50}
+        });
+        let response = parse_claude_response(&json).unwrap();
+        assert_eq!(response.usage.prompt_tokens, 100);
+        assert_eq!(response.usage.cache_read_tokens, 0);
+        assert_eq!(response.usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
     fn to_anthropic_messages_emits_tool_use_blocks() {
         let messages = vec![
             Message::system("sys"),
@@ -3634,6 +3691,7 @@ mod tests {
             Some(Usage {
                 prompt_tokens: 12,
                 completion_tokens: 7,
+                ..Usage::default()
             })
         );
         assert!(
