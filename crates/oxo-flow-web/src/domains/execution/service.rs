@@ -7,6 +7,8 @@
 use oxo_flow_core::WorkflowConfig;
 use oxo_flow_core::dag::WorkflowDag;
 
+use crate::infra::db::models;
+
 use super::diagnostics::DiagnosticsEngine;
 use super::types::*;
 
@@ -175,6 +177,148 @@ pub fn compute_retry_plan(
 /// (issue #67 §4). Sampled peaks underestimate true maxima, so the
 /// threshold is conservative.
 const MEMORY_BOTTLENECK_THRESHOLD_PCT: u64 = 80;
+
+/// Run-listing filter set for `GET /api/runs` (#948 P2-6).
+///
+/// Assembled by the handler from the query string and the authenticated
+/// caller, then turned into SQL fragments by [`assemble_run_list_query`] —
+/// the split keeps the pagination/filter semantics unit-testable without
+/// any HTTP or database plumbing.
+#[derive(Debug, Clone, Default)]
+pub struct RunListFilters {
+    /// Restrict results to this user's rows (the handler passes the
+    /// non-admin caller's id; admins pass `None` to see the whole fleet —
+    /// issue #82 P0-4 ownership scoping).
+    pub user_id: Option<String>,
+    /// `status` query parameter, already validated against the whitelist by
+    /// the caller (unrecognized values are ignored, never 400).
+    pub status: Option<String>,
+    /// `q` search term — matched against `workflow_name` and run `id`.
+    pub q: Option<String>,
+    /// Cursor = `created_at` of the last row of the previous page. A page
+    /// bound, NOT a filter: it applies to the row SELECT but never the
+    /// COUNT (audit #665).
+    pub cursor: Option<String>,
+    /// Row cap, clamped by the caller to 1..=500 (default 100). Consumed by
+    /// the CALLER — it formats the SELECT's `LIMIT` and fetches `limit + 1`
+    /// to detect a next page; the assembled WHERE fragments stay cap-agnostic.
+    #[allow(dead_code)]
+    pub limit: i64,
+}
+
+/// SQL fragments for one run-listing page: the row SELECT (filters + cursor)
+/// and the filter-only COUNT (audit #665), each with its ordered binds.
+///
+/// All fragments are static strings pushed by this function — every piece of
+/// user input rides in the binds — which is what makes the assembled SQL safe
+/// to pass to `sqlx::AssertSqlSafe` at the call site.
+#[derive(Debug, Clone)]
+pub struct RunListQuery {
+    /// `SELECT * FROM runs<page_where> ORDER BY created_at DESC LIMIT <limit + 1>`
+    /// — ready for `format!` substitution of the numeric LIMIT.
+    pub page_where_sql: String,
+    /// Binds for the SELECT, in placeholder order (admin scoping → status
+    /// → q → cursor).
+    pub page_binds: Vec<String>,
+    /// `SELECT COUNT(*) FROM runs<filter_where>` — cursor deliberately
+    /// excluded so the total stays stable across pages.
+    pub filter_where_sql: String,
+    /// Binds for the COUNT (admin scoping → status → q).
+    pub filter_binds: Vec<String>,
+}
+
+/// Assemble the run-listing SELECT and COUNT fragments from the filters.
+///
+/// Clause order is part of the wire-stable behavior the tests pin down:
+/// `user_id = ?` (ownership, issue #82 P0-4) → `status = ?` →
+/// `(workflow_name LIKE ? OR id LIKE ?)` → page-only `created_at < ?`.
+/// An unrecognized `status` is silently dropped (the handler's long-standing
+/// contract), as is a whitespace-only `q`. The row cap is NOT folded in
+/// here — the caller formats the numeric `LIMIT` itself (fetching
+/// `limit + 1`), so the fragments stay cap-agnostic.
+pub fn assemble_run_list_query(filters: &RunListFilters) -> RunListQuery {
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(user_id) = &filters.user_id {
+        where_clauses.push("user_id = ?".to_string());
+        binds.push(user_id.clone());
+    }
+    if let Some(status) = &filters.status
+        && matches!(
+            status.as_str(),
+            "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
+        )
+    {
+        where_clauses.push("status = ?".to_string());
+        binds.push(status.clone());
+    }
+    if let Some(q) = &filters.q
+        && !q.trim().is_empty()
+    {
+        where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
+        let pattern = format!("%{}%", q.trim());
+        binds.push(pattern.clone());
+        binds.push(pattern);
+    }
+    // The cursor is a page bound, not a filter: it applies to the row
+    // SELECT but NOT to the total COUNT, which reports the whole matching
+    // population and must not shrink with every page (audit #665).
+    let mut page_clauses = where_clauses.clone();
+    let mut page_binds = binds.clone();
+    if let Some(cursor) = &filters.cursor {
+        page_clauses.push("created_at < ?".to_string());
+        page_binds.push(cursor.clone());
+    }
+    let page_where_sql = if page_clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", page_clauses.join(" AND "))
+    };
+    let filter_where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_clauses.join(" AND "))
+    };
+    RunListQuery {
+        page_where_sql,
+        page_binds,
+        filter_where_sql,
+        filter_binds: binds,
+    }
+}
+
+/// Shape one `RunRow` into the API's public list-item JSON (#948 P2-6).
+///
+/// Deliberately NO `pid`: the host process id is engine bookkeeping (cancel
+/// and liveness probes use it server-side) and discloses host internals to
+/// API consumers.
+pub fn run_row_to_list_item(r: &models::RunRow) -> serde_json::Value {
+    let duration_secs = match (&r.started_at, &r.finished_at) {
+        (Some(s), Some(f)) => {
+            let start = chrono::DateTime::parse_from_rfc3339(s).ok();
+            let end = chrono::DateTime::parse_from_rfc3339(f).ok();
+            match (start, end) {
+                (Some(a), Some(b)) => Some((b - a).num_seconds().max(0)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    serde_json::json!({
+        "id": r.id,
+        "user_id": r.user_id,
+        "pipeline_id": r.pipeline_id,
+        "workflow_name": r.workflow_name,
+        "status": r.status,
+        "phase": r.phase,
+        "dry_run": r.dry_run,
+        "workdir": r.workdir,
+        "started_at": r.started_at,
+        "finished_at": r.finished_at,
+        "created_at": r.created_at,
+        "duration_secs": duration_secs,
+    })
+}
 
 /// Diagnose a failed run using the deterministic diagnostics engine.
 ///
@@ -743,5 +887,172 @@ mod file_listing_tests {
         );
         let resp = diagnose_run(&[], "", &benchmarks);
         assert!(resp.resource_bottlenecks.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod run_list_query_tests {
+    use super::*;
+
+    fn filters(
+        user_id: Option<&str>,
+        status: Option<&str>,
+        q: Option<&str>,
+        cursor: Option<&str>,
+    ) -> RunListFilters {
+        RunListFilters {
+            user_id: user_id.map(str::to_string),
+            status: status.map(str::to_string),
+            q: q.map(str::to_string),
+            cursor: cursor.map(str::to_string),
+            limit: 100,
+        }
+    }
+
+    #[test]
+    fn no_filters_yields_empty_where_and_no_binds() {
+        let q = assemble_run_list_query(&filters(None, None, None, None));
+        assert_eq!(q.page_where_sql, "");
+        assert!(q.page_binds.is_empty());
+        assert_eq!(q.filter_where_sql, "");
+        assert!(q.filter_binds.is_empty());
+    }
+
+    #[test]
+    fn non_admin_scope_adds_user_id_clause() {
+        // Ownership scoping (issue #82 P0-4): non-admins see their own runs
+        // only — first clause, before any user-supplied filter.
+        let q = assemble_run_list_query(&filters(Some("u1"), Some("failed"), Some("rna"), None));
+        assert_eq!(
+            q.filter_where_sql,
+            " WHERE user_id = ? AND status = ? AND (workflow_name LIKE ? OR id LIKE ?)"
+        );
+        assert_eq!(q.filter_binds, vec!["u1", "failed", "%rna%", "%rna%"]);
+    }
+
+    #[test]
+    fn admin_sees_whole_fleet_no_user_clause() {
+        let q = assemble_run_list_query(&filters(None, Some("running"), None, None));
+        assert_eq!(q.filter_where_sql, " WHERE status = ?");
+        assert_eq!(q.filter_binds, vec!["running"]);
+    }
+
+    #[test]
+    fn unrecognized_status_is_silently_dropped() {
+        let q = assemble_run_list_query(&filters(None, Some("DROP TABLE"), None, None));
+        assert_eq!(q.filter_where_sql, "");
+        assert!(q.filter_binds.is_empty());
+    }
+
+    #[test]
+    fn empty_or_whitespace_q_is_dropped() {
+        let q = assemble_run_list_query(&filters(None, None, Some("   "), None));
+        assert_eq!(q.filter_where_sql, "");
+        // A meaningful term still binds twice: LIKE pattern for both columns.
+        let q2 = assemble_run_list_query(&filters(None, None, Some("  rna  "), None));
+        assert_eq!(
+            q2.filter_where_sql,
+            " WHERE (workflow_name LIKE ? OR id LIKE ?)"
+        );
+        assert_eq!(q2.filter_binds, vec!["%rna%", "%rna%"]);
+    }
+
+    #[test]
+    fn cursor_applies_to_select_but_not_count() {
+        // Audit #665: the cursor is a page bound, not a filter — the COUNT
+        // must not shrink with every page.
+        let q = assemble_run_list_query(&filters(
+            Some("u1"),
+            None,
+            None,
+            Some("2026-01-01T00:00:00Z"),
+        ));
+        assert_eq!(q.page_where_sql, " WHERE user_id = ? AND created_at < ?");
+        assert_eq!(q.page_binds, vec!["u1", "2026-01-01T00:00:00Z"]);
+        assert_eq!(q.filter_where_sql, " WHERE user_id = ?");
+        assert_eq!(q.filter_binds, vec!["u1"]);
+    }
+
+    #[test]
+    fn full_assembled_select_sql_is_parameterized() {
+        // The handler concatenates `page_where_sql` into the final SELECT —
+        // assert the whole string contains nothing but static fragments and
+        // the numeric limit.
+        let q =
+            assemble_run_list_query(&filters(Some("u1"), Some("queued"), Some("x"), Some("c1")));
+        let sql = format!(
+            "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
+            q.page_where_sql,
+            100 + 1
+        );
+        assert_eq!(
+            sql,
+            "SELECT * FROM runs WHERE user_id = ? AND status = ? AND (workflow_name LIKE ? OR id LIKE ?) AND created_at < ? ORDER BY created_at DESC LIMIT 101"
+        );
+        assert_eq!(q.page_binds, vec!["u1", "queued", "%x%", "%x%", "c1"]);
+        // A quote in the search term never reaches the SQL text — it rides
+        // in the bind.
+        let evil =
+            assemble_run_list_query(&filters(None, None, Some("'; DROP TABLE runs;--"), None));
+        assert!(!evil.page_where_sql.contains('\''));
+        assert_eq!(
+            evil.page_binds,
+            vec!["%'; DROP TABLE runs;--%", "%'; DROP TABLE runs;--%"]
+        );
+    }
+
+    #[test]
+    fn list_item_omits_pid_and_computes_duration() {
+        let row = models::RunRow {
+            id: "r1".into(),
+            user_id: "u1".into(),
+            pipeline_id: None,
+            pipeline_snapshot: String::new(),
+            workflow_name: Some("wf".into()),
+            status: "completed".into(),
+            phase: "executing".into(),
+            dry_run: false,
+            pid: Some(4242),
+            workdir: None,
+            config_overrides: None,
+            started_at: Some("2026-01-01T00:00:00Z".into()),
+            finished_at: Some("2026-01-01T00:01:10Z".into()),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let item = run_row_to_list_item(&row);
+        assert!(item.get("pid").is_none(), "pid must never be public");
+        assert_eq!(item["id"], "r1");
+        assert_eq!(item["user_id"], "u1");
+        assert_eq!(item["status"], "completed");
+        assert_eq!(item["duration_secs"], 70);
+        // A run without both timestamps has no duration to report.
+        let open = models::RunRow {
+            finished_at: None,
+            pid: None,
+            ..row
+        };
+        assert_eq!(
+            run_row_to_list_item(&open)["duration_secs"],
+            serde_json::Value::Null
+        );
+        // Clock skew (finished_at before started_at) clamps at 0, never
+        // goes negative.
+        let skewed = models::RunRow {
+            started_at: Some("2026-01-01T00:01:10Z".into()),
+            finished_at: Some("2026-01-01T00:00:00Z".into()),
+            ..open
+        };
+        assert_eq!(run_row_to_list_item(&skewed)["duration_secs"], 0);
+    }
+
+    #[test]
+    fn cursor_only_yields_bare_page_clause() {
+        // The one filter-shape the other tests don't pin: a cursor with no
+        // other filters — the admin's Load-More path.
+        let q = assemble_run_list_query(&filters(None, None, None, Some("2026-01-01T00:00:00Z")));
+        assert_eq!(q.page_where_sql, " WHERE created_at < ?");
+        assert_eq!(q.page_binds, vec!["2026-01-01T00:00:00Z"]);
+        assert_eq!(q.filter_where_sql, "");
+        assert!(q.filter_binds.is_empty());
     }
 }
