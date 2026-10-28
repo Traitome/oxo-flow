@@ -140,6 +140,8 @@ docker run -d -p 3000:3000 -v oxo-flow-data:/app/data oxo-flow
 | `OPENAI_API_KEY` | No | — | OpenAI-compatible API key (overrides OXO_FLOW_AI_API_KEY) |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1/chat/completions` (endpoint; base `https://api.openai.com/v1`) | OpenAI-compatible API endpoint URL |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI-compatible model name |
+| `OLLAMA_HOST` | No | — | Local Ollama endpoint (enables Ollama auto-detection) |
+| `OLLAMA_MODEL` | No | (provider default) | Ollama model name (rides the canonical model tier under an explicit `model` override; #948 P2-3) |
 | `OXO_FLOW_FRONTEND_DIR` | No | — | Path to built frontend dist directory |
 | `DATABASE_URL` | No | `sqlite://oxo-flow.db` | Database selection shared by `oxo-flow serve`, `oxo-flow-web`, and desktop: a `postgres://`/`postgresql://` URL enables PostgreSQL for library/AI/auth (requires the `postgres` compile feature; the published Docker image omits it), anything else stays SQLite. Run execution is SQLite-only regardless (#207) |
 | `OXO_FLOW_PORT` | No | `8080` | Web server port (also settable via `--port`). The standalone `oxo-flow-web` binary defaults to `3000` |

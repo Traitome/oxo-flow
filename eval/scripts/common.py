@@ -204,9 +204,23 @@ def known_version_pins(kb_versions):
 # ── AI provider resolution (mirrors the CLI: env > ~/.oxo-flow/ai_config.json) ──
 
 def resolve_provider():
-    """Return provider config dict or None when unconfigured/disabled."""
+    """Return provider config dict or None when unconfigured/disabled.
+
+    Credential precedence mirrors the canonical Rust chain
+    (`provider::env_credential`, #948 P2-3): per-provider variables beat the
+    generic `OXO_FLOW_AI_API_KEY` fallback (the #645 bug shape — the generic
+    tier used to sit first here and shadow every specific variable), the
+    resolved key is trimmed with blank treated as absent.
+
+    Two deliberate eval-only divergences from `env_credential` (both
+    pre-existing; the Rust `explicit` tier sits FIRST because a saved
+    Settings config beats auto-detection, while this harness resolves the
+    saved config last — and per-tier blank semantics differ, since Rust
+    `usable_key` lets a whitespace-specific var fall through to the generic
+    tier while the Python `or`-chain treats any truthy value as fatal):
+    here the saved-config key is the final fallback rather than an override.
+    """
     kind = os.environ.get("OXO_FLOW_AI_PROVIDER", "").strip().lower()
-    api_key = os.environ.get("OXO_FLOW_AI_API_KEY", "")
     api_url = os.environ.get("OXO_FLOW_AI_API_URL", "")
     model = os.environ.get("OXO_FLOW_AI_MODEL", "")
 
@@ -222,19 +236,25 @@ def resolve_provider():
         return None
 
     if kind == "claude":
-        api_key = api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN", "") or cfg.get("api_key", "")
+        api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "") or os.environ.get(
+            "OXO_FLOW_AI_API_KEY", ""
+        ) or cfg.get("api_key", "")
         api_url = api_url or os.environ.get("ANTHROPIC_BASE_URL", "") or cfg.get("api_url", "")
         model = model or os.environ.get("ANTHROPIC_MODEL", "") or cfg.get("model", "")
         api_url = api_url or DEFAULT_CLAUDE_URL
         model = model or DEFAULT_CLAUDE_MODEL
     elif kind == "openai":
-        api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or cfg.get("api_key", "")
+        api_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get(
+            "OXO_FLOW_AI_API_KEY", ""
+        ) or cfg.get("api_key", "")
         api_url = api_url or os.environ.get("OPENAI_BASE_URL", "") or cfg.get("api_url", "")
         model = model or os.environ.get("OPENAI_MODEL", "") or cfg.get("model", "")
         api_url = api_url or DEFAULT_OPENAI_URL
         model = model or DEFAULT_OPENAI_MODEL
     elif kind == "deepseek":
-        api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "") or cfg.get("api_key", "")
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "") or os.environ.get(
+            "OXO_FLOW_AI_API_KEY", ""
+        ) or cfg.get("api_key", "")
         api_url = api_url or os.environ.get("DEEPSEEK_BASE_URL", "") or cfg.get("api_url", "")
         model = model or os.environ.get("DEEPSEEK_MODEL", "") or cfg.get("model", "")
         api_url = api_url or DEFAULT_DEEPSEEK_URL
@@ -248,8 +268,10 @@ def resolve_provider():
     else:
         return None
 
-    if kind != "ollama" and not api_key:
-        return None
+    if kind != "ollama":
+        api_key = api_key.strip()
+        if not api_key:
+            return None
     return {"kind": kind, "api_url": api_url, "api_key": api_key, "model": model}
 
 
