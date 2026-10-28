@@ -20,11 +20,12 @@ Variants
                   measures a bare prompt baseline and is named for it.
 
 Success is judged ONLY by the deterministic gates (never by an LLM judge),
-so the numbers are cheap and the judging is deterministic; generation
-sampling is pinned to temperature 0 where the provider honors it but is
-not fully reproducible across providers/runs. Token usage comes from the
-AI session archives (cli) or the provider response (naive-prompt); cost is
-derived from a configurable price table.
+so the numbers are cheap and the judging is deterministic; the naive-prompt
+arm is pinned to temperature 0 where the provider honors it but is not
+fully reproducible across providers/runs (the cli arm inherits the engine's
+[ai] temperature config, unset = provider default). Token usage comes from
+the AI session archives (cli) or the provider response (naive-prompt); cost
+is derived from a configurable price table.
 
 Usage
     # pilot: all intents, both variants, the model configured in the env
@@ -98,12 +99,16 @@ def load_credentials() -> dict[str, str]:
             cfg = json.loads(CFG_PATH.read_text())
         except json.JSONDecodeError:
             cfg = {}
+        if not isinstance(cfg, dict):
+            cfg = {}
         alias = {"ANTHROPIC_AUTH_TOKEN": "api_key",
                  "ANTHROPIC_BASE_URL": "api_url",
                  "ANTHROPIC_MODEL": "model"}
         for env_key, cfg_key in alias.items():
             if not creds.get(env_key):
-                creds[env_key] = str(cfg.get(cfg_key, ""))
+                # `or ""` collapses JSON null/empty to ""; .strip() treats
+                # blank as absent, matching resolve_provider's semantics.
+                creds[env_key] = str(cfg.get(cfg_key) or "").strip()
     missing = [k for k in CREDS_KEYS if not creds.get(k)]
     if missing:
         sys.exit(f"missing credentials: {', '.join(missing)} "
@@ -148,8 +153,7 @@ def extract_toml(text: str) -> str | None:
 
 def anthropic_chat(creds: dict, model: str, system: str, user: str,
                    max_tokens: int, timeout: float,
-                   temperature: float | None = 0.0,
-                   seed: int | None = None) -> tuple[str | None, dict, str | None]:
+                   temperature: float | None = 0.0) -> tuple[str | None, dict, str | None]:
     """One Anthropic-messages call. Returns (text, usage, error).
 
     temperature defaults to 0 so naive-prompt draws are as deterministic as
@@ -166,8 +170,6 @@ def anthropic_chat(creds: dict, model: str, system: str, user: str,
     }
     if temperature is not None:
         body["temperature"] = temperature
-    if seed is not None:
-        body["seed"] = seed
     payload = json.dumps(body).encode()
     req = urllib.request.Request(
         f"{base}/v1/messages", data=payload, method="POST",
