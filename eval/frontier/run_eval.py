@@ -9,16 +9,20 @@ against the engine's three deterministic static gates:
     oxo-flow lint     --json   (best practices)
 
 Variants
-    cli      full CLI path: `oxo-flow template --ai` (rich prompt + knowledge
-             tools + tool-calling loop) — the "strong" path.
-    minimal  faithful replication of the weakest embedded path (web chat
-             `process_chat` prompt: 7 generic rules, no tools, no knowledge
-             injection, single shot) — the "floor" path.
+    cli           full CLI path: `oxo-flow template --ai` (rich prompt +
+                  knowledge tools + tool-calling loop) — the "strong" path.
+    naive-prompt  single-shot naive prompt (7 generic rules, no tools, no
+                  knowledge injection) — a prompt-axis floor, not a product
+                  path. Named `minimal` before #948 P2-4: it claimed to
+                  replicate the web chat prompt, but since the #342
+                  unification every surface (web chat included) routes
+                  through the shared PipelineGenAgent, so the arm now
+                  measures a bare prompt baseline and is named for it.
 
 Success is judged ONLY by the deterministic gates (never by an LLM judge),
 so the numbers are reproducible and cheap. Token usage comes from the AI
-session archives (cli) or the provider response (minimal); cost is derived
-from a configurable price table.
+session archives (cli) or the provider response (naive-prompt); cost is
+derived from a configurable price table.
 
 Usage
     # pilot: all intents, both variants, the model configured in the env
@@ -61,7 +65,7 @@ PRICE_PER_MTOK = {
 ZSHRC = Path.home() / ".zshrc"
 ZSHRC_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
 
-MINIMAL_SYSTEM = """You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.
+NAIVE_SYSTEM = """You are a bioinformatics pipeline expert. Generate valid .oxoflow TOML configurations.
 
 Intent: {intent}
 
@@ -170,9 +174,9 @@ def run_generation(variant: str, intent: str, model: str, run_dir: Path,
     started = time.time()
     meta["wall_s"] = None
 
-    if variant == "minimal":
+    if variant == "naive-prompt":
         text, usage, err = anthropic_chat(
-            creds, model, MINIMAL_SYSTEM.format(intent=intent),
+            creds, model, NAIVE_SYSTEM.format(intent=intent),
             f"## User Request\nGenerate a .oxoflow pipeline for: {intent}\n\n"
             "## Task\nGenerate the optimized .oxoflow TOML configuration now. "
             "Output inside ```toml fences.",
@@ -294,7 +298,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--intents", default=str(Path(__file__).parent / "intents.json"))
     ap.add_argument("--out", default=None, help="results directory (default: results/<stamp>)")
-    ap.add_argument("--variants", default="minimal,cli")
+    ap.add_argument("--variants", default="naive-prompt,cli")
     ap.add_argument("--models", default="", help="comma list; default: env ANTHROPIC_MODEL")
     ap.add_argument("--filter", default="", help="comma list of intent ids to include")
     ap.add_argument("--max-retries", type=int, default=None,

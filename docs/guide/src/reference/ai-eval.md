@@ -74,20 +74,21 @@ Capture manifests record git SHA, gold/knowledge hashes, provider/model identity
 the **quality/cost frontier across generation paths** rather than
 gold-set coverage on a single path. It runs a tiered intent set (easy /
 medium / hard) through two variants — the full CLI path
-(`template --ai`: rich prompt, knowledge tools, tool loop) and a faithful
-replication of the weakest embedded prompt (no tools, single shot) — and
-judges every artifact with the three deterministic static gates
-(`validate`, `dry-run`, `lint`; exit code only, no LLM judge).
+(`template --ai`: rich prompt, knowledge tools, tool loop) and a
+single-shot naive prompt (no tools, no knowledge injection; a
+bare-prompt baseline, not a product path) — and judges every artifact
+with the three deterministic static gates (`validate`, `dry-run`,
+`lint`; exit code only, no LLM judge).
 
 Per-run token usage comes from the AI session archives (CLI variant) or
-the provider response (minimal variant), so each cell of the
+the provider response (naive-prompt variant), so each cell of the
 {path × model} matrix reports gate pass@1 alongside tokens, estimated
 cost, and wall time. This is the evidence base for the unified
 generation harness (see [Architecture → AI Subsystem](architecture.md))
 and for sizing its cost tiers.
 
 ```bash
-python3 eval/frontier/run_eval.py --variants minimal,cli
+python3 eval/frontier/run_eval.py --variants naive-prompt,cli
 ```
 
 See `eval/frontier/README.md` for the full method, price-table
