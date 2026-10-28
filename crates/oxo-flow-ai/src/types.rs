@@ -230,9 +230,12 @@ impl Usage {
     /// Pricing as of 2026-08: deepseek-v4-pro $0.28/M in, $1.10/M out.
     ///
     /// DeepSeek charges cache reads at 1/10 input price and cache writes at
-    /// input price; cache fields are always zero on this backend.
+    /// input price; cache fields are always zero on this backend. The
+    /// subtraction is saturating because `Usage` deserializes without
+    /// enforcing `cache_read_tokens <= prompt_tokens` (review finding on
+    /// this PR — a hand-built value must not panic the estimator).
     pub fn cost_deepseek_v4_pro(&self) -> f64 {
-        (self.prompt_tokens - self.cache_read_tokens) as f64 * 0.28 / 1_000_000.0
+        self.prompt_tokens.saturating_sub(self.cache_read_tokens) as f64 * 0.28 / 1_000_000.0
             + self.cache_read_tokens as f64 * 0.028 / 1_000_000.0
             + self.completion_tokens as f64 * 1.10 / 1_000_000.0
     }
@@ -240,7 +243,7 @@ impl Usage {
     /// Estimated cost in USD for DeepSeek flash models.
     /// Pricing as of 2026-08: deepseek-v4-flash $0.14/M in, $0.55/M out.
     pub fn cost_deepseek_v4_flash(&self) -> f64 {
-        (self.prompt_tokens - self.cache_read_tokens) as f64 * 0.14 / 1_000_000.0
+        self.prompt_tokens.saturating_sub(self.cache_read_tokens) as f64 * 0.14 / 1_000_000.0
             + self.cache_read_tokens as f64 * 0.014 / 1_000_000.0
             + self.completion_tokens as f64 * 0.55 / 1_000_000.0
     }
