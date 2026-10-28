@@ -374,11 +374,24 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
   "user_intent": "RNA-seq with STAR and DESeq2",
   "provider": "deepseek",
   "model": "deepseek-v4-pro",
-  "total_usage": { "prompt_tokens": 1234, "completion_tokens": 432 },
+  "total_usage": {
+    "prompt_tokens": 1234,
+    "completion_tokens": 432,
+    "cache_read_tokens": 800,
+    "cache_creation_tokens": 200
+  },
   "outcome": "success",
   "confidence": 0.91
 }
 ```
+
+`prompt_tokens` is the **full prompt bill**: on caching-enabled
+Anthropic-compatible endpoints it includes `cache_read_tokens` (served from
+the provider's prompt cache) and `cache_creation_tokens` (written to it),
+so token totals stay comparable across providers while the cache split is
+preserved for cost estimation — cache reads bill below the input rate and
+cache writes above it. Sessions written before cache accounting carry only
+the two base counters and still load unchanged.
 
 ---
 

@@ -213,20 +213,38 @@ pub struct AiResponse {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Prompt tokens served from the provider's prompt cache
+    /// (Anthropic `cache_read_input_tokens`). Billed below the input rate,
+    /// so cost estimates must not treat them as full-price input tokens.
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// Prompt tokens spent writing to the provider's prompt cache
+    /// (Anthropic `cache_creation_input_tokens`). Billed above the input
+    /// rate, so cost estimates must not treat them as full-price tokens.
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
 }
 
 impl Usage {
     /// Estimated cost in USD for DeepSeek models.
     /// Pricing as of 2026-08: deepseek-v4-pro $0.28/M in, $1.10/M out.
+    ///
+    /// DeepSeek charges cache reads at 1/10 input price and cache writes at
+    /// input price; cache fields are always zero on this backend. The
+    /// subtraction is saturating because `Usage` deserializes without
+    /// enforcing `cache_read_tokens <= prompt_tokens` (review finding on
+    /// this PR — a hand-built value must not panic the estimator).
     pub fn cost_deepseek_v4_pro(&self) -> f64 {
-        self.prompt_tokens as f64 * 0.28 / 1_000_000.0
+        self.prompt_tokens.saturating_sub(self.cache_read_tokens) as f64 * 0.28 / 1_000_000.0
+            + self.cache_read_tokens as f64 * 0.028 / 1_000_000.0
             + self.completion_tokens as f64 * 1.10 / 1_000_000.0
     }
 
     /// Estimated cost in USD for DeepSeek flash models.
     /// Pricing as of 2026-08: deepseek-v4-flash $0.14/M in, $0.55/M out.
     pub fn cost_deepseek_v4_flash(&self) -> f64 {
-        self.prompt_tokens as f64 * 0.14 / 1_000_000.0
+        self.prompt_tokens.saturating_sub(self.cache_read_tokens) as f64 * 0.14 / 1_000_000.0
+            + self.cache_read_tokens as f64 * 0.014 / 1_000_000.0
             + self.completion_tokens as f64 * 0.55 / 1_000_000.0
     }
 }
@@ -375,9 +393,52 @@ mod tests {
         let usage = Usage {
             prompt_tokens: 1000,
             completion_tokens: 500,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         };
         assert!(usage.cost_deepseek_v4_pro() > 0.0);
         assert!(usage.cost_deepseek_v4_flash() > 0.0);
         assert!(usage.cost_deepseek_v4_pro() > usage.cost_deepseek_v4_flash());
+    }
+
+    #[test]
+    fn usage_deserializes_without_cache_fields() {
+        // Archived sessions written before cache accounting carry only the
+        // two base counters — old JSON must keep loading (`#[serde(default)]`).
+        let usage: Usage =
+            serde_json::from_str(r#"{"prompt_tokens": 10, "completion_tokens": 5}"#).unwrap();
+        assert_eq!(usage.cache_read_tokens, 0);
+        assert_eq!(usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn usage_cache_read_tokens_are_billed_below_input() {
+        // Cache reads bill at 1/10 the input rate on DeepSeek, so a Usage
+        // with the same prompt_tokens but more of them cached must be
+        // strictly cheaper — and cache_creation (billed at input price)
+        // must not change the estimate.
+        let plain = Usage {
+            prompt_tokens: 1_000_000,
+            completion_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        };
+        let cached = Usage {
+            cache_read_tokens: 800_000,
+            ..plain.clone()
+        };
+        let written = Usage {
+            cache_creation_tokens: 800_000,
+            ..plain.clone()
+        };
+        assert!(
+            cached.cost_deepseek_v4_pro() < plain.cost_deepseek_v4_pro(),
+            "cache reads must bill below input rate"
+        );
+        assert_eq!(
+            written.cost_deepseek_v4_pro(),
+            plain.cost_deepseek_v4_pro(),
+            "cache writes bill at input price on this estimator"
+        );
     }
 }

@@ -126,6 +126,8 @@ impl AiSession {
     pub fn add_usage(&mut self, usage: &Usage) {
         self.total_usage.prompt_tokens += usage.prompt_tokens;
         self.total_usage.completion_tokens += usage.completion_tokens;
+        self.total_usage.cache_read_tokens += usage.cache_read_tokens;
+        self.total_usage.cache_creation_tokens += usage.cache_creation_tokens;
     }
 }
 
@@ -446,6 +448,30 @@ mod tests {
         let failed = session.fail("timeout");
         assert_eq!(failed.outcome, SessionOutcome::Failed);
         assert_eq!(failed.error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn add_usage_accumulates_cache_tokens() {
+        // Cache counters must ride the same rollup as the base tokens — a
+        // caching-enabled Anthropic endpoint reports them per call, and the
+        // archived session's totals must reflect the full bill shape.
+        let mut session = AiSession::new("template", "test", "claude", "claude-sonnet-4");
+        session.add_usage(&Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            cache_read_tokens: 40,
+            cache_creation_tokens: 20,
+        });
+        session.add_usage(&Usage {
+            prompt_tokens: 200,
+            completion_tokens: 5,
+            cache_read_tokens: 80,
+            cache_creation_tokens: 0,
+        });
+        assert_eq!(session.total_usage.prompt_tokens, 300);
+        assert_eq!(session.total_usage.completion_tokens, 15);
+        assert_eq!(session.total_usage.cache_read_tokens, 120);
+        assert_eq!(session.total_usage.cache_creation_tokens, 20);
     }
 
     #[test]
