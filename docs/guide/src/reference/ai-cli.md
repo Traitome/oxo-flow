@@ -250,6 +250,14 @@ The provider layer treats model failures explicitly — nothing is silently drop
 - **Offline replay for tests**: a scripted provider replays serialized
   completions (tool calls, errors, delays) through the real code path, so CI
   covers multi-turn tool-calling and error recovery without an API key.
+- **Ollama tool-calls are parsed, not dropped** (issue #948 P3-3): the Ollama
+  backend now surfaces the model's `tool_calls` (ids synthesized positionally,
+  object-or-string arguments both accepted), maps
+  `prompt_eval_count`/`eval_count` into token usage, and echoes
+  assistant tool-call requests plus `tool`-role results back in the native
+  request shape. Support still varies by model/daemon version, so an
+  orchestrator run that pairs Ollama with a non-empty tool registry logs a
+  one-time warning.
 
 ---
 

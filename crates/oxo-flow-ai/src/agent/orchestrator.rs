@@ -80,6 +80,8 @@ impl Orchestrator {
         let mut tool_only_rounds: u32 = 0;
         let mut exploration_nudged = false;
         let exploration_nudge_threshold = (self.max_rounds / 2).max(2);
+        // One-time Ollama tool-registry warning flag (issue #948 P3-3).
+        let mut warned_ollama_tools = false;
 
         loop {
             rounds += 1;
@@ -114,6 +116,22 @@ impl Orchestrator {
 
             // 2. GATHER/ACT — call AI with current messages + tools
             let tool_defs = ctx.tool_registry.to_defs();
+            // Ollama tool-calling support varies widely by model (and older
+            // daemons ignore `tools` entirely); say so once per run instead
+            // of letting a tool-calling generation silently degrade to text.
+            if matches!(self.provider, AiProvider::Ollama(_))
+                && !tool_defs.is_empty()
+                && !warned_ollama_tools
+            {
+                warned_ollama_tools = true;
+                tracing::warn!(
+                    provider = "ollama",
+                    tools = tool_defs.len(),
+                    "Ollama backend run with a non-empty tool registry — tool-call \
+                     support varies by model; if the model never calls tools, use a \
+                     different provider or reduce agent tooling"
+                );
+            }
             let response = match self
                 .provider
                 .chat_with_tools_overflow_safe(&messages, &tool_defs)
