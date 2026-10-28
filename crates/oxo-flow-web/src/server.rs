@@ -927,10 +927,17 @@ async fn security_headers(
         axum::http::header::HeaderName::from_static("x-frame-options"),
         "DENY".parse().unwrap(),
     );
-    // Basic CSP: only allow same-origin resources
+    // Basic CSP: only allow same-origin resources. Scripts must load from
+    // bundled files — no inline `<script>` (issue #948 P3-2: an XSS that can
+    // run inline script would also read localStorage['oxo_token'], so script
+    // execution and token theft must not be one shot). Inline *style* stays
+    // allowed: React inline `style={{…}}` props and CodeMirror's runtime-
+    // injected editor theme are attribute styles, which `style-src` does not
+    // govern (that would need `style-src-attr`), and the built index.html
+    // carries no `<style>`/`<script>` bodies — verified by the CSP drift test.
     headers.insert(
         axum::http::header::HeaderName::from_static("content-security-policy"),
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'".parse().unwrap(),
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'".parse().unwrap(),
     );
     // Referrer policy
     headers.insert(

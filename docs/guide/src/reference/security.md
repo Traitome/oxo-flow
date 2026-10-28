@@ -166,6 +166,26 @@ limiter whose 429 body uses the code `RUN_RATE_LIMITED`, and
 `OXO_FLOW_DISABLE_RATE_LIMIT=1` disables the middleware entirely (test/dev
 escape hatch, e.g. for Playwright e2e runs — do not use in production).
 
+## Layer 5 — HTTP Security Headers
+
+Every response the web server emits carries a baseline set of security
+headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, and a Content-Security-Policy):
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; connect-src 'self'
+```
+
+Scripts may only load from bundled files — inline `<script>` execution is
+blocked, so a future XSS cannot run an inline payload in the same shot it
+would need to read the session token from `localStorage`. Inline *style*
+remains allowed because React's `style={{…}}` props are attribute styles
+(outside `style-src` scope) and the pipeline editor injects its CodeMirror
+theme at runtime. The exact policy string is pinned by the
+`csp_gate` integration test, which also drift-checks the built
+`static/index.html` against inline script — a weakening fails CI.
+
 ---
 
 ## Best Practices
