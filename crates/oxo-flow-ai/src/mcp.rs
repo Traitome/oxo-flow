@@ -173,6 +173,11 @@ pub struct McpHttpClient {
     server_name: String,
     /// Exemptions for per-hop SSRF screening of redirect targets (#642).
     allow: Vec<String>,
+    /// Vetted address from the construction-time screen (#948 P2-1), with
+    /// the same semantics as `ScreenedTarget.pin`: set whenever DNS was
+    /// consulted, so requests go to exactly what was screened. Allowlisted
+    /// hosts and IP literals skip DNS and need no pin.
+    pin: Option<(String, std::net::SocketAddr)>,
 }
 
 /// SSRF-screen an MCP endpoint host:port (same policy as `fetch_url`):
@@ -181,7 +186,17 @@ pub struct McpHttpClient {
 /// cannot resolve is rejected too — an unreachable server is unusable, and
 /// failing closed keeps a later DNS change from smuggling the connection
 /// into internal space.
-fn screen_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<(), AiError> {
+///
+/// Returns the vetted pin (same semantics as `ScreenedTarget.pin` in
+/// `tools::builtin`): `Some((host, addr))` whenever DNS was consulted, so
+/// every request is sent to exactly the address that was screened — a DNS
+/// change between here and `rpc` cannot re-point the connection into
+/// internal space. Allowlisted hosts and IP literals skip DNS and need no
+/// pin (`None`).
+fn screen_mcp_endpoint(
+    base_url: &str,
+    allow: &[String],
+) -> Result<Option<(String, std::net::SocketAddr)>, AiError> {
     use std::net::ToSocketAddrs;
 
     use crate::tools::builtin::{BLOCKED_HOST_SUFFIXES, ip_is_forbidden};
@@ -201,7 +216,7 @@ fn screen_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<(), AiError> 
         ),
     };
     if allow.iter().any(|a| a == &host) {
-        return Ok(());
+        return Ok(None);
     }
     if host == "localhost" || BLOCKED_HOST_SUFFIXES.iter().any(|sfx| host.ends_with(sfx)) {
         return Err(blocked(format!("host {host:?} is site-local")));
@@ -212,21 +227,58 @@ fn screen_mcp_endpoint(base_url: &str, allow: &[String]) -> Result<(), AiError> 
                 "host {ip} lies in forbidden address space"
             )))
         } else {
-            Ok(())
+            // Literal IP: no name resolution happens, so there is nothing
+            // to pin.
+            Ok(None)
         };
     }
     let port = parsed
         .port()
         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let addrs = (host.as_str(), port)
+    let addrs: Vec<_> = (host.as_str(), port)
         .to_socket_addrs()
-        .map_err(|e| blocked(format!("host {host:?} does not resolve: {e}")))?;
-    if let Some(offender) = addrs.map(|a| a.ip()).find(|ip| ip_is_forbidden(*ip)) {
+        .map_err(|e| blocked(format!("host {host:?} does not resolve: {e}")))?
+        .collect();
+    if let Some(offender) = addrs.iter().map(|a| a.ip()).find(|ip| ip_is_forbidden(*ip)) {
         return Err(blocked(format!(
             "host {host:?} resolves into forbidden address space ({offender})"
         )));
     }
-    Ok(())
+    // Connect to the address that was screened — the first one suffices;
+    // every entry was vetted above and multi-address failover would just
+    // re-open name-resolution timing gaps we explicitly closed (#948 P2-1).
+    // to_socket_addrs can legally yield an empty iterator without an error,
+    // so fail closed like the fetch_url screen does.
+    let Some(first) = addrs.first().copied() else {
+        return Err(blocked(format!(
+            "DNS resolution returned no addresses for {host:?}"
+        )));
+    };
+    Ok(Some((host, first)))
+}
+
+/// Build an MCP HTTP client, optionally pinned to a vetted address.
+///
+/// Pinning overrides name resolution ONLY: SNI and certificate checks still
+/// run against the hostname, so https stays verifiable (same pattern as
+/// `fetch_client` in tools::builtin). Every client bounds its requests —
+/// a hung MCP server must fail the tool call (fail-safe), never block the
+/// AI command indefinitely — and follows NO redirects automatically;
+/// `rpc` re-screens each hop manually (#642).
+fn pinned_client(pin: Option<(&str, std::net::SocketAddr)>) -> Result<reqwest::Client, AiError> {
+    let builder = reqwest::Client::builder();
+    let builder = match pin {
+        Some((host, addr)) => builder.resolve(host, addr),
+        None => builder,
+    };
+    builder
+        .connect_timeout(MCP_CONNECT_TIMEOUT)
+        .timeout(MCP_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| AiError::Config {
+            message: format!("failed to build MCP HTTP client: {e}"),
+        })
 }
 
 impl McpHttpClient {
@@ -253,8 +305,10 @@ impl McpHttpClient {
         // #518: a skill manifest is attacker-influenced text, so its
         // mcp:// target gets the same SSRF screen as fetch_url — internal
         // address space is unreachable unless explicitly allowlisted.
-        // Fail before any model call or request.
-        screen_mcp_endpoint(&base_url, &allow)?;
+        // Fail before any model call or request. The returned pin travels
+        // with the client (#948 P2-1): DNS-resolved endpoints connect to
+        // the exact address that was screened.
+        let pin = screen_mcp_endpoint(&base_url, &allow)?;
         let server_name = url
             .trim_start_matches("mcp://")
             .trim_start_matches("https://")
@@ -270,21 +324,17 @@ impl McpHttpClient {
         // the default policy follows up to 10 hops blindly, letting a
         // hostile endpoint 302 the client into internal address space and
         // feed the fetched body back into the model transcript (#642 —
-        // same chain #518 closed for fetch_url).
-        let http = reqwest::Client::builder()
-            .connect_timeout(MCP_CONNECT_TIMEOUT)
-            .timeout(MCP_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| AiError::Config {
-                message: format!("failed to build MCP HTTP client: {e}"),
-            })?;
+        // same chain #518 closed for fetch_url). A DNS-pinned endpoint
+        // gets its pin baked into the shared client; redirect hops rebuild
+        // short-lived clients in `rpc` for their own (re-screened) pins.
+        let http = pinned_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)))?;
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
             http,
             server_name,
             allow,
+            pin,
         })
     }
 
@@ -302,12 +352,27 @@ impl McpHttpClient {
             "params": params,
         });
         // Manual redirect loop: every hop re-runs the SSRF screen before
-        // the request is sent (#642).
+        // the request is sent (#642), and the vetted pin is carried into
+        // the next hop so it connects to exactly what was screened (#948
+        // P2-1) — a DNS change mid-chain cannot re-point the connection.
         const MAX_REDIRECTS: usize = 5;
         let mut current_url = self.base_url.clone();
+        let mut current_pin = self.pin.clone();
         for _hop in 0..=MAX_REDIRECTS {
-            let mut req = self
-                .http
+            // A pinned hop builds its own short-lived client; this costs a
+            // connect per fetch/hop but AI-driven MCP calls are rare and the
+            // guarantee is worth it. The shared client serves pin-free
+            // targets (allowlisted hosts and IP literals — same split as
+            // `validated_get` in tools::builtin).
+            let pinned;
+            let send_client = match &current_pin {
+                Some((host, addr)) => {
+                    pinned = pinned_client(Some((host.as_str(), *addr)))?;
+                    &pinned
+                }
+                None => &self.http,
+            };
+            let mut req = send_client
                 .post(&current_url)
                 .header("Accept", "application/json, text/event-stream")
                 .json(&body);
@@ -334,7 +399,7 @@ impl McpHttpClient {
                         message: format!("MCP redirect Location '{location}' is invalid: {e}"),
                     })?;
                 let next_url = next.to_string();
-                screen_mcp_endpoint(&next_url, &self.allow)?;
+                current_pin = screen_mcp_endpoint(&next_url, &self.allow)?;
                 tracing::info!("MCP endpoint {current_url} redirected to {next_url}");
                 current_url = next_url;
                 continue;
@@ -985,7 +1050,10 @@ mod tests {
     #[test]
     fn mcp_http_client_rejects_bad_url() {
         assert!(McpHttpClient::new("stdio://local").is_err());
-        assert!(McpHttpClient::new("https://example.com/mcp").is_ok());
+        // Must be an IP literal: a DNS name would force a live resolve in
+        // the screen, and CI sandboxes / fake-IP resolvers (Clash) return
+        // addresses inside forbidden space for arbitrary hosts (#948).
+        assert!(McpHttpClient::new("https://93.184.216.34/mcp").is_ok());
     }
 
     #[test]

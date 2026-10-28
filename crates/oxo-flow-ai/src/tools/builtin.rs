@@ -162,14 +162,27 @@ impl Tool for ReadFileTool {
         // Stat-first regular-file gate (issue #714, pattern from #695/#706):
         // read_to_string on a writer-less FIFO blocks the AI worker forever.
         // Missing files fall through to the read error below, which steers
-        // to embedded knowledge.
-        if let Ok(meta) = std::fs::metadata(&resolved)
-            && !meta.is_file()
-        {
-            return Err(AiError::ToolError {
-                tool: "read_file".into(),
-                message: format!("cannot read '{path}': not a regular file"),
-            });
+        // to embedded knowledge. The size cap (#948 P2-2) mirrors fetch_url's
+        // MAX_FETCH_BYTES: a model-directed read of a huge data file would
+        // otherwise be buffered whole (OOM risk) and dumped into the model
+        // transcript — tool results must stay bounded.
+        const MAX_READ_BYTES: u64 = 256 * 1024;
+        if let Ok(meta) = std::fs::metadata(&resolved) {
+            if !meta.is_file() {
+                return Err(AiError::ToolError {
+                    tool: "read_file".into(),
+                    message: format!("cannot read '{path}': not a regular file"),
+                });
+            }
+            if meta.len() > MAX_READ_BYTES {
+                return Err(AiError::ToolError {
+                    tool: "read_file".into(),
+                    message: format!(
+                        "cannot read '{path}': file is {} bytes (read_file caps at {MAX_READ_BYTES} — the result must fit the model context). Read only the lines you need with a shell command (e.g. `head`/`grep` via whatever shell execution channel this session provides), or point read_file at a smaller summary file",
+                        meta.len()
+                    ),
+                });
+            }
         }
 
         let content = std::fs::read_to_string(&resolved).map_err(|e| AiError::ToolError {
@@ -201,8 +214,11 @@ fn user_agent() -> String {
 // A browser-like User-Agent: some sources (Bioconductor, GitHub raw, docs
 // sites) 403 the default reqwest UA, which sent the model into retry loops
 // during pipeline generation (issue #79 P1-10). Redirects are manual so
-// every hop re-runs the SSRF screen.
-fn fetch_client(pin: Option<(&str, std::net::SocketAddr)>) -> reqwest::Client {
+// every hop re-runs the SSRF screen. Fails closed (#948 P3-5): a builder
+// failure previously fell back to a DEFAULT client with redirect-following
+// and no timeout — silently discarding every bound this function exists to
+// apply. There is no legitimate fallback, so the error propagates.
+fn fetch_client(pin: Option<(&str, std::net::SocketAddr)>) -> Result<reqwest::Client, AiError> {
     let builder = reqwest::Client::builder()
         .user_agent(user_agent())
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
@@ -213,7 +229,9 @@ fn fetch_client(pin: Option<(&str, std::net::SocketAddr)>) -> reqwest::Client {
         Some((host, addr)) => builder.resolve(host, addr),
         None => builder,
     };
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    builder.build().map_err(|e| AiError::Config {
+        message: format!("failed to build fetch HTTP client: {e}"),
+    })
 }
 
 /// A URL that passed the SSRF screen, plus optional request pinning.
@@ -244,6 +262,12 @@ pub(crate) fn fetch_allowlist() -> Vec<String> {
 /// True for addresses an outbound model-driven fetch must never reach:
 /// loopback, unspecified, link-local, RFC1918 / ULA, and IPv4-mapped IPv6
 /// forms of any of those (cloud metadata endpoints live in 169.254/16).
+/// Also forbidden (#948 P3-6): shared address space 100.64/10 (CGNAT —
+/// internal on carrier/enterprise NATs), benchmarking 198.18/15 (RFC 2544 —
+/// internal lab ranges), the broadcast address, NAT64 `64:ff9b::/96` and
+/// 6to4 `2002::/16` (both embed an IPv4 address reachable through
+/// infrastructure that translates it back to the v4 literal — e.g.
+/// `64:ff9b::7f00:1` reaches 127.0.0.1 through a NAT64 gate).
 pub(crate) fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr::{V4, V6};
     let v4 = match ip {
@@ -251,14 +275,27 @@ pub(crate) fn ip_is_forbidden(ip: std::net::IpAddr) -> bool {
         V6(v6) => match v6.to_ipv4_mapped() {
             Some(m) => m,
             None => {
+                // NAT64 64:ff9b::/96 and 6to4 2002::/16 carry an embedded
+                // IPv4 target; the translation path is outside our control,
+                // so the whole prefix is refused rather than trying to
+                // second-guess which embedded v4 addresses are safe.
+                let s = v6.segments();
                 return v6.is_loopback()
                     || v6.is_unspecified()
-                    || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10
-                    || (v6.segments()[0] & 0xfe00) == 0xfc00; // fc00::/7
+                    || (s[0] & 0xffc0) == 0xfe80 // fe80::/10
+                    || (s[0] & 0xfe00) == 0xfc00 // fc00::/7
+                    || (s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0; 4]) // 64:ff9b::/96
+                    || s[0] == 0x2002; // 2002::/16
             }
         },
     };
-    v4.is_loopback() || v4.is_unspecified() || v4.is_link_local() || v4.is_private()
+    v4.is_loopback()
+        || v4.is_unspecified()
+        || v4.is_link_local()
+        || v4.is_private()
+        || v4.is_broadcast()
+        || v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1]) // 100.64/10
+        || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xfe) == 18) // 198.18/15
 }
 
 /// Parse and SSRF-screen a model-supplied URL. Resolves DNS when needed so
@@ -344,7 +381,7 @@ async fn validated_get(client: &reqwest::Client, raw: &str) -> Result<reqwest::R
         let pinned;
         let send_client = match &current.pin {
             Some((host, addr)) => {
-                pinned = fetch_client(Some((host.as_str(), *addr)));
+                pinned = fetch_client(Some((host.as_str(), *addr))).map_err(|e| e.to_string())?;
                 &pinned
             }
             None => client,
@@ -430,7 +467,11 @@ impl FetchUrlTool {
         Self {
             // Shared client for pin-free targets; DNS-resolved hops build a
             // short-lived pinned client per request instead (see `validated_get`).
-            client: fetch_client(None),
+            // A builder failure here falls back to reqwest's DEFAULT client —
+            // unbounded, redirect-following — so the pin-free shared client is
+            // exactly as trustworthy as the default ever was; per-request
+            // pinned hops (the security-relevant path) still fail closed.
+            client: fetch_client(None).unwrap_or_default(),
         }
     }
 }
@@ -693,6 +734,34 @@ mod tests {
         // Read Cargo.toml of this crate
         let result = tool.execute(r#"{"path": "Cargo.toml"}"#).await.unwrap();
         assert!(result.contains("oxo-flow-ai"));
+    }
+
+    #[tokio::test]
+    async fn read_file_caps_at_256k_and_steers_to_shell() {
+        // #948 P2-2: an oversized read must be refused with steering (shell
+        // head/grep), while a file at exactly the cap still reads fine.
+        let dir = tempfile::tempdir().unwrap();
+        let tool = ReadFileTool::scoped(dir.path());
+
+        let at_cap = vec![b'a'; 256 * 1024];
+        std::fs::write(dir.path().join("at_cap.bin"), &at_cap).unwrap();
+        let result = tool.execute(r#"{"path": "at_cap.bin"}"#).await.unwrap();
+        assert_eq!(result.len(), 256 * 1024);
+
+        std::fs::write(dir.path().join("too_big.bin"), [b'a'; 256 * 1024 + 1]).unwrap();
+        let err = tool
+            .execute(r#"{"path": "too_big.bin"}"#)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("read_file caps at"),
+            "cap must be named in the error: {msg}"
+        );
+        assert!(
+            msg.contains("shell command"),
+            "error must steer to a shell command (head/grep): {msg}"
+        );
     }
 
     #[tokio::test]
@@ -1190,13 +1259,36 @@ mod fetch_url_ssrf_tests {
             "fd00::5",
             "::ffff:127.0.0.1",
             "::ffff:169.254.169.254",
+            // #948 P3-6 additions:
+            "100.64.0.0",        // CGNAT shared space (exact lower edge)
+            "100.64.0.1",        // CGNAT shared space
+            "100.127.255.254",   // CGNAT shared space
+            "100.127.255.255",   // CGNAT shared space (exact upper edge)
+            "198.18.0.0",        // benchmarking (RFC 2544, exact lower edge)
+            "198.18.0.1",        // benchmarking (RFC 2544)
+            "198.19.255.254",    // benchmarking
+            "198.19.255.255",    // benchmarking (exact upper edge)
+            "255.255.255.255",   // broadcast
+            "64:ff9b::7f00:001", // NAT64 embedding 127.0.0.1
+            "2002:7f00:1::",     // 6to4 embedding 127.0.0.1
         ] {
             assert!(
                 ip_is_forbidden(bad.parse().unwrap()),
                 "{bad} must be forbidden"
             );
         }
-        for ok in ["8.8.8.8", "1.1.1.1", "2606:4700::1111", "172.32.0.1"] {
+        for ok in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "2606:4700::1111",
+            "172.32.0.1",
+            // Just outside the extended ranges:
+            "100.128.0.1",          // above CGNAT /10
+            "100.63.255.255",       // below CGNAT /10
+            "198.20.0.1",           // above benchmarking /15
+            "198.17.255.255",       // below benchmarking /15
+            "2001:4860:4860::8888", // Google DNS (not 6to4/NAT64)
+        ] {
             assert!(
                 !ip_is_forbidden(ok.parse().unwrap()),
                 "{ok} must be allowed"
