@@ -17,7 +17,7 @@ unification proposal and its TeamProfile tiers.
 | | variants |
 |---|---|
 | `cli` | full CLI path: `oxo-flow template --ai` — rich prompt + knowledge tools + tool-calling loop (the "strong" path) |
-| `naive-prompt` | single-shot naive prompt (7 generic rules, no tools, single shot) — a prompt-axis baseline, not a product path |
+| `naive-prompt` | single-shot naive prompt (7 generic rules, no tools, no knowledge injection) — a prompt-axis baseline, not a product path |
 
 Gates (exit 0 = pass, machine-readable JSON captured per run):
 

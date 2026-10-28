@@ -75,10 +75,10 @@ the **quality/cost frontier across generation paths** rather than
 gold-set coverage on a single path. It runs a tiered intent set (easy /
 medium / hard) through two variants — the full CLI path
 (`template --ai`: rich prompt, knowledge tools, tool loop) and a
-single-shot naive prompt (no tools, single shot; a bare-prompt baseline,
-not a product path) — and judges every artifact with the three
-deterministic static gates (`validate`, `dry-run`, `lint`; exit code
-only, no LLM judge).
+single-shot naive prompt (no tools, no knowledge injection; a
+bare-prompt baseline, not a product path) — and judges every artifact
+with the three deterministic static gates (`validate`, `dry-run`,
+`lint`; exit code only, no LLM judge).
 
 Per-run token usage comes from the AI session archives (CLI variant) or
 the provider response (naive-prompt variant), so each cell of the
