@@ -3509,6 +3509,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#layer-5-http-security-headers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 5 — HTTP Security Headers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3933,6 +3944,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#layer-5-http-security-headers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 5 — HTTP Security Headers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4256,6 +4278,26 @@ additional behaviors worth knowing: run-submission endpoints have a separate
 limiter whose 429 body uses the code <code>RUN_RATE_LIMITED</code>, and
 <code>OXO_FLOW_DISABLE_RATE_LIMIT=1</code> disables the middleware entirely (test/dev
 escape hatch, e.g. for Playwright e2e runs — do not use in production).</p>
+<h2 id="layer-5-http-security-headers">Layer 5 — HTTP Security Headers<a class="headerlink" href="#layer-5-http-security-headers" title="Permanent link">#</a></h2>
+<p>Every response the web server emits carries a baseline set of security
+headers (<code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: DENY</code>,
+<code>Referrer-Policy: strict-origin-when-cross-origin</code>, and a
+Content-Security-Policy):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>img-src 'self' data: blob:; connect-src 'self'
+</span></code></pre></div>
+<p>Scripts may only load from bundled files — inline <code>&lt;script&gt;</code> execution is
+blocked, so a future XSS cannot run an inline payload in the same shot it
+would need to read the session token from <code>localStorage</code>. The server
+delivers the sub-path mount prefix (<code>--base-path</code>) as a
+<code>&lt;meta name="oxo-base"&gt;</code> tag that the bundled JS reads from the DOM — no
+inline bootstrap script. Inline <em>style</em> remains allowed because the policy
+sets no <code>style-src-attr</code>, so style attributes (React's <code>style={{…}}</code> props,
+the pipeline editor's runtime-injected CodeMirror theme) fall back to
+<code>style-src</code>, whose <code>'unsafe-inline'</code> covers them. The exact policy string is
+pinned by the <code>csp_gate</code> integration test, which drift-checks both the built
+<code>static/index.html</code> and the <em>served</em> index against inline script — a
+weakening fails CI.</p>
 <hr />
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">#</a></h2>
 <ol>
