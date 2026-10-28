@@ -3347,6 +3347,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#protocol-version-and-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protocol Version and Authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bounded-agent-tools" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3894,6 +3905,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#protocol-version-and-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protocol Version and Authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bounded-agent-tools" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4133,6 +4155,33 @@ refused, and an approved hop connects to its own vetted address.</p>
 <p>This preserves the trust boundary: the AI never executes autonomously,
 and attacker-influenced skill manifests cannot aim it at internal
 services.</p>
+<h3 id="protocol-version-and-authentication">Protocol Version and Authentication<a class="headerlink" href="#protocol-version-and-authentication" title="Permanent link">#</a></h3>
+<p>On connect the client proposes the newest MCP protocol version it speaks
+(<code>2025-06-18</code>) at <code>initialize</code> and uses whatever version the server
+answers with; a server answering with a version this client does not
+understand (<code>2025-06-18</code>, <code>2025-03-26</code>, <code>2024-11-05</code>) fails the session
+closed instead of proceeding against an unvetted dialect. The negotiated
+version is sent back as <code>MCP-Protocol-Version</code> on every subsequent
+request.</p>
+<p>MCP servers requiring bearer authentication read the token from the
+environment — never from a skill manifest, which is attacker-influenced
+text (#518):</p>
+<ul>
+<li><code>OXO_FLOW_MCP_TOKEN</code> — generic token sent to every MCP server</li>
+<li><code>OXO_FLOW_MCP_TOKEN_&lt;SERVER&gt;</code> — per-server token (server name
+  uppercased, non-alphanumeric characters folded to <code>_</code>; e.g. server
+  <code>fs-gdrive</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE</code>)</li>
+</ul>
+<p>The per-server variable wins when both are set. The <code>&lt;SERVER&gt;</code> name is
+folded from the endpoint URL's host, port and path (everything after the
+scheme — <code>mcp://fs-gdrive:9000/v1</code> → <code>OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1</code>),
+so two servers sharing a host on different paths get distinct variables.
+Tokens are attached as <code>Authorization: Bearer …</code> on every request to the
+endpoint's origin and are never logged; a redirect to a different origin
+(checked per hop) carries no <code>Authorization</code>, session or protocol headers.</p>
+<p>Because the token rides <code>Authorization</code> on every request, prefer
+<code>https://</code> endpoints when a token is configured — a plain-<code>http://</code>
+endpoint sends the credential unencrypted on the wire.</p>
 <h3 id="bounded-agent-tools">Bounded Agent Tools<a class="headerlink" href="#bounded-agent-tools" title="Permanent link">#</a></h3>
 <p>The agent's built-in <code>read_file</code> tool refuses files larger than <strong>256 KiB</strong>
 (#948) — a model-directed read of a huge data file would otherwise be
