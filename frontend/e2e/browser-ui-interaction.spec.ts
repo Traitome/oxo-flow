@@ -97,13 +97,14 @@ test.describe('Browser UI Interaction Tests', () => {
     await page.goto('/');
     await page.waitForTimeout(1000);
 
-    // Mobile menu button should be visible
-    const menuBtn = page.locator('button[aria-label="Toggle menu"]');
-    // This button only exists when the responsive hamburger is shown
+    // Issue #947: below 1024px the sidebar becomes a drawer opened by the
+    // header toggle (bilingual default locale is en, so the English label).
+    const menuBtn = page.locator('button[aria-label="Open navigation menu"]');
     const isVisible = await menuBtn.isVisible().catch(() => false);
     if (isVisible) {
       await menuBtn.click();
-      await expect(page.locator('.header-nav.open')).toBeVisible();
+      await expect(page.locator('.sidebar.drawer')).toBeVisible();
+      await expect(page.locator('.sidebar.drawer .nav-item').first()).toBeVisible();
     }
     // At minimum the page should render without horizontal scroll
     const body = page.locator('body');
@@ -112,13 +113,13 @@ test.describe('Browser UI Interaction Tests', () => {
 
   // ── Header Branding ──
 
-  test('header shows brand and version', async ({ page }) => {
+  test('header shows brand; version lives in the footer', async ({ page }) => {
     await page.goto('/');
     await page.waitForTimeout(1000);
 
-    // Header brand
+    // Header brand (issue #947: header is nav-free, brand only)
     await expect(page.locator('.header-brand')).toContainText('oxo-flow');
-    // Version tag
-    await expect(page.locator('.header-ver')).toBeVisible();
+    // Version tag: rendered exactly once, in the page footer
+    await expect(page.locator('.app-footer')).toContainText('oxo-flow v');
   });
 });
