@@ -747,54 +747,33 @@ pub async fn list_runs(
     let limit = params.limit.unwrap_or(100).clamp(1, 500) as i64;
 
     // Ownership scoping (issue #82 P0-4): non-admins see their own runs
-    // only; admins see the whole fleet. Filters compose on top.
-    let mut where_clauses: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
-    if !user.is_admin() {
-        where_clauses.push("user_id = ?".to_string());
-        binds.push(user.id.clone());
-    }
-    if let Some(status) = &params.status
-        && matches!(
-            status.as_str(),
-            "queued" | "running" | "paused" | "completed" | "failed" | "cancelled"
-        )
-    {
-        where_clauses.push("status = ?".to_string());
-        binds.push(status.clone());
-    }
-    if let Some(q) = &params.q
-        && !q.trim().is_empty()
-    {
-        where_clauses.push("(workflow_name LIKE ? OR id LIKE ?)".to_string());
-        let pattern = format!("%{}%", q.trim());
-        binds.push(pattern.clone());
-        binds.push(pattern);
-    }
-    // The cursor is a page bound, not a filter: it applies to the row
-    // SELECT but NOT to the total COUNT, which reports the whole matching
-    // population and must not shrink with every page (audit #665).
-    let mut page_clauses = where_clauses.clone();
-    let mut page_binds = binds.clone();
-    if let Some(cursor) = &params.cursor {
-        page_clauses.push("created_at < ?".to_string());
-        page_binds.push(cursor.clone());
-    }
-    let page_where_sql = if page_clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", page_clauses.join(" AND "))
+    // only; admins see the whole fleet. Filters compose on top. Query
+    // assembly lives in service.rs (#948 P2-6) so the pagination/filter
+    // semantics are unit-testable without HTTP plumbing.
+    let filters = service::RunListFilters {
+        user_id: if user.is_admin() {
+            None
+        } else {
+            Some(user.id.clone())
+        },
+        status: params.status.clone(),
+        q: params.q.clone(),
+        cursor: params.cursor.clone(),
+        limit,
     };
+    let assembled = service::assemble_run_list_query(&filters);
 
-    // page_where_sql only ever contains the static fragments pushed above
-    // (column names and `?` placeholders) — all user input rides in the
-    // binds. Fetch limit+1 to detect a next page without a COUNT(*).
+    // `page_where_sql` only ever contains static fragments pushed inside
+    // `assemble_run_list_query` (column names and `?` placeholders) — all
+    // user input rides in the binds. Fetch limit+1 to detect a next page
+    // without a COUNT(*).
     let sql = format!(
-        "SELECT * FROM runs{page_where_sql} ORDER BY created_at DESC LIMIT {}",
+        "SELECT * FROM runs{} ORDER BY created_at DESC LIMIT {}",
+        assembled.page_where_sql,
         limit + 1
     );
     let mut query = sqlx::query_as::<_, models::RunRow>(sqlx::AssertSqlSafe(sql));
-    for bind in &page_binds {
+    for bind in &assembled.page_binds {
         query = query.bind(bind);
     }
     let rows: Vec<models::RunRow> = query.fetch_all(pool).await.map_err(|e| {
@@ -823,51 +802,14 @@ pub async fn list_runs(
 
     // Total = number of rows matching the FILTERS (no LIMIT, no cursor).
     // Bounded by SQLite's rowid; fine for a per-deployment run log.
-    let filter_where_sql = if where_clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", where_clauses.join(" AND "))
-    };
-    let count_sql = format!("SELECT COUNT(*) FROM runs{filter_where_sql}");
+    let count_sql = format!("SELECT COUNT(*) FROM runs{}", assembled.filter_where_sql);
     let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
-    for bind in &binds {
+    for bind in &assembled.filter_binds {
         count_query = count_query.bind(bind);
     }
     let total: i64 = count_query.fetch_one(pool).await.unwrap_or(0);
 
-    let items: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let duration_secs = match (&r.started_at, &r.finished_at) {
-                (Some(s), Some(f)) => {
-                    let start = chrono::DateTime::parse_from_rfc3339(s).ok();
-                    let end = chrono::DateTime::parse_from_rfc3339(f).ok();
-                    match (start, end) {
-                        (Some(a), Some(b)) => Some((b - a).num_seconds().max(0)),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            serde_json::json!({
-                "id": r.id,
-                "user_id": r.user_id,
-                "pipeline_id": r.pipeline_id,
-                "workflow_name": r.workflow_name,
-                "status": r.status,
-                "phase": r.phase,
-                "dry_run": r.dry_run,
-                // No `pid`: the host process id is engine bookkeeping (cancel
-                // and liveness probes use it server-side) and discloses host
-                // internals to API consumers.
-                "workdir": r.workdir,
-                "started_at": r.started_at,
-                "finished_at": r.finished_at,
-                "created_at": r.created_at,
-                "duration_secs": duration_secs,
-            })
-        })
-        .collect();
+    let items: Vec<serde_json::Value> = rows.iter().map(service::run_row_to_list_item).collect();
 
     Ok(Json(serde_json::json!({
         "items": items,
