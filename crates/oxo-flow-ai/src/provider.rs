@@ -2500,6 +2500,26 @@ mod tests {
     }
 
     #[test]
+    fn ollama_model_env_snapshot_fallback() {
+        // OLLAMA_MODEL rides the EnvSnapshot tier (#948 P2-3): an explicit
+        // model override wins, otherwise the env var flows into the
+        // backend (the CLI used to ignore it entirely).
+        let env = EnvSnapshot {
+            ollama_model: Some("qwen3:32b".into()),
+            ..EnvSnapshot::default()
+        };
+        assert_eq!(
+            resolve_provider("ollama", None, &env).model().as_deref(),
+            Some("qwen3:32b")
+        );
+        // Explicit model beats the snapshot tier (saved-config tuple:
+        // kind, key, url, model; the explicit model field wins over the
+        // env var even though OLLAMA_MODEL is set).
+        let explicit = create_provider(ProviderKind::Ollama, None, None, Some("llama3".into()));
+        assert_eq!(explicit.model().as_deref(), Some("llama3"));
+    }
+
+    #[test]
     fn detection_precedence_claude_over_openai_over_deepseek() {
         // Multiple credentials exported at once: deterministic tie-break in
         // claude > openai > deepseek > ollama order.

@@ -210,8 +210,15 @@ def resolve_provider():
     (`provider::env_credential`, #948 P2-3): per-provider variables beat the
     generic `OXO_FLOW_AI_API_KEY` fallback (the #645 bug shape — the generic
     tier used to sit first here and shadow every specific variable), the
-    saved-config key stays last as the persisted tier, and the resolved key
-    is trimmed with blank treated as absent.
+    resolved key is trimmed with blank treated as absent.
+
+    Two deliberate eval-only divergences from `env_credential` (both
+    pre-existing; the Rust `explicit` tier sits FIRST because a saved
+    Settings config beats auto-detection, while this harness resolves the
+    saved config last — and per-tier blank semantics differ, since Rust
+    `usable_key` lets a whitespace-specific var fall through to the generic
+    tier while the Python `or`-chain treats any truthy value as fatal):
+    here the saved-config key is the final fallback rather than an override.
     """
     kind = os.environ.get("OXO_FLOW_AI_PROVIDER", "").strip().lower()
     api_url = os.environ.get("OXO_FLOW_AI_API_URL", "")

@@ -35,6 +35,8 @@ services:
       - OPENAI_BASE_URL
       - OPENAI_MODEL
       - DEEPSEEK_API_KEY
+      - OLLAMA_HOST
+      - OLLAMA_MODEL
       # Other deployment knobs the server reads (all optional):
       - OXO_FLOW_TRUSTED_PROXY
       - OXO_FLOW_RUNS_RATE_LIMIT
