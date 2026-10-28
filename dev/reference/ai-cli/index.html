@@ -4854,6 +4854,14 @@ explicit disable:</p>
 <li><strong>Offline replay for tests</strong>: a scripted provider replays serialized
   completions (tool calls, errors, delays) through the real code path, so CI
   covers multi-turn tool-calling and error recovery without an API key.</li>
+<li><strong>Ollama tool-calls are parsed, not dropped</strong> (issue #948 P3-3): the Ollama
+  backend now surfaces the model's <code>tool_calls</code> (ids synthesized positionally,
+  object-or-string arguments both accepted), maps
+  <code>prompt_eval_count</code>/<code>eval_count</code> into token usage, and echoes
+  assistant tool-call requests plus <code>tool</code>-role results back in the native
+  request shape. Support still varies by model/daemon version, so an
+  orchestrator run that pairs Ollama with a non-empty tool registry logs a
+  one-time warning.</li>
 </ul>
 <hr />
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">#</a></h2>
