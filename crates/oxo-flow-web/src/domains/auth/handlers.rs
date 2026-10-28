@@ -980,10 +980,11 @@ pub async fn list_api_keys(
     .fetch_all(pool)
     .await
     .map_err(|e| {
+        tracing::error!("DB error listing API keys: {e}");
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "DB_ERROR",
-            format!("DB error listing API keys: {e}"),
+            "Internal database error".to_string(),
         )
     })?;
     Ok(Json(
@@ -1020,10 +1021,11 @@ pub async fn revoke_api_key(
         .execute(pool)
         .await
         .map_err(|e| {
+            tracing::error!("DB error revoking API key: {e}");
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "DB_ERROR",
-                format!("DB error revoking API key: {e}"),
+                "Internal database error".to_string(),
             )
         })?
         .rows_affected();
