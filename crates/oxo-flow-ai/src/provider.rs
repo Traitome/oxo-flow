@@ -1117,7 +1117,7 @@ impl OllamaBackend {
             });
         }
 
-        let response = parse_ollama_response(&json);
+        let response = parse_ollama_response(&json)?;
         Ok(response)
     }
 }
@@ -1127,15 +1127,15 @@ impl OllamaBackend {
 /// Ollama's native tool-call shape carries no call ids (synthesized
 /// positionally) and returns `arguments` as a JSON object (string on some
 /// older versions); token counts live under `prompt_eval_count`/`eval_count`.
-fn parse_ollama_response(json: &serde_json::Value) -> AiResponse {
+/// A structurally broken tool call (missing `function.name`) is propagated
+/// as a `ToolError` — same strictness as the OpenAI parser — instead of
+/// being silently dropped into a max-rounds spin.
+fn parse_ollama_response(json: &serde_json::Value) -> Result<AiResponse, AiError> {
     let content = json["message"]["content"].as_str().map(String::from);
     let done = json["done"].as_bool().unwrap_or(true);
 
     let tool_calls = match json["message"]["tool_calls"].as_array() {
-        Some(arr) if !arr.is_empty() => match parse_ollama_tool_calls(arr) {
-            Ok(calls) if !calls.is_empty() => Some(calls),
-            _ => None,
-        },
+        Some(arr) if !arr.is_empty() => Some(parse_ollama_tool_calls(arr)?),
         _ => None,
     };
 
@@ -1144,21 +1144,25 @@ fn parse_ollama_response(json: &serde_json::Value) -> AiResponse {
         completion_tokens: json["eval_count"].as_u64().unwrap_or(0),
     };
 
+    // Ollama reports truncation via `done_reason: "length"` while `done`
+    // stays true — keep the #543 truncation guard working on this backend.
     let finish_reason = if tool_calls.is_some() {
         "tool_calls"
+    } else if json["done_reason"].as_str() == Some("length") {
+        "length"
     } else if done {
         "stop"
     } else {
         "length"
     };
 
-    AiResponse {
+    Ok(AiResponse {
         content,
         reasoning_content: None,
         tool_calls,
         usage,
         finish_reason: finish_reason.into(),
-    }
+    })
 }
 
 /// Parse Ollama tool-call entries into the shared [`ToolCall`] shape.
@@ -2988,7 +2992,7 @@ mod tests {
             "prompt_eval_count": 120,
             "eval_count": 45
         });
-        let response = parse_ollama_response(&json);
+        let response = parse_ollama_response(&json).expect("parse succeeds");
         let calls = response
             .tool_calls
             .expect("ollama tool calls must be surfaced, not dropped");
@@ -3012,7 +3016,7 @@ mod tests {
             "message": {"role": "assistant", "content": "hello"},
             "done": true
         });
-        let response = parse_ollama_response(&json);
+        let response = parse_ollama_response(&json).expect("parse succeeds");
         assert_eq!(response.content.as_deref(), Some("hello"));
         assert_eq!(response.finish_reason, "stop");
         assert_eq!(response.usage, Usage::default());
@@ -3034,7 +3038,7 @@ mod tests {
             },
             "done": false
         });
-        let response = parse_ollama_response(&json);
+        let response = parse_ollama_response(&json).expect("parse succeeds");
         let calls = response.tool_calls.expect("string-argument call kept");
         assert_eq!(calls[0].arguments, r#"{"tool": "bwa"}"#);
         assert_eq!(response.finish_reason, "tool_calls");
@@ -3043,19 +3047,36 @@ mod tests {
     #[test]
     fn parse_ollama_response_errors_on_nameless_tool_call() {
         // Same strictness as the OpenAI parser: a call without a function
-        // name is an error, not a silent drop.
+        // name is an error propagated out of parse_ollama_response — not a
+        // silent drop that would spin the orchestrator into max rounds
+        // without ever surfacing the cause (review MINOR-1 composition gap).
         let json = serde_json::json!({
             "message": {
                 "role": "assistant",
                 "tool_calls": [{"function": {"arguments": {}}}]
             }
         });
-        let err =
-            parse_ollama_tool_calls(json["message"]["tool_calls"].as_array().unwrap()).unwrap_err();
+        let err = parse_ollama_response(&json).unwrap_err();
         assert!(
             matches!(err, AiError::ToolError { .. }),
             "expected ToolError, got {err:?}"
         );
+    }
+
+    #[test]
+    fn parse_ollama_response_done_reason_length_maps_to_truncation() {
+        // `done_reason: "length"` accompanies a truncated response while
+        // `done` stays true — finish_reason must report "length" so the
+        // orchestrator's #543 truncation guard fires (review MINOR-2).
+        let json = serde_json::json!({
+            "message": {"role": "assistant", "content": "partial output"},
+            "done": true,
+            "done_reason": "length",
+            "prompt_eval_count": 30,
+            "eval_count": 512
+        });
+        let response = parse_ollama_response(&json).expect("parse succeeds");
+        assert_eq!(response.finish_reason, "length");
     }
 
     #[test]
