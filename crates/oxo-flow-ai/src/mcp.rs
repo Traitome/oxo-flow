@@ -247,7 +247,13 @@ fn screen_mcp_endpoint(
     // Connect to the address that was screened — the first one suffices;
     // every entry was vetted above and multi-address failover would just
     // re-open name-resolution timing gaps we explicitly closed (#948 P2-1).
-    let first = addrs.first().copied().expect("at least one resolved addr");
+    // to_socket_addrs can legally yield an empty iterator without an error,
+    // so fail closed like the fetch_url screen does.
+    let Some(first) = addrs.first().copied() else {
+        return Err(blocked(format!(
+            "DNS resolution returned no addresses for {host:?}"
+        )));
+    };
     Ok(Some((host, first)))
 }
 

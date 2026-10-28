@@ -178,7 +178,7 @@ impl Tool for ReadFileTool {
                 return Err(AiError::ToolError {
                     tool: "read_file".into(),
                     message: format!(
-                        "cannot read '{path}': file is {} bytes (read_file caps at {MAX_READ_BYTES} — the result must fit the model context). Read only the lines you need with run_shell (e.g. `head`/`grep`), or point read_file at a smaller summary file",
+                        "cannot read '{path}': file is {} bytes (read_file caps at {MAX_READ_BYTES} — the result must fit the model context). Read only the lines you need with a shell command (e.g. `head`/`grep` via whatever shell execution channel this session provides), or point read_file at a smaller summary file",
                         meta.len()
                     ),
                 });
@@ -738,7 +738,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_file_caps_at_256k_and_steers_to_shell() {
-        // #948 P2-2: an oversized read must be refused with steering (run_shell
+        // #948 P2-2: an oversized read must be refused with steering (shell
         // head/grep), while a file at exactly the cap still reads fine.
         let dir = tempfile::tempdir().unwrap();
         let tool = ReadFileTool::scoped(dir.path());
@@ -759,8 +759,8 @@ mod tests {
             "cap must be named in the error: {msg}"
         );
         assert!(
-            msg.contains("run_shell"),
-            "error must steer to run_shell (head/grep): {msg}"
+            msg.contains("shell command"),
+            "error must steer to a shell command (head/grep): {msg}"
         );
     }
 
@@ -1260,10 +1260,14 @@ mod fetch_url_ssrf_tests {
             "::ffff:127.0.0.1",
             "::ffff:169.254.169.254",
             // #948 P3-6 additions:
-            "100.64.0.1",        // CGNAT shared space (lower edge)
-            "100.127.255.254",   // CGNAT shared space (upper edge)
+            "100.64.0.0",        // CGNAT shared space (exact lower edge)
+            "100.64.0.1",        // CGNAT shared space
+            "100.127.255.254",   // CGNAT shared space
+            "100.127.255.255",   // CGNAT shared space (exact upper edge)
+            "198.18.0.0",        // benchmarking (RFC 2544, exact lower edge)
             "198.18.0.1",        // benchmarking (RFC 2544)
-            "198.19.255.254",    // benchmarking (upper edge)
+            "198.19.255.254",    // benchmarking
+            "198.19.255.255",    // benchmarking (exact upper edge)
             "255.255.255.255",   // broadcast
             "64:ff9b::7f00:001", // NAT64 embedding 127.0.0.1
             "2002:7f00:1::",     // 6to4 embedding 127.0.0.1

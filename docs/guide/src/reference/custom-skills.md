@@ -185,9 +185,9 @@ services.
 The agent's built-in `read_file` tool refuses files larger than **256 KiB**
 (#948) — a model-directed read of a huge data file would otherwise be
 buffered whole and dumped into the model transcript (an OOM and
-prompt-injection vector). The error steers the model to `run_shell`
-(`head`, `grep`) for targeted reads. (`fetch_url` carries the same bound
-under its 256 KiB response cap.)
+prompt-injection vector). The error steers the model to targeted reads
+(`head`, `grep` over a shell channel) or a smaller summary file.
+(`fetch_url` carries the same bound under its 256 KiB response cap.)
 
 ## Roadmap
 
