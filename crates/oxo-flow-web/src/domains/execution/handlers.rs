@@ -2710,12 +2710,17 @@ pub async fn verify_data(
     // Stage the inline sidecar for the CLI (`--from` takes a path, not
     // stdin). The temp file lives OUTSIDE the tree, so the CLI's own
     // sidecar-self exclusion never even triggers.
-    let sidecar_dir = tempfile::tempdir()
-        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+    let sidecar_dir = tempfile::tempdir().map_err(|e| {
+        tracing::error!("failed to stage verify-data sidecar tempdir: {e}");
+        internal_verify_error("failed to stage sidecar".to_string())
+    })?;
     let sidecar_path = sidecar_dir.path().join("md5.txt");
     tokio::fs::write(&sidecar_path, &req.md5_content)
         .await
-        .map_err(|e| internal_verify_error(format!("failed to stage sidecar: {e}")))?;
+        .map_err(|e| {
+            tracing::error!("failed to write verify-data sidecar file: {e}");
+            internal_verify_error("failed to stage sidecar".to_string())
+        })?;
 
     let bin = crate::executor::find_oxo_flow_binary();
     let mut cmd = tokio::process::Command::new(bin);

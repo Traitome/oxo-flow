@@ -741,7 +741,14 @@ pub async fn update_server_ai_config(
     .bind(&now)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error saving server AI provider config: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
     if updated.rows_affected() == 0 {
         sqlx::query(
             "INSERT INTO ai_provider_config (id, user_id, provider, api_url, model, api_key, search_enabled, monitor_enabled, auto_retry_enabled, max_correction_rounds, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, 1, 1, 0, 3, ?, ?)",
@@ -755,7 +762,14 @@ pub async fn update_server_ai_config(
         .bind(&now)
         .execute(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("DB error inserting server AI provider config: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                "Internal database error".to_string(),
+            )
+        })?;
     }
 
     // Apply to runtime
@@ -917,7 +931,14 @@ pub async fn update_user_ai_config(
     .bind(keep_key)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!("DB error saving user AI provider config: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DB_ERROR",
+            "Internal database error".to_string(),
+        )
+    })?;
 
     // The runtime serves ONE provider registry per process: in personal
     // mode (or for admins) applying it immediately is exactly what the
