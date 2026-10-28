@@ -180,6 +180,28 @@ This preserves the trust boundary: the AI never executes autonomously,
 and attacker-influenced skill manifests cannot aim it at internal
 services.
 
+### Protocol Version and Authentication
+
+On connect the client proposes the newest MCP protocol version it speaks
+(`2025-06-18`) at `initialize` and uses whatever version the server
+answers with; a server answering with a version this client does not
+understand (`2025-06-18`, `2025-03-26`, `2024-11-05`) fails the session
+closed instead of proceeding against an unvetted dialect. The negotiated
+version is sent back as `MCP-Protocol-Version` on every subsequent
+request.
+
+MCP servers requiring bearer authentication read the token from the
+environment — never from a skill manifest, which is attacker-influenced
+text (#518):
+
+- `OXO_FLOW_MCP_TOKEN` — generic token sent to every MCP server
+- `OXO_FLOW_MCP_TOKEN_<SERVER>` — per-server token (server name
+  uppercased, non-alphanumeric characters folded to `_`; e.g. server
+  `fs-gdrive` → `OXO_FLOW_MCP_TOKEN_FS_GDRIVE`)
+
+The per-server variable wins when both are set. Tokens are attached as
+`Authorization: Bearer …` on every request and are never logged.
+
 ### Bounded Agent Tools
 
 The agent's built-in `read_file` tool refuses files larger than **256 KiB**

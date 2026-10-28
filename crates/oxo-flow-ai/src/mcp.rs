@@ -166,9 +166,64 @@ impl Tool for McpToolBridge {
 /// manifests (`requires = ["mcp://..."]`); `https://` URLs are also
 /// accepted directly. The engine never spawns MCP server processes —
 /// the server must already be reachable over HTTP.
+/// Latest MCP protocol version this client speaks (#948 P3-7a): proposed
+/// at `initialize`. The server answers with the version it wants — one we
+/// don't understand fails the session closed (spec: the client SHOULD
+/// disconnect). Newer revisions can be appended as the transport needs
+/// them; the request handling below is identical across all of them.
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+/// Versions this client can work with. The transport (JSON-RPC over POST,
+/// JSON or SSE bodies, `mcp-session-id`) is identical across them.
+const MCP_UNDERSTOOD_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Resolve the MCP bearer token for a server (#948 P3-7d):
+/// `OXO_FLOW_MCP_TOKEN` first, then the per-server
+/// `OXO_FLOW_MCP_TOKEN_<SERVER>` (server name uppercased, non-alphanumeric
+/// folded to `_`). Auth material lives in the environment, never in a
+/// skill manifest — the manifest is attacker-influenced text (#518).
+/// Returns `None` when nothing is set.
+fn resolve_bearer_token(server_name: &str) -> Option<String> {
+    let generic = std::env::var("OXO_FLOW_MCP_TOKEN").unwrap_or_default();
+    if !generic.trim().is_empty() {
+        return Some(generic);
+    }
+    let var = token_env_var(server_name);
+    let specific = std::env::var(&var).unwrap_or_default();
+    if !specific.trim().is_empty() {
+        return Some(specific);
+    }
+    None
+}
+
+/// Environment variable name for a server's bearer token: the server name
+/// uppercased with non-alphanumeric characters folded to `_` (pure —
+/// unit-testable without touching process env, which tests may not do).
+fn token_env_var(server_name: &str) -> String {
+    format!(
+        "OXO_FLOW_MCP_TOKEN_{}",
+        server_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>()
+            .to_ascii_uppercase()
+    )
+}
+
 pub struct McpHttpClient {
     base_url: String,
     session_id: std::sync::Mutex<Option<String>>,
+    /// Protocol version the server negotiated at initialize (#948 P3-7a),
+    /// attached as `MCP-Protocol-Version` on every subsequent request.
+    protocol_version: std::sync::Mutex<Option<String>>,
+    /// Monotonic JSON-RPC request-id source (#948 P3-7c): hardcoded ids
+    /// collided with the pagination ids and defeated the replay guard.
+    next_id: std::sync::atomic::AtomicU64,
+    /// Optional bearer token sent as `Authorization: Bearer …` on every
+    /// request (#948 P3-7d). Resolved from `<OXO_FLOW_MCP_TOKEN>`, then
+    /// `<OXO_FLOW_MCP_TOKEN_<SERVER>>` (server name uppercased, non-word
+    /// runs → `_`) so per-server credentials stay out of skill manifests.
+    /// Never logged; empty = no header.
+    bearer_token: Option<String>,
     http: reqwest::Client,
     server_name: String,
     /// Exemptions for per-hop SSRF screening of redirect targets (#642).
@@ -328,14 +383,27 @@ impl McpHttpClient {
         // gets its pin baked into the shared client; redirect hops rebuild
         // short-lived clients in `rpc` for their own (re-screened) pins.
         let http = pinned_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)))?;
+        let bearer_token = resolve_bearer_token(&server_name);
         Ok(Self {
             base_url,
             session_id: std::sync::Mutex::new(None),
+            protocol_version: std::sync::Mutex::new(None),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+            bearer_token,
             http,
             server_name,
             allow,
             pin,
         })
+    }
+
+    /// Reserve the next monotonically increasing request id. A fresh id per
+    /// call keeps the replay guard (`extract_rpc_result` id check) sound:
+    /// hardcoded ids collided with the `tools/list` pagination ids and let
+    /// a stale body for a previous same-id request be accepted (#948 P3-7c).
+    fn reserve_id(&self) -> u64 {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Send one JSON-RPC request, returning the `result` value.
@@ -378,6 +446,17 @@ impl McpHttpClient {
                 .json(&body);
             if let Some(sid) = self.session_id.lock().unwrap().clone() {
                 req = req.header("mcp-session-id", sid);
+            }
+            // Post-initialize requests announce the negotiated version
+            // (#948 P3-7a) so version-strict servers can validate it.
+            let pv = self.protocol_version.lock().unwrap().clone();
+            if let Some(pv) = pv {
+                req = req.header("MCP-Protocol-Version", pv);
+            }
+            // Bearer auth (#948 P3-7d): token resolved from the environment
+            // at construction — never logged, never stored in manifests.
+            if let Some(token) = &self.bearer_token {
+                req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
             }
             let response = req.send().await.map_err(|e| AiError::Transport {
                 message: format!("MCP request to {current_url} failed: {e}"),
@@ -519,9 +598,15 @@ fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, Ai
         }
     }
     if text.is_none()
-        && let Some(structured) = result.get("structuredContent").and_then(|t| t.as_str())
+        && let Some(structured) = result.get("structuredContent")
     {
-        text = Some(structured.to_string());
+        // Spec: structuredContent is a JSON object, not a string — the old
+        // `as_str()` peek made the branch dead and every structured result
+        // degraded to the whole-envelope `to_string()` (#948 P3-7b).
+        // Serialize it losslessly (key order as received).
+        if !structured.is_null() {
+            text = Some(structured.to_string());
+        }
     }
     let text = text.unwrap_or_else(|| result.to_string());
     if result
@@ -541,16 +626,45 @@ fn tool_result_text(name: &str, result: &serde_json::Value) -> Result<String, Ai
 impl McpClient for McpHttpClient {
     async fn list_tools(&self) -> Result<Vec<McpToolDef>, AiError> {
         // initialize → notifications/initialized → tools/list
-        self.rpc(
-            1,
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
-            }),
-        )
-        .await?;
+        //
+        // Protocol negotiation (#948 P3-7a): propose the newest version we
+        // speak; the server answers with the one it wants. A version we
+        // don't understand fails the session closed — silently continuing
+        // let two sides talk past each other with different framing
+        // assumptions (the old client hardcoded "2024-11-05" and never
+        // looked at the answer).
+        let init_id = self.reserve_id();
+        let init = self
+            .rpc(
+                init_id,
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "oxo-flow", "version": env!("CARGO_PKG_VERSION")},
+                }),
+            )
+            .await?;
+        let server_version = init
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !MCP_UNDERSTOOD_VERSIONS.contains(&server_version.as_str()) {
+            return Err(AiError::Protocol {
+                message: format!(
+                    "MCP server '{}' negotiated protocol version {server_version:?}, but this client speaks only {}",
+                    self.server_name,
+                    MCP_UNDERSTOOD_VERSIONS.join(", ")
+                ),
+            });
+        }
+        tracing::debug!(
+            server = %self.server_name,
+            version = %server_version,
+            "MCP protocol version negotiated"
+        );
+        *self.protocol_version.lock().unwrap() = Some(server_version);
         // Spec: once initialize returns an mcp-session-id, every
         // subsequent request — the initialized notification included —
         // must carry it.
@@ -573,7 +687,9 @@ impl McpClient for McpHttpClient {
         // cannot spin forever.
         let mut tools: Vec<McpToolDef> = Vec::new();
         let mut cursor: Option<String> = None;
-        for request_id in (2_u64..).take(MAX_TOOL_PAGES) {
+        let mut pages = 0_usize;
+        loop {
+            let request_id = self.reserve_id();
             let params = match &cursor {
                 Some(c) => serde_json::json!({ "cursor": c }),
                 None => serde_json::json!({}),
@@ -589,11 +705,18 @@ impl McpClient for McpHttpClient {
                 message: format!("invalid tools/list payload: {e}"),
             })?;
             tools.extend(page);
+            pages += 1;
             cursor = result
                 .get("nextCursor")
                 .and_then(|c| c.as_str())
                 .map(String::from);
             if cursor.is_none() {
+                break;
+            }
+            // Bounded so a looping server cannot spin forever (and, since
+            // #948 P3-7c, ids stay monotonic across pages — no collision
+            // with a later call's id).
+            if pages >= MAX_TOOL_PAGES {
                 break;
             }
         }
@@ -613,9 +736,14 @@ impl McpClient for McpHttpClient {
             serde_json::from_str(arguments).map_err(|e| AiError::Protocol {
                 message: format!("invalid tool arguments: {e}"),
             })?;
+        // Monotonic id (#948 P3-7c): the old hardcoded id 3 collided with
+        // the tools/list pagination range, so after a paginated discover
+        // every call reused an id and the replay guard could not tell a
+        // fresh answer from a stale same-id body.
+        let request_id = self.reserve_id();
         let result = self
             .rpc(
-                3,
+                request_id,
                 "tools/call",
                 serde_json::json!({ "name": name, "arguments": args }),
             )
@@ -735,6 +863,31 @@ mod tests {
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
+    }
+
+    #[test]
+    fn tool_result_text_structured_content_object_is_serialized() {
+        // Spec: structuredContent is a JSON object. The old `.as_str()` peek
+        // made the branch dead, so a structured-only result degraded to the
+        // whole-envelope dump including isError/content (#948 P3-7b).
+        let result = serde_json::json!({
+            "content": [],
+            "structuredContent": {"result": 42, "unit": "bp"},
+        });
+        let text = tool_result_text("q", &result).unwrap();
+        assert_eq!(text, r#"{"result":42,"unit":"bp"}"#);
+
+        // Non-object structured values (legacy servers) are serialized too —
+        // anything beats the envelope dump.
+        let scalar = serde_json::json!({"structuredContent": 7});
+        assert_eq!(tool_result_text("q", &scalar).unwrap(), "7");
+
+        // content text still wins over structuredContent.
+        let both = serde_json::json!({
+            "content": [{"type": "text", "text": "plain"}],
+            "structuredContent": {"hidden": true},
+        });
+        assert_eq!(tool_result_text("q", &both).unwrap(), "plain");
     }
 
     #[test]
@@ -999,6 +1152,10 @@ mod tests {
         let (url, calls) = json_rpc_fixture(|req| {
             let id = req["id"].clone();
             match req["method"].as_str().unwrap_or("") {
+                // initialize with a version the client understands —
+                // negotiation must succeed against an old-style server.
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2024-11-05"}}),
                 "tools/list" => {
                     let cursor = req["params"]["cursor"].as_str().unwrap_or("");
                     if cursor.is_empty() {
@@ -1026,16 +1183,135 @@ mod tests {
     #[tokio::test]
     async fn mcp_http_client_rejects_a_response_for_another_request() {
         let (url, _calls) = json_rpc_fixture(|req| {
-            if req["method"].as_str() == Some("tools/list") {
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{
+                    "protocolVersion":"2024-11-05"}})
+                }
+                "tools/list" =>
                 // A stale/replayed body: this id belongs to another request.
-                serde_json::json!({"jsonrpc":"2.0","id":99,"result":{"tools":[]}})
-            } else {
-                serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}})
+                {
+                    serde_json::json!({"jsonrpc":"2.0","id":99,"result":{"tools":[]}})
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":req["id"].clone(),"result":{}}),
             }
         });
         let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
         let err = client.list_tools().await.unwrap_err().to_string();
         assert!(err.contains("id mismatch"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_ids_stay_monotonic_across_paginated_discovery_and_call() {
+        // #948 P3-7c: the old client hardcoded tools/call id 3, colliding
+        // with the pagination id range — after a paginated discover, the
+        // replay guard could not distinguish a fresh answer from a stale
+        // same-id body. Record every id the server sees; they must be
+        // unique per request and a tools/call after pagination must use a
+        // brand-new id.
+        let seen_ids = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen_for_server = seen_ids.clone();
+        let (url, _calls) = json_rpc_fixture(move |req| {
+            let id = req["id"].as_u64().unwrap_or(0);
+            if req["method"].as_str() != Some("notifications/initialized") {
+                seen_for_server.lock().unwrap().push(id);
+            }
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":{"protocolVersion":"2025-06-18"}
+                }),
+                "tools/list" => {
+                    let cursor = req["params"]["cursor"].as_str().unwrap_or("");
+                    if cursor.is_empty() {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"p1","description":"p1","inputSchema":{"type":"object"}}],
+                            "nextCursor":"page-2"}})
+                    } else {
+                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                            "tools":[{"name":"p2","description":"p2","inputSchema":{"type":"object"}}]}})
+                    }
+                }
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 2);
+        let result = client
+            .call_tool("p1", r#"{"x":1}"#)
+            .await
+            .expect("tools/call with a fresh id must succeed");
+        assert!(result.contains("p1") || !result.is_empty(), "{result}");
+
+        let ids = seen_ids.lock().unwrap().clone();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "request ids must be unique: {ids:?}"
+        );
+        assert!(
+            ids.iter().all(|id| (1..=4).contains(id)),
+            "ids start at 1 and increase per request: {ids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_fails_closed_on_unsupported_protocol_version() {
+        // #948 P3-7a: the old client hardcoded its version and never read
+        // the server's answer — a server negotiating a future protocol
+        // would be talked to with mismatched framing assumptions.
+        let (url, _calls) = json_rpc_fixture(|req| {
+            let id = req["id"].clone();
+            if req["method"].as_str() == Some("initialize") {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2999-01-01"}})
+            } else {
+                serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}})
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        let err = client.list_tools().await.unwrap_err().to_string();
+        assert!(
+            err.contains("protocol version") && err.contains("2999-01-01"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_http_client_announces_negotiated_version_after_initialize() {
+        // #948 P3-7a: initialize persists the server's chosen version for
+        // the MCP-Protocol-Version header path.
+        let (url, _calls) = json_rpc_fixture(move |req| {
+            let id = req["id"].clone();
+            match req["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{
+                    "protocolVersion":"2025-03-26"}}),
+                _ => serde_json::json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}),
+            }
+        });
+        let client = client_with_allow(&url, &["127.0.0.1"]).unwrap();
+        client.list_tools().await.unwrap();
+        // The fixture thread can't see headers, so assert on client state:
+        // the negotiated version must be stored for the header path.
+        assert_eq!(
+            client.protocol_version.lock().unwrap().as_deref(),
+            Some("2025-03-26")
+        );
+    }
+
+    #[test]
+    fn token_env_var_folds_server_names() {
+        // #948 P3-7d: per-server token vars fold the name to upper snake.
+        assert_eq!(token_env_var("fs"), "OXO_FLOW_MCP_TOKEN_FS");
+        assert_eq!(token_env_var("fs-gdrive"), "OXO_FLOW_MCP_TOKEN_FS_GDRIVE");
+        assert_eq!(
+            token_env_var("genomics.tools"),
+            "OXO_FLOW_MCP_TOKEN_GENOMICS_TOOLS"
+        );
     }
 
     #[test]
