@@ -3346,6 +3346,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#bounded-agent-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounded Agent Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3882,6 +3893,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#bounded-agent-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounded Agent Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4096,14 +4118,28 @@ be reachable over HTTP (stdio servers are not supported).</p>
   always refuse.</li>
 </ul>
 <p>The endpoint itself is SSRF-screened at connect time (#518): internal
-address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges)
-and site-local names (<code>localhost</code>, <code>.local</code>, <code>.internal</code>) are refused
+address space (loopback, RFC1918/ULA, link-local, cloud-metadata ranges,
+CGNAT 100.64/10, benchmarking 198.18/15, NAT64 <code>64:ff9b::/96</code>, 6to4
+<code>2002::/16</code>) and site-local names (<code>localhost</code>, <code>.local</code>, <code>.internal</code>) are refused
 unless the exact host is exempted via <code>OXO_FLOW_AI_FETCH_ALLOW</code> — the
 same opt-out documented for <code>fetch_url</code>. A trusted in-house MCP server on
 a private address must be listed there explicitly.</p>
+<p>When the endpoint resolves through DNS, the vetted address is pinned for
+the connection (#948): the client connects to exactly what was screened,
+closing the DNS-rebinding window between screening and connecting
+(allowlisted hosts and IP literals skip DNS and need no pin). Redirect
+hops are re-screened the same way — a hop that lands in internal space is
+refused, and an approved hop connects to its own vetted address.</p>
 <p>This preserves the trust boundary: the AI never executes autonomously,
 and attacker-influenced skill manifests cannot aim it at internal
 services.</p>
+<h3 id="bounded-agent-tools">Bounded Agent Tools<a class="headerlink" href="#bounded-agent-tools" title="Permanent link">#</a></h3>
+<p>The agent's built-in <code>read_file</code> tool refuses files larger than <strong>256 KiB</strong>
+(#948) — a model-directed read of a huge data file would otherwise be
+buffered whole and dumped into the model transcript (an OOM and
+prompt-injection vector). The error steers the model to targeted reads
+(<code>head</code>, <code>grep</code> over a shell channel) or a smaller summary file.
+(<code>fetch_url</code> carries the same bound under its 256 KiB response cap.)</p>
 <h2 id="roadmap">Roadmap<a class="headerlink" href="#roadmap" title="Permanent link">#</a></h2>
 <ul>
 <li>SKILL.md <code>metadata.allowed-tools</code> and license fields may be honored in a
