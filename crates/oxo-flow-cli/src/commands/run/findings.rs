@@ -64,6 +64,13 @@ pub(crate) fn print_truncated_list(label: &str, names: &[String]) -> String {
     format!("  {label} {}{}", shown.join(", "), suffix)
 }
 
+/// Print the config-change impact summary (issue #62).
+///
+/// Distinguishes the full invalidation set (checkpoint mutation; includes
+/// rules outside this run's targets/samples) from the rules that will
+/// actually re-execute in THIS run (intersection with `order`). Under
+/// `--rerun` everything is forced anyway, so the summary is suppressed —
+/// the snapshot/fingerprint refresh still happened silently.
 #[allow(clippy::too_many_arguments)] // report + snapshot + config + log plumbing; all needed
 pub(crate) fn print_config_change_summary(
     report: &ConfigChangeReport,
@@ -160,6 +167,11 @@ pub(crate) fn print_config_change_summary(
     // the same grouping the console shows.
     diagnostic_narrate(format_args!("{}", lines.join("\n")), run_log);
 }
+
+/// Quote a path for safe embedding in a reference build command (executed
+/// via `bash -c` / `sh -c`): wrap in single quotes and escape embedded
+/// quotes with the POSIX `'\''` sequence — the same idiom the environment
+/// wrapper uses when embedding commands into `sh -c '...'` and the cluster
 /// renderer uses for its `cd '...'`. Without the quoting, a source path
 /// containing spaces or shell metacharacters would be spliced bare into the
 /// command (issue #136 tier-2 audit).

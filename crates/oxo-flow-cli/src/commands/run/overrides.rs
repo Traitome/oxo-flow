@@ -2,6 +2,8 @@
 
 use super::*;
 
+/// Long-form names of `oxo-flow run` flags (plus clap's global --help/
+/// --version). Keep in sync with the `Run` variant in main.rs.
 ///
 /// clap's trailing `config_overrides` positional (`allow_hyphen_values`)
 /// cannot distinguish `--json` the run flag from `--json` a hyphen-value

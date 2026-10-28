@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Wall-time timings for `status --timing`, slowest first, plus their sum.
+/// Synthetic records (issue #324 F-1 `recorded_as: Some(...)`) carry a 0.0
+/// placeholder rather than a measurement, so they are excluded from the
 /// list and the total — a fake "0.0s" row would pollute both.
 pub(crate) fn rule_timings(state: &CheckpointState) -> (Vec<(&str, f64)>, f64) {
     let mut timings: Vec<(&str, f64)> = state
