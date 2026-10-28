@@ -1,5 +1,11 @@
 # Pilot findings — DeepSeek v4-flash (Anthropic-compatible endpoint)
 
+> Note (2026-10-28, #948 P2-4): rows labelled `minimal` below are the arm
+> now renamed **`naive-prompt`**. At pilot time it still claimed to
+> replicate the web chat prompt; since the #342 unification no product
+> path uses that prompt, so the arm is a bare-prompt baseline. The
+> historical results stand as measured.
+
 First run of the frontier benchmark, 2026-09-09. 9 intents (3 easy /
 3 medium / 3 hard), one seed per cell, `deepseek-v4-flash-vision-exp`
 via `https://api.deepseek.com/anthropic` (the same wire protocol Claude
@@ -9,7 +15,7 @@ Code uses). Machine-local artifacts under `results/` (gitignored).
 
 | cell | runs | artifacts | all-gates pass | tokens in/out | est. cost* |
 |---|---|---|---|---|---|
-| `minimal` (weak embedded prompt) | 9 | 8 | **0/9** | 2,382 / 51,447 | ~$0.057 |
+| `minimal` (weak embedded prompt) — the naive-prompt arm under its pre-#948 name | 9 | 8 | **0/9** | 2,382 / 51,447 | ~$0.057 |
 | `cli` @ default (max_tokens 4096, timeout 120s) | 9 | **0** | 0/9 | n/a (sessions lost — pre-fix) | wasted |
 | `cli` @ raised (16384 / 300s) | 9 | 4 | **3/9** | ~79k / ~65k (two batches) | ~$0.094 |
 

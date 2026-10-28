@@ -17,7 +17,7 @@ unification proposal and its TeamProfile tiers.
 | | variants |
 |---|---|
 | `cli` | full CLI path: `oxo-flow template --ai` — rich prompt + knowledge tools + tool-calling loop (the "strong" path) |
-| `minimal` | faithful replication of the weakest embedded path (web chat `process_chat` prompt: 7 generic rules, no tools, single shot) (the "floor") |
+| `naive-prompt` | single-shot naive prompt (7 generic rules, no tools, single shot) — a prompt-axis baseline, not a product path |
 
 Gates (exit 0 = pass, machine-readable JSON captured per run):
 
@@ -26,9 +26,9 @@ Gates (exit 0 = pass, machine-readable JSON captured per run):
 3. `oxo-flow lint --json` — best practices
 
 Token accounting: `cli` reads the AI session archive
-(`~/.oxo-flow/ai_sessions/*-template-*.json`); `minimal` reads the provider
-response usage. Cost is derived from the price table in `run_eval.py`
-(defaults mirror the repo constant in `oxo-flow-ai/src/types.rs`).
+(`~/.oxo-flow/ai_sessions/*-template-*.json`); `naive-prompt` reads the
+provider response usage. Cost is derived from the price table in
+`run_eval.py` (defaults mirror the repo constant in `oxo-flow-ai/src/types.rs`).
 
 ## Usage
 
@@ -36,10 +36,10 @@ response usage. Cost is derived from the price table in `run_eval.py`
 # credentials: ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL
 # from env, or parsed silently from ~/.zshrc (never printed)
 
-python3 run_eval.py                          # 29 intents x minimal,cli
+python3 run_eval.py                          # 29 intents x naive-prompt,cli
 python3 run_eval.py --filter rnaseq-star     # subset
 python3 run_eval.py --models deepseek-chat   # model axis (quality/cost frontier)
-python3 run_eval.py --variants minimal       # cheapest full sweep
+python3 run_eval.py --variants naive-prompt  # cheapest full sweep
 python3 run_eval.py --seeds 2                # 2 seeds per cell (variance)
 python3 run_eval.py --profile full           # Scientist Team roles (compact is default)
 python3 run_eval.py --binary /path/oxo-flow  # pin the binary for a whole campaign
@@ -64,8 +64,13 @@ tokens, cost, latency).
 ## Interpreting
 
 - `all-gates pass@1` is the headline quality metric (deterministic).
-- `minimal` vs `cli` quantifies what the rich prompt + tool loop buy —
-  the core empirical claim behind unifying the four generation paths (#342).
+- `naive-prompt` vs `cli` quantifies what the rich prompt + tool loop buy
+  over a bare prompt — the prompt/tool-loop axis behind the #342
+  unification. (Historical note: this arm was named `minimal` and
+  described as the web chat prompt before #948 P2-4; since #342 every
+  surface, web chat included, runs the unified `PipelineGenAgent`, so no
+  product path uses the naive prompt anymore — the rows in
+  PILOT_FINDINGS.md labelled `minimal` are this arm under its old name.)
 - The `model` axis gives a quality/cost frontier for the `TeamProfile`
   tiers (Full vs Compact) proposed in #342.
 - Gate failures carry structured error codes (e.g. `E017` unknown key),
