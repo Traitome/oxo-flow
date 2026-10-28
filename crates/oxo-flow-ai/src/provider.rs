@@ -1117,17 +1117,88 @@ impl OllamaBackend {
             });
         }
 
-        let content = json["message"]["content"].as_str().map(String::from);
-        let done = json["done"].as_bool().unwrap_or(true);
-
-        Ok(AiResponse {
-            content,
-            reasoning_content: None,
-            tool_calls: None, // Ollama tool support varies by model; start with text-only
-            usage: Usage::default(), // Ollama doesn't report token counts
-            finish_reason: if done { "stop".into() } else { "length".into() },
-        })
+        let response = parse_ollama_response(&json);
+        Ok(response)
     }
+}
+
+/// Parse an Ollama `/api/chat` response into the shared [`AiResponse`].
+///
+/// Ollama's native tool-call shape carries no call ids (synthesized
+/// positionally) and returns `arguments` as a JSON object (string on some
+/// older versions); token counts live under `prompt_eval_count`/`eval_count`.
+fn parse_ollama_response(json: &serde_json::Value) -> AiResponse {
+    let content = json["message"]["content"].as_str().map(String::from);
+    let done = json["done"].as_bool().unwrap_or(true);
+
+    let tool_calls = match json["message"]["tool_calls"].as_array() {
+        Some(arr) if !arr.is_empty() => match parse_ollama_tool_calls(arr) {
+            Ok(calls) if !calls.is_empty() => Some(calls),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    let usage = Usage {
+        prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0),
+        completion_tokens: json["eval_count"].as_u64().unwrap_or(0),
+    };
+
+    let finish_reason = if tool_calls.is_some() {
+        "tool_calls"
+    } else if done {
+        "stop"
+    } else {
+        "length"
+    };
+
+    AiResponse {
+        content,
+        reasoning_content: None,
+        tool_calls,
+        usage,
+        finish_reason: finish_reason.into(),
+    }
+}
+
+/// Parse Ollama tool-call entries into the shared [`ToolCall`] shape.
+///
+/// Mirrors the strictness of the OpenAI parser: a structurally broken call
+/// (missing `function`/name) is an error instead of being silently dropped.
+/// Broken *arguments* are repaired to `{}` like every other backend.
+fn parse_ollama_tool_calls(arr: &[serde_json::Value]) -> Result<Vec<ToolCall>, AiError> {
+    arr.iter()
+        .enumerate()
+        .map(|(i, tc)| {
+            let name = tc["function"]["name"]
+                .as_str()
+                .ok_or_else(|| AiError::ToolError {
+                    tool: "<unknown>".into(),
+                    message: "ollama tool call missing function name".into(),
+                })?;
+            let arguments = match &tc["function"]["arguments"] {
+                // Newer Ollama emits a JSON object; older versions a string.
+                serde_json::Value::String(s) => {
+                    if serde_json::from_str::<serde_json::Value>(s).is_ok() {
+                        s.clone()
+                    } else {
+                        tracing::warn!(
+                            tool = name,
+                            "ollama tool call arguments are not valid JSON — repairing to {{}}"
+                        );
+                        "{}".to_string()
+                    }
+                }
+                serde_json::Value::Null => "{}".to_string(),
+                other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+            };
+            Ok(ToolCall {
+                id: format!("ollama-call-{i}"),
+                name: name.to_string(),
+                arguments,
+            })
+        })
+        .collect()
 }
 
 fn build_ollama_body(
@@ -1139,15 +1210,35 @@ fn build_ollama_body(
     let ollama_msgs: Vec<serde_json::Value> = messages
         .iter()
         .map(|m| {
-            serde_json::json!({
+            let mut msg = serde_json::json!({
                 "role": match m.role {
                     MessageRole::System => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
-                    _ => "user",
+                    MessageRole::Tool => "tool",
                 },
                 "content": m.content,
-            })
+            });
+            // Echo the assistant's tool-call request back so Ollama can
+            // correlate the following tool result with its request.
+            if let Some(calls) = &m.tool_calls {
+                msg["tool_calls"] = serde_json::json!(calls.iter().map(|tc| {
+                    serde_json::json!({
+                        "function": {
+                            "name": tc.name,
+                            "arguments": serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                                .unwrap_or_else(|_| serde_json::json!({})),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>());
+            }
+            if m.role == MessageRole::Tool
+                && let Some(id) = &m.tool_call_id
+            {
+                msg["tool_call_id"] = serde_json::json!(id);
+            }
+            msg
         })
         .collect();
 
@@ -2875,6 +2966,126 @@ mod tests {
             matches!(err, AiError::ToolError { .. }),
             "expected ToolError, got {err:?}"
         );
+    }
+
+    #[test]
+    fn parse_ollama_response_extracts_tool_calls_and_usage() {
+        // Ollama /api/chat emits tool calls without ids and with `arguments`
+        // as a JSON *object*; token counts use prompt_eval_count/eval_count
+        // (issue #948 P3-3 — the old parser returned None/Usage::default()).
+        let json = serde_json::json!({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "lookup_tool",
+                        "arguments": {"tool": "STAR"}
+                    }
+                }]
+            },
+            "done": true,
+            "prompt_eval_count": 120,
+            "eval_count": 45
+        });
+        let response = parse_ollama_response(&json);
+        let calls = response
+            .tool_calls
+            .expect("ollama tool calls must be surfaced, not dropped");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "lookup_tool");
+        // Object arguments serialize to a JSON string; id synthesized
+        // positionally (Ollama provides none).
+        assert_eq!(calls[0].arguments, r#"{"tool":"STAR"}"#);
+        assert_eq!(calls[0].id, "ollama-call-0");
+        assert_eq!(response.finish_reason, "tool_calls");
+        assert_eq!(response.usage.prompt_tokens, 120);
+        assert_eq!(response.usage.completion_tokens, 45);
+    }
+
+    #[test]
+    fn parse_ollama_response_text_and_defaults() {
+        // A plain text completion keeps finish_reason "stop" and maps absent
+        // counters to zeros — never a silent Usage::default() lie when the
+        // daemon DID report counts.
+        let json = serde_json::json!({
+            "message": {"role": "assistant", "content": "hello"},
+            "done": true
+        });
+        let response = parse_ollama_response(&json);
+        assert_eq!(response.content.as_deref(), Some("hello"));
+        assert_eq!(response.finish_reason, "stop");
+        assert_eq!(response.usage, Usage::default());
+        assert!(response.tool_calls.is_none());
+    }
+
+    #[test]
+    fn parse_ollama_response_string_arguments_pass_through() {
+        // Older Ollama versions emit arguments as a JSON-encoded string.
+        let json = serde_json::json!({
+            "message": {
+                "content": null,
+                "tool_calls": [{
+                    "function": {
+                        "name": "lookup_tool",
+                        "arguments": "{\"tool\": \"bwa\"}"
+                    }
+                }]
+            },
+            "done": false
+        });
+        let response = parse_ollama_response(&json);
+        let calls = response.tool_calls.expect("string-argument call kept");
+        assert_eq!(calls[0].arguments, r#"{"tool": "bwa"}"#);
+        assert_eq!(response.finish_reason, "tool_calls");
+    }
+
+    #[test]
+    fn parse_ollama_response_errors_on_nameless_tool_call() {
+        // Same strictness as the OpenAI parser: a call without a function
+        // name is an error, not a silent drop.
+        let json = serde_json::json!({
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{"function": {"arguments": {}}}]
+            }
+        });
+        let err =
+            parse_ollama_tool_calls(json["message"]["tool_calls"].as_array().unwrap()).unwrap_err();
+        assert!(
+            matches!(err, AiError::ToolError { .. }),
+            "expected ToolError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ollama_body_echoes_tool_call_and_result_messages() {
+        // Multi-turn tool flow: the assistant's request must be echoed back
+        // (Ollama correlates the tool result with it) and Tool-role messages
+        // must keep role "tool" — they previously degraded to "user", which
+        // breaks Ollama's tool-result contract.
+        let messages = vec![
+            Message::user("list skills"),
+            Message::assistant_with_tools(vec![ToolCall {
+                id: "ollama-call-0".into(),
+                name: "lookup_tool".into(),
+                arguments: r#"{"tool":"STAR"}"#.into(),
+            }]),
+            Message::tool("ollama-call-0", "lookup_tool", "found 3"),
+        ];
+        let body = build_ollama_body(&messages, &[], "llama3", None);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["tool_call_id"], "ollama-call-0");
+        let echo = &msgs[1]["tool_calls"];
+        assert_eq!(echo[0]["function"]["name"], "lookup_tool");
+        assert_eq!(
+            echo[0]["function"]["arguments"],
+            serde_json::json!({"tool": "STAR"})
+        );
+        // System/User/Assistant roles unchanged.
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[1]["role"], "assistant");
     }
 
     #[test]
