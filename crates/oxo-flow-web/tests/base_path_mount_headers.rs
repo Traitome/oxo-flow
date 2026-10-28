@@ -60,11 +60,16 @@ async fn mount_root_serves_security_headers_like_nested_routes() {
         "mount root CSP must equal the nested app's CSP (issue #957)"
     );
 
-    // The rest of the baseline travels with it.
+    // The rest of the baseline travels with it (permissions-policy kept as a
+    // one-off value check — the CSP equality above already pins the strongest).
     for (name, value) in [
         ("x-content-type-options", "nosniff"),
         ("x-frame-options", "DENY"),
         ("referrer-policy", "strict-origin-when-cross-origin"),
+        (
+            "permissions-policy",
+            "camera=(), microphone=(), geolocation=()",
+        ),
     ] {
         assert_eq!(
             root.headers().get(name).expect(name).to_str().unwrap(),
@@ -109,7 +114,8 @@ fn mount_with_base_path_root_mount_is_identity() {
     // double-apply the SPA index route for nothing.
     let app = server::build_router("personal");
     let mounted = server::mount_with_base_path(app, "");
-    // Root-mount contract: "/" serves the SPA index.
+    // Root-mount contract: "/" serves the SPA index (pinned in csp_gate);
+    // here the identity claim only needs one nested route answering.
     let resp = tokio::runtime::Runtime::new().unwrap().block_on(async {
         get(
             mounted,

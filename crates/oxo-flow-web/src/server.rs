@@ -818,6 +818,10 @@ pub fn normalize_base_path(input: &str) -> String {
 /// them (issue #957). Centralizing the mount here lets the mount-root
 /// route share the same `security_headers` middleware as the nested app,
 /// and keeps the two entry-point wirings from drifting.
+///
+/// `base` must be a `normalize_base_path` result: `""` (root mount,
+/// identity) or a `"/name"`-shaped prefix — anything else (e.g. a raw
+/// `"/"`) would build a `"/"`-rooted nest, which axum 0.8 rejects.
 pub fn mount_with_base_path(app: Router, base: &str) -> Router {
     // No prefix to apply: the caller's router already serves at "/".
     if base.is_empty() {
