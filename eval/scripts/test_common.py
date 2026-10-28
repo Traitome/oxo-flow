@@ -64,6 +64,35 @@ class ResolveProviderTests(unittest.TestCase):
             },
         )
 
+    def test_specific_provider_key_beats_generic_fallback(self):
+        # #948 P2-3: the generic OXO_FLOW_AI_API_KEY used to sit FIRST and
+        # shadow the per-provider variable (the #645 bug shape).
+        env = {
+            "OXO_FLOW_AI_PROVIDER": "openai",
+            "OPENAI_API_KEY": "sk-specific",
+            "OXO_FLOW_AI_API_KEY": "sk-generic",
+        }
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("os.path.exists", return_value=False):
+            provider = common.resolve_provider()
+        self.assertEqual(provider["api_key"], "sk-specific")
+
+    def test_generic_key_used_when_specific_missing(self):
+        env = {
+            "OXO_FLOW_AI_PROVIDER": "deepseek",
+            "OXO_FLOW_AI_API_KEY": "sk-generic",
+        }
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("os.path.exists", return_value=False):
+            provider = common.resolve_provider()
+        self.assertEqual(provider["api_key"], "sk-generic")
+
+    def test_whitespace_only_key_is_unconfigured(self):
+        env = {
+            "OXO_FLOW_AI_PROVIDER": "claude",
+            "ANTHROPIC_AUTH_TOKEN": "   ",
+        }
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("os.path.exists", return_value=False):
+            self.assertIsNone(common.resolve_provider())
+
 
 class UrlHelperTests(unittest.TestCase):
     def test_openai_url_helper_accepts_base_or_full_endpoint(self):

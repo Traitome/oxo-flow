@@ -1433,33 +1433,20 @@ fn create_provider_in(
 
     match kind {
         ProviderKind::Claude => {
-            // Per-provider credential variables beat the generic fallback —
-            // the documented contract is that e.g. ANTHROPIC_AUTH_TOKEN
-            // OVERRIDES OXO_FLOW_AI_API_KEY, so the generic tier sits last
-            // (audit #645: it used to sit first and shadow every specific
-            // variable).
-            let api_key = api_key
-                .or_else(|| usable_key(&env.anthropic_auth_token))
-                .or_else(|| usable_key(&env.anthropic_api_key))
-                .or_else(|| usable_key(&env.claude_api_key))
-                .or_else(|| usable_key(&env.oxo_flow_api_key))
-                // A whitespace-only key (shell-profile leftover like
-                // `ANTHROPIC_AUTH_TOKEN=" "`) is the same unfinished setup
-                // as an empty one, and padding would leak into the
-                // Authorization header — trim, then treat blank as absent.
-                .map(|k| k.trim().to_string())
-                .unwrap_or_default();
-            // An env-tier provider with no credential is an unfinished
-            // setup, not a working backend — same rule as the saved-config
-            // tier. Returning Noop keeps status probes and fallback chains
-            // from firing real (guaranteed-401) network calls on an empty
-            // key.
-            if api_key.is_empty() {
+            // Credential chain + precedence live in `env_credential`
+            // (single-sourced since #948 P2-3 — it used to be retyped in
+            // config.rs and the web fallback constructors).
+            let Some(api_key) = env_credential(kind, api_key, env) else {
+                // An env-tier provider with no credential is an unfinished
+                // setup, not a working backend — same rule as the
+                // saved-config tier. Returning Noop keeps status probes
+                // and fallback chains from firing real (guaranteed-401)
+                // network calls on an empty key.
                 tracing::info!(
                     "claude provider selected but no API key found (set ANTHROPIC_AUTH_TOKEN) — treated as unconfigured"
                 );
                 return AiProvider::Noop;
-            }
+            };
             let api_url = url
                 .or_else(|| env.anthropic_base_url.clone())
                 .unwrap_or_else(|| CLAUDE_API_URL.to_string());
@@ -1468,39 +1455,29 @@ fn create_provider_in(
         }
         ProviderKind::OpenAi => {
             // Specific before generic — see the claude arm above (#645).
-            let api_key = api_key
-                .or_else(|| usable_key(&env.openai_api_key))
-                .or_else(|| usable_key(&env.oxo_flow_api_key))
-                .map(|k| k.trim().to_string())
-                .unwrap_or_default();
-            // Same no-credential guard as the claude tier (above) and the
-            // saved-config tier (below): an empty key means unfinished
-            // setup, not a working backend.
-            if api_key.is_empty() {
+            let Some(api_key) = env_credential(kind, api_key, env) else {
+                // Same no-credential guard as the claude tier (above) and
+                // the saved-config tier (below): an empty key means
+                // unfinished setup, not a working backend.
                 tracing::info!(
                     "openai provider selected but no API key found (set OPENAI_API_KEY) — treated as unconfigured"
                 );
                 return AiProvider::Noop;
-            }
+            };
             let api_url = url.or_else(|| env.openai_base_url.clone());
             let model_name = mdl.or_else(|| env.openai_model.clone());
             AiProvider::OpenAi(OpenAiBackend::new(api_key, model_name, api_url))
         }
         ProviderKind::DeepSeek => {
             // Specific before generic — see the claude arm above (#645).
-            let api_key = api_key
-                .or_else(|| usable_key(&env.deepseek_api_key))
-                .or_else(|| usable_key(&env.oxo_flow_api_key))
-                .map(|k| k.trim().to_string())
-                .unwrap_or_default();
-            // Same no-credential guard as the claude/openai tiers: an
-            // empty key means unfinished setup, not a working backend.
-            if api_key.is_empty() {
+            let Some(api_key) = env_credential(kind, api_key, env) else {
+                // Same no-credential guard as the claude/openai tiers: an
+                // empty key means unfinished setup, not a working backend.
                 tracing::info!(
                     "deepseek provider selected but no API key found (set DEEPSEEK_API_KEY) — treated as unconfigured"
                 );
                 return AiProvider::Noop;
-            }
+            };
             let api_url = url
                 .or_else(|| env.deepseek_base_url.clone())
                 .unwrap_or_else(|| DEEPSEEK_API_URL.to_string());
@@ -1521,7 +1498,12 @@ fn create_provider_in(
             // was detected but requests still went to localhost:11434
             // (live-observed).
             let url = url.or_else(|| env.ollama_host.clone());
-            AiProvider::Ollama(OllamaBackend::new(mdl, url))
+            // OLLAMA_MODEL rides the same tier as ANTHROPIC_MODEL /
+            // OPENAI_MODEL (#948 P2-3: the web fallback used to read it
+            // out-of-chain; now every provider's model override is
+            // resolved through the one snapshot).
+            let model_name = mdl.or_else(|| env.ollama_model.clone());
+            AiProvider::Ollama(OllamaBackend::new(model_name, url))
         }
     }
 }
@@ -1535,6 +1517,65 @@ fn usable_key(v: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Resolve a provider's API key from the environment snapshot — THE single
+/// canonical credential chain (#948 P2-3). It used to be retyped in
+/// `config.rs` (`resolve_api_key_from_env`) and the web fallback
+/// constructors, and the copies drifted: no trim, no blank-as-absent, and
+/// the web claude tier lacked the `OXO_FLOW_AI_API_KEY` generic tier.
+///
+/// `explicit` (an already-resolved key, e.g. from saved config or a caller
+/// that resolved the key itself) beats every environment tier. Otherwise
+/// per-provider credential variables beat the generic fallback — the
+/// documented contract is that e.g. `ANTHROPIC_AUTH_TOKEN` OVERRIDES
+/// `OXO_FLOW_AI_API_KEY`, so the generic tier sits last (audit #645: it
+/// used to sit first and shadow every specific variable).
+///
+/// A whitespace-only key (shell-profile leftover like
+/// `ANTHROPIC_AUTH_TOKEN=" "`) is the same unfinished setup as an empty
+/// one, and padding would leak into the Authorization header — trim, then
+/// treat blank as absent.
+///
+/// Returns `None` when no credential survives; callers decide what
+/// "unconfigured" means (the engine tier returns `Noop`, the CLI config
+/// tier returns `None`, the web fallback tier returns `Err`).
+fn env_credential(
+    kind: ProviderKind,
+    explicit: Option<String>,
+    env: &EnvSnapshot,
+) -> Option<String> {
+    let from_env = match kind {
+        ProviderKind::Claude => usable_key(&env.anthropic_auth_token)
+            .or_else(|| usable_key(&env.anthropic_api_key))
+            .or_else(|| usable_key(&env.claude_api_key))
+            .or_else(|| usable_key(&env.oxo_flow_api_key)),
+        ProviderKind::OpenAi => {
+            usable_key(&env.openai_api_key).or_else(|| usable_key(&env.oxo_flow_api_key))
+        }
+        ProviderKind::DeepSeek => {
+            usable_key(&env.deepseek_api_key).or_else(|| usable_key(&env.oxo_flow_api_key))
+        }
+        // Ollama is keyless by design.
+        ProviderKind::Ollama => None,
+    };
+    let key = explicit.or(from_env)?;
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Environment-tier key lookup for callers outside this module (#948
+/// P2-3): the same canonical chain as `create_provider_in`, exposed so
+/// config resolution no longer retypes the per-provider variable lists.
+///
+/// Returns `None` for Ollama (keyless by design) and when no credential
+/// survives the trim-blank contract.
+pub fn env_api_key(kind: ProviderKind) -> Option<String> {
+    env_credential(kind, None, &EnvSnapshot::from_process_env())
 }
 
 /// Create a provider from environment variables or persisted config.
@@ -1700,6 +1741,10 @@ fn detect_provider_from_env(env: &EnvSnapshot) -> Option<AiProvider> {
 /// Snapshot of every environment variable the resolution tiers read.
 /// Built once by `create_provider_from_env` so tests can drive the pure
 /// `resolve_provider` without touching process-global state.
+///
+/// NOTE: the snapshot itself is private; outside callers use
+/// [`env_api_key`] (or `create_provider`), which rebuild it from the
+/// process env.
 #[derive(Debug, Default, Clone)]
 struct EnvSnapshot {
     anthropic_auth_token: Option<String>,
@@ -1713,6 +1758,7 @@ struct EnvSnapshot {
     deepseek_api_key: Option<String>,
     deepseek_base_url: Option<String>,
     ollama_host: Option<String>,
+    ollama_model: Option<String>,
     oxo_flow_api_key: Option<String>,
     oxo_flow_api_url: Option<String>,
     oxo_flow_model: Option<String>,
@@ -1734,6 +1780,7 @@ impl EnvSnapshot {
             deepseek_api_key: get("DEEPSEEK_API_KEY"),
             deepseek_base_url: get("DEEPSEEK_BASE_URL"),
             ollama_host: get("OLLAMA_HOST"),
+            ollama_model: get("OLLAMA_MODEL"),
             oxo_flow_api_key: get("OXO_FLOW_AI_API_KEY"),
             oxo_flow_api_url: get("OXO_FLOW_AI_API_URL"),
             oxo_flow_model: get("OXO_FLOW_AI_MODEL"),

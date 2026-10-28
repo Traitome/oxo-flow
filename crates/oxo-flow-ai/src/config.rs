@@ -162,7 +162,10 @@ impl AiConfig {
 
         let model = std::env::var("OXO_FLOW_AI_MODEL").ok();
         let api_url = std::env::var("OXO_FLOW_AI_API_URL").ok();
-        let api_key = resolve_api_key_from_env(provider);
+        // Canonical credential chain (#948 P2-3) — used to be a private
+        // retype here (`resolve_api_key_from_env`) with no trim and no
+        // blank-as-absent contract.
+        let api_key = crate::provider::env_api_key(provider);
 
         Self {
             enabled,
@@ -337,23 +340,8 @@ impl std::str::FromStr for AutoFixMode {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/// Resolve API key from environment variables based on provider.
-fn resolve_api_key_from_env(provider: ProviderKind) -> Option<String> {
-    match provider {
-        ProviderKind::Claude => std::env::var("ANTHROPIC_AUTH_TOKEN")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| std::env::var("CLAUDE_API_KEY"))
-            .or_else(|_| std::env::var("OXO_FLOW_AI_API_KEY"))
-            .ok(),
-        ProviderKind::OpenAi => std::env::var("OPENAI_API_KEY")
-            .or_else(|_| std::env::var("OXO_FLOW_AI_API_KEY"))
-            .ok(),
-        ProviderKind::DeepSeek => std::env::var("DEEPSEEK_API_KEY")
-            .or_else(|_| std::env::var("OXO_FLOW_AI_API_KEY"))
-            .ok(),
-        ProviderKind::Ollama => None, // Ollama doesn't need an API key
-    }
-}
+// Credential resolution lives in `provider::env_api_key` (the canonical
+// chain, #948 P2-3) — nothing provider-specific is retyped here anymore.
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 

@@ -183,39 +183,33 @@ impl AiProviderRegistry {
     }
 
     pub fn create_claude_from_env() -> Result<AiProvider, anyhow::Error> {
-        // Same credential chain as the CLI provider factory: AUTH_TOKEN is
-        // what Anthropic SDKs and gateway deployments actually export;
-        // API_KEY spellings are accepted for parity.
-        let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| std::env::var("CLAUDE_API_KEY"))
-            .map_err(|_| anyhow::anyhow!("ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) not set"))?;
-        let model = std::env::var("ANTHROPIC_MODEL").ok();
-        let api_url = std::env::var("ANTHROPIC_BASE_URL").ok();
-        Ok(create_provider(
-            ProviderKind::Claude,
-            Some(api_key),
-            api_url,
-            model,
-        ))
+        // Canonical credential chain (#948 P2-3) — the constructors used to
+        // hand-read env vars and had drifted (no trim, no blank-as-absent,
+        // claude tier missing the OXO_FLOW_AI_API_KEY generic fallback).
+        // create_provider applies the same env tiers as the CLI factory;
+        // an unconfigured provider is surfaced as Err so the fallback
+        // chain in `provider_candidates` skips it.
+        let provider = create_provider(ProviderKind::Claude, None, None, None);
+        if !provider.is_usable() {
+            return Err(anyhow::anyhow!(
+                "ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) not set"
+            ));
+        }
+        Ok(provider)
     }
 
     pub fn create_openai_from_env() -> Result<AiProvider, anyhow::Error> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
-        let model = std::env::var("OPENAI_MODEL").ok();
-        let api_url = std::env::var("OPENAI_BASE_URL").ok();
-        Ok(create_provider(
-            ProviderKind::OpenAi,
-            Some(api_key),
-            api_url,
-            model,
-        ))
+        let provider = create_provider(ProviderKind::OpenAi, None, None, None);
+        if !provider.is_usable() {
+            return Err(anyhow::anyhow!("OPENAI_API_KEY not set"));
+        }
+        Ok(provider)
     }
 
     pub fn create_ollama_from_env() -> Result<AiProvider, anyhow::Error> {
-        let api_url = std::env::var("OLLAMA_HOST").ok();
-        let model = std::env::var("OLLAMA_MODEL").ok();
-        Ok(create_provider(ProviderKind::Ollama, None, api_url, model))
+        // Ollama stays infallible: it is keyless by design and detection is
+        // gated on OLLAMA_HOST by the caller (`provider_candidates`).
+        // OLLAMA_HOST / OLLAMA_MODEL ride the canonical env snapshot now.
+        Ok(create_provider(ProviderKind::Ollama, None, None, None))
     }
 }
