@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { api, oxoBase } from '../api/client';
 import type { AiConfig, HealthResponse, QuotaInfo, ReferenceStatus } from '../api/types';
 import { ChevronDown, FlaskConical, Cpu, HardDrive, Database, Shield } from 'lucide-react';
 import StatCard from '../components/StatCard';
@@ -23,11 +23,10 @@ const DEFAULT_QUOTA: QuotaFormState = {
 // (base-path prefix + bearer token, see api/client.ts) so team-mode
 // deployments under a sub-path or with auth enabled still load.
 function fetchQuota(): Promise<QuotaInfo> {
-  const base = (window as { __OXO_BASE__?: string }).__OXO_BASE__ ?? '';
   const token = localStorage.getItem('oxo_token');
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(`${base}/api/quota`, { headers }).then((r) => {
+  return fetch(`${oxoBase()}/api/quota`, { headers }).then((r) => {
     if (!r.ok) throw new Error(`quota: ${r.status}`);
     return r.json() as Promise<QuotaInfo>;
   });

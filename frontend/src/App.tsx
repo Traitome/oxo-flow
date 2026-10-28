@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense, type ReactNode } from 'react';
 import Layout from './components/Layout';
 import RouteErrorBoundary from './components/RouteErrorBoundary';
+import { oxoBase } from './api/client';
 import { useI18n } from './context/I18n';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -33,15 +34,11 @@ function route(name: string, node: ReactNode): ReactNode {
   );
 }
 
-// Mount-aware routing: the server injects window.__OXO_BASE__ into
-// index.html when the app is served under a sub-path (--base-path); the
-// BrowserRouter basename must match or every route 404s the SPA fallback.
-declare global {
-  interface Window {
-    __OXO_BASE__?: string;
-  }
-}
-const appBasename = window.__OXO_BASE__ && window.__OXO_BASE__ !== '/' ? window.__OXO_BASE__ : undefined;
+// Mount-aware routing: the server injects a `<meta name="oxo-base">` tag
+// into index.html when the app is served under a sub-path (--base-path);
+// the BrowserRouter basename must match or every route 404s the SPA
+// fallback. Root mounts (and dev mode) see no tag → undefined basename.
+const appBasename = oxoBase() && oxoBase() !== '/' ? oxoBase() : undefined;
 
 export default function App() {
   return (

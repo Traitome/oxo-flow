@@ -48,7 +48,7 @@ pub async fn spa_index() -> impl IntoResponse {
 }
 
 /// Read index.html from disk and inject the `<base>` tag +
-/// `window.__OXO_BASE__` script. Runs exactly once, on the first request
+/// `oxo-base` meta tag. Runs exactly once, on the first request
 /// (see [`spa_index`]).
 ///
 /// A source checkout ships a tracked `index.html` but NOT the built
@@ -94,7 +94,11 @@ fn load_spa_index_html() -> String {
     // from the mount root instead of the CURRENT ROUTE: without it,
     // /runs/<id> would request /runs/assets/... and get the SPA fallback
     // (MIME mismatch, blank page). Root mounts get href="/"; sub-path
-    // mounts get the mount prefix.
+    // mounts get the mount prefix. The mount prefix is also published as
+    // a `<meta name="oxo-base">` tag — the CSP blocks inline script
+    // (issue #948 P3-2), so the frontend reads its base from the DOM
+    // (see `oxoBase()` in frontend/src/api/client.ts) instead of a
+    // `window.__OXO_BASE__` assignment.
     let base = base_path();
     let effective_base = if base.is_empty() {
         "/".to_string()
@@ -102,7 +106,7 @@ fn load_spa_index_html() -> String {
         format!("{base}/")
     };
     let tag = format!(
-        "<base href=\"{effective_base}\"><script>window.__OXO_BASE__=\"{}\";</script>",
+        "<base href=\"{effective_base}\"><meta name=\"oxo-base\" content=\"{}\">",
         if base.is_empty() { "" } else { base }
     );
     // Insert right after <head>: <base> only affects URLs that FOLLOW it,
@@ -761,7 +765,7 @@ pub fn build_router(mode: &str) -> Router {
 static RUNNING_MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Base path the app is mounted under ("" or "/" = root mount). The served
-/// SPA index gets a `<base>` tag + `window.__OXO_BASE__` injected so the
+/// SPA index gets a `<base>` tag + `oxo-base` meta tag injected so the
 /// frontend router and relative asset URLs work from any mount point
 /// (issue #79 deployment modes: "the app mounts somewhere").
 static BASE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -931,10 +935,11 @@ async fn security_headers(
     // bundled files — no inline `<script>` (issue #948 P3-2: an XSS that can
     // run inline script would also read localStorage['oxo_token'], so script
     // execution and token theft must not be one shot). Inline *style* stays
-    // allowed: React inline `style={{…}}` props and CodeMirror's runtime-
-    // injected editor theme are attribute styles, which `style-src` does not
-    // govern (that would need `style-src-attr`), and the built index.html
-    // carries no `<style>`/`<script>` bodies — verified by the CSP drift test.
+    // allowed: `style-src-attr` is not set, so style attributes (React's
+    // `style={{…}}` props, CodeMirror's runtime-injected editor theme) fall
+    // back to `style-src`, whose `'unsafe-inline'` covers them; the built
+    // index.html carries no `<style>`/`<script>` bodies — verified by the
+    // CSP drift test.
     headers.insert(
         axum::http::header::HeaderName::from_static("content-security-policy"),
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'".parse().unwrap(),

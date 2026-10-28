@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   // Relative asset URLs: the app can be mounted under any base path
   // (--base-path /oxoflow) without rebuilding — the server injects a
-  // <base> tag + window.__OXO_BASE__ into index.html at serve time
+  // <base> tag + oxo-base meta tag into index.html at serve time
   // (issue #79 deployment modes).
   base: './',
   build: {
