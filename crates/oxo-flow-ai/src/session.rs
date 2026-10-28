@@ -305,7 +305,7 @@ fn prune_oldest(dir: &Path, extension: &str, keep: usize) {
     let excess = sessions.len() - keep;
     for (_, path) in sessions.into_iter().take(excess) {
         if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!(error = %e, path = %path.display(), "session prune failed");
+            tracing::warn!(error = %e, path = %path.display(), "prune failed");
         }
     }
 }
