@@ -199,8 +199,17 @@ text (#518):
   uppercased, non-alphanumeric characters folded to `_`; e.g. server
   `fs-gdrive` → `OXO_FLOW_MCP_TOKEN_FS_GDRIVE`)
 
-The per-server variable wins when both are set. Tokens are attached as
-`Authorization: Bearer …` on every request and are never logged.
+The per-server variable wins when both are set. The `<SERVER>` name is
+folded from the endpoint URL's host, port and path (everything after the
+scheme — `mcp://fs-gdrive:9000/v1` → `OXO_FLOW_MCP_TOKEN_FS_GDRIVE_9000_V1`),
+so two servers sharing a host on different paths get distinct variables.
+Tokens are attached as `Authorization: Bearer …` on every request to the
+endpoint's origin and are never logged; a redirect to a different origin
+(checked per hop) carries no `Authorization`, session or protocol headers.
+
+Because the token rides `Authorization` on every request, prefer
+`https://` endpoints when a token is configured — a plain-`http://`
+endpoint sends the credential unencrypted on the wire.
 
 ### Bounded Agent Tools
 
