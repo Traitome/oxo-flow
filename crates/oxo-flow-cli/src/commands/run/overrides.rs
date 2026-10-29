@@ -1,4 +1,4 @@
-//! CLI override parsing/validation: --arg KEY=VALUE handling, key canonicalization, unknown-key warnings, run-flag registries, cache cleanup (#948 P2-5).
+//! CLI override parsing/validation: --arg KEY=VALUE handling, key canonicalization, unknown-key warnings, run-flag registries, retired-key diagnostics (#948 P2-5).
 
 use super::*;
 
@@ -189,54 +189,6 @@ pub(crate) fn validate_config_value(
     }
 
     Ok(())
-}
-
-/// Remove entries in the environment cache that have not been touched for
-/// `max_age_days` (issue #75; recursive since #194 C1 — subdirectories
-/// were previously never aged out). Returns the number of entries removed.
-pub(crate) fn cleanup_cache_dir(cache_dir: &std::path::Path, max_age_days: u64) -> usize {
-    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
-    let now = std::time::SystemTime::now();
-    let mut removed = 0;
-    let mut stack = vec![cache_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_file = path.is_file();
-            if !is_file && !path.is_dir() {
-                continue;
-            }
-            let Ok(metadata) = std::fs::metadata(&path) else {
-                continue;
-            };
-            let Ok(modified) = metadata.modified() else {
-                continue;
-            };
-            let Ok(age) = now.duration_since(modified) else {
-                continue;
-            };
-            if age <= max_age {
-                // Young entries may still contain aged descendants; only
-                // descend into directories that are themselves young.
-                if !is_file {
-                    stack.push(path);
-                }
-                continue;
-            }
-            let ok = if is_file {
-                std::fs::remove_file(&path).is_ok()
-            } else {
-                std::fs::remove_dir_all(&path).is_ok()
-            };
-            if ok {
-                removed += 1;
-            }
-        }
-    }
-    removed
 }
 
 /// Attempt count for a single-shot AI operation in `run`/`dry-run`.
@@ -522,7 +474,25 @@ pub(crate) fn apply_cli_overrides(
             .config
             .insert(k.clone(), toml::Value::String(v.clone()));
     }
+    warn_retired_cache_aging_key(config);
     Ok(())
+}
+
+/// The post-run `cache_max_age_days` environment-cache aging sweep was
+/// retired in favor of `oxo-flow env gc` (issue #974) — the shared env
+/// store (#904) owns environment lifecycle now. The key still PARSES (it is
+/// a plain `cache_max_age_days` \[config\] entry), but it has no effect; warn once per invocation
+/// so a stale workflow doesn't silently expect pruning (diagnostic ships
+/// with docs: run.md "Cache environment setup").
+fn warn_retired_cache_aging_key(config: &WorkflowConfig) {
+    if config.config.contains_key("cache_max_age_days") {
+        eprintln!(
+            "{} config key 'cache_max_age_days' no longer does anything — post-run \
+             environment-cache aging was retired (issue #974). Reclaim stale entries with \
+             `oxo-flow env gc` (its --min-age-days gate defaults to 90).",
+            "Warning:".bold().yellow(),
+        );
+    }
 }
 
 /// Warn about `KEY=VALUE` overrides the workflow never uses.

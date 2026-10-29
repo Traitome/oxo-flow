@@ -2649,6 +2649,26 @@ fn cli_env_list() {
     oxo_flow_cmd().args(["env", "list"]).assert().success();
 }
 
+/// `env gc --min-age-days` defaults to 90 (issue #975): runs in other
+/// workdirs sharing the store are invisible to checkpoint discovery, so the
+/// age gate is their only protection and must stay well above a 14-day gap.
+#[test]
+fn cli_env_gc_min_age_defaults_to_90() {
+    let out = oxo_flow_cmd()
+        .args(["env", "gc", "--help"])
+        .output()
+        .unwrap();
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        help.contains("[default: 90]"),
+        "env gc --min-age-days must default to 90, got:\n{help}"
+    );
+}
+
 // ─── init subcommand ────────────────────────────────────────────────────────
 
 #[test]
@@ -6038,36 +6058,41 @@ fn cli_run_temporary_lifecycle_tombstone_and_lazy_regeneration() {
     );
 }
 
-/// `cache_max_age_days` controls environment-cache aging after a run: the
-/// 90-day default removes only files untouched beyond it; 0 disables aging.
+/// The retired post-run `cache_max_age_days` aging sweep (issue #974) must
+/// warn and point at `oxo-flow env gc` — a stale workflow can't silently
+/// expect pruning. The key still parses (plain [config] entry) and the run
+/// succeeds. The survival assertion is load-bearing: the cache entry is
+/// backdated beyond the declared 90-day window, so the pre-retirement sweep
+/// would delete it, while the retired-key path must keep it.
 #[test]
-fn cli_run_cache_aging_default_and_override() {
+fn cli_run_retired_cache_aging_key_warns_but_run_succeeds() {
     let dir = tempfile::tempdir().unwrap();
     let cache = dir.path().join("envs");
     fs::create_dir_all(&cache).unwrap();
-    let old = cache.join("old.tar.gz");
-    fs::write(&old, "old").unwrap();
+    let stale = cache.join("stale.txt");
+    fs::write(&stale, "stale").unwrap();
     let old_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
         - 100 * 24 * 3600;
-    let old_ts = filetime::FileTime::from_unix_time(old_unix as i64, 0);
-    filetime::set_file_mtime(&old, old_ts).unwrap();
-    let fresh = cache.join("fresh.tar.gz");
-    fs::write(&fresh, "fresh").unwrap();
+    filetime::set_file_mtime(
+        &stale,
+        filetime::FileTime::from_unix_time(old_unix as i64, 0),
+    )
+    .unwrap();
 
-    let wf = dir.path().join("aging.oxoflow");
+    let wf = dir.path().join("retired.oxoflow");
     fs::write(
         &wf,
-        "[workflow]\nname = \"aging\"\nversion = \"1.0.0\"\n\n\
+        "[workflow]\nname = \"retired\"\nversion = \"1.0.0\"\n\n\
+         [config]\ncache_max_age_days = 90\n\n\
          [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
          shell = \"echo hi > {output[0]}\"\n",
     )
     .unwrap();
 
-    // Default (90 days): only the backdated file goes.
-    oxo_flow_cmd()
+    let output = oxo_flow_cmd()
         .args([
             "run",
             wf.to_str().unwrap(),
@@ -6077,35 +6102,14 @@ fn cli_run_cache_aging_default_and_override() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(
-        !old.exists(),
-        "default aging removes files older than 90 days"
-    );
-    assert!(fresh.exists(), "fresh cache entries survive");
 
-    // Override 0: aging disabled.
-    fs::write(&old, "old again").unwrap();
-    filetime::set_file_mtime(&old, old_ts).unwrap();
-    let wf0 = dir.path().join("aging0.oxoflow");
-    fs::write(
-        &wf0,
-        "[workflow]\nname = \"aging0\"\nversion = \"1.0.0\"\n\n\
-         [config]\ncache_max_age_days = 0\n\n\
-         [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
-         shell = \"echo hi > {output[0]}\"\n",
-    )
-    .unwrap();
-    oxo_flow_cmd()
-        .args([
-            "run",
-            wf0.to_str().unwrap(),
-            "--cache-dir",
-            cache.to_str().unwrap(),
-        ])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(old.exists(), "cache_max_age_days = 0 disables aging");
+    assert!(output.status.success(), "retired key must not fail the run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cache_max_age_days") && stderr.contains("env gc"),
+        "warn-once must name the key and point at env gc: {stderr}"
+    );
+    assert!(stale.exists(), "no aging sweep may delete cache entries");
 }
 
 /// A rule skipped by a false `when` condition must be counted once, not once
@@ -9345,54 +9349,6 @@ fn cli_disk_requirement_preflight_warns() {
     assert!(
         stderr.contains("declares 999999999G disk but only"),
         "pre-flight disk warning expected: {stderr}"
-    );
-}
-
-/// --cache-dir entries older than 30 days are removed after the run
-/// (issue #75); fresh entries survive.
-#[test]
-fn cli_cache_dir_aging_cleans_stale_entries() {
-    let dir = tempfile::tempdir().unwrap();
-    let wf = dir.path().join("cache75.oxoflow");
-    fs::write(
-        &wf,
-        "[workflow]\nname = \"cache75\"\n\n\
-         [[rules]]\nname = \"one\"\noutput = [\"one.txt\"]\n\
-         shell = \"echo x > one.txt\"\n",
-    )
-    .unwrap();
-    let cache = dir.path().join("env-cache");
-    fs::create_dir_all(&cache).unwrap();
-    fs::write(cache.join("stale.txt"), "old").unwrap();
-    fs::write(cache.join("fresh.txt"), "new").unwrap();
-    // Backdate the stale entry beyond the 30-day window.
-    let touch = std::process::Command::new("touch")
-        .arg("-t")
-        .arg("200001010000")
-        .arg(cache.join("stale.txt"))
-        .status()
-        .unwrap();
-    assert!(touch.success(), "touch must backdate the stale file");
-
-    let run = oxo_flow_cmd()
-        .args([
-            "run",
-            wf.to_str().unwrap(),
-            "--cache-dir",
-            cache.to_str().unwrap(),
-        ])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(run.status.success());
-
-    assert!(
-        !cache.join("stale.txt").exists(),
-        "stale cache entry must be removed"
-    );
-    assert!(
-        cache.join("fresh.txt").exists(),
-        "fresh cache entry must survive"
     );
 }
 
