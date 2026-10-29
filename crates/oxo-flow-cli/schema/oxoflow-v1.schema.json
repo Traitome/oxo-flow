@@ -131,8 +131,13 @@
             "type": "object",
             "properties": {
               "default": {
-                "type": "string",
-                "description": "Default value when not provided via CLI"
+                "description": "Default value when not provided via CLI",
+                "anyOf": [
+                  { "type": "string" },
+                  { "type": "integer" },
+                  { "type": "number" },
+                  { "type": "boolean" }
+                ]
               },
               "required": {
                 "type": "boolean",
