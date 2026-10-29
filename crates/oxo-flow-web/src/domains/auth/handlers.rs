@@ -1304,8 +1304,10 @@ mod tests {
     }
 
     /// End-to-end for the issue's acceptance criterion: a non-default TTL
-    /// must land in the minted session's `expires_at` so `validate_session`
-    /// honors it. Uses the same chrono arithmetic as the two minting sites.
+    /// must land in the minted session's `expires_at` so the production
+    /// comparators (`require_auth` in server.rs and `validate_token` here,
+    /// both SQL `expires_at > …` string compares) honor it. Uses the same
+    /// chrono arithmetic as the two minting sites.
     #[test]
     fn ttl_boundary_rejects_expired_session() {
         let ttl = parse_session_ttl_hours(Some("1"));
@@ -1320,7 +1322,7 @@ mod tests {
         );
 
         // Just outside: expired under the same string comparison
-        // `validate_session` uses.
+        // `require_auth`/`validate_token` use.
         let just_after = now + chrono::Duration::minutes(61);
         assert!(
             expires.as_str() <= just_after.to_rfc3339().as_str(),
