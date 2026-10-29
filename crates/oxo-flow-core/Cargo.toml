@@ -61,6 +61,10 @@ nix = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true }
 filetime = "0.2.29"
+# Gallery-vs-schema drift gate (#973 F5): default features pull reqwest for
+# remote $ref resolution, which this workspace never needs — the schema is
+# self-contained.
+jsonschema = { version = "0.60.2", default-features = false, features = ["resolve-file"] }
 
 # Criterion benches are standalone binaries: `harness = false` stops libtest
 # from wrapping them, so their `criterion_main!` actually runs. A bench file
