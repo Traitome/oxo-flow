@@ -4078,7 +4078,7 @@ manual intervention needed.</p>
 <tbody>
 <tr>
 <td><code>--min-age-days</code></td>
-<td><code>14</code></td>
+<td><code>90</code></td>
 <td>Minimum age (mtime) before an unreferenced store dir may be deleted</td>
 </tr>
 <tr>
@@ -4099,6 +4099,7 @@ and exits — there is nothing to collect.</p>
 <p><strong>What <code>env gc</code> deletes:</strong></p>
 <ul>
 <li>Only store dirs <strong>not referenced</strong> by any discovered run checkpoint (<code>env_store_refs</code> in <code>.oxo-flow/checkpoint.json</code>), AND older than <code>--min-age-days</code></li>
+<li>Checkpoint discovery covers the CURRENT workflow directory only — runs in other worktrees/workdirs sharing the store are invisible to GC and are protected <strong>solely by the age gate</strong>. The 90-day default is sized for that: keep it well above the longest interval between runs in any workdir sharing the store, and always check <code>--dry-run</code> output before a real collection</li>
 <li>Referenced dirs are always kept — a running or resumable run keeps its environments (the #893 lesson)</li>
 <li>Young dirs are kept even when torn/incomplete: a fresh torn dir may be a concurrent run mid-setup, so the age gate protects those too</li>
 <li>Deleting a still-needed env is recoverable: the next run detects the broken link and rebuilds</li>
