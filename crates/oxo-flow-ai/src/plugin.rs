@@ -8,6 +8,16 @@
 //! - **AiToolPlugin**: Custom tools the AI agent can invoke during generation/analysis
 //! - **AiKnowledgePlugin**: Custom knowledge sources for domain-specific context
 //! - **AiValidatorPlugin**: Custom validation rules for AI-generated content
+//!
+//! ## Status (#965)
+//!
+//! These traits are a compile-time extension surface only. Nothing in
+//! oxo-flow constructs an [`AiPluginRegistry`] yet: there is no
+//! `.plugin.toml` loader (that format belongs to the inert engine-side
+//! plugin system, `oxo_flow_core::plugin`), and the agent's real tool set
+//! lives in [`crate::tools`] (`ToolRegistry`). Implementing these traits
+//! today wires nothing — registration is programmatic and the registry has
+//! no consumer.
 
 use async_trait::async_trait;
 
@@ -19,7 +29,9 @@ use crate::types::ToolDef;
 /// A custom tool the AI agent can call.
 ///
 /// Unlike built-in tools (read_file, fetch_url, etc.) which are compiled into
-/// the binary, tool plugins can be registered dynamically from configuration files.
+/// the binary, tool plugins can be registered programmatically on an
+/// [`AiPluginRegistry`] (see the module-level status note: no config-file
+/// loading exists yet).
 ///
 /// # Example
 ///
@@ -34,7 +46,7 @@ use crate::types::ToolDef;
 /// ```
 #[async_trait]
 pub trait AiToolPlugin: Send + Sync {
-    /// Unique tool name — must match the name in `.plugin.toml`.
+    /// Unique tool name.
     fn tool_name(&self) -> &str;
 
     /// Tool definition for the AI model's function-calling API.
@@ -128,9 +140,15 @@ pub enum IssueSeverity {
     Info,
 }
 
-// ── Plugin discovery (reserved interface) ──────────────────────────────────
+// ── Plugin registry (reserved interface, #965) ─────────────────────────────
 
-/// Registry of loaded AI plugins.
+/// Registry of AI plugins.
+///
+/// Scaffolding: as of v0.24.1 nothing in oxo-flow constructs this registry
+/// or reads its fields — the agent's tool set is [`crate::tools::ToolRegistry`]
+/// and knowledge injection is built from [`crate::knowledge`]. Kept as the
+/// compile-time contract for a future dynamic-loading design; per #965 the
+/// doc must not claim config-file registration that doesn't exist.
 #[derive(Default)]
 pub struct AiPluginRegistry {
     pub tools: Vec<Box<dyn AiToolPlugin>>,
@@ -143,14 +161,17 @@ impl AiPluginRegistry {
         Self::default()
     }
 
+    /// Programmatic registration only — there is no config-file loader (#965).
     pub fn register_tool(&mut self, plugin: Box<dyn AiToolPlugin>) {
         self.tools.push(plugin);
     }
 
+    /// Programmatic registration only; no consumer reads this yet (#965).
     pub fn register_knowledge(&mut self, plugin: Box<dyn AiKnowledgePlugin>) {
         self.knowledge.push(plugin);
     }
 
+    /// Programmatic registration only; no consumer reads this yet (#965).
     pub fn register_validator(&mut self, plugin: Box<dyn AiValidatorPlugin>) {
         self.validators.push(plugin);
     }
@@ -239,6 +260,9 @@ mod tests {
 
     #[test]
     fn plugin_registry_registration() {
+        // #965: the registry is documented scaffolding — this test pins the
+        // compile-time contract (registration API + read-only tool default)
+        // that a future loader must keep.
         let mut reg = AiPluginRegistry::new();
         reg.register_tool(Box::new(TestToolPlugin));
         reg.register_knowledge(Box::new(TestKnowledgePlugin));
