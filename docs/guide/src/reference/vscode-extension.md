@@ -13,13 +13,15 @@ and publishes it to [Open VSX](https://open-vsx.org/).
 
 !!! note "About the VS Code Marketplace"
 
-    CI publishes the extension to the VS Code Marketplace (`VSCE_PAT`) and
-    the listing goes live at the next tagged release; until then, two
-    channels already cover every VS Code fork:
+    CI publishes the extension to both marketplaces — the [VS Code
+    Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow)
+    (`VSCE_PAT`, live since v0.25.0) and [Open VSX](https://open-vsx.org/)
+    (`OVSX_PAT`) — so every VS Code variant is covered:
 
-    1. **Open VSX** — VSCodium, Cursor, Windsurf and most forks search it by
+    1. **VS Code Marketplace** — stock VS Code searches it by default.
+    2. **Open VSX** — VSCodium, Cursor, Windsurf and most forks search it by
        default; the same `traitome.oxo-flow` id is there.
-    2. **Offline VSIX** — download the release artifact and install it with
+    3. **Offline VSIX** — download the release artifact and install it with
        one command (below); this works in stock VS Code and any fork.
 
 ## Install
