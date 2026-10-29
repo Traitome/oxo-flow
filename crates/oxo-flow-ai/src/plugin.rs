@@ -13,8 +13,9 @@
 //!
 //! These traits are a compile-time extension surface only. Nothing in
 //! oxo-flow constructs an [`AiPluginRegistry`] yet: there is no
-//! `.plugin.toml` loader (that format belongs to the inert engine-side
-//! plugin system, `oxo_flow_core::plugin`), and the agent's real tool set
+//! `.plugin.toml` loader (that format belongs to the engine-side plugin
+//! system, `oxo_flow_core::plugin` — its manifest parsing exists but
+//! executes nothing), and the agent's real tool set
 //! lives in [`crate::tools`] (`ToolRegistry`). Implementing these traits
 //! today wires nothing — registration is programmatic and the registry has
 //! no consumer.

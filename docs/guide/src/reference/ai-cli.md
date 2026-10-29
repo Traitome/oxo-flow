@@ -596,7 +596,7 @@ If you see rate limit errors, wait a few seconds and retry. For production use, 
 | Phase 1 | AI template generation | ✅ Complete |
 | Phase 2 | AI dry-run + validate analysis | ✅ Complete |
 | Phase 3 | AI error recovery (`--ai-recover`) | ✅ Complete |
-| Phase 4 | Scope-level AI config, AI plugin types | ✅ Complete |
+| Phase 4 | Scope-level AI config, AI plugin types (trait surface only — no loader, see `oxo_flow_ai::plugin`) | ✅ Complete |
 | Phase 5 | MCP/Skill ecosystem | ✅ Complete |
 | Phase 6 | Workflow explanation (`ai explain`) | ✅ Complete |
 | Phase 7 | Provider failure handling (tool-call repair, overflow recovery, bounded results) | ✅ Complete |
