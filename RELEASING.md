@@ -42,7 +42,7 @@ Before creating a release, ensure the following:
 
 - [ ] All CI checks pass on the `main` branch
 - [ ] `cargo fmt -- --check` reports no formatting issues
-- [ ] `cargo clippy -- -D warnings` reports zero warnings
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` reports zero warnings (same gate as CI)
 - [ ] `cargo build` succeeds for all workspace members
 - [ ] `cargo test` passes all unit and integration tests
 - [ ] **Knowledge freshness gate**: the embedded AI knowledge data
