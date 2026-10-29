@@ -58,7 +58,7 @@ not list (extras).
 | `--from <MD5_FILE>` | md5 sidecar to verify against, in `md5sum` text format |
 | `--json` | Emit a machine-readable JSON document on stdout; the human report stays on stderr |
 | `-v, --verbose` | Enable verbose (debug-level) logging |
-| `-q, --quiet` | Suppress non-essential output (errors only) |
+| `--quiet` | Suppress non-essential output (errors only) |
 | `--no-color` | Disable colored output (also respects `NO_COLOR`) |
 
 ## Exit Code
