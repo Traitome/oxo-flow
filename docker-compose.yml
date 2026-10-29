@@ -40,6 +40,7 @@ services:
       # Other deployment knobs the server reads (all optional):
       - OXO_FLOW_TRUSTED_PROXY
       - OXO_FLOW_RUNS_RATE_LIMIT
+      - OXO_FLOW_SESSION_TTL_HOURS
       - OXO_FLOW_ALLOWED_ORIGINS
       - OXO_FLOW_OAUTH_REDIRECT_URI
       - ORCID_CLIENT_ID

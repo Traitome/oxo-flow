@@ -188,6 +188,13 @@ Returns session token, username, and role.
 > usernames. Sessions store the canonical `users.id` resolved at login;
 > role lookups match by id only and a session whose user row is gone
 > (deleted user, stale pre-upgrade session) is rejected with 401.
+>
+> **Session lifetime is operator-tunable (#976):** every minted session
+> (login and OAuth callback) expires after `OXO_FLOW_SESSION_TTL_HOURS`
+> hours — default `24`, minimum `1`, cap `8760` (one year). Unset keeps
+> the historical 24-hour TTL; an unparseable or out-of-range value warns
+> and falls back to the default. Existing sessions keep their minted
+> expiry — the variable is read at session creation only.
 
 ### Check Session
 ```
@@ -202,7 +209,7 @@ POST /api/auth/logout
 Authorization: Bearer <token>
 ```
 Revokes the presented session server-side (#520) — the token stops
-authenticating immediately instead of living out its 24-hour TTL. The
+authenticating immediately instead of living out its configured TTL. The
 client should drop its local copy (`logged_out: true` on success).
 Deleting a user (`DELETE /api/users/{id}`) cascades: the deleted user's
 sessions and API keys are removed with the account.
