@@ -247,9 +247,9 @@ Wildcards like `{sample}` expand automatically via input file discovery. Feature
 
 ## Editor Support (VS Code)
 
-The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX with checksum attached to every GitHub release, published to [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow)):
+The first-party **oxo-flow Pipeline** extension (`traitome.oxo-flow`) makes VS Code a full `.oxoflow` IDE — and it is released in lockstep with the engine (VSIX with checksum attached to every GitHub release):
 
-> **Note** — the **VS Code Marketplace is not currently supported** (requires an Azure DevOps publisher account the project does not maintain yet). VSCodium, Cursor, Windsurf and most forks get the extension from **Open VSX** (searched by default); stock VS Code users can install the release VSIX offline:
+> **Note** — the extension is published to both marketplaces: [Open VSX](https://open-vsx.org/extension/traitome/oxo-flow) (searched by default by VSCodium, Cursor, Windsurf and most forks) and the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow) (stock VS Code, live since v0.25.0). Install from either, or grab the release VSIX offline:
 
 ```bash
 codium --install-extension traitome.oxo-flow              # Open VSX (forks)

@@ -90,8 +90,13 @@ commit_parsers = [
 commit_preprocessors = [
   # Strip commit body and trailers (everything after the subject line)
   { pattern = "(?s)\\n.*", replace = "" },
-  { pattern = " \\(#(\\d+)\\)$", replace = " ([#${1}](https://github.com/Traitome/oxo-flow/pull/${1}))" },
 ]
+
+# NOTE: the subject-line "(#N)" is NOT rewritten to a link here. The body
+# template below already renders `([#N](…))` from `commit.remote.pr_number`;
+# rewriting the subject too made every CHANGELOG row render the PR link
+# twice (v0.25.0 shipped `([#972](…)) ([#972](…))`, issue #982 P2-5).
+# Squash-merge subjects keep their plain "(#N)" text, which reads fine.
 
 filter_commits = false
 tag_pattern = "v[0-9].*"
