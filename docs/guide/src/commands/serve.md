@@ -83,6 +83,13 @@ Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
     `serve`, otherwise the server reports `SPA not built` instead of a blank
     page.
 
+    The server verifies each `assets/…` reference in `index.html` (not just
+    the directory's existence — a stale `assets/` dir from an older build
+    also counts as missing) and falls back to the actionable page with a
+    warning naming the missing files. Missing-asset responses are sent with
+    `Cache-Control: no-store`, so building the frontend fixes the next
+    normal reload — no hard refresh needed.
+
 ---
 
 ## API Endpoints

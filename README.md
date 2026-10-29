@@ -137,6 +137,10 @@ git clone https://github.com/Traitome/oxo-flow.git
 cd oxo-flow
 cargo build --release --workspace
 
+# Build the web SPA so `oxo-flow serve` has assets to serve
+# (the committed index.html references gitignored build output):
+make frontend-build   # or: cd frontend && npm install && npm run build
+
 # Install the CLI to your local cargo bin directory:
 cargo install --path crates/oxo-flow-cli
 
@@ -144,6 +148,10 @@ cargo install --path crates/oxo-flow-cli
 # - oxo-flow        (CLI, includes `oxo-flow serve` for web UI)
 # - oxo-flow-web    (Standalone web server)
 ```
+
+Skipping the frontend build is safe: `oxo-flow serve` detects the missing
+SPA assets and shows an actionable "SPA not built" page instead of a blank
+screen.
 
 ### First workflow
 
