@@ -96,19 +96,38 @@ fn wait_ready(server: &mut ServeProcess, base_path: &str, timeout: Duration) -> 
 /// Spawn `serve` on a fresh port, retrying when the child dies before
 /// binding (free_port releases its probe before the child binds, so a
 /// parallel test can steal the port — same TOCTOU window as
-/// `common::spawn_web_server`). `base_path` is the ALREADY normalized
-/// prefix (`""` or `/name`) used in the readiness probe.
+/// `common::spawn_web_server`). A child still alive at deadline is
+/// slow-start (#958), not a failure: it keeps waiting on the same child.
+/// `base_path` is the ALREADY normalized prefix (`""` or `/name`) used in
+/// the readiness probe.
 fn spawn_serve(dir: &Path, base_path: &str) -> ServeProcess {
     let normalized = if base_path == "/" {
         String::new()
     } else {
         format!("/{}", base_path.trim_matches('/'))
     };
+    let overall_deadline = Instant::now() + 3 * common::BIND_WAIT_TIMEOUT;
     let mut last_log = String::new();
     for _ in 0..5 {
         let mut server = spawn_serve_once(dir, free_port(), base_path);
-        if wait_ready(&mut server, &normalized, Duration::from_secs(15)) {
-            return server;
+        loop {
+            if wait_ready(&mut server, &normalized, common::BIND_WAIT_TIMEOUT) {
+                return server;
+            }
+            if matches!(server.child.try_wait(), Ok(Some(_))) {
+                // Exited without binding: retry on a fresh port.
+                break;
+            }
+            // Alive but slow — keep waiting on this child rather than
+            // respawning a fresh cold one (issue #958).
+            if Instant::now() > overall_deadline {
+                panic!(
+                    "`oxo-flow serve` did not bind within the overall deadline \
+                     (alive but slow after {}s)\n{}",
+                    3 * common::BIND_WAIT_TIMEOUT.as_secs(),
+                    serve_log_tail(&server)
+                );
+            }
         }
         last_log = serve_log_tail(&server);
     }
