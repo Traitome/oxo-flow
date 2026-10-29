@@ -4297,7 +4297,10 @@ the pipeline editor's runtime-injected CodeMirror theme) fall back to
 <code>style-src</code>, whose <code>'unsafe-inline'</code> covers them. The exact policy string is
 pinned by the <code>csp_gate</code> integration test, which drift-checks both the built
 <code>static/index.html</code> and the <em>served</em> index against inline script — a
-weakening fails CI.</p>
+weakening fails CI. The baseline has no route-shaped holes: under a
+sub-path mount (<code>--base-path /oxo-flow</code>), the mount-root SPA index
+(<code>GET /oxo-flow/</code>) is routed through the same middleware as the nested
+app, pinned by the <code>base_path_mount_headers</code> integration test.</p>
 <hr />
 <h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">#</a></h2>
 <ol>
