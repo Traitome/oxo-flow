@@ -368,6 +368,17 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      # Issue #982 P1-2: the feature gates used to be advertised as
+      # "minimal-build" support, but --no-default-features rotted (8 compile
+      # errors) with zero CI coverage to catch it. s3-storage/gcs-storage are
+      # the only real opt-ins now — check the core crate both without them
+      # and with each enabled, so the storage backends can't rot either.
+      - name: Feature-combination checks
+        run: |
+          cargo check -p oxo-flow-core --no-default-features
+          cargo check -p oxo-flow-core --no-default-features --features s3-storage
+          cargo check -p oxo-flow-core --no-default-features --features gcs-storage
+
       # Issue #557: doc builds were never gated, so broken intra-doc links and
       # the oxo_flow bin/lib filename collision rotted silently. -D warnings
       # makes every broken link a hard error.
