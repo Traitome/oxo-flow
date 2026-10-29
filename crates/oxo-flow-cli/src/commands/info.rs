@@ -626,6 +626,19 @@ fn pairs_text(pairs: Option<&Vec<Value>>) -> String {
 mod tests {
     use super::*;
 
+    /// Gallery fixtures anchored to the crate root (issue #982 P1-1): the
+    /// old `../../examples/gallery/...` relative paths resolved against the
+    /// process cwd, so any parallel test that `set_current_dir`s mid-run
+    /// (run_preview's when-gate cwd dance) broke these loads with
+    /// WorkflowNotFound. `env!("CARGO_MANIFEST_DIR")` is compile-time, so
+    /// the fixture paths no longer depend on cwd at all.
+    fn gallery(name: &str) -> String {
+        format!(
+            "{}/../../examples/gallery/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    }
+
     fn config(path: &str) -> WorkflowConfig {
         WorkflowConfig::from_file(Path::new(path)).unwrap()
     }
@@ -727,8 +740,8 @@ shell = "cp {input} {output}"
         // remote: deriving metadata for a workflow inside it must carry
         // the git identity keys (issue #124 pillar 3). The real path is
         // passed as both display and fixture so the walk-up finds .git.
-        let fixture = "../../examples/gallery/05_conda_environments.oxoflow";
-        let meta = meta(fixture, fixture);
+        let fixture = gallery("05_conda_environments.oxoflow");
+        let meta = meta(&fixture, &fixture);
         assert_eq!(meta["git_sha"].as_str().map(|s| !s.is_empty()), Some(true));
         // git_remote is only derivable when the repository has an origin
         // remote — the key is omitted otherwise (the catalog contract).
@@ -774,7 +787,7 @@ shell = "cp {input} {output}"
     fn derive_meta_from_gallery_05() {
         let meta = meta(
             "05_conda_environments.oxoflow",
-            "../../examples/gallery/05_conda_environments.oxoflow",
+            &gallery("05_conda_environments.oxoflow"),
         );
 
         assert_eq!(meta["name"], "environment-showcase");
@@ -805,7 +818,7 @@ shell = "cp {input} {output}"
     fn derive_meta_from_gallery_13() {
         let meta = meta(
             "13_simple_variant_calling.oxoflow",
-            "../../examples/gallery/13_simple_variant_calling.oxoflow",
+            &gallery("13_simple_variant_calling.oxoflow"),
         );
 
         assert_eq!(meta["name"], "simple-variant-calling");
@@ -827,7 +840,7 @@ shell = "cp {input} {output}"
     fn derive_meta_config_details() {
         let meta = meta(
             "13_simple_variant_calling.oxoflow",
-            "../../examples/gallery/13_simple_variant_calling.oxoflow",
+            &gallery("13_simple_variant_calling.oxoflow"),
         );
 
         assert_eq!(
@@ -967,7 +980,7 @@ shell = "cp {input} {output}"
     fn derive_meta_config_empty_when_no_keys() {
         let meta = meta(
             "05_conda_environments.oxoflow",
-            "../../examples/gallery/05_conda_environments.oxoflow",
+            &gallery("05_conda_environments.oxoflow"),
         );
 
         assert_eq!(meta["config"], json!([]));
@@ -977,7 +990,7 @@ shell = "cp {input} {output}"
     fn derive_meta_config_description_from_comments() {
         let meta_16s = meta(
             "16_16s_qiime2_amplicon.oxoflow",
-            "../../examples/gallery/16_16s_qiime2_amplicon.oxoflow",
+            &gallery("16_16s_qiime2_amplicon.oxoflow"),
         );
 
         // `classifier` carries a 4-line comment block (newline-joined, so
@@ -1005,7 +1018,7 @@ shell = "cp {input} {output}"
         // description.
         let bare = meta(
             "11_conditional_workflow.oxoflow",
-            "../../examples/gallery/11_conditional_workflow.oxoflow",
+            &gallery("11_conditional_workflow.oxoflow"),
         );
         let bare_records = bare["config"].as_array().unwrap();
         let sequencing_mode = bare_records
@@ -1019,7 +1032,7 @@ shell = "cp {input} {output}"
     fn derive_meta_config_used_by_when_expressions() {
         let meta = meta(
             "11_conditional_workflow.oxoflow",
-            "../../examples/gallery/11_conditional_workflow.oxoflow",
+            &gallery("11_conditional_workflow.oxoflow"),
         );
 
         // `when` conditions use the brace-less `config.<key>` form and must
