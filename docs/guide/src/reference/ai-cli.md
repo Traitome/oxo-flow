@@ -387,11 +387,16 @@ Every AI interaction is logged to `.oxo-flow/ai_sessions/` for audit and debuggi
 
 `prompt_tokens` is the **full prompt bill**: on caching-enabled
 Anthropic-compatible endpoints it includes `cache_read_tokens` (served from
-the provider's prompt cache) and `cache_creation_tokens` (written to it),
-so token totals stay comparable across providers while the cache split is
-preserved for cost estimation — cache reads bill below the input rate and
-cache writes above it. Sessions written before cache accounting carry only
-the two base counters and still load unchanged.
+the provider's prompt cache) and `cache_creation_tokens` (written to it);
+DeepSeek-native and OpenAI-compatible endpoints report the same split under
+their own shapes (`prompt_cache_hit_tokens` and
+`prompt_tokens_details.cached_tokens` respectively, folded into
+`cache_read_tokens` — DeepSeek has no cache-write counter, so
+`cache_creation_tokens` stays 0 there). Token totals stay comparable across
+providers while the cache split is preserved for cost estimation — cache
+reads bill below the input rate and cache writes above it. Sessions written
+before cache accounting carry only the two base counters and still load
+unchanged.
 
 ---
 

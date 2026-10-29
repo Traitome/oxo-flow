@@ -230,10 +230,12 @@ impl Usage {
     /// Pricing as of 2026-08: deepseek-v4-pro $0.28/M in, $1.10/M out.
     ///
     /// DeepSeek charges cache reads at 1/10 input price and cache writes at
-    /// input price; cache fields are always zero on this backend. The
-    /// subtraction is saturating because `Usage` deserializes without
-    /// enforcing `cache_read_tokens <= prompt_tokens` (review finding on
-    /// this PR — a hand-built value must not panic the estimator).
+    /// input price. Cache fields arrive from the provider — DeepSeek reports
+    /// `prompt_cache_hit_tokens` natively (folded into `cache_read_tokens`),
+    /// so the below-rate branch is live on real DeepSeek traffic; hand-built
+    /// `Usage` values may still violate `cache_read_tokens <= prompt_tokens`
+    /// because `Usage` deserializes without enforcing it (review finding on
+    /// an earlier PR — a hand-built value must not panic the estimator).
     pub fn cost_deepseek_v4_pro(&self) -> f64 {
         self.prompt_tokens.saturating_sub(self.cache_read_tokens) as f64 * 0.28 / 1_000_000.0
             + self.cache_read_tokens as f64 * 0.028 / 1_000_000.0

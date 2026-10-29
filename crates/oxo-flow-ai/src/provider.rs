@@ -3310,10 +3310,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_openai_response_without_cache_counters_defaults_to_zero() {
-        // OpenAI/Groq/Azure omit DeepSeek's cache counters — the parse must
-        // not invent tokens. `prompt_tokens_details.cached_tokens` is also
-        // honored as a fallback (OpenAI-compatible shape).
+    fn parse_openai_response_cached_tokens_fallback() {
+        // OpenAI/Groq/Azure omit DeepSeek's native counters; when they do
+        // send `prompt_tokens_details.cached_tokens` (OpenAI-compatible
+        // shape) the parse honors it as a fallback instead of inventing
+        // tokens. Endpoints carrying neither field land at 0 — covered by
+        // `parse_openai_response_text`.
         let json = serde_json::json!({
             "choices": [{
                 "message": {"role": "assistant", "content": "ok"},
