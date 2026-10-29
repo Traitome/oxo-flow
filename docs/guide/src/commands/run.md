@@ -38,7 +38,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest `memory.max` — see [Notes](#notes)); set it explicitly (e.g. `--max-memory 430000 --retry 2`) when the clamp misreads a deliberately generous slice |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
-| `--cache-dir` | — | — | Directory for caching environment setup state (entries untouched for 90 days are cleaned up after each run; override with the `cache_max_age_days` config key, `0` disables aging) |
+| `--cache-dir` | — | — | Directory for caching environment setup state. Lifecycle is managed with `oxo-flow env gc` (the retired post-run `cache_max_age_days` aging sweep warns and points there) |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose `when` gate recorded `false` (they are skips, not failures — issue #690); `status` reports them as skipped, not failed |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
@@ -252,15 +252,18 @@ oxo-flow run pipeline.oxoflow --max-threads 16 --max-memory 32768
 oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
 ```
 
-The cache would otherwise grow without bound, so after each run files
-untouched for **90 days** are removed (the next run starts clean). The age
-limit is configurable per workflow — set `cache_max_age_days = 0` to disable
-aging entirely, or any other value to change the window:
+The cache is **not** aged automatically — `--cache-dir` only selects where
+environment setup state lives. To reclaim space from stale entries, run
+`oxo-flow env gc` (see [env](env.md)); its `--min-age-days` gate (default 90)
+protects entries that recent runs may still reference.
 
-```toml
-[config]
-cache_max_age_days = 30   # prune after 30 days instead of the 90-day default
-```
+!!! note "Removed: `cache_max_age_days`"
+
+    Older versions swept this cache after every run, keyed off the workflow
+    config key `cache_max_age_days`. That mechanism was retired in favor of
+    the explicit, store-aware `oxo-flow env gc` command (issue #974). A
+    workflow that still declares the key now triggers a one-time warning
+    pointing at `env gc`; the key has no effect.
 
 ### Skip environment setup (when environments are pre-built)
 
@@ -1468,4 +1471,4 @@ unchanged, so tooling that parses run logs keeps working.
   `--retry` so a transient OOM does not kill the whole run.
 - Environment setup is performed automatically before first use of each environment (conda, pixi, docker, singularity, venv)
 - Use `--skip-env-setup` when environments are pre-built to avoid redundant setup
-- Use `--cache-dir` to persist environment setup state across runs for faster startup
+- Use `--cache-dir` to persist environment setup state across runs for faster startup (reclaim stale entries with `oxo-flow env gc` — the old post-run aging sweep was retired, issue #974)

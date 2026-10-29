@@ -148,7 +148,10 @@ pub enum Commands {
         skip_env_setup: bool,
         #[arg(long, help = "Skip automatic reference/index building")]
         skip_ref_build: bool,
-        #[arg(long, help = "Directory for caching environment setup state")]
+        #[arg(
+            long,
+            help = "Directory for caching environment setup state (reclaim stale entries with `oxo-flow env gc`)"
+        )]
         cache_dir: Option<PathBuf>,
         #[arg(long, help = "Track output file checksums for later verification")]
         provenance: bool,
@@ -957,8 +960,11 @@ pub enum EnvAction {
     /// share one store.
     Gc {
         /// Only delete unreferenced store dirs untouched for at least this
-        /// many days (default: 14).
-        #[arg(long, value_name = "DAYS", default_value_t = 14)]
+        /// many days (default: 90). Store dirs referenced by checkpoints in
+        /// other workdirs are NOT seen by GC — they are protected only by
+        /// this age gate, so keep it well above the interval between runs
+        /// in any workdir sharing the store.
+        #[arg(long, value_name = "DAYS", default_value_t = 90)]
         min_age_days: u64,
         /// Show what would be deleted without touching anything.
         #[arg(long)]

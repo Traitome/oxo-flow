@@ -4124,31 +4124,6 @@ pub async fn run_command(
 
     progress.finish_and_clear();
 
-    // Environment-cache aging (issue #75): --cache-dir would grow without
-    // bound; files untouched beyond the age limit are removed after the
-    // run so the next one starts clean. Default 90 days, overridable with
-    // the `cache_max_age_days` workflow config key (0 disables aging).
-    const DEFAULT_CACHE_MAX_AGE_DAYS: u64 = 90;
-    let cache_max_age_days: u64 = config
-        .config
-        .get("cache_max_age_days")
-        .and_then(toml::Value::as_integer)
-        .filter(|d| *d >= 0)
-        .map(|d| d as u64)
-        .unwrap_or(DEFAULT_CACHE_MAX_AGE_DAYS);
-    if cache_max_age_days > 0
-        && let Some(ref cache_dir) = cache_dir
-    {
-        let removed = cleanup_cache_dir(cache_dir, cache_max_age_days);
-        if removed > 0 {
-            tracing::info!(
-                removed,
-                cache = %cache_dir.display(),
-                "aged environment-cache files removed"
-            );
-        }
-    }
-
     emit_execution_event(oxo_flow_core::executor::ExecutionEvent::WorkflowCompleted {
         total_duration_ms: run_started.elapsed().as_millis() as u64,
         succeeded: success_count,
@@ -6484,7 +6459,7 @@ pub async fn resume_command(
 mod tests {
     use super::{EndOfRunPruneDecision as Prune, endofrun_prune_decision};
     use super::{
-        age_ready_list, ai_attempts, apply_cli_overrides, cleanup_cache_dir, closest_declared_key,
+        age_ready_list, ai_attempts, apply_cli_overrides, closest_declared_key,
         config_placeholder_values, failure_exit_code, known_modules_hint, missing_source_findings,
         missing_source_lines, parse_cli_overrides, parse_disk_hold_abort_rounds,
         parse_disk_tick_secs, parse_spawn_watchdog_threshold, parse_watchdog_requeue_fires,
@@ -7108,21 +7083,6 @@ shell = "cat {input} > {output[0]}"
         let config = config_with_rules("[workflow]\nname = \"t\"\nversion = \"0.1\"\n");
         assert_eq!(suggest_jobs(&config, &[], 64), 1);
         assert_eq!(suggest_jobs(&config, &[vec![]], 64), 1);
-    }
-
-    #[test]
-    fn cleanup_cache_dir_is_recursive() {
-        // issue #194 C1: nested directories age out too (max_age_days = 0
-        // makes everything eligible immediately).
-        let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("sub").join("deeper");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(dir.path().join("old.txt"), "x").unwrap();
-        std::fs::write(nested.join("old-too.txt"), "y").unwrap();
-        let removed = cleanup_cache_dir(dir.path(), 0);
-        assert_eq!(removed, 2, "file + one nested directory removed");
-        assert!(!dir.path().join("old.txt").exists());
-        assert!(!dir.path().join("sub").exists());
     }
 
     fn declared(keys: &[&str]) -> HashSet<String> {
