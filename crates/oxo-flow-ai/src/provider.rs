@@ -1009,9 +1009,22 @@ fn parse_openai_response(json: &serde_json::Value, label: &str) -> Result<AiResp
         None
     };
 
+    // DeepSeek reports cache traffic natively: `prompt_tokens` is already
+    // the full bill (hit + miss), and the split arrives as
+    // `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`. Mapping the
+    // hit count into `cache_read_tokens` keeps below-rate billing honest
+    // on DeepSeek (PR #960 wired only the Anthropic counters, leaving this
+    // branch dead on real DeepSeek traffic). Endpoints without the fields
+    // default to zero, so OpenAI/Groq/Azure parsing is unchanged.
+    let cache_read_tokens = json["usage"]["prompt_cache_hit_tokens"]
+        .as_u64()
+        .or(json["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64())
+        .unwrap_or(0);
+
     let usage = Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
         completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens,
         ..Usage::default()
     };
 
@@ -1371,14 +1384,20 @@ fn push_sse_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
 }
 
 /// Token usage carried by a streamed frame, when the endpoint sends one
-/// (requested via `stream_options.include_usage`).
+/// (requested via `stream_options.include_usage`). DeepSeek's streamed
+/// usage frames carry the same native cache counters as non-streaming
+/// (`prompt_cache_hit_tokens`), folded in here identically.
 fn usage_from_frame(frame: &str) -> Option<Usage> {
     let line = frame.lines().find(|l| l.contains("\"usage\""))?;
     let json: serde_json::Value =
         serde_json::from_str(line.trim().strip_prefix("data:").unwrap_or("").trim()).ok()?;
+    let cache_read_tokens = json["usage"]["prompt_cache_hit_tokens"]
+        .as_u64()
+        .or(json["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64());
     Some(Usage {
         prompt_tokens: json["usage"]["prompt_tokens"].as_u64()?,
         completion_tokens: json["usage"]["completion_tokens"].as_u64()?,
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
         ..Usage::default()
     })
 }
@@ -3266,6 +3285,55 @@ mod tests {
     }
 
     #[test]
+    fn parse_openai_response_folds_deepseek_cache_tokens_into_usage() {
+        // DeepSeek reports prompt_cache_hit_tokens / prompt_cache_miss_tokens
+        // natively (prompt_tokens = hit + miss). Mapping the hit count into
+        // cache_read_tokens keeps below-rate billing honest; before PR #960
+        // only the Anthropic counters were wired, leaving this dead on real
+        // DeepSeek traffic.
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10_100,
+                "prompt_cache_hit_tokens": 8_000,
+                "prompt_cache_miss_tokens": 2_100,
+                "completion_tokens": 50
+            }
+        });
+        let response = parse_openai_response(&json, "deepseek").unwrap();
+        assert_eq!(response.usage.prompt_tokens, 10_100);
+        assert_eq!(response.usage.cache_read_tokens, 8_000);
+        assert_eq!(response.usage.completion_tokens, 50);
+    }
+
+    #[test]
+    fn parse_openai_response_cached_tokens_fallback() {
+        // OpenAI/Groq/Azure omit DeepSeek's native counters; when they do
+        // send `prompt_tokens_details.cached_tokens` (OpenAI-compatible
+        // shape) the parse honors it as a fallback instead of inventing
+        // tokens. Endpoints carrying neither field land at 0 — covered by
+        // `parse_openai_response_text`.
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 40},
+                "completion_tokens": 50
+            }
+        });
+        let response = parse_openai_response(&json, "openai").unwrap();
+        assert_eq!(response.usage.prompt_tokens, 100);
+        assert_eq!(response.usage.cache_read_tokens, 40);
+        assert_eq!(response.usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
     fn to_anthropic_messages_emits_tool_use_blocks() {
         let messages = vec![
             Message::system("sys"),
@@ -3691,6 +3759,19 @@ mod tests {
             Some(Usage {
                 prompt_tokens: 12,
                 completion_tokens: 7,
+                ..Usage::default()
+            })
+        );
+        // DeepSeek streams the native cache counters in the same frame.
+        let deepseek_frame = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\
+             \"completion_tokens\":7,\"prompt_cache_hit_tokens\":800,\
+             \"prompt_cache_miss_tokens\":200}}";
+        assert_eq!(
+            usage_from_frame(deepseek_frame),
+            Some(Usage {
+                prompt_tokens: 1000,
+                completion_tokens: 7,
+                cache_read_tokens: 800,
                 ..Usage::default()
             })
         );
