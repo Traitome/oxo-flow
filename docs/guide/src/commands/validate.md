@@ -125,8 +125,11 @@ Warnings keep exit code `0` — only errors fail. `validate` scopes itself
 to `W024` (runnability); the full best-practice sweep remains
 [`lint`](lint.md)'s job, and the `warnings` array is empty when nothing
 blocks runnability. At run time the corresponding unbound-placeholder
-WARN is emitted once per (rule, placeholder) — a 200-sample fan-out logs
-the line once, not once per instance.
+WARN is emitted once per (instance, placeholder): the multiple render
+sites within one instance (output pattern + command) collapse to a
+single line — the double-print the issue reporter saw — while each
+fan-out instance still logs its own line, because the message names the
+expanded instance (`step1_lane_L1`) rather than the template rule.
 
 ---
 

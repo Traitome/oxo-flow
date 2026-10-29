@@ -151,6 +151,17 @@ pub async fn validate_command(
                     Ok(dag) => (dag.node_count(), dag.edge_count()),
                     Err(e) => {
                         if json {
+                            let warnings_json: Vec<serde_json::Value> = warnings
+                                .iter()
+                                .map(|d| {
+                                    serde_json::json!({
+                                        "code": d.code,
+                                        "message": d.message,
+                                        "rule": d.rule,
+                                        "suggestion": d.suggestion,
+                                    })
+                                })
+                                .collect();
                             let output = serde_json::json!({
                                 "command": "validate",
                                 "workflow": workflow.display().to_string(),
@@ -158,7 +169,7 @@ pub async fn validate_command(
                                 "rules": cfg.rules.len(),
                                 "dependencies": 0,
                                 "errors": [{"code": "DAG", "message": e.to_string()}],
-                                "warnings": [],
+                                "warnings": warnings_json,
                                 "missing_inputs": [],
                             });
                             println!("{}", serde_json::to_string_pretty(&output)?);
