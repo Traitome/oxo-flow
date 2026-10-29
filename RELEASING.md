@@ -159,7 +159,7 @@ publishes the **same artifact** to:
 - **VS Code Marketplace**
   (`marketplace.visualstudio.com/items?itemName=traitome.oxo-flow`) —
   requires the `VSCE_PAT` secret (**currently configured**, org-level, since
-  2026-10-03; the listing goes live at the next tagged release); the step
+  2026-10-03; the listing is live since v0.25.0); the step
   passes `--skip-duplicate`, so re-running the job is idempotent for the
   Marketplace but NOT for Open VSX (re-publishing an existing Open VSX
   version fails — if Open VSX succeeded and only the Marketplace step
