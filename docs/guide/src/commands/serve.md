@@ -133,15 +133,6 @@ Once the server is running, the following REST endpoints are available. The full
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` / `POST` | `/api/runs` | List runs (cursor-paginated) / create a run |
-
-`POST /api/runs` builds the run from the `toml_content` you send; the other
-fields are optional: `max_jobs` (default 4, becomes `-j`), `dry_run`,
-`keep_going` (`-k`), `pipeline_id` (associate the run with a saved pipeline
-and reuse its persistent workdir), and `cluster_id` (execute on a configured
-SSH cluster). `GET /api/runs` is paginated by **cursor** — the `created_at`
-of the previous page's last row — and returns `{ items, next_cursor, total }`,
-not numbered pages. See the [Web API reference](../reference/web-api.md#create-run).
-
 | `GET` | `/api/runs/{id}` | Run detail |
 | `GET` | `/api/runs/{id}/status` | Real-time status (nodes, timeline, resources) |
 | `GET` | `/api/runs/{id}/dag-status` | DAG JSON + per-node live status |
@@ -155,6 +146,14 @@ not numbered pages. See the [Web API reference](../reference/web-api.md#create-r
 | `GET` | `/api/runs/{id}/report` | Run report |
 | `POST` | `/api/runs/{id}/report/ask` | Ask a question about the report |
 | `POST` | `/api/runs/{id}/report/visualize` | Visualize report data |
+
+`POST /api/runs` builds the run from the `toml_content` you send; the other
+fields are optional: `max_jobs` (default 4, becomes `-j`), `dry_run`,
+`keep_going` (`-k`), `pipeline_id` (associate the run with a saved pipeline
+and reuse its persistent workdir), and `cluster_id` (execute on a configured
+SSH cluster). `GET /api/runs` is paginated by **cursor** — the `created_at`
+of the previous page's last row — and returns `{ items, next_cursor, total }`,
+not numbered pages. See the [Web API reference](../reference/web-api.md#create-run).
 
 ### Other routes
 

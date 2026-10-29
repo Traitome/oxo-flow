@@ -671,16 +671,6 @@ memory = "32G"
 | `threads` | Integer | No | *(Deprecated)* CPU threads — use `resources.threads` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `memory` | String | No | *(Deprecated)* Memory allocation — use `resources.memory` instead. Still honored, but `oxo-flow lint` flags it with a W025 suggestion to move it under `[rules.resources]` |
 | `resources` | Table | No | Full resource specification (threads, memory, gpu, disk, time_limit, partition, groups) |
-
-> **Run-path field validation (#523).** Rule *names* (charset:
-> alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
-> (`<number><G|M|K|T>`), thread counts and `retry_delay` formats are
-> validated when the workflow is parsed — an invalid value fails the run
-> before any expansion or rendering, so values from a third-party
-> `[[include]]` can never reach the rendered docker/scheduler/shell
-> command line. Design-level checks (GPU/backend pairing,
-> `output_pattern` consistency) stay at expansion time where their
-> context-aware diagnostics run.
 | `environment` | Table | No | Environment specification |
 | `transform` | Table | No | Unified scatter-gather operator (split → map → combine) |
 | `when` | String | No | Conditional expression — skip rule when `false`. May call read-only runtime functions (`reads_count`, `wc_lines`, `file_size`, `file_exists`, `regex_extract`) that inspect files in the run workdir; see [Data-Dependent `when` Gates](#data-dependent-when-gates) |
@@ -715,13 +705,22 @@ memory = "32G"
 | `scratch` | Boolean | No | Execute in an isolated per-instance scratch directory: inputs render as absolute paths, declared outputs written there move back to the main workdir and are verified, and the scratch is removed on success (preserved with a path note on failure). Use for tools that write fixed filenames or pollute the workdir |
 | `protected_output` | Array | No | Outputs the engine must never destroy: failure invalidation skips them (no delete, no move-aside to `<name>.oxo-failed`) and `oxo-flow clean` refuses them with a `(protected — skipped)` diagnostic, even with `--force`. Three pattern forms are honored: exact paths, `{wildcard}` patterns (`results/{sample}.bam`), and shell globs (`results/*.bam` — `*` does not cross `/`). Advisory in the remaining sense that the rule's own command can still overwrite them on a rerun |
 | `tags` | Array | No | Categorization tags (e.g., `["qc", "alignment"]`) |
-
 | `ancient` | Array | No | Inputs excluded from freshness tracking and input manifests — they never trigger re-execution (reference files; an engine wildcard in a declaration matches the expanded input structurally) |
 | `localrule` | Boolean | No | Parsed but **not enforced yet** — mixed local+cluster execution needs a scheduler-side local executor and live cluster verification; every schedulable rule can currently be submitted. Do not rely on it (see [Resource Tuning](../how-to/resource-tuning.md)) |
 | `format_hint` | Array | No | Parsed and validated but **not yet used** by the engine (planned for I/O optimization) |
 | `pipe` | Boolean | No | Parsed and validated but **not yet used** by the engine (planned for FIFO streaming; no streaming is performed today) |
 | `checksum` | String | No | Parsed but **not yet enforced** — provenance checksums (sha256) are computed for all outputs regardless; no per-rule verification happens today |
 | `resource_hint` | Table | No | Resource estimation hints for dynamic scheduling |
+
+> **Run-path field validation (#523).** Rule *names* (charset:
+> alphanumeric, `_`, `-`, `:`), `resources.memory`/`memory` formats
+> (`<number><G|M|K|T>`), thread counts and `retry_delay` formats are
+> validated when the workflow is parsed — an invalid value fails the run
+> before any expansion or rendering, so values from a third-party
+> `[[include]]` can never reach the rendered docker/scheduler/shell
+> command line. Design-level checks (GPU/backend pairing,
+> `output_pattern` consistency) stay at expansion time where their
+> context-aware diagnostics run.
 
 **Note:** When a rule declares outputs, at least one of `shell`, `script`, or `transform` must be provided. If both `shell` and `script` are defined, they execute sequentially: shell first, then script.
 
@@ -1177,7 +1176,6 @@ resume.
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
 | `localrule` | Boolean | `false` | Parsed but **not enforced yet** — every schedulable rule can currently be submitted to the cluster |
-
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 **DAG edge inference** — edges form when a rule's `input` paths match
