@@ -1176,7 +1176,6 @@ resume.
 |-------|------|---------|-------------|
 | `depends_on` | Array | — | Explicit rule dependencies (not inferred from files) |
 | `localrule` | Boolean | `false` | Parsed but **not enforced yet** — every schedulable rule can currently be submitted to the cluster |
-
 | `checkpoint` | Boolean | `false` | Enable checkpoint re-entry (requires `checkpoint_manifest`; the rule must not use `{sample}`/`{group}`) |
 
 **DAG edge inference** — edges form when a rule's `input` paths match
