@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "fca814e40490399be54edb7a471ea88810b27a74f67361da0bf4ab4fea1be6df",
+  "schemaSha256": "798cf6f2f5705bb584ee10ff9bb893ba11e997c7c5b343ca85852e20f68722e0",
   "contexts": {
     "root": {
       "keys": [
@@ -680,7 +680,7 @@
         },
         {
           "key": "scatter",
-          "description": "",
+          "description": "Fan-out over `values` (declared list) or `values_from` (config reference); both absent is accepted at parse time (the executor expands zero instances — see validate W-side emptiness checks)",
           "type": "object",
           "ref": "#/$defs/scatterConfig"
         },
@@ -897,7 +897,7 @@
         },
         {
           "key": "variables",
-          "description": "",
+          "description": "Variable name to config reference (\"config.samples_list\") or inline literal (\"S1,S2\"; brackets `\"[S1, S2]\"` also work)",
           "type": "object"
         }
       ]

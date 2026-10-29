@@ -745,6 +745,75 @@ mod tests {
         assert_eq!(checked, 16, "expected the full 16-workflow gallery");
     }
 
+    /// Convert parsed workflow TOML into a JSON value for schema validation.
+    ///
+    /// `toml::Value` → `serde_json::Value` loses nothing the schema cares
+    /// about (the schema's leaves are strings/numbers/bools/arrays/objects).
+    fn to_json(value: &toml::Value) -> serde_json::Value {
+        match value {
+            toml::Value::String(s) => serde_json::Value::String(s.clone()),
+            toml::Value::Integer(i) => serde_json::json!(i),
+            toml::Value::Float(f) => serde_json::json!(f),
+            toml::Value::Boolean(b) => serde_json::json!(b),
+            toml::Value::Datetime(d) => serde_json::json!(d.to_string()),
+            toml::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(to_json).collect())
+            }
+            toml::Value::Table(map) => serde_json::Value::Object(
+                map.iter().map(|(k, v)| (k.clone(), to_json(v))).collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn schema_validates_every_gallery_workflow() {
+        // Issue #973 F5: the shipped schema is what `oxo-flow schema`,
+        // the VS Code extension, and external validators enforce, so the
+        // gallery (the compatibility floor) must validate against it too —
+        // otherwise documented-but-rejected forms silently erode IDE trust.
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../oxo-flow-cli/schema/oxoflow-v1.schema.json");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&schema_path).expect("schema readable"))
+                .expect("schema is valid JSON");
+        let compiled = jsonschema::validator_for(&schema).expect("schema compiles");
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("gallery directory exists") {
+            let path = entry.expect("readable gallery entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("oxoflow") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).expect("gallery file readable");
+            let value = to_json(&toml::Value::Table(parse(&content)));
+            let errors: Vec<String> = compiled
+                .iter_errors(&value)
+                .map(|e| {
+                    let at = e
+                        .instance_path()
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if at.is_empty() {
+                        e.to_string()
+                    } else {
+                        format!("at `{at}`: {e}")
+                    }
+                })
+                .collect();
+            assert!(
+                errors.is_empty(),
+                "{} fails schema validation: {}",
+                path.display(),
+                errors.join("; ")
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 16, "expected the full 16-workflow gallery");
+    }
+
     #[test]
     fn accepts_the_documented_ai_section() {
         // Issue #634: `[ai] enabled = true` is the documented activation
