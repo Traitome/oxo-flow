@@ -58,13 +58,32 @@ impl TestServer {
     /// Retries on a fresh port when the child dies before binding: `free_port`
     /// releases its probe listener before the child binds, so a parallel test
     /// can steal the port (TOCTOU) and the child then exits on the bind error.
+    /// A child still alive at deadline is slow-start (#958), not a failure —
+    /// it keeps waiting on the same child, mirroring `common::spawn_web_server`.
     fn spawn_server(dir: &std::path::Path, port: u16, extra_envs: &[(&str, &str)]) -> Self {
+        let overall_deadline = Instant::now() + 3 * common::BIND_WAIT_TIMEOUT;
         let mut last_log = String::new();
         for attempt in 1..=5 {
             let port = if attempt == 1 { port } else { free_port() };
             let mut server = Self::spawn_server_once(dir, port, extra_envs);
-            if server.wait_for_bind(Duration::from_secs(15)) {
-                return server;
+            loop {
+                if server.wait_for_bind(common::BIND_WAIT_TIMEOUT) {
+                    return server;
+                }
+                if matches!(server.child.try_wait(), Ok(Some(_))) {
+                    // Exited without binding: retry on a fresh port.
+                    break;
+                }
+                // Alive but slow — keep waiting on this child rather than
+                // respawning a fresh cold one (issue #958).
+                if Instant::now() > overall_deadline {
+                    panic!(
+                        "web server did not bind within the overall deadline \
+                         (alive but slow after {}s)\nlast server log tail:\n{}",
+                        3 * common::BIND_WAIT_TIMEOUT.as_secs(),
+                        server.log_tail()
+                    );
+                }
             }
             last_log = server.log_tail();
             // Drop kills a child that is somehow still alive.

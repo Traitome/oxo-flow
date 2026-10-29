@@ -2,8 +2,10 @@
 //! `workspace_bin` (current_exe-derived — release/`CARGO_TARGET_DIR`
 //! safe), `free_port`, and a web-server spawner whose bind is proven by
 //! the child's own "Listening on" log line (a foreign process squatting
-//! on the port cannot be mistaken for ours), with a retry on a fresh
-//! port when the child dies before binding. Include with
+//! on the port cannot be mistaken for ours). The spawner retries on a
+//! fresh port when the child dies before binding, and keeps waiting on a
+//! still-alive child past the per-attempt deadline (#958 slow-start
+//! under parallel load). Include with
 //! `mod common;` (path-relative) or `#[path = "common/mod.rs"] mod common;`.
 
 #![allow(dead_code)] // per-binary: unused helpers are expected
@@ -134,10 +136,27 @@ fn wait_for_bind(server: &mut WebServer, timeout: Duration) -> bool {
     }
 }
 
+/// Per-attempt bind deadline for the retry loop below. Generous enough for
+/// slow-start under parallel test load (cold binary page-in, DB init, the
+/// AI-provider auto-detect probe in `oxo-flow-web`'s startup path — all of
+/// which happen BEFORE the "Listening on" line): #958 observed 15 s
+/// abandoning alive-but-slow children, and each retry then started another
+/// cold child with the same slow start, so all 5 attempts failed identically.
+///
+/// `pub` so the mirrored loop in `web_integration.rs` (`TestServer`) imports
+/// it instead of retyping a constant — reuse-never-retype.
+pub const BIND_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Spawn the web server, retrying on a fresh port when the child dies
 /// before binding. `free_port` releases its probe listener before the
 /// child binds, so a parallel test can steal the port (TOCTOU) and the
 /// child then exits on the bind error.
+///
+/// A child that is still ALIVE at deadline expiry is a slow-start case,
+/// not a failure: dropping it and starting a fresh cold child reproduces
+/// the same slow start (issue #958), so the same child keeps waiting until
+/// the overall deadline instead. Only an exited child triggers the
+/// fresh-port retry (bind theft, config error).
 pub fn spawn_web_server(
     dir: &std::path::Path,
     port: u16,
@@ -153,12 +172,31 @@ pub fn spawn_web_server_with_args(
     extra_envs: &[(&str, &str)],
     extra_args: &[&str],
 ) -> WebServer {
+    // Total budget across all attempts; per-attempt waits stay under it.
+    let overall_deadline = Instant::now() + 3 * BIND_WAIT_TIMEOUT;
     let mut last_log = String::new();
     for attempt in 1..=5 {
         let port = if attempt == 1 { port } else { free_port() };
         let mut server = spawn_web_server_once(dir, port, extra_envs, extra_args);
-        if wait_for_bind(&mut server, Duration::from_secs(15)) {
-            return server;
+        loop {
+            if wait_for_bind(&mut server, BIND_WAIT_TIMEOUT) {
+                return server;
+            }
+            if matches!(server.child.try_wait(), Ok(Some(_))) {
+                // Exited without binding: retry on a fresh port.
+                break;
+            }
+            // Still alive past the per-attempt deadline — slow start under
+            // load, not a bind failure. Keep waiting on THIS child; killing
+            // it and respawning would just restart the cold-start cost.
+            if Instant::now() > overall_deadline {
+                panic!(
+                    "web server did not bind within the overall deadline \
+                     (alive but slow after {}s)\n{}",
+                    3 * BIND_WAIT_TIMEOUT.as_secs(),
+                    log_tail(&server)
+                );
+            }
         }
         last_log = log_tail(&server);
     }
