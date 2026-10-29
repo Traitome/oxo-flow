@@ -1,9 +1,8 @@
 //! AI-powered error recovery for run failures.
 
 use anyhow::Result;
-use chrono::Utc;
 use colored::Colorize;
-use oxo_flow_ai::{knowledge::builtin, provider::AiProvider};
+use oxo_flow_ai::{knowledge::builtin, provider::AiProvider, session::archive_before_modify};
 use std::path::{Path, PathBuf};
 
 /// Diagnostic result from AI error analysis.
@@ -144,14 +143,12 @@ pub async fn diagnose_failure(
 
 /// Apply a fix to the workflow file, archiving the original.
 pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) -> Result<PathBuf> {
-    // Archive original
-    let archive_dir = archive_dir_for(workflow_path);
-    std::fs::create_dir_all(&archive_dir)?;
-
+    // Archive original via the shared #544/P3-10 machinery: the snapshot
+    // carries the full pre-fix workflow content, so it must land 0600 and
+    // the per-workflow archive dir must stay pruned — `archive_dir_for`
+    // used to hand-roll the layout with neither.
     let original = std::fs::read_to_string(workflow_path)?;
-    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let backup_path = archive_dir.join(format!("{timestamp}-{session_id}-before.oxoflow"));
-    std::fs::write(&backup_path, &original)?;
+    let backup_path = archive_before_modify(workflow_path, &original, session_id)?;
     eprintln!(
         "{} Original archived to {}",
         "  ✓".green(),
@@ -167,32 +164,6 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
     );
 
     Ok(backup_path)
-}
-
-fn archive_dir_for(workflow_path: &Path) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let local = cwd.join(".oxo-flow").join("ai_archive").join(
-        workflow_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .as_ref(),
-    );
-    if local.parent().is_some_and(|p| p.exists()) || cwd.join(".oxo-flow").exists() {
-        local
-    } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home)
-            .join(".oxo-flow")
-            .join("ai_archive")
-            .join(
-                workflow_path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .as_ref(),
-            )
-    }
 }
 
 fn build_diagnose_prompt() -> String {
@@ -339,7 +310,9 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::apply_fix;
     use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn safe_gate_requires_an_explicit_yes() {
@@ -408,5 +381,160 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         assert!(extract_toml_block("```toml\n[workflow]\nname = \"x\"\n```").is_some());
         assert!(extract_toml_block("```toml\nnot toml at all\n```").is_none());
         assert!(extract_toml_block("no fence here").is_none());
+    }
+
+    /// Serializes the tests that `set_current_dir` into a temp cwd —
+    /// `apply_fix` → `archive_before_modify` resolves the archive root
+    /// against the process cwd, and a parallel test mid-dance would
+    /// otherwise observe the wrong root. A poisoned lock (one test
+    /// panicking while the cwd is elsewhere) must not cascade into every
+    /// sibling failing with PoisonError.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `apply_fix` resolves the archive root from the process cwd, so these
+    /// tests run inside a temp cwd (pattern from web `workspace.rs` tests).
+    fn with_temp_cwd(tag: &str, f: impl FnOnce(&Path)) {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::Builder::new()
+            .prefix(&format!("oxo-recover-{tag}-"))
+            .tempdir()
+            .unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // A project-local `.oxo-flow` marker makes `resolve_oxo_flow_dir`
+        // anchor here instead of falling back to the real `$HOME` — the
+        // layout assertions below must never touch the developer's home.
+        std::fs::create_dir_all(".oxo-flow").unwrap();
+        std::fs::write("workflow.oxoflow", "[workflow]\nname = \"t\"\n").unwrap();
+
+        struct RestoreCwd(PathBuf);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                // Runs on panic too — a cwd left inside a deleted temp dir
+                // would make every other test fail resolving relative paths.
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _restore = RestoreCwd(prev);
+
+        f(tmp.path());
+    }
+
+    #[test]
+    fn recovered_archive_is_owner_only() {
+        // Issue #964: recover-side backups carry the full pre-fix workflow
+        // content — they must land 0600 exactly like the orchestrator-side
+        // archives (`archived_snapshot_is_owner_only` in oxo-flow-ai).
+        with_temp_cwd("perm", |_| {
+            let backup = apply_fix(
+                Path::new("workflow.oxoflow"),
+                "[workflow]\nname = \"fixed\"\n",
+                "sess-964",
+            )
+            .unwrap();
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+                    0o600,
+                    "recover archive must be owner-only"
+                );
+            }
+            let _ = backup;
+        });
+    }
+
+    #[test]
+    fn recovered_archive_prunes_oldest_snapshots() {
+        // Issue #964: repeated recover runs previously grew
+        // `.oxo-flow/ai_archive/<stem>/` without bound; the shared machinery
+        // caps it (200 kept here — verified via the prune contract on a
+        // smaller keep by `archive_prune_keeps_the_newest_snapshots_per_workflow`,
+        // so this test only pins that the cap applies on the recover path).
+        with_temp_cwd("prune", |_| {
+            // Pre-fill the per-workflow archive dir beyond the cap with
+            // older-dated snapshots, then let apply_fix add one more.
+            let dir = std::env::current_dir()
+                .unwrap()
+                .join(".oxo-flow/ai_archive/workflow");
+            std::fs::create_dir_all(&dir).unwrap();
+            for i in 0..200 {
+                let p = dir.join(format!("20250101-0000{i:02}-old{i}-before.oxoflow"));
+                std::fs::write(&p, "old").unwrap();
+                // Distinct mtimes: a same-second batch would leave the sort
+                // order to the filesystem.
+                let t = filetime::FileTime::from_unix_time(1_700_000_000 + i as i64, 0);
+                filetime::set_file_mtime(&p, t).unwrap();
+            }
+
+            apply_fix(
+                Path::new("workflow.oxoflow"),
+                "[workflow]\nname = \"fixed\"\n",
+                "sess-prune",
+            )
+            .unwrap();
+
+            let remaining: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                remaining.len(),
+                200,
+                "recover archives must be pruned to the cap: got {}",
+                remaining.len()
+            );
+            assert!(
+                !remaining.iter().any(|n| n.contains("old0-")),
+                "the oldest pre-filled snapshot must be pruned: {remaining:?}"
+            );
+            assert!(
+                remaining.iter().any(|n| n.contains("sess-prune")),
+                "the fresh snapshot must survive the prune: {remaining:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn recovered_archive_layout_matches_session_machinery() {
+        // The recover path must not retype its own archive layout: the
+        // backup lives under `.oxo-flow/ai_archive/<stem>/` with the
+        // `{timestamp}-{session}-before.oxoflow` name the shared helper
+        // owns (and the fix is actually written).
+        with_temp_cwd("layout", |_| {
+            let backup = apply_fix(
+                Path::new("workflow.oxoflow"),
+                "[workflow]\nname = \"fixed\"\n",
+                "sess-layout",
+            )
+            .unwrap();
+
+            let expected_parent = std::env::current_dir()
+                .unwrap()
+                .join(".oxo-flow/ai_archive/workflow");
+            assert_eq!(
+                backup.parent().unwrap(),
+                expected_parent,
+                "archive dir must come from the shared resolver"
+            );
+            assert!(
+                backup
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .ends_with("-sess-layout-before.oxoflow"),
+                "backup filename must follow the shared convention: {}",
+                backup.display()
+            );
+            assert_eq!(
+                std::fs::read_to_string("workflow.oxoflow").unwrap(),
+                "[workflow]\nname = \"fixed\"\n",
+                "the fix itself must be written"
+            );
+        });
     }
 }
