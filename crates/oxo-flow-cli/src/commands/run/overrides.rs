@@ -481,7 +481,7 @@ pub(crate) fn apply_cli_overrides(
 /// The post-run `cache_max_age_days` environment-cache aging sweep was
 /// retired in favor of `oxo-flow env gc` (issue #974) — the shared env
 /// store (#904) owns environment lifecycle now. The key still PARSES (it is
-/// a plain [config] entry), but it has no effect; warn once per invocation
+/// a plain `cache_max_age_days` \[config\] entry), but it has no effect; warn once per invocation
 /// so a stale workflow doesn't silently expect pruning (diagnostic ships
 /// with docs: run.md "Cache environment setup").
 fn warn_retired_cache_aging_key(config: &WorkflowConfig) {
