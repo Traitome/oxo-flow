@@ -5073,11 +5073,16 @@ prompt. See <a href="../custom-skills/">Custom Skills</a>.</p>
 </span></code></pre></div>
 <p><code>prompt_tokens</code> is the <strong>full prompt bill</strong>: on caching-enabled
 Anthropic-compatible endpoints it includes <code>cache_read_tokens</code> (served from
-the provider's prompt cache) and <code>cache_creation_tokens</code> (written to it),
-so token totals stay comparable across providers while the cache split is
-preserved for cost estimation — cache reads bill below the input rate and
-cache writes above it. Sessions written before cache accounting carry only
-the two base counters and still load unchanged.</p>
+the provider's prompt cache) and <code>cache_creation_tokens</code> (written to it);
+DeepSeek-native and OpenAI-compatible endpoints report the same split under
+their own shapes (<code>prompt_cache_hit_tokens</code> and
+<code>prompt_tokens_details.cached_tokens</code> respectively, folded into
+<code>cache_read_tokens</code> — DeepSeek has no cache-write counter, so
+<code>cache_creation_tokens</code> stays 0 there). Token totals stay comparable across
+providers while the cache split is preserved for cost estimation — cache
+reads bill below the input rate and cache writes above it. Sessions written
+before cache accounting carry only the two base counters and still load
+unchanged.</p>
 <hr />
 <h2 id="provider-comparison">Provider Comparison<a class="headerlink" href="#provider-comparison" title="Permanent link">#</a></h2>
 <table>
