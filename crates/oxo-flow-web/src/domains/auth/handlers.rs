@@ -14,6 +14,47 @@ use crate::infra::db::models;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
+/// Session lifetime for every minted session (login + OAuth callback),
+/// issue #976. Configurable via `OXO_FLOW_SESSION_TTL_HOURS` so operators
+/// can align it with their security posture; the default matches the
+/// historical hardcoded 24 h. Same env-knob convention as the other
+/// `OXO_FLOW_*` variables: unparseable, `0`, or above the 1-year cap falls
+/// back to the default with a warning — a typo can never mint a
+/// permanently-valid or instantly-dead session.
+pub(crate) const DEFAULT_SESSION_TTL_HOURS: u64 = 24;
+pub(crate) const MAX_SESSION_TTL_HOURS: u64 = 8760; // one year
+pub(crate) const SESSION_TTL_ENV: &str = "OXO_FLOW_SESSION_TTL_HOURS";
+
+pub(crate) fn session_ttl_hours() -> u64 {
+    parse_session_ttl_hours(std::env::var(SESSION_TTL_ENV).ok().as_deref())
+}
+
+pub(crate) fn parse_session_ttl_hours(raw: Option<&str>) -> u64 {
+    match raw.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(h) if (1..=MAX_SESSION_TTL_HOURS).contains(&h) => h,
+        Some(_) => {
+            tracing::warn!(
+                "{} out of range (must be 1..={}) — falling back to the default {}h",
+                SESSION_TTL_ENV,
+                MAX_SESSION_TTL_HOURS,
+                DEFAULT_SESSION_TTL_HOURS
+            );
+            DEFAULT_SESSION_TTL_HOURS
+        }
+        None => {
+            if let Some(raw) = raw {
+                tracing::warn!(
+                    "{} is not a number ('{}') — falling back to the default {}h",
+                    SESSION_TTL_ENV,
+                    raw,
+                    DEFAULT_SESSION_TTL_HOURS
+                );
+            }
+            DEFAULT_SESSION_TTL_HOURS
+        }
+    }
+}
+
 /// Extract the Bearer token from request headers.
 fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -332,7 +373,7 @@ pub async fn login(
     // Persist session to database so the token is actually valid.
     // Without this, require_auth and auth_me would reject the token.
     if let Ok(pool) = get_pool() {
-        let expires = chrono::Utc::now() + chrono::Duration::hours(24);
+        let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
         let insert_result = sqlx::query(
             "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         )
@@ -785,7 +826,7 @@ pub async fn oauth_callback(
         );
     }
 
-    let expires = chrono::Utc::now() + chrono::Duration::hours(24);
+    let expires = chrono::Utc::now() + chrono::Duration::hours(session_ttl_hours() as i64);
     let insert_result = sqlx::query(
         "INSERT OR REPLACE INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
     )
@@ -1203,5 +1244,87 @@ mod tests {
         // No credential → not authenticated.
         let me = auth_me_in(&pool, &axum::http::HeaderMap::new()).await;
         assert!(!me.authenticated);
+    }
+
+    // ---- OXO_FLOW_SESSION_TTL_HOURS (issue #976) ----
+
+    #[test]
+    fn ttl_unset_uses_default() {
+        assert_eq!(
+            parse_session_ttl_hours(None),
+            DEFAULT_SESSION_TTL_HOURS,
+            "unset env must keep the historical 24 h default"
+        );
+    }
+
+    #[test]
+    fn ttl_accepts_in_range_values() {
+        assert_eq!(parse_session_ttl_hours(Some("1")), 1);
+        assert_eq!(parse_session_ttl_hours(Some("24")), 24);
+        assert_eq!(parse_session_ttl_hours(Some("168")), 168);
+        assert_eq!(parse_session_ttl_hours(Some("8760")), MAX_SESSION_TTL_HOURS);
+        assert_eq!(
+            parse_session_ttl_hours(Some(" 12 ")),
+            12,
+            "surrounding whitespace tolerated"
+        );
+    }
+
+    #[test]
+    fn ttl_out_of_range_falls_back_with_default() {
+        assert_eq!(
+            parse_session_ttl_hours(Some("0")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+        assert_eq!(
+            parse_session_ttl_hours(Some("8761")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+        assert_eq!(
+            parse_session_ttl_hours(Some("999999999999")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+    }
+
+    #[test]
+    fn ttl_garbage_falls_back_with_default() {
+        assert_eq!(
+            parse_session_ttl_hours(Some("abc")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+        assert_eq!(parse_session_ttl_hours(Some("")), DEFAULT_SESSION_TTL_HOURS);
+        assert_eq!(
+            parse_session_ttl_hours(Some("-5")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+        assert_eq!(
+            parse_session_ttl_hours(Some("24.5")),
+            DEFAULT_SESSION_TTL_HOURS
+        );
+    }
+
+    /// End-to-end for the issue's acceptance criterion: a non-default TTL
+    /// must land in the minted session's `expires_at` so `validate_session`
+    /// honors it. Uses the same chrono arithmetic as the two minting sites.
+    #[test]
+    fn ttl_boundary_rejects_expired_session() {
+        let ttl = parse_session_ttl_hours(Some("1"));
+        let now = chrono::Utc::now();
+        let expires = (now + chrono::Duration::hours(ttl as i64)).to_rfc3339();
+
+        // Just inside the window: still valid.
+        let almost_now = now + chrono::Duration::minutes(59);
+        assert!(
+            expires.as_str() > almost_now.to_rfc3339().as_str(),
+            "session minted with a 1 h TTL must still validate near the end of the window"
+        );
+
+        // Just outside: expired under the same string comparison
+        // `validate_session` uses.
+        let just_after = now + chrono::Duration::minutes(61);
+        assert!(
+            expires.as_str() <= just_after.to_rfc3339().as_str(),
+            "session minted with a 1 h TTL must be expired past its window"
+        );
     }
 }

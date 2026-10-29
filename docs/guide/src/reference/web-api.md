@@ -188,6 +188,13 @@ Returns session token, username, and role.
 > usernames. Sessions store the canonical `users.id` resolved at login;
 > role lookups match by id only and a session whose user row is gone
 > (deleted user, stale pre-upgrade session) is rejected with 401.
+>
+> **Session lifetime is operator-tunable (#976):** every minted session
+> (login and OAuth callback) expires after `OXO_FLOW_SESSION_TTL_HOURS`
+> hours — default `24`, minimum `1`, cap `8760` (one year). Unset keeps
+> the historical 24-hour TTL; an unparseable or out-of-range value warns
+> and falls back to the default. Existing sessions keep their minted
+> expiry — the variable is read at session creation only.
 
 ### Check Session
 ```
