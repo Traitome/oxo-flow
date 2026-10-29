@@ -1083,12 +1083,22 @@ shell = "echo hi > {output[0]}"
             "gate must resolve panel.bed against the workflow root, not cwd"
         );
 
-        // And from a genuinely different cwd, same verdict.
+        // And from a genuinely different cwd, same verdict. The cwd dance
+        // takes the crate-shared CWD_LOCK (commands/mod.rs — issue #982
+        // P1-1): parallel tests that resolve relative paths against the
+        // process cwd must not run while the cwd is elsewhere. RestoreCwd
+        // restores even on panic, so a failure here can't cascade into
+        // every sibling failing on a deleted-cwd path.
+        let _cwd = crate::commands::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let elsewhere = tempfile::tempdir().unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(elsewhere.path()).unwrap();
+        let _restore = crate::commands::RestoreCwd(prev);
         let verdict = when_condition_false(rule, &config, &wildcard_values);
-        std::env::set_current_dir(prev).unwrap();
+        drop(_restore);
+        drop(_cwd);
         assert!(!verdict, "changing the process cwd must not flip the gate");
     }
 

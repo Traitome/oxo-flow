@@ -312,7 +312,7 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 mod tests {
     use super::apply_fix;
     use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn safe_gate_requires_an_explicit_yes() {
@@ -383,18 +383,15 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         assert!(extract_toml_block("no fence here").is_none());
     }
 
-    /// Serializes the tests that `set_current_dir` into a temp cwd —
-    /// `apply_fix` → `archive_before_modify` resolves the archive root
-    /// against the process cwd, and a parallel test mid-dance would
-    /// otherwise observe the wrong root. A poisoned lock (one test
-    /// panicking while the cwd is elsewhere) must not cascade into every
-    /// sibling failing with PoisonError.
-    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// `apply_fix` resolves the archive root from the process cwd, so these
     /// tests run inside a temp cwd (pattern from web `workspace.rs` tests).
+    /// The cwd dance takes the crate-shared CWD_LOCK (commands/mod.rs,
+    /// issue #982 P1-1) — run_preview's when-gate cwd test dances the same
+    /// process state and must not interleave.
     fn with_temp_cwd(tag: &str, f: impl FnOnce(&Path)) {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = crate::commands::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::Builder::new()
             .prefix(&format!("oxo-recover-{tag}-"))
             .tempdir()
@@ -408,15 +405,7 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         std::fs::create_dir_all(".oxo-flow").unwrap();
         std::fs::write("workflow.oxoflow", "[workflow]\nname = \"t\"\n").unwrap();
 
-        struct RestoreCwd(PathBuf);
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                // Runs on panic too — a cwd left inside a deleted temp dir
-                // would make every other test fail resolving relative paths.
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _restore = RestoreCwd(prev);
+        let _restore = crate::commands::RestoreCwd(prev);
 
         f(tmp.path());
     }

@@ -69,6 +69,29 @@ pub fn is_quiet() -> bool {
     QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Serializes tests that `set_current_dir` into a temp cwd (issue #982
+/// P1-1): several command test modules dance the process cwd, and a
+/// parallel test mid-dance would break siblings resolving relative paths
+/// against the cwd. One lock shared by every cwd-dancing test module
+/// (ai_recover, run_preview); a poisoned lock (one test panicking while
+/// the cwd is elsewhere) must not cascade into every sibling failing with
+/// PoisonError — callers recover via `unwrap_or_else(|e| e.into_inner())`.
+#[cfg(test)]
+pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Restores the process cwd on drop, panics included (issue #982 P1-1) —
+/// a cwd left inside a deleted temp dir would make every other test fail
+/// resolving relative paths. Test-only companion to [`CWD_LOCK`].
+#[cfg(test)]
+pub(crate) struct RestoreCwd(std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for RestoreCwd {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
 pub fn print_banner() {
     if QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         return;
