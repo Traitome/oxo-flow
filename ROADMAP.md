@@ -312,6 +312,13 @@ memory = "32G"
 
 ---
 
+> **Note on numbering** — there is no Phase 7: that number was assigned to
+> the Venus pipeline (removed from the repository in commit 287447cf), and
+> the remaining phases keep their original numbers so cross-references
+> elsewhere (e.g. "Phase 10.4", "Phase 10") stay valid.
+
+---
+
 ## Phase 8: Production Hardening
 
 **Goal**: Production-ready release with complete documentation and testing.
