@@ -40,7 +40,7 @@ and publishes it to [Open VSX](https://open-vsx.org/).
     from the release page and install it directly:
 
     ```bash
-    code --install-extension oxo-flow-vscode-v0.24.1.vsix
+    code --install-extension oxo-flow-vscode-v0.25.0.vsix
     ```
 
 ## Language support

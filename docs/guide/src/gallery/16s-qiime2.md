@@ -63,7 +63,7 @@ Two hard-won gotchas surfaced in live testing:
 - **scikit-learn version gate.** `classify-sklearn` hard-fails when the classifier artifact was trained under a different scikit-learn version than the one in your QIIME2 env:
 
   ```
-  ValueError: The scikit-learn version (0.24.1) used to generate this
+  ValueError: The scikit-learn version (0.25.0) used to generate this
   artifact does not match the current version of scikit-learn installed
   (1.4.2). Please retrain your classifier for your current deployment ...
   ```
