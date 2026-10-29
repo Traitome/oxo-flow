@@ -148,8 +148,7 @@ pub fn apply_fix(workflow_path: &Path, modified_toml: &str, session_id: &str) ->
     // the per-workflow archive dir must stay pruned — `archive_dir_for`
     // used to hand-roll the layout with neither.
     let original = std::fs::read_to_string(workflow_path)?;
-    let backup_path = archive_before_modify(workflow_path, &original, session_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let backup_path = archive_before_modify(workflow_path, &original, session_id)?;
     eprintln!(
         "{} Original archived to {}",
         "  ✓".green(),
@@ -313,7 +312,7 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 mod tests {
     use super::apply_fix;
     use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn safe_gate_requires_an_explicit_yes() {
@@ -409,12 +408,17 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         std::fs::create_dir_all(".oxo-flow").unwrap();
         std::fs::write("workflow.oxoflow", "[workflow]\nname = \"t\"\n").unwrap();
 
-        f(tmp.path());
+        struct RestoreCwd(PathBuf);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                // Runs on panic too — a cwd left inside a deleted temp dir
+                // would make every other test fail resolving relative paths.
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _restore = RestoreCwd(prev);
 
-        // Restore cwd before `tmp` drops (same rationale as audit.rs tests):
-        // a panic with the cwd inside tmp would leave every other test
-        // resolving relative paths inside a deleted temp dir.
-        std::env::set_current_dir(prev).unwrap();
+        f(tmp.path());
     }
 
     #[test]
