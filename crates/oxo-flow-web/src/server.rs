@@ -56,6 +56,14 @@ pub async fn spa_index() -> impl IntoResponse {
 /// yields a blank page whose hashed asset URLs all 404, with no hint
 /// (issue #276). When the referenced assets directory is missing, fall
 /// back to the actionable "SPA not built" page instead.
+///
+/// The check is per-reference, not just "assets/ exists" (issue #973 F1):
+/// a stale gitignored `assets/` directory from an older build passes the
+/// directory test while the committed index.html references NEW hashes
+/// that are absent — the exact black-screen-with-zero-diagnostics path the
+/// reporter hit. Parse every `assets/…` URL out of index.html and verify
+/// each file resolves; otherwise the fallback page is served with a loud
+/// warning naming the remedy.
 fn load_spa_index_html() -> String {
     // The fallback carries a <head> so the <base>/<meta> injection below
     // stays unconditional — including under sub-path mounts, where the
@@ -66,13 +74,17 @@ fn load_spa_index_html() -> String {
     let read_index = |dir: &std::path::Path| -> Option<String> {
         let html = std::fs::read_to_string(dir.join("index.html")).ok()?;
         // A built SPA emits its scripts/links under `assets/` next to
-        // index.html; if that directory is absent the page cannot load —
-        // report the actionable fallback instead of a blank shell.
-        if !dir.join("assets").is_dir() {
+        // index.html; every referenced file must exist or the page cannot
+        // load — report the actionable fallback instead of a blank shell.
+        let missing = missing_spa_assets(&html, dir);
+        if !missing.is_empty() {
             tracing::warn!(
-                "SPA index found at {} but its assets/ directory is missing — \
-                 run `make frontend-build` (or `cd frontend && npm run build`) first",
-                dir.display()
+                "SPA index at {} references {} missing asset(s) (first: {}) — \
+                 run `make frontend-build` (or `cd frontend && npm run build`) first, \
+                 or point OXO_FLOW_FRONTEND_DIR at a built frontend directory",
+                dir.display(),
+                missing.len(),
+                missing[0]
             );
             return None;
         }
@@ -84,7 +96,12 @@ fn load_spa_index_html() -> String {
         .or_else(|| std::env::var("FRONTEND_DIR").ok())
         .map(|dir| {
             read_index(std::path::Path::new(&dir)).unwrap_or_else(|| {
-                tracing::warn!("SPA index not found at {dir}, using fallback");
+                // Only claim "not found" when index.html itself could not be
+                // read — a found-but-broken index already logged its own
+                // specific warn (missing assets) inside read_index.
+                if !std::path::Path::new(&dir).join("index.html").is_file() {
+                    tracing::warn!("SPA index not found at {dir}, using fallback");
+                }
                 fallback.to_string()
             })
         })
@@ -229,6 +246,62 @@ fn frontend_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/static"))
 }
 
+/// Status-conditional `Cache-Control` for `/assets` (issue #973 F2):
+/// hashed bundles on success are immutable; error responses must never be
+/// cached, or a 404 for a not-yet-built bundle poisons the browser cache
+/// for a year and survives the fix. Generic over the body type because
+/// ServeDir responses carry `ServeFileSystemResponseBody`, not `Body`.
+fn cache_control_by_status<B>(res: &axum::http::Response<B>) -> Option<axum::http::HeaderValue> {
+    let value = if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
+    Some(axum::http::HeaderValue::from_static(value))
+}
+
+/// Verify that every `assets/…` reference in a served index.html actually
+/// resolves next to it (issue #973 F1). Vite emits URLs like
+/// `./assets/index-HASH.js`; a stale `assets/` directory from an older
+/// build leaves the committed index.html pointing at hashes that no longer
+/// exist — the SPA then renders nothing while every check on the directory
+/// level passes.
+fn missing_spa_assets(html: &str, dir: &std::path::Path) -> Vec<String> {
+    let mut missing = Vec::new();
+    for caps in asset_ref_regex().captures_iter(html) {
+        // The capture strips the `assets/` prefix and any leading `./`;
+        // re-anchor to the served directory next to index.html.
+        // Vite never emits query strings here today, but a cache-buster
+        // (`x.js?v=2`) must not leak into the filesystem lookup.
+        let rel = caps[1].trim_start_matches('/');
+        let rel = rel.split(['?', '#']).next().unwrap_or(rel);
+        let path = dir.join("assets").join(rel);
+        if !path.is_file() && !missing.iter().any(|m| m == &caps[1]) {
+            missing.push(caps[1].to_string());
+        }
+    }
+    missing
+}
+
+/// Match `src`/`href` attributes whose value resolves under `assets/`
+/// (`./assets/x.js`, `/assets/x.css`, `assets/x.woff2`). Vite emits exactly
+/// this shape for every entry the SPA loads, and the built index.html is
+/// machine-generated, so a regex is sufficient — no HTML parser dep.
+/// Boundaries: the leading `[\s"'<]` keeps `data-src=` / `xhref=` from
+/// matching (the `regex` crate has no lookbehind), and the optional prefix
+/// segment handles `./` plus at most one path segment — vite never emits
+/// deeper relative prefixes (`../../assets/…`) or multi-segment mount
+/// paths in the committed index.html.
+fn asset_ref_regex() -> &'static regex::Regex {
+    static ASSET_REF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ASSET_REF.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?:^|[\s"'<])(?:src|href)=["']\.{0,2}/?(?:[a-zA-Z0-9._~-]+/)?assets/([^"']+)["']"#,
+        )
+        .expect("static asset-ref regex")
+    })
+}
+
 /// Build the full application router for the given serve mode.
 ///
 /// * `personal` — bind to 127.0.0.1, no auth required
@@ -247,13 +320,22 @@ pub fn build_router(mode: &str) -> Router {
     // ---- Frontend / SPA routes ----
     //
     // Vite emits content-hashed filenames under /assets (the hash changes on
-    // every build), so they are safe to cache forever — `immutable` keeps
-    // repeat loads from revalidating. index.html itself stays `no-cache`
-    // (see spa_index) so new deploys are picked up immediately.
+    // every build), so successful responses are safe to cache forever —
+    // `immutable` keeps repeat loads from revalidating. index.html itself
+    // stays `no-cache` (see spa_index) so new deploys are picked up
+    // immediately.
+    //
+    // The header is status-conditional (issue #973 F2): stamping `immutable`
+    // on 404s made the browser cache MISSING assets for a year, so a user
+    // who hit the un-built-SPA black screen kept getting a cached 404 for
+    // the asset even after building the frontend — only a hard refresh
+    // recovered. 2xx (and 304, which reuses the cached entry) keep
+    // `immutable`; error statuses get `no-store` so a build fixes the next
+    // reload without cache surgery.
     let assets_service = tower::ServiceBuilder::new()
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+            cache_control_by_status,
         ))
         .service(tower_http::services::ServeDir::new(
             frontend_dir().join("assets"),
@@ -1233,5 +1315,129 @@ mod normalize_tests {
         // Trailing slashes and spaces never reach the router.
         assert_eq!(normalize_base_path("/oxo-flow/"), "/oxo-flow");
         assert_eq!(normalize_base_path("  oxo-flow/  "), "/oxo-flow");
+    }
+}
+
+#[cfg(test)]
+mod spa_asset_check_tests {
+    use super::*;
+
+    /// #973 F1: every assets/… reference in the served index.html must
+    /// resolve to a real file, else the SPA black-screens with no
+    /// diagnostics. The committed source-tree index.html references hashed
+    /// entry bundles; a stale gitignored assets/ dir passes a directory
+    /// check while the files are gone.
+    #[test]
+    fn missing_spa_assets_catches_stale_hashes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><head><script type="module" src="./assets/index-OLDHASH.js"></script>
+            <link rel="stylesheet" href="./assets/index-OLDHASH.css"></head><body></body></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        // Stale assets/ dir: exists, but contains none of the referenced files.
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+
+        let missing = missing_spa_assets(html, dir.path());
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0], "index-OLDHASH.js");
+
+        // Build the referenced files → check goes green.
+        std::fs::write(dir.path().join("assets/index-OLDHASH.js"), b"").expect("write js");
+        std::fs::write(dir.path().join("assets/index-OLDHASH.css"), b"").expect("write css");
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
+    }
+
+    /// References outside `assets/` (favicon, OpenAPI, CDNs) and the
+    /// fallback page (no asset refs at all) must not trip the check.
+    #[test]
+    fn non_asset_refs_are_ignored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><head>
+            <link rel="icon" href="/favicon.svg">
+            <script type="module" src="https://cdn.example.com/assets/external.js"></script>
+            <script type="module" crossorigin src="./assets/real-HASH.js"></script>
+            </head><body></body></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/real-HASH.js"), b"").expect("write js");
+
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
+        // Same HTML without the built asset → exactly one finding.
+        let html_stale = html.replace("assets/real-HASH.js", "assets/gone-HASH.js");
+        assert_eq!(missing_spa_assets(&html_stale, dir.path()).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod cache_control_tests {
+    use super::*;
+
+    /// #973 F2: 404s for missing bundles must be no-store — a poisoned
+    /// 1-year cache survived "build it later" and required a hard refresh.
+    #[test]
+    fn error_statuses_are_no_store() {
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            let res = axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .expect("response");
+            let header = cache_control_by_status(&res).expect("header");
+            assert_eq!(header, "no-store", "status {status} must not be cached");
+        }
+    }
+
+    /// Success (and 304, which serves from the browser cache) keep the
+    /// immutable stamp — hashed filenames change on every build.
+    #[test]
+    fn success_statuses_are_immutable() {
+        for status in [StatusCode::OK, StatusCode::PARTIAL_CONTENT] {
+            let res = axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .expect("response");
+            assert_eq!(
+                cache_control_by_status(&res).expect("header"),
+                "public, max-age=31536000, immutable"
+            );
+        }
+        let not_modified = axum::response::Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .body(axum::body::Body::empty())
+            .expect("response");
+        assert_eq!(
+            cache_control_by_status(&not_modified).expect("header"),
+            "public, max-age=31536000, immutable"
+        );
+    }
+
+    /// Review follow-up: `data-src=` / `xhref=` must not match — a
+    /// lazy-loading attribute pointing outside `assets/` would otherwise
+    /// fallback the whole SPA even when every real ref resolves.
+    #[test]
+    fn attribute_lookalikes_do_not_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><body>
+            <div data-src="./assets/hero.png" data-href="./assets/gone.png"></div>
+            <script src="./assets/real-HASH.js"></script>
+            </body></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/real-HASH.js"), b"").expect("write js");
+        // hero.png deliberately absent — data-src must not surface it.
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
+    }
+
+    /// Cache-buster query strings must not leak into the filesystem check.
+    #[test]
+    fn query_strings_are_stripped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><head><script type="module" src="./assets/real-HASH.js?v=2"></script></head></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/real-HASH.js"), b"").expect("write js");
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
     }
 }

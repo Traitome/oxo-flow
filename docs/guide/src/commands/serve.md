@@ -83,6 +83,17 @@ Serve: Starting oxo-flow web server in personal mode on 127.0.0.1:8080
     `serve`, otherwise the server reports `SPA not built` instead of a blank
     page.
 
+    The server verifies each `assets/…` reference in `index.html` (not just
+    the directory's existence — a stale `assets/` dir from an older build
+    also counts as missing) and falls back to the actionable page with a
+    warning naming the first missing file. Missing-asset responses are sent
+    with `Cache-Control: no-store`, so a fresh browser needs no hard refresh
+    after building. Two caveats: the index (fallback or real) is read once
+    per process, so a server **restart** is needed to pick up a frontend
+    build that happened after startup; and a browser that already stored a
+    404 under the old `immutable` header from an older build still needs one
+    hard refresh — the `no-store` only prevents *new* poisoning.
+
 ---
 
 ## API Endpoints
