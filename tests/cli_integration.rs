@@ -6061,7 +6061,9 @@ fn cli_run_temporary_lifecycle_tombstone_and_lazy_regeneration() {
 /// The retired post-run `cache_max_age_days` aging sweep (issue #974) must
 /// warn and point at `oxo-flow env gc` — a stale workflow can't silently
 /// expect pruning. The key still parses (plain [config] entry) and the run
-/// succeeds; the cache file is NOT deleted (no aging remains).
+/// succeeds. The survival assertion is load-bearing: the cache entry is
+/// backdated beyond the declared 90-day window, so the pre-retirement sweep
+/// would delete it, while the retired-key path must keep it.
 #[test]
 fn cli_run_retired_cache_aging_key_warns_but_run_succeeds() {
     let dir = tempfile::tempdir().unwrap();
@@ -6069,12 +6071,22 @@ fn cli_run_retired_cache_aging_key_warns_but_run_succeeds() {
     fs::create_dir_all(&cache).unwrap();
     let stale = cache.join("stale.txt");
     fs::write(&stale, "stale").unwrap();
+    let old_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 100 * 24 * 3600;
+    filetime::set_file_mtime(
+        &stale,
+        filetime::FileTime::from_unix_time(old_unix as i64, 0),
+    )
+    .unwrap();
 
     let wf = dir.path().join("retired.oxoflow");
     fs::write(
         &wf,
         "[workflow]\nname = \"retired\"\nversion = \"1.0.0\"\n\n\
-         [config]\ncache_max_age_days = 0\n\n\
+         [config]\ncache_max_age_days = 90\n\n\
          [[rules]]\nname = \"hello\"\noutput = [\"hello.txt\"]\n\
          shell = \"echo hi > {output[0]}\"\n",
     )

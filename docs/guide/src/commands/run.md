@@ -38,7 +38,7 @@ oxo-flow run [OPTIONS] [WORKFLOW] [KEY=VALUE]...
 | `--max-memory` | — | `0` (auto-detect) | Maximum memory in MB available for execution. Auto-detect is cgroup-aware on Linux (clamped to the tightest `memory.max` — see [Notes](#notes)); set it explicitly (e.g. `--max-memory 430000 --retry 2`) when the clamp misreads a deliberately generous slice |
 | `--skip-env-setup` | — | — | Skip environment setup (assume environments are ready) |
 | `--skip-ref-build` | — | — | Skip automatic reference/index building (assume pre-built) |
-| `--cache-dir` | — | — | Directory for caching environment setup state. Lifecycle is managed with `oxo-flow env gc` (the retired post-run `cache_max_age_days` aging sweep warns and points there) |
+| `--cache-dir` | — | — | Directory for caching environment setup state (a small readiness manifest that rebuilds itself on demand). The retired post-run `cache_max_age_days` aging sweep warns and points at `oxo-flow env gc`, which reclaims the shared env store (`OXO_FLOW_ENV_STORE`) — not this directory |
 | `--resume-failed` | — | — | Resume only failed rules from a previous run. Also clears stale checkpoint entries for rules whose `when` gate recorded `false` (they are skips, not failures — issue #690); `status` reports them as skipped, not failed |
 | `--profile` | — | — | Execution profile name, loaded from `profiles/<NAME>.toml` or `profiles/<NAME>.oxoflow` (see [Execution profiles](#execution-profiles)) |
 | `--max-submitted` | — | profile default (`50`) | Cluster jobs in flight at once (overrides the profile's `max_submitted`) |
@@ -253,9 +253,12 @@ oxo-flow run pipeline.oxoflow --cache-dir .oxo-flow/cache
 ```
 
 The cache is **not** aged automatically — `--cache-dir` only selects where
-environment setup state lives. To reclaim space from stale entries, run
-`oxo-flow env gc` (see [env](env.md)); its `--min-age-days` gate (default 90)
-protects entries that recent runs may still reference.
+environment setup state lives, and that state is a small readiness manifest
+that rebuilds itself on the next run if entries go missing. To reclaim the
+bulk of environment disk usage, target the shared env store instead: run
+`oxo-flow env gc` (see [env](env.md)), which collects
+`OXO_FLOW_ENV_STORE` directories under its `--min-age-days` gate (default 90)
+so entries that recent runs may still reference survive.
 
 !!! note "Removed: `cache_max_age_days`"
 
