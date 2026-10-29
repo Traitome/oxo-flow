@@ -5078,7 +5078,7 @@ below list every code the engine currently emits.</p>
 </tr>
 <tr>
 <td><code>E017</code></td>
-<td>Unknown key in a rule — usually a foreign workflow dialect (e.g. <code>foreach</code>, <code>inputs = {...}</code>)</td>
+<td>Unknown key in a rule — usually a foreign workflow dialect (e.g. <code>foreach</code>, <code>inputs = {...}</code>). A hard parse error; the message names the offending keys and points at the workflow format reference</td>
 </tr>
 <tr>
 <td><code>E018</code></td>
@@ -5177,7 +5177,7 @@ below list every code the engine currently emits.</p>
 </tr>
 <tr>
 <td><code>W024</code></td>
-<td>A wildcard has no declared source — it will stay literal at run time</td>
+<td>A wildcard has no declared source — it will stay literal at run time. Also surfaced by <code>validate</code> (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it (#973 F6)</td>
 </tr>
 <tr>
 <td><code>W025</code></td>

@@ -2719,6 +2719,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#unbound-wildcard-w024-surfaced-in-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unbound wildcard (W024 surfaced in validate)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3960,6 +3971,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#unbound-wildcard-w024-surfaced-in-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unbound wildcard (W024 surfaced in validate)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4087,8 +4109,9 @@
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">"rules"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">"dependencies"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">"errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"refs/genome.fa"</span><span class="p">]</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">"warnings"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">"missing_inputs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"refs/genome.fa"</span><span class="p">]</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="invalid-toml-syntax">Invalid TOML syntax<a class="headerlink" href="#invalid-toml-syntax" title="Permanent link">#</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>✗ pipeline.oxoflow — parse error in pipeline.oxoflow: TOML parse error at line 15, column 1
@@ -4114,6 +4137,28 @@ free-text diagnostic list, not a stable machine interface: entries mix
 plain paths (file simply absent on disk) with paths annotated with a
 trailing <code>(...)</code> reason, so consumers must not exact-match the strings
 or split on whitespace — match on the path prefix instead.</p>
+<h3 id="unbound-wildcard-w024-surfaced-in-validate">Unbound wildcard (W024 surfaced in validate)<a class="headerlink" href="#unbound-wildcard-w024-surfaced-in-validate" title="Permanent link">#</a></h3>
+<p>A rule that uses a wildcard no rule in the workflow declares a source for
+(<code>output = ["out/{sample}.txt"]</code> with no <code>[[sample_groups]]</code>, <code>[[pairs]]</code>,
+<code>sample_pattern</code>, or <code>[[values]]</code> entry) keeps the brace token <strong>literal</strong>
+at run time and then fails with a precise hard error. <code>lint</code> warns about
+this (<code>W024</code>); <code>validate</code> — the first gate in the recommended
+validate → dry-run → run path — now surfaces the same <code>W024</code> diagnostic
+so a green validate no longer hides a workflow that cannot run:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>✓ p.oxoflow — 1 rule, 0 dependencies
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  warning [W024]: wildcard '{sample}' has no declared source — it will stay literal at run time and files may be written literally named after the placeholder (rule: step1)
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    hint: declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder
+</span></code></pre></div>
+<p>Warnings keep exit code <code>0</code> — only errors fail. <code>validate</code> scopes itself
+to <code>W024</code> (runnability); the full best-practice sweep remains
+<a href="../lint/"><code>lint</code></a>'s job, and the <code>warnings</code> array is empty when nothing
+blocks runnability. At run time the corresponding unbound-placeholder
+WARN is emitted once per (instance, placeholder): the multiple render
+sites within one instance (output pattern + command) collapse to a
+single line — the double-print the issue reporter saw — while each
+fan-out instance still logs its own line, because the message names the
+expanded instance (<code>step1_lane_L1</code>) rather than the template rule.</p>
 <hr />
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">#</a></h2>
 <ul>
