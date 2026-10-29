@@ -816,17 +816,10 @@ pub async fn start_server_with_mode(
     let normalized = crate::server::normalize_base_path(base_path);
     crate::server::set_base_path(&normalized);
     let app = crate::server::build_router(mode);
-    let app = if normalized.is_empty() {
-        app
-    } else {
-        // See main.rs: `nest` leaves the trailing-slash mount root unrouted.
-        axum::Router::new()
-            .route(
-                &format!("{normalized}/"),
-                axum::routing::get(crate::server::spa_index),
-            )
-            .nest(&normalized, app)
-    };
+    // See main.rs: the shared mount helper routes the trailing-slash mount
+    // root (nest leaves it unrouted) with the same security headers as the
+    // nested app (issue #957).
+    let app = crate::server::mount_with_base_path(app, &normalized);
 
     let addr = format!("{host}:{port}");
     tracing::info!("Starting oxo-flow web server in {mode} mode on {addr}");

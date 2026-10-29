@@ -806,6 +806,39 @@ pub fn normalize_base_path(input: &str) -> String {
     }
 }
 
+/// Mount the fully-layered router under a sub-path (issue #957).
+///
+/// `axum::Router::nest` registers `GET <base>` itself but leaves the
+/// trailing-slash mount root (`GET <base>/`) unrouted — so both serving
+/// entry points add an explicit `{base}/` route for the SPA index. The
+/// route used to live on a bare OUTER router, outside `build_router`'s
+/// middleware chain, which meant the one page a sub-path deployment's
+/// canonical URL points at was served with **zero** security headers
+/// (no CSP, no X-Frame-Options, …) while everything under the nest kept
+/// them (issue #957). Centralizing the mount here lets the mount-root
+/// route share the same `security_headers` middleware as the nested app,
+/// and keeps the two entry-point wirings from drifting.
+///
+/// `base` must be a `normalize_base_path` result: `""` (root mount,
+/// identity) or a `"/name"`-shaped prefix — anything else (e.g. a raw
+/// `"/"`) would build a `"/"`-rooted nest, which axum 0.8 rejects.
+pub fn mount_with_base_path(app: Router, base: &str) -> Router {
+    // No prefix to apply: the caller's router already serves at "/".
+    if base.is_empty() {
+        return app;
+    }
+    // `security_headers` is response-only (no request extensions used), so
+    // applying it to the outer router does not depend on anything nest()
+    // strips — the mount-root SPA response gets the same baseline as every
+    // response produced inside `build_router`.
+    Router::new()
+        .route(
+            &format!("{base}/"),
+            axum::routing::get(spa_index).layer(axum::middleware::from_fn(security_headers)),
+        )
+        .nest(base, app)
+}
+
 /// Port the server actually bound (issue #82 P0-6): share URLs must point
 /// at the real listener, not a hardcoded default.
 static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();

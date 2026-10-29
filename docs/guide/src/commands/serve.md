@@ -63,6 +63,10 @@ GET /oxo-flow/api/health
 POST /oxo-flow/api/pipelines/validate
 ```
 
+Every served response — including the SPA index at the mount root
+(`/oxo-flow/`) — carries the baseline security headers
+(`Content-Security-Policy`, `X-Frame-Options`, …).
+
 ---
 
 ## Output

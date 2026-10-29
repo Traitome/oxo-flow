@@ -171,21 +171,10 @@ async fn main() -> Result<()> {
     let app = oxo_flow_web::server::build_router(&mode_str);
     // Mount the whole app under --base-path when set (sub-path deployments,
     // e.g. behind a reverse proxy at /oxoflow). The flag was previously
-    // parsed but never applied (issue #79 deployment modes).
-    let app = if base_path.is_empty() {
-        app
-    } else {
-        // `nest` registers GET <base_path> itself, but a request with the
-        // trailing slash (/oxoflow/) lands on an empty remainder inside the
-        // nest — route it explicitly so the mount root serves the SPA.
-        let base = &base_path;
-        axum::Router::new()
-            .route(
-                &format!("{base}/"),
-                axum::routing::get(oxo_flow_web::server::spa_index),
-            )
-            .nest(base, app)
-    };
+    // parsed but never applied (issue #79 deployment modes). The shared
+    // mount helper also routes the trailing-slash mount root so it serves
+    // the SPA with the same security headers as the nested app (issue #957).
+    let app = oxo_flow_web::server::mount_with_base_path(app, &base_path);
 
     // Background maintenance every serving entry point needs (idempotent):
     // without the daily quota reset, runs_today only ever grows and every
