@@ -96,7 +96,12 @@ fn load_spa_index_html() -> String {
         .or_else(|| std::env::var("FRONTEND_DIR").ok())
         .map(|dir| {
             read_index(std::path::Path::new(&dir)).unwrap_or_else(|| {
-                tracing::warn!("SPA index not found at {dir}, using fallback");
+                // Only claim "not found" when index.html itself could not be
+                // read — a found-but-broken index already logged its own
+                // specific warn (missing assets) inside read_index.
+                if !std::path::Path::new(&dir).join("index.html").is_file() {
+                    tracing::warn!("SPA index not found at {dir}, using fallback");
+                }
                 fallback.to_string()
             })
         })
@@ -266,7 +271,10 @@ fn missing_spa_assets(html: &str, dir: &std::path::Path) -> Vec<String> {
     for caps in asset_ref_regex().captures_iter(html) {
         // The capture strips the `assets/` prefix and any leading `./`;
         // re-anchor to the served directory next to index.html.
+        // Vite never emits query strings here today, but a cache-buster
+        // (`x.js?v=2`) must not leak into the filesystem lookup.
         let rel = caps[1].trim_start_matches('/');
+        let rel = rel.split(['?', '#']).next().unwrap_or(rel);
         let path = dir.join("assets").join(rel);
         if !path.is_file() && !missing.iter().any(|m| m == &caps[1]) {
             missing.push(caps[1].to_string());
@@ -279,11 +287,18 @@ fn missing_spa_assets(html: &str, dir: &std::path::Path) -> Vec<String> {
 /// (`./assets/x.js`, `/assets/x.css`, `assets/x.woff2`). Vite emits exactly
 /// this shape for every entry the SPA loads, and the built index.html is
 /// machine-generated, so a regex is sufficient — no HTML parser dep.
+/// Boundaries: the leading `[\s"'<]` keeps `data-src=` / `xhref=` from
+/// matching (the `regex` crate has no lookbehind), and the optional prefix
+/// segment handles `./` plus at most one path segment — vite never emits
+/// deeper relative prefixes (`../../assets/…`) or multi-segment mount
+/// paths in the committed index.html.
 fn asset_ref_regex() -> &'static regex::Regex {
     static ASSET_REF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     ASSET_REF.get_or_init(|| {
-        regex::Regex::new(r#"(?:src|href)=["']\.{0,2}/?(?:[a-zA-Z0-9._~-]+/)?assets/([^"']+)["']"#)
-            .expect("static asset-ref regex")
+        regex::Regex::new(
+            r#"(?:^|[\s"'<])(?:src|href)=["']\.{0,2}/?(?:[a-zA-Z0-9._~-]+/)?assets/([^"']+)["']"#,
+        )
+        .expect("static asset-ref regex")
     })
 }
 
@@ -1396,5 +1411,33 @@ mod cache_control_tests {
             cache_control_by_status(&not_modified).expect("header"),
             "public, max-age=31536000, immutable"
         );
+    }
+
+    /// Review follow-up: `data-src=` / `xhref=` must not match — a
+    /// lazy-loading attribute pointing outside `assets/` would otherwise
+    /// fallback the whole SPA even when every real ref resolves.
+    #[test]
+    fn attribute_lookalikes_do_not_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><body>
+            <div data-src="./assets/hero.png" data-href="./assets/gone.png"></div>
+            <script src="./assets/real-HASH.js"></script>
+            </body></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/real-HASH.js"), b"").expect("write js");
+        // hero.png deliberately absent — data-src must not surface it.
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
+    }
+
+    /// Cache-buster query strings must not leak into the filesystem check.
+    #[test]
+    fn query_strings_are_stripped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let html = r#"<html><head><script type="module" src="./assets/real-HASH.js?v=2"></script></head></html>"#;
+        std::fs::write(dir.path().join("index.html"), html).expect("write index");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/real-HASH.js"), b"").expect("write js");
+        assert!(missing_spa_assets(html, dir.path()).is_empty());
     }
 }
