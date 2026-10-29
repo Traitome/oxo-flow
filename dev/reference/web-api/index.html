@@ -4107,6 +4107,12 @@ namespaced (<code>&lt;provider&gt;:&lt;name&gt;</code>) and can never collide wi
 usernames. Sessions store the canonical <code>users.id</code> resolved at login;
 role lookups match by id only and a session whose user row is gone
 (deleted user, stale pre-upgrade session) is rejected with 401.</p>
+<p><strong>Session lifetime is operator-tunable (#976):</strong> every minted session
+(login and OAuth callback) expires after <code>OXO_FLOW_SESSION_TTL_HOURS</code>
+hours — default <code>24</code>, minimum <code>1</code>, cap <code>8760</code> (one year). Unset keeps
+the historical 24-hour TTL; an unparseable or out-of-range value warns
+and falls back to the default. Existing sessions keep their minted
+expiry — the variable is read at session creation only.</p>
 </blockquote>
 <h3 id="check-session">Check Session<a class="headerlink" href="#check-session" title="Permanent link">#</a></h3>
 <p><div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/auth/me
@@ -4118,7 +4124,7 @@ Returns <code>{"authenticated": true, "username": "admin", "role": "admin"}</cod
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>Authorization: Bearer &lt;token&gt;
 </span></code></pre></div>
 Revokes the presented session server-side (#520) — the token stops
-authenticating immediately instead of living out its 24-hour TTL. The
+authenticating immediately instead of living out its configured TTL. The
 client should drop its local copy (<code>logged_out: true</code> on success).
 Deleting a user (<code>DELETE /api/users/{id}</code>) cascades: the deleted user's
 sessions and API keys are removed with the account.</p>
