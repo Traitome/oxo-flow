@@ -1095,13 +1095,7 @@ shell = "echo hi > {output[0]}"
         let elsewhere = tempfile::tempdir().unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(elsewhere.path()).unwrap();
-        struct RestoreCwd(std::path::PathBuf);
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _restore = RestoreCwd(prev);
+        let _restore = crate::commands::RestoreCwd(prev);
         let verdict = when_condition_false(rule, &config, &wildcard_values);
         drop(_restore);
         drop(_cwd);

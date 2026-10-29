@@ -79,6 +79,19 @@ pub fn is_quiet() -> bool {
 #[cfg(test)]
 pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Restores the process cwd on drop, panics included (issue #982 P1-1) —
+/// a cwd left inside a deleted temp dir would make every other test fail
+/// resolving relative paths. Test-only companion to [`CWD_LOCK`].
+#[cfg(test)]
+pub(crate) struct RestoreCwd(std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for RestoreCwd {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
 pub fn print_banner() {
     if QUIET_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         return;

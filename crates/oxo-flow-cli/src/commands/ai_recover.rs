@@ -312,7 +312,7 @@ fn extract_heading_section(text: &str, marker: &str) -> Option<String> {
 mod tests {
     use super::apply_fix;
     use super::{extract_section, extract_toml_block, parse_safe_to_auto_apply};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn safe_gate_requires_an_explicit_yes() {
@@ -405,15 +405,7 @@ Change `threads = 16` to `threads = 4` in rule `align`.\n\n## Corrected TOML\n\
         std::fs::create_dir_all(".oxo-flow").unwrap();
         std::fs::write("workflow.oxoflow", "[workflow]\nname = \"t\"\n").unwrap();
 
-        struct RestoreCwd(PathBuf);
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                // Runs on panic too — a cwd left inside a deleted temp dir
-                // would make every other test fail resolving relative paths.
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _restore = RestoreCwd(prev);
+        let _restore = crate::commands::RestoreCwd(prev);
 
         f(tmp.path());
     }
