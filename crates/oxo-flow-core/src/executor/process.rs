@@ -3298,15 +3298,18 @@ fn warn_shell_fallback_once() {
 }
 
 /// Print a shell-safety warning once per (rule, pattern description) pair
-/// instead of once per wildcard instance (#890 string batch): a 200-sample
-/// fan-out rule with a `$(...)` idiom used to log the same line 200 times
-/// (each instance's warning embeds its own rendered command, so keying on
-/// the full warning text would never dedupe). Different patterns in the
-/// same rule each still print once. The set lives for the process
-/// lifetime — a run is one process, and it is bounded by the pattern
-/// count times rule count, not by run length. A poisoned lock (a panic
-/// while holding it) is recovered from rather than silently suppressing
-/// every future warning.
+/// instead of once per render site (#890 string batch): every wildcard
+/// instance of a fan-out rule shares the template's idioms and the same
+/// command renders at multiple sites (shell + hooks), so the identical
+/// warning used to re-print per site and per instance (each instance's
+/// warning embeds its own rendered command, so keying on the full
+/// warning text would never dedupe). `rule` is the caller's rule name —
+/// for expanded instances that is the instance name, so callers dedupe
+/// per instance. Different patterns in the same rule each still print
+/// once. The set lives for the process lifetime — a run is one process,
+/// and it is bounded by the pattern count times rule count, not by run
+/// length. A poisoned lock (a panic while holding it) is recovered from
+/// rather than silently suppressing every future warning.
 fn emit_once_per_rule(rule: &str, pattern: &str, emit: impl FnOnce(&str)) {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -4035,11 +4038,21 @@ fn render_shell_command_inner(
     ];
     for ph in KNOWN_PLACEHOLDERS {
         if expanded.contains(ph) {
-            tracing::warn!(
-                rule = %rule.name,
-                placeholder = ph,
-                "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
-            );
+            // One warn per (expanded instance, placeholder): without the
+            // dedupe one rule's single command logged the same line once
+            // per render site (output pattern + shell + hooks — the issue
+            // reporter saw it print twice from one rule's single command,
+            // #973 F6). Each fan-out instance still logs its own line —
+            // the key is the expanded instance name, and that is
+            // deliberate: the message names the instance, so N instances
+            // mean N lines pointing at their own command.
+            emit_once_per_rule(&rule.name, ph, |_| {
+                tracing::warn!(
+                    rule = %rule.name,
+                    placeholder = ph,
+                    "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
+                );
+            });
         }
     }
     // Comments are prose, not executed code — scan the command with them

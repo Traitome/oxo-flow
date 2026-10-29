@@ -652,7 +652,7 @@ pub(crate) fn check(raw: &toml::Table) -> Result<()> {
         .map(ToString::to_string)
         .collect();
     let mut message = format!(
-        "{} — not a .oxoflow key. A misspelled key is silently ignored, so the setting never applies.",
+        "{} — not a .oxoflow key. Check the spelling (see the workflow format reference for the valid sections).",
         listed.join("; ")
     );
     let hidden = unknown.len() - listed.len();

@@ -11017,3 +11017,188 @@ fn cli_run_converts_identical_workdir_copies_to_symlinks() {
         "pairs=1\n"
     );
 }
+
+/// #973 F6: `validate` — the first gate in the documented
+/// validate → dry-run → run path — waved a workflow through with exit 0
+/// even when `lint` flagged W024 (wildcard with no declared source stays
+/// literal at run time). A user who stopped at a green validate never
+/// learned the workflow could not run. `validate` must now surface W024
+/// as a warning (exit 0 preserved; only errors fail), scoped to W024 —
+/// the full best-practice sweep remains `lint`'s job.
+#[test]
+fn validate_surfaces_unbound_wildcard_warning_but_stays_green() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("w024.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"w024\"\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"out/{sample}.txt\"]\nshell = \"echo {sample} > out/{sample}.txt\"\n",
+    )
+    .unwrap();
+
+    // Human output: the warning block appears after the ✓ line.
+    let out = oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "W024 is a warning, not an error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains('✓'), "summary line still green: {stderr}");
+    assert!(
+        stderr.contains("W024"),
+        "W024 must surface in validate output: {stderr}"
+    );
+    assert!(
+        stderr.contains("no declared source"),
+        "W024 message text must be present: {stderr}"
+    );
+
+    // JSON output carries the same warning in the `warnings` array.
+    let out = oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+    assert_eq!(parsed["valid"], true, "warnings keep validate green");
+    let warnings = parsed["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["code"] == "W024" && w["rule"] == "step1"),
+        "warnings array must contain the W024 diagnostic: {warnings:?}"
+    );
+
+    // Scoping: a rule with a declared wildcard source must validate with
+    // an EMPTY warnings array — validate does not re-print lint's
+    // style/best-practice sweep (W001/W006/…).
+    let clean = dir.path().join("clean.oxoflow");
+    fs::write(
+        &clean,
+        "[workflow]\nname = \"clean\"\n\n[[sample_groups]]\nname = \"all\"\nsamples = [\"a\"]\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"out/{sample}.txt\"]\nshell = \"echo x > out/{sample}.txt\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["validate", clean.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap();
+    assert!(
+        parsed["warnings"].as_array().unwrap().is_empty(),
+        "declared-source workflow must have no validate warnings: {parsed}"
+    );
+}
+
+/// #973 F6 (dedupe): one rule whose template mentions the same unbound
+/// placeholder in both the output pattern and the command used to emit the
+/// run-time WARN once per render site (twice for a single-sample run, once
+/// per fan-out instance otherwise). The residual token is a property of the
+/// rule template, so the warn is deduped per (rule, placeholder).
+#[test]
+fn run_unbound_placeholder_warn_emits_once_per_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("dedupe.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"dedupe\"\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"out/done.txt\"]\nshell = \"mkdir -p out && echo {sample} > out/done.txt\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["run", wf.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run itself must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let count = stderr.matches("unresolved placeholder remained").count();
+    assert_eq!(
+        count, 1,
+        "one (rule, placeholder) pair must warn exactly once, got {count}: {stderr}"
+    );
+}
+
+/// #973 F7: lint W008's hint used to teach a nonexistent top-level
+/// `[environment]` section — a user following it verbatim hit E017.
+/// The hint must teach the real syntax.
+#[test]
+fn lint_w008_hint_teaches_working_environment_syntax() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // A rule without any environment → W008 with the fixed hint.
+    let wf = dir.path().join("noenv.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"noenv\"\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"o.txt\"]\nshell = \"echo hi > {output[0]}\"\n",
+    )
+    .unwrap();
+    let out = oxo_flow_cmd()
+        .args(["lint", wf.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("W008"),
+        "fixture must trigger W008: {stderr}"
+    );
+    assert!(
+        stderr.contains("[rules.<name>.environment]"),
+        "hint must name the real section syntax: {stderr}"
+    );
+    assert!(
+        !stderr.contains("add an [environment] section"),
+        "old broken hint must be gone: {stderr}"
+    );
+
+    // And the hint's syntax actually parses: [rules.environment] is valid.
+    let fixed = dir.path().join("fixed.oxoflow");
+    fs::write(
+        &fixed,
+        "[workflow]\nname = \"fixed\"\n\n[[rules]]\nname = \"step1\"\ninput = []\noutput = [\"o.txt\"]\nshell = \"echo hi > {output[0]}\"\n\n[rules.environment]\nconda = \"bioconda::samtools\"\n",
+    )
+    .unwrap();
+    oxo_flow_cmd()
+        .args(["validate", fixed.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+/// #973 F7 (related nit): E017's boilerplate claimed a misspelled key is
+/// "silently ignored" while the diagnostic itself is a hard parse error —
+/// contradictory wording. The message must now point at the spelling fix.
+#[test]
+fn e017_message_no_longer_claims_silent_ignoral() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf = dir.path().join("badenv.oxoflow");
+    fs::write(
+        &wf,
+        "[workflow]\nname = \"badenv\"\n\n[[rules]]\nname = \"step1\"\noutput = [\"o.txt\"]\nshell = \"echo hi\"\n\n[environment]\nconda = \"bioconda::samtools\"\n",
+    )
+    .unwrap();
+
+    let out = oxo_flow_cmd()
+        .args(["validate", wf.to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E017"),
+        "E017 must fire on the unknown top-level key: {stderr}"
+    );
+    assert!(
+        stderr.contains("Check the spelling"),
+        "new wording must point at the spelling: {stderr}"
+    );
+    assert!(
+        !stderr.contains("silently ignored"),
+        "contradictory 'silently ignored' claim must be gone: {stderr}"
+    );
+}
