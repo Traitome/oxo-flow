@@ -4035,11 +4035,18 @@ fn render_shell_command_inner(
     ];
     for ph in KNOWN_PLACEHOLDERS {
         if expanded.contains(ph) {
-            tracing::warn!(
-                rule = %rule.name,
-                placeholder = ph,
-                "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
-            );
+            // One warn per (rule, placeholder): the residual token is a
+            // property of the rule template, not the instance — without the
+            // dedupe a 200-sample fan-out logs the same line 200 times
+            // (#973 F6: the issue reporter saw it print twice from one
+            // rule's single command; large fan-outs were far worse).
+            emit_once_per_rule(&rule.name, ph, |_| {
+                tracing::warn!(
+                    rule = %rule.name,
+                    placeholder = ph,
+                    "unresolved placeholder remained in the rendered command — no value bound to it in this run (the rule will execute with a literal brace token); check the workflow's sample_groups/pairs/sample_pattern declarations and the --samples selection"
+                );
+            });
         }
     }
     // Comments are prose, not executed code — scan the command with them

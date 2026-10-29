@@ -64,6 +64,7 @@ oxo-flow validate pipeline.oxoflow
   "rules": 5,
   "dependencies": 4,
   "errors": [],
+  "warnings": [],
   "missing_inputs": ["refs/genome.fa"]
 }
 ```
@@ -102,6 +103,30 @@ free-text diagnostic list, not a stable machine interface: entries mix
 plain paths (file simply absent on disk) with paths annotated with a
 trailing `(...)` reason, so consumers must not exact-match the strings
 or split on whitespace — match on the path prefix instead.
+
+### Unbound wildcard (W024 surfaced in validate)
+
+A rule that uses a wildcard no rule in the workflow declares a source for
+(`output = ["out/{sample}.txt"]` with no `[[sample_groups]]`, `[[pairs]]`,
+`sample_pattern`, or `[[values]]` entry) keeps the brace token **literal**
+at run time and then fails with a precise hard error. `lint` warns about
+this (`W024`); `validate` — the first gate in the recommended
+validate → dry-run → run path — now surfaces the same `W024` diagnostic
+so a green validate no longer hides a workflow that cannot run:
+
+```
+✓ p.oxoflow — 1 rule, 0 dependencies
+
+  warning [W024]: wildcard '{sample}' has no declared source — it will stay literal at run time and files may be written literally named after the placeholder (rule: step1)
+    hint: declare a source for the wildcard (sample_pattern in [config], [[sample_groups]], [[pairs]], or a [[values]] table), or remove the placeholder
+```
+
+Warnings keep exit code `0` — only errors fail. `validate` scopes itself
+to `W024` (runnability); the full best-practice sweep remains
+[`lint`](lint.md)'s job, and the `warnings` array is empty when nothing
+blocks runnability. At run time the corresponding unbound-placeholder
+WARN is emitted once per (rule, placeholder) — a 200-sample fan-out logs
+the line once, not once per instance.
 
 ---
 

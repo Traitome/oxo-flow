@@ -42,6 +42,7 @@ pub async fn validate_command(
                         "rules": 0,
                         "dependencies": 0,
                         "errors": [],
+                        "warnings": [],
                         "missing_inputs": [],
                     });
                     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -57,6 +58,22 @@ pub async fn validate_command(
 
             // Run semantic validation (E001-E008)
             let validation = oxo_flow_core::format::validate_format(&cfg);
+            // W024-class warnings (#973 F6): `lint` already flags wildcards
+            // with no declared source, but `validate` — the first gate in the
+            // documented validate → dry-run → run path — stayed silent and
+            // waved the workflow through with exit 0. Surface W024 here too
+            // (warnings keep exit 0; only errors fail), so a green validate
+            // no longer hides a workflow that cannot run. Scoped to W024 —
+            // validate's contract is runnability; the full best-practice
+            // sweep remains `lint`'s job and re-printing it here drowned
+            // every validate in style noise.
+            let lint_diags = if !as_include {
+                oxo_flow_core::format::lint_format(&cfg, None)
+            } else {
+                Vec::new()
+            };
+            let warnings: Vec<&oxo_flow_core::format::Diagnostic> =
+                lint_diags.iter().filter(|d| d.code == "W024").collect();
             let mut error_count = 0usize;
             let mut errors_json: Vec<serde_json::Value> = Vec::new();
 
@@ -141,6 +158,7 @@ pub async fn validate_command(
                                 "rules": cfg.rules.len(),
                                 "dependencies": 0,
                                 "errors": [{"code": "DAG", "message": e.to_string()}],
+                                "warnings": [],
                                 "missing_inputs": [],
                             });
                             println!("{}", serde_json::to_string_pretty(&output)?);
@@ -158,6 +176,17 @@ pub async fn validate_command(
             };
 
             if json {
+                let warnings_json: Vec<serde_json::Value> = warnings
+                    .iter()
+                    .map(|d| {
+                        serde_json::json!({
+                            "code": d.code,
+                            "message": d.message,
+                            "rule": d.rule,
+                            "suggestion": d.suggestion,
+                        })
+                    })
+                    .collect();
                 let output = serde_json::json!({
                     "command": "validate",
                     "workflow": workflow.display().to_string(),
@@ -165,6 +194,7 @@ pub async fn validate_command(
                     "rules": rules,
                     "dependencies": dependencies,
                     "errors": errors_json,
+                    "warnings": warnings_json,
                     "missing_inputs": missing_inputs,
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
@@ -184,6 +214,22 @@ pub async fn validate_command(
                         workflow.display(),
                         plural(error_count, "validation error", "validation errors")
                     );
+                }
+
+                for d in &warnings {
+                    eprintln!(
+                        "  {} [{}]: {}{}",
+                        "warning".yellow().bold(),
+                        d.code,
+                        d.message,
+                        d.rule
+                            .as_ref()
+                            .map(|r| format!(" (rule: {r})"))
+                            .unwrap_or_default()
+                    );
+                    if let Some(ref suggestion) = d.suggestion {
+                        eprintln!("    hint: {}", suggestion);
+                    }
                 }
 
                 if !missing_inputs.is_empty() {
@@ -219,6 +265,7 @@ pub async fn validate_command(
                     "rules": 0,
                     "dependencies": 0,
                     "errors": [{"code": "PARSE", "message": e.to_string()}],
+                    "warnings": [],
                     "missing_inputs": [],
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);

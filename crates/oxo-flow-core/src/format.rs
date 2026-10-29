@@ -1507,7 +1507,7 @@ pub fn lint_format(
                 rule: Some(rule.name.clone()),
                 code: "W008".to_string(),
                 suggestion: Some(
-                    "add an [environment] section with conda, docker, or another backend"
+                    "declare an environment for this rule via [rules.<name>.environment] (conda, docker, pixi, …), or a shared [defaults.environment]"
                         .to_string(),
                 ),
             });

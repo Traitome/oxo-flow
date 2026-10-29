@@ -339,7 +339,7 @@ below list every code the engine currently emits.
 | `E014` | A checkpoint rule is parameterized by `{sample}`/`{group}`/`{pair_id}` (not allowed) |
 | `E015` | Re-entry declares a `pair_id` with conflicting content |
 | `E016` | An environment field contains a shell-unsafe character — the spec would not render as safe argv; the same code also labels a re-entry `pair_id` colliding with an existing instance name (see Checkpoint re-entry) |
-| `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`) |
+| `E017` | Unknown key in a rule — usually a foreign workflow dialect (e.g. `foreach`, `inputs = {...}`). A hard parse error; the message names the offending keys and points at the workflow format reference |
 | `E018` | A `when` condition uses an unrecognized bare identifier (e.g. `params_mode == 1`) — the evaluator would treat it as true and the rule would silently run. Reference config keys as `config.key`, or use a quoted literal, a `{...}` placeholder, or a built-in function |
 | `E019` | A rule's declared pixi manifest does not exist (resolved relative to the workflow directory). `validate` and `plan`/dry-run preflight it the same way they existence-check static inputs; `run` fails before executing anything |
 
@@ -366,7 +366,7 @@ below list every code the engine currently emits.
 | `W019` | Rule executes a command but declares no outputs |
 | `W020`/`W021`/`W022` | A missing relative input file (`W020`), or a `pre_exec`/`on_success`/`on_failure` hook containing a dangerous pattern. `W021` also labels a `script` that references another rule's output without an ordering edge (`depends_on`) |
 | `W023` | Shell command uses flagged idioms (`$()`, backticks, `rm -rf`, `chmod 777`, `eval`, curl-pipe-shell) — aggregated one diagnostic per command; common in bioinformatics scripts, verify intentional |
-| `W024` | A wildcard has no declared source — it will stay literal at run time |
+| `W024` | A wildcard has no declared source — it will stay literal at run time. Also surfaced by `validate` (as a warning, exit 0), so the first gate in the validate → dry-run → run path is not silent about it (#973 F6) |
 | `W025` | Legacy `threads =`/`memory =` keys under the rule body (use `resources.`) |
 | `W027` | A `when` condition references a wildcard nothing can bind — evaluates false |
 | `W028` | Docker image is not fully qualified (resolves against docker.io) |
