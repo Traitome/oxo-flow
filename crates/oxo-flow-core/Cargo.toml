@@ -9,15 +9,14 @@ homepage.workspace = true
 description = "Core library for the oxo-flow bioinformatics pipeline engine"
 
 [features]
-default = ["container", "webhook", "report", "cluster"]
 # Cloud storage backends (opt-in)
 s3-storage = ["aws-sdk-s3", "dep:aws-config"]
 gcs-storage = ["dep:sha1"]
-# Optional modules - compile-time feature gates for minimal builds
-container = []
-webhook = []
-report = []
-cluster = []
+# NOTE: there are deliberately no other feature gates. The former
+# `container`/`webhook`/`report`/`cluster` markers gated nothing (every
+# dependency behind them is non-optional) and their cfg gates drifted
+# out of sync, breaking `--no-default-features` builds (#982 P1-2) —
+# the modules are now compiled unconditionally.
 
 [dependencies]
 serde = { workspace = true }

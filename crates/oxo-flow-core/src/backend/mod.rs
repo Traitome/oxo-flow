@@ -13,7 +13,6 @@ use crate::rule::Rule;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod driver;
 

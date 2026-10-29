@@ -40,11 +40,9 @@
 //! ```
 
 pub mod backend;
-#[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod config;
 pub mod config_impact;
-#[cfg(feature = "container")]
 pub mod container;
 pub mod dag;
 pub mod deep_check;
@@ -59,18 +57,14 @@ pub mod reentry;
 pub mod references;
 pub mod result;
 
-#[cfg(feature = "report")]
 pub mod report;
-#[cfg(feature = "report")]
 pub mod report_metrics;
 pub mod rule;
 pub mod scheduler;
 pub mod scientific_preflight;
-#[cfg(feature = "report")]
 pub mod software_versions;
 pub mod stage;
 pub mod storage;
-#[cfg(feature = "webhook")]
 pub mod webhook;
 pub mod wildcard;
 
@@ -83,7 +77,6 @@ pub use config::{
 pub use dag::WorkflowDag;
 pub use error::{OxoFlowError, Result};
 pub use executor::{CheckpointState, ExecutionEvent, JobStatus};
-#[cfg(feature = "webhook")]
 // Re-export result types
 pub use result::{
     FastQcExtractor, GenericTextExtractor, MultiQcExtractor, OutputRecord, ResultExtractor,
