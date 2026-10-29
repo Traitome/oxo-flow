@@ -138,7 +138,7 @@ fn wait_for_bind(server: &mut WebServer, timeout: Duration) -> bool {
 
 /// Per-attempt bind deadline for the retry loop below. Generous enough for
 /// slow-start under parallel test load (cold binary page-in, DB init, the
-/// AI-provider auto-detect probe in `oxo-flow-web`'s startup path — all of
+/// AI-provider auto-detection in `oxo-flow-web`'s startup path — all of
 /// which happen BEFORE the "Listening on" line): #958 observed 15 s
 /// abandoning alive-but-slow children, and each retry then started another
 /// cold child with the same slow start, so all 5 attempts failed identically.

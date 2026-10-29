@@ -123,8 +123,9 @@ fn spawn_serve(dir: &Path, base_path: &str) -> ServeProcess {
             if Instant::now() > overall_deadline {
                 panic!(
                     "`oxo-flow serve` did not bind within the overall deadline \
-                     (alive but slow after {}s)\n{last_log}",
-                    3 * common::BIND_WAIT_TIMEOUT.as_secs()
+                     (alive but slow after {}s)\n{}",
+                    3 * common::BIND_WAIT_TIMEOUT.as_secs(),
+                    serve_log_tail(&server)
                 );
             }
         }
