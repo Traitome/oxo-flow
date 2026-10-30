@@ -1196,6 +1196,15 @@ impl Tool for LookupDocTool {
                 skillgraph_docs::doc_count()
             ));
         };
+        if skill.trim().is_empty() {
+            // An empty substring matches every graph node, so find_node
+            // would hand back the first doc — a usage hint is far safer.
+            return Ok(
+                "Empty skill query. Call lookup_doc with \"skill\": \"list\" \
+                 for the index of all docs."
+                    .to_string(),
+            );
+        }
         if skill.eq_ignore_ascii_case("list") {
             return Ok(skillgraph_docs::list_docs());
         }
@@ -1357,6 +1366,18 @@ async fn lookup_doc_handles_missing_query() {
     assert!(
         result.contains("Usage:"),
         "empty arguments should return a usage hint, got: {result}"
+    );
+}
+
+/// An empty `skill` string would substring-match every graph node, so the
+/// empty query must get a usage hint instead of an arbitrary first doc.
+#[tokio::test]
+async fn lookup_doc_empty_skill_gets_usage_hint() {
+    let tool = LookupDocTool::new();
+    let result = tool.execute(r#"{"skill": "  "}"#).await.unwrap();
+    assert!(
+        result.contains("Empty skill query"),
+        "empty skill should not resolve to a doc, got: {result}"
     );
 }
 

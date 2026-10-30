@@ -61,7 +61,7 @@ pub fn doc_count() -> usize {
     DOCS.docs.len()
 }
 
-/// Total size of the embedded documentation in characters.
+/// Total size of the embedded documentation in bytes.
 pub fn doc_chars() -> usize {
     DOCS.docs.iter().map(|d| d.doc.len()).sum()
 }
@@ -84,10 +84,11 @@ fn doc_title(doc: &str) -> &str {
 
 /// Format one doc for an AI prompt: the header echoes the RESOLVED id, so
 /// a substring-fallback match is visible and the model can catch a
-/// wrong-skill hit.
+/// wrong-skill hit. The size is reported in bytes (same measure as the
+/// freshness record counts) rather than an inflated char count.
 pub fn format_doc(doc: &SkillDoc) -> String {
     format!(
-        "Skill doc for `{}` ({} chars)\n\n{}",
+        "Skill doc for `{}` ({} bytes)\n\n{}",
         doc.id,
         doc.doc.len(),
         doc.doc

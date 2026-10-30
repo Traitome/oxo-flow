@@ -340,7 +340,7 @@ The AI agent combines five embedded knowledge sources (all compiled into the bin
 2. **Bioconda Tool Database**: 6,525 curated CLI tools with current versions and descriptions (`knowledge_meta.json`: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via `lookup_tool`
 3. **bioSkills Library**: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via `lookup_skill`
 4. **Pipeline Knowledge Graph**: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via `lookup_pipeline` to design correct multi-step topologies
-5. **Skill Protocol Docs**: the full SKILL.md document for every pipeline-graph skill (~77 docs) — fetched one at a time via `lookup_doc` by skill id, display name, or unique substring; each doc carries Required Tools, the canonical Workflow, and caveats
+5. **Skill Protocol Docs**: the full SKILL.md document for every documented pipeline-graph skill (77 of 78 nodes; the `shared` pseudo-node has none) — fetched one at a time via `lookup_doc` by skill id, display name, or unique substring; each doc carries Required Tools, the canonical Workflow, and caveats
 
 Token efficiency: embedded data is **never added to the LLM context wholesale**. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed. The one deliberate exception is `lookup_doc`, whose full-protocol response is larger by design (roughly 2-5K tokens per fetched doc) and is still strictly on demand — one skill at a time.
 
