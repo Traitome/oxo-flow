@@ -3,8 +3,11 @@ name = "scatter-gather-pipeline"
 version = "1.0.0"
 description = "Parallel scatter-gather processing pipeline"
 
-[variables]
-chunks = ["chunk1", "chunk2", "chunk3", "chunk4"]
+# Define the chunk list for {chunk} wildcard expansion (WC-03).
+# Every rule referencing {chunk} fans out into one instance per value.
+[[values]]
+name = "chunk"
+values = ["chunk1", "chunk2", "chunk3", "chunk4"]
 
 [[rules]]
 name = "split"

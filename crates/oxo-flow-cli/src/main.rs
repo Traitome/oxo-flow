@@ -1324,11 +1324,20 @@ async fn main() -> Result<()> {
     } else {
         "info"
     };
+    // The archived run log (`.oxo-flow/logs/oxo-flow.log`) must always carry
+    // the structured execution events (workflow_started / rule_completed /
+    // …) — they are the machine-readable audit trail (#194 B3), not debug
+    // chatter. A user's `RUST_LOG=warn` must not silently strip them, so the
+    // `execution_event` target is pinned to `info` ahead of any env filter.
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level));
+    let env_filter = env_filter.add_directive(
+        "execution_event=info"
+            .parse()
+            .expect("static execution_event directive parses"),
+    );
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
-        )
+        .with_env_filter(env_filter)
         .with_target(false)
         .with_ansi(!color_disabled)
         // Logs go to stderr so machine-readable stdout (graph DOT output,

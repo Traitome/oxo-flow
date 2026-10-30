@@ -13,8 +13,15 @@ static UNSAFE_WILDCARDS_WARNED: AtomicBool = AtomicBool::new(false);
 ///
 /// Prevents use of interpreters from untrusted locations. Only allows:
 /// - Simple names (no path component): e.g., "python", "Rscript"
-/// - Absolute paths in standard system directories: /usr/bin, /usr/local/bin, /opt
-/// - Absolute paths in user directories: /home, /Users
+/// - Absolute paths under standard system directories: /usr/bin, /usr/local/bin, /bin
+/// - Absolute paths under user directories: /home, /Users, /opt
+///
+/// The check is anchored on directory boundaries (component-wise), so
+/// `/home_evil/evil_python` or `/opt_bad/bin` do NOT satisfy the `/home`
+/// or `/opt` prefixes. Relative paths containing a separator (`./evil`,
+/// `bin/evil`) are rejected outright: a rule's working directory is
+/// attacker-influenced data. Windows drive-letter and backslash paths are
+/// rejected as non-portable.
 ///
 /// Returns Ok(()) if safe, Err if potentially dangerous.
 #[must_use = "interpreter path validation returns a Result that must be checked"]
@@ -33,18 +40,61 @@ pub fn validate_interpreter_path(interpreter: &str) -> Result<()> {
         });
     }
 
-    // For absolute paths, verify they're in safe directories
-    if interpreter.starts_with('/') {
-        let safe_prefixes = ["/usr/bin", "/usr/local/bin", "/opt", "/home", "/Users"];
-        if !safe_prefixes.iter().any(|p| interpreter.starts_with(p)) {
-            return Err(OxoFlowError::Validation {
-                message: format!("Interpreter path '{}' not in safe directories", interpreter),
-                rule: None,
-                suggestion: Some(
-                    "Use interpreters from standard paths (/usr/bin, /usr/local/bin, /opt, /home, /Users)".to_string(),
-                ),
-            });
-        }
+    // Windows drive-letter paths (C:\..., C:/...) are not portable across
+    // the supported POSIX targets; reject rather than pretend to vet them.
+    // Checked before the absolute-path test so the common `C:\...` shape
+    // gets the Windows-specific message instead of "is relative".
+    let looks_windows = interpreter.as_bytes().get(1) == Some(&b':') || interpreter.contains('\\');
+    if looks_windows {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Interpreter path '{}' looks like a Windows path; use a POSIX absolute path",
+                interpreter
+            ),
+            rule: None,
+            suggestion: Some(
+                "Use a POSIX absolute path (/usr/bin/python3) or a bare name (python)".to_string(),
+            ),
+        });
+    }
+
+    // Absolute paths only — a relative path with a separator resolves
+    // against the rule's workdir, which is not a trusted location.
+    if !interpreter.starts_with('/') {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Interpreter path '{}' is relative; only absolute paths or bare command names are allowed",
+                interpreter
+            ),
+            rule: None,
+            suggestion: Some(
+                "Use an absolute path (/usr/bin/python3) or a bare name resolved via PATH (python)"
+                    .to_string(),
+            ),
+        });
+    }
+
+    // Verify the path lives under a safe directory, matching whole
+    // path components (a prefix string check would admit `/home_evil/…`).
+    let safe_dirs = [
+        "/usr/bin",
+        "/usr/local/bin",
+        "/bin",
+        "/opt",
+        "/home",
+        "/Users",
+    ];
+    let path = Path::new(interpreter);
+    let under_safe_dir = safe_dirs.iter().any(|dir| path.starts_with(dir));
+    if !under_safe_dir {
+        return Err(OxoFlowError::Validation {
+            message: format!("Interpreter path '{}' not in safe directories", interpreter),
+            rule: None,
+            suggestion: Some(
+                "Use interpreters from standard paths (/usr/bin, /usr/local/bin, /bin, /opt, /home, /Users)"
+                    .to_string(),
+            ),
+        });
     }
 
     Ok(())

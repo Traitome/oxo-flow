@@ -149,6 +149,17 @@ pub async fn batch_command(
             if stop_on_error {
                 stop_flag_clone.store(true, Ordering::Relaxed);
             }
+            // Record the skip so the summary reports the full item count
+            // (a skipped item is neither done nor a failure).
+            if let Ok(mut results_lock) = results_clone.lock() {
+                results_lock.push(BatchResult {
+                    item: item_clone.clone(),
+                    command: cmd_clone,
+                    exit_code: None,
+                    success: false,
+                    error: Some("skipped (stop-on-error)".to_string()),
+                });
+            }
             // Release permit and continue
             drop(permit);
             continue;
@@ -226,12 +237,19 @@ pub async fn batch_command(
 
     progress.finish_and_clear();
 
-    // Calculate summary
+    // Calculate summary. Items skipped by stop-on-error are recorded, but
+    // items past the loop-top `break` are not — `total_results` is the
+    // number of *recorded* items (executed + skipped), which may be smaller
+    // than `items.len()` when the batch aborted early.
     let results_lock = results
         .lock()
         .map_err(|_| anyhow::anyhow!("results mutex poisoned"))?;
     let total_results = results_lock.len();
     let failed = results_lock.iter().filter(|r| !r.success).count();
+    let skipped = results_lock
+        .iter()
+        .filter(|r| r.error.as_deref() == Some("skipped (stop-on-error)"))
+        .count();
     let done = total_results - failed;
 
     // Output summary
@@ -240,22 +258,27 @@ pub async fn batch_command(
             "tool": "oxo-flow batch",
             "template": template,
             "total": total_results,
-            "failed": failed,
+            "failed": failed - skipped,
+            "skipped": skipped,
             "success": failed == 0,
             "results": results_lock.clone()
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         eprintln!(
-            "\n{} {}/{} items succeeded, {} failed",
+            "\n{} {}/{} items succeeded, {} failed, {} skipped",
             "Done:".bold(),
             done,
             total_results,
-            failed
+            failed - skipped,
+            skipped
         );
         if failed > 0 {
             eprintln!("\n{}", "Failures:".bold().red());
-            for r in results_lock.iter().filter(|r| !r.success) {
+            for r in results_lock
+                .iter()
+                .filter(|r| !r.success && r.error.as_deref() != Some("skipped (stop-on-error)"))
+            {
                 eprintln!(
                     "  {} — {}",
                     r.item.bold(),
@@ -271,8 +294,14 @@ pub async fn batch_command(
     // JSON. --stop-on-error stays the abort-on-first-failure switch, not
     // the only failure signal.
     if failed > 0 {
+        let failed_only = failed - skipped;
+        let skipped_note = if skipped > 0 {
+            format!(", {skipped} skipped after stop-on-error")
+        } else {
+            String::new()
+        };
         return Err(anyhow::anyhow!(
-            "batch execution failed: {failed} item(s) did not succeed"
+            "batch execution failed: {failed_only} item(s) did not succeed{skipped_note}"
         ));
     }
 

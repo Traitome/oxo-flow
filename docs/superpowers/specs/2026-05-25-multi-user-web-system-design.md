@@ -326,7 +326,9 @@ MVP considered complete when:
 ## References
 
 - [web-api.md](../../guide/src/reference/web-api.md) - Existing API docs
-- [simulation_20users.rs](../../../crates/oxo-flow-web/tests/simulation_20users.rs) - Current tests
+- Web integration tests: `crates/oxo-flow-web/tests/` (the original
+  `simulation_20users.rs` has been removed; current coverage lives in the
+  remaining integration suites)
 - [HTMX Documentation](https://htmx.org/docs/)
 - [Alpine.js Documentation](https://alpinejs.dev/start-here)
 - [maud Documentation](https://maud.lambda.xyz/)
