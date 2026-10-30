@@ -573,7 +573,7 @@ flowchart TB
     subgraph harness["Shared harness (oxo-flow-ai)"]
         agent["PipelineGenAgent<br/>engine-accurate prompt ·<br/>canonical TOML extraction ·<br/>injected validator"]
         loop["Orchestrator loop<br/>plan → tools → extract →<br/>validate → feedback → deliver"]
-        kt["knowledge_tool_registry<br/>(read-only: bioconda · skills ·<br/>pipeline graph · screened fetch)"]
+        kt["knowledge_tool_registry<br/>(read-only: bioconda · skills · pipeline<br/>graph · skill docs · screened fetch)"]
     end
 
     gates["Engine validation<br/>(CLI: WorkflowConfig parse ·<br/>web: workflow service)"]

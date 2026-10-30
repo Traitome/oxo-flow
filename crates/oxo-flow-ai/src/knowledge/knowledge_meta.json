@@ -79,7 +79,7 @@
     "skillgraph_docs": {
       "count": 77,
       "url": "https://skillgraph.pipette.bio/mcp",
-      "description": "full SKILL.md docs per skill (reserved for a later doc layer)",
+      "description": "full SKILL.md docs per skill, served via lookup_doc",
       "data_file": "skillgraph_docs.jsonl",
       "generated_at": "2026-10-16T08:17:49Z",
       "auto": true

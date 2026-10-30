@@ -143,6 +143,15 @@ database (6000+ tools with current versions and descriptions). Use it to:
 - Discover alternative tools by purpose keyword (e.g. `lookup_tool("peak calling")`)
 - Check platform support before recommending a tool
 
+## Skill Documentation (lookup_doc)
+Full SKILL.md protocol docs for the embedded pipeline skills are available.
+- Before writing steps that involve a skill you have not loaded, call
+  lookup_doc with {{"skill": "<id>"}} — the doc gives Required Tools and the
+  canonical Workflow for that step.
+- Ids match pipeline-graph nodes (see lookup_pipeline); passing "list"
+  prints the index of all docs.
+- Docs are complete protocols (2-5K tokens): load only what you need, once.
+
 ## Pipeline Design Methodology
 1. **Understand the assay type** — RNA-seq, DNA-seq, ChIP-seq, ATAC-seq, metagenomics, etc.
 2. **Select tools** — Match tools to steps. Prefer the curated reference table above; use `lookup_tool` for anything not listed there or to verify current versions.
@@ -663,6 +672,7 @@ mod tests {
         assert!(p.contains("[[rules]]"));
         assert!(p.contains("depends_on"));
         assert!(p.contains("lookup_tool"));
+        assert!(p.contains("lookup_doc"));
         assert!(p.contains("NO `foreach`"));
     }
 
