@@ -190,4 +190,34 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
     expect(body).toHaveProperty('version');
     expect(typeof body.version).toBe('string');
   });
+
+  test('Lifecycle workbench: 5-stage grid, Command Palette, Sample Sheet parser, Engine guard, Format & Lint', async ({ page }) => {
+    await page.goto('/');
+    // 5-stage lifecycle grid renders on Dashboard
+    await expect(page.locator('.lifecycle-stage-card')).toHaveCount(5);
+
+    // Command Palette opens via header trigger
+    await page.locator('.cmd-trigger').click();
+    await expect(page.locator('.cmd-palette-dialog')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // Click Stage 1 (Data & Samples) -> opens Editor with Data Workbench modal
+    await page.locator('.lifecycle-stage-card').first().click();
+    await expect(page).toHaveURL(/\/editor\?modal=data/);
+    await expect(page.getByRole('dialog', { name: /Data & Sample Sheet Workbench/i })).toBeVisible();
+    await page.getByRole('button', { name: /Parse Sample Sheet/i }).click();
+    await expect(page.getByRole('button', { name: /Insert Samples into Workflow/i })).toBeVisible();
+    await page.getByRole('button', { name: /Insert Samples into Workflow/i }).click();
+    await expect(page.locator('.result-bar.success')).toContainText('Injected 2 sample(s) into [config]');
+
+    // Engine & Safety modal injects [engine] settings
+    await page.getByRole('button', { name: /Engine & Safety/i }).click();
+    await expect(page.getByRole('dialog', { name: /Engine & Data Safety/i })).toBeVisible();
+    await page.getByRole('button', { name: /Inject into \[engine\]/i }).click();
+    await expect(page.locator('.result-bar.success')).toContainText('Updated [engine]');
+
+    // Format & Lint buttons work in Editor
+    await page.getByRole('button', { name: /^Format$/i }).click();
+    await expect(page.locator('.result-bar.success')).toContainText('Formatted TOML canonically');
+  });
 });

@@ -286,6 +286,22 @@ export default function ChatUI({ context = 'dashboard', onPipelineReady }: ChatU
           <div className="chat-empty">
             <Bot size={32} style={{ opacity: 0.5 }} />
             <p style={{ fontSize: '0.9rem' }}>{placeholders[context]}</p>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center', marginTop: 8 }}>
+              {[
+                'RNA-seq paired-end hg38: fastp + STAR + featureCounts + MultiQC',
+                'WGS germline variant calling: bwa-mem2 + samtools + GATK4 HaplotypeCaller',
+                'scRNA-seq CellRanger + Seurat QC pipeline',
+              ].map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className="pill-chip"
+                  onClick={() => setInput(prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

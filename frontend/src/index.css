@@ -20,6 +20,7 @@
   /* Environment badge colors (rule-node dots) as semantic variables so
      the dark themes can re-tone them. */
   --env-system:#6B7280; --env-conda:#3B82F6; --env-mamba:#10B981;
+  --env-pixi:#059669;
   --env-docker:#8B5CF6; --env-singularity:#EC4899; --env-venv:#F59E0B;
   --env-modules:#14B8A6;
 }
@@ -40,6 +41,7 @@
   --shadow-card:0 1px 2px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.3);
   --shadow-pop:0 8px 24px rgba(0,0,0,.5);
   --env-system:#9CA3AF; --env-conda:#60A5FA; --env-mamba:#34D399;
+  --env-pixi:#10B981;
   --env-docker:#A78BFA; --env-singularity:#F472B6; --env-venv:#FBBF24;
   --env-modules:#2DD4BF;
 }
@@ -58,6 +60,7 @@
     --shadow-card:0 1px 2px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.3);
     --shadow-pop:0 8px 24px rgba(0,0,0,.5);
     --env-system:#9CA3AF; --env-conda:#60A5FA; --env-mamba:#34D399;
+    --env-pixi:#10B981;
     --env-docker:#A78BFA; --env-singularity:#F472B6; --env-venv:#FBBF24;
     --env-modules:#2DD4BF;
   }
@@ -408,6 +411,7 @@ select.search-input{padding-right:1.75rem}
 .rf-env-system { background: var(--env-system); }
 .rf-env-conda { background: var(--env-conda); }
 .rf-env-mamba { background: var(--env-mamba); }
+.rf-env-pixi { background: var(--env-pixi); }
 .rf-env-docker { background: var(--env-docker); }
 .rf-env-singularity { background: var(--env-singularity); }
 .rf-env-venv { background: var(--env-venv); }
@@ -725,4 +729,241 @@ select.search-input{padding-right:1.75rem}
   .tool-palette-search input,
   .search-input { min-height: 32px; }
   .app-footer { height: auto; min-height: var(--footer-h); }
+}
+
+/* ── Metro-DAG Studio Overhaul: Lifecycle & Command Surfaces ── */
+.app-header {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.header-center {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+
+.cmd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  max-width: 280px;
+}
+.cmd-trigger:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  background: var(--color-bg-tertiary);
+}
+.cmd-kbd {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.lifecycle-pill-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 0.72rem;
+}
+.lifecycle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.lifecycle-pill:hover {
+  color: var(--color-text);
+  background: var(--color-bg-tertiary);
+}
+.lifecycle-pill.active {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.lifecycle-sep {
+  color: var(--color-border);
+  font-size: 0.65rem;
+  user-select: none;
+}
+
+/* 5-Stage Lifecycle Architecture Grid on Dashboard */
+.lifecycle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1.5rem;
+}
+.lifecycle-stage-card {
+  position: relative;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-top: 3px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  box-shadow: var(--shadow-card);
+}
+.lifecycle-stage-card:nth-child(2) { border-top-color: var(--color-accent); }
+.lifecycle-stage-card:nth-child(3) { border-top-color: var(--color-info); }
+.lifecycle-stage-card:nth-child(4) { border-top-color: var(--color-warning); }
+.lifecycle-stage-card:nth-child(5) { border-top-color: var(--color-success); }
+.lifecycle-stage-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-pop);
+  border-color: var(--color-primary);
+}
+.lifecycle-stage-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lifecycle-stage-sub {
+  font-size: 0.74rem;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+/* Command Palette Modal */
+.cmd-palette-dialog {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  width: min(580px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.cmd-palette-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+.cmd-palette-head input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.92rem;
+  outline: none;
+}
+.cmd-palette-list {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cmd-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.84rem;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.cmd-palette-item:hover, .cmd-palette-item:focus-visible {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+/* Segmented filter pills & workbench tabs */
+.pill-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.pill-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.pill-chip:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.pill-chip.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+/* Verification & Provenance Cards */
+.verify-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.verify-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  box-shadow: var(--shadow-card);
+}
+
+@media (max-width: 1023px) {
+  .lifecycle-pill-bar { display: none; }
+}
+@media (max-width: 640px) {
+  .cmd-trigger span { display: none; }
 }

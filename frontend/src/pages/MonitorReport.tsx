@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api, createEventSource } from '../api/client';
-import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance } from '../api/types';
-import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot, ChevronDown } from 'lucide-react';
+import { api, createEventSource, describeApiError } from '../api/client';
+import type { RunItem, MonitorStatus, ReportData, DagStatus, Diagnostics, DryRunPreview, RunInstance, ProvenanceVerifyResponse, ProtectedDriftResponse, FilePreviewResponse } from '../api/types';
+import { Play, Pause, RotateCcw, BarChart3, Loader2, Bot, Ban, Trash2, StepForward, Download, Lightbulb, Wrench, FileText, Folder, File, CircleX, TriangleAlert, CircleDot, ChevronDown, ShieldCheck, Eye, X } from 'lucide-react';
 import WorkflowCanvas from '../components/WorkflowCanvas';
 import RunTimeline from '../components/RunTimeline';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
 
-type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances';
+type TabType = 'monitor' | 'report' | 'diagnostics' | 'dag' | 'logs' | 'instances' | 'verification';
 
 function StatCard({ value, label, color }: { value: string; label: string; color?: string }) {
   return (
@@ -120,6 +120,9 @@ export default function MonitorReport() {
   // The Recent Events table under a finished run starts collapsed too.
   const [collapsedAlerts, setCollapsedAlerts] = useState<Set<string>>(new Set());
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [provResult, setProvResult] = useState<ProvenanceVerifyResponse | null>(null);
+  const [driftResult, setDriftResult] = useState<ProtectedDriftResponse | null>(null);
+  const [filePreview, setFilePreview] = useState<FilePreviewResponse | null>(null);
 
   const { id: routeId } = useParams();
   const navigate = useNavigate();
@@ -797,10 +800,21 @@ export default function MonitorReport() {
         {/* File Tree */}
         {reportData.file_tree.length > 0 && (
           <div className="dash-card" style={{ marginBottom: '1rem' }}>
-            <h4 style={{ fontSize: '0.85rem', marginBottom: '6px' }}>{t('monitor.outputFiles')}</h4>
-            <div style={{ maxHeight: '200px', overflow: 'auto', fontSize: '0.78rem' }}>
+            <div className="row" style={{ justifyContent: 'space-between', marginBottom: '6px' }}>
+              <h4 style={{ fontSize: '0.85rem', margin: 0 }}>{t('monitor.outputFiles')}</h4>
+              {selId && (
+                <a
+                  href={api.getRunFileDownloadUrl(selId, '.')}
+                  className="btn-sm"
+                  style={{ textDecoration: 'none' }}
+                >
+                  <Download size={13} /> {t('monitor.downloadZip')}
+                </a>
+              )}
+            </div>
+            <div style={{ maxHeight: '240px', overflow: 'auto', fontSize: '0.78rem' }}>
               <table className="run-table">
-                <thead><tr><th>{t('monitor.rule')}</th><th>{t('monitor.totalSize')}</th><th>{t('monitor.status')}</th></tr></thead>
+                <thead><tr><th>{t('monitor.rule')}</th><th>{t('monitor.totalSize')}</th><th>{t('monitor.status')}</th><th></th></tr></thead>
                 <tbody>
                   {reportData.file_tree.map((f, i) => (
                     <tr key={i}>
@@ -809,6 +823,35 @@ export default function MonitorReport() {
                       </td>
                       <td>{f.size_bytes > 1024 ? `${(f.size_bytes / 1024).toFixed(1)} KB` : `${f.size_bytes} B`}</td>
                       <td>{f.is_dir ? t('monitor.directory') : t('monitor.file')}</td>
+                      <td>
+                        {selId && (
+                          <div className="row" style={{ gap: 4 }}>
+                            {!f.is_dir && (
+                              <button
+                                type="button"
+                                className="btn-sm"
+                                onClick={async () => {
+                                  try {
+                                    const p = await api.previewRunFile(selId, f.path || f.name);
+                                    setFilePreview(p);
+                                  } catch (err: unknown) {
+                                    setActionError(describeApiError(err, 'Preview unavailable'));
+                                  }
+                                }}
+                              >
+                                <Eye size={12} /> {t('monitor.previewFile')}
+                              </button>
+                            )}
+                            <a
+                              href={api.getRunFileDownloadUrl(selId, f.path || f.name)}
+                              className="btn-sm"
+                              style={{ textDecoration: 'none' }}
+                            >
+                              <Download size={12} /> {t('monitor.downloadFile')}
+                            </a>
+                          </div>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -960,6 +1003,109 @@ export default function MonitorReport() {
 
   const selectedRun = runs.find(r => r.id === selId);
 
+  const renderVerification = () => {
+    if (!selId) return null;
+    return (
+      <div className="verify-grid">
+        <div className="verify-card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h4 style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ShieldCheck size={16} color="var(--color-success)" /> {t('monitor.verifyProvenance')}
+            </h4>
+            <button
+              type="button"
+              className="btn-run"
+              onClick={async () => {
+                try {
+                  const res = await api.verifyRunProvenance(selId);
+                  setProvResult(res);
+                  setActionError(null);
+                } catch (err: unknown) {
+                  setActionError(describeApiError(err, 'Provenance verification failed'));
+                }
+              }}
+            >
+              <ShieldCheck size={14} /> {t('monitor.verifyProvenance')}
+            </button>
+          </div>
+          <p className="muted">
+            Audits recorded SHA-256 output checksums in <code>.oxo-flow/checkpoint.json</code> against live workdir files.
+          </p>
+          {provResult && (
+            <div>
+              <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+                <span className={`status-badge ${provResult.ok ? 'success' : 'failed'}`}>
+                  {provResult.ok ? 'VERIFIED OK' : 'DRIFT DETECTED'}
+                </span>
+                <span className="status-badge success">Matched: {provResult.matched}</span>
+                <span className={`status-badge ${provResult.mismatched > 0 ? 'failed' : 'skipped'}`}>Mismatched: {provResult.mismatched}</span>
+                <span className={`status-badge ${provResult.missing > 0 ? 'failed' : 'skipped'}`}>Missing: {provResult.missing}</span>
+                <span className="status-badge">Cleaned: {provResult.cleaned}</span>
+              </div>
+              {provResult.note && <div className="muted" style={{ marginBottom: 6 }}>{provResult.note}</div>}
+              {provResult.entries.length > 0 && (
+                <div className="overflow-x" style={{ maxHeight: 200 }}>
+                  <table className="data-table">
+                    <thead><tr><th>File</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {provResult.entries.map((e, i) => (
+                        <tr key={i}>
+                          <td className="mono">{e.file}</td>
+                          <td><span className={`status-badge ${e.status === 'matched' ? 'success' : e.status === 'cleaned' ? 'skipped' : 'failed'}`}>{e.status}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="verify-card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h4 style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ShieldCheck size={16} color="var(--color-primary)" /> {t('monitor.checkProtectedDrift')}
+            </h4>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={async () => {
+                try {
+                  const res = await api.getRunProtectedDrift(selId);
+                  setDriftResult(res);
+                  setActionError(null);
+                } catch (err: unknown) {
+                  setActionError(describeApiError(err, 'Protected drift check failed'));
+                }
+              }}
+            >
+              {t('monitor.checkProtectedDrift')}
+            </button>
+          </div>
+          <p className="muted">
+            Read-only check of <code>[engine] protected_data_trees</code> against the run&apos;s baseline manifest.
+          </p>
+          {driftResult && (
+            <div>
+              <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+                <span className={`status-badge ${driftResult.drifted_files.length === 0 ? 'success' : 'failed'}`}>
+                  Drifted files: {driftResult.drifted_files.length}
+                </span>
+                <span className="status-badge">New trees: {driftResult.new_trees}</span>
+              </div>
+              {driftResult.drifted_files.length > 0 && (
+                <pre className="log-view" style={{ maxHeight: 160 }}>
+                  {driftResult.drifted_files.join('\n')}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="page">
       <h1 className="page-title">{t('monitor.title')}</h1>
@@ -1090,7 +1236,7 @@ export default function MonitorReport() {
               role="tablist"
               style={{ gap: '4px', position: 'sticky', top: 0, zIndex: 5, background: 'var(--color-bg)', paddingBottom: '6px' }}
             >
-              {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances'] as const).map((tabKey) => (
+              {(['monitor', 'report', 'diagnostics', 'dag', 'logs', 'instances', 'verification'] as const).map((tabKey) => (
                 <button
                   key={tabKey}
                   role="tab"
@@ -1110,6 +1256,20 @@ export default function MonitorReport() {
           {tab === 'dag' && renderDag()}
           {tab === 'logs' && renderLogs()}
           {tab === 'instances' && renderInstances()}
+          {tab === 'verification' && renderVerification()}
+        </div>
+      )}
+
+      {filePreview && (
+        <div className="modal-overlay" onClick={() => setFilePreview(null)}>
+          <div className="modal-dialog" style={{ maxWidth: 680 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={filePreview.name}>
+            <div className="inspector-header" style={{ padding: '0 0 10px 0', marginBottom: 10 }}>
+              <h3 className="mono" style={{ margin: 0 }}>{filePreview.name} ({(filePreview.size_bytes / 1024).toFixed(1)} KB)</h3>
+              <button className="btn-sm" onClick={() => setFilePreview(null)} aria-label={t('common.close')}><X size={14} /></button>
+            </div>
+            <pre className="log-view" style={{ maxHeight: 420 }}>{filePreview.content}</pre>
+            {filePreview.truncated && <div className="muted" style={{ marginTop: 6 }}>Preview truncated at 100 KB — download the file for full contents.</div>}
+          </div>
         </div>
       )}
     </div>

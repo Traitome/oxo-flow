@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react';
-import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { Play, CheckCircle, AlertCircle, Undo2, Redo2, Save, Wand2, Blocks, History, Maximize2, Minimize2, PanelLeftOpen, PanelLeftClose, Sparkles, Shield, FileSpreadsheet, AlignLeft, X, Upload } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, describeApiError } from '../api/client';
-import type { DagJson, KnowledgeTool } from '../api/types';
+import type { DagJson, KnowledgeTool, SamplesheetParseResponse, UploadedFileEntry, VerifyDataResponse } from '../api/types';
 import ChatUI from '../components/ChatUI';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ToolPalette from '../components/ToolPalette';
 import RuleInspector from '../components/RuleInspector';
-import RunDialog from '../components/RunDialog';
+import RunDialog, { type RunOptions } from '../components/RunDialog';
 import GuidedRuleBuilder from '../components/GuidedRuleBuilder';
 import { usePipelineSession } from '../context/PipelineSession';
 import { useI18n, getLocale } from '../context/I18n';
@@ -92,6 +92,22 @@ export default function PipelineEditor() {
   const [revisions, setRevisions] = useState<Array<{ id: string; version: string; actor: string; created_at: string }> | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [showDataModal, setShowDataModal] = useState(() => searchParams.get('modal') === 'data');
+  const [showEngineModal, setShowEngineModal] = useState(() => searchParams.get('modal') === 'engine');
+  const [dataTab, setDataTab] = useState<'sheet' | 'upload' | 'verify'>('sheet');
+  const [sheetText, setSheetText] = useState('sample,fastq_r1,fastq_r2\nS1,data/S1_R1.fq.gz,data/S1_R2.fq.gz\nS2,data/S2_R1.fq.gz,data/S2_R2.fq.gz');
+  const [sheetParsed, setSheetParsed] = useState<SamplesheetParseResponse | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFileEntry[]>([]);
+  const [verifyTree, setVerifyTree] = useState('inputs');
+  const [verifyMd5, setVerifyMd5] = useState('');
+  const [verifyRes, setVerifyRes] = useState<VerifyDataResponse | null>(null);
+  const [engineForm, setEngineForm] = useState({
+    minFreeDisk: '20G',
+    reclaimFreeDisk: '50G',
+    tmpDir: '',
+    protectedTrees: '',
+  });
+  const fileUploadRef = useRef<HTMLInputElement>(null);
 
   // Load a template or a saved pipeline when navigated with
   // ?template=<id> / ?pipeline=<id> (dashboard quick-start, My Pipelines).
@@ -169,7 +185,7 @@ export default function PipelineEditor() {
     return () => clearTimeout(timer);
   }, [toml, updateDag]);
 
-  const handleRun = async (dryRun = false, options: { maxJobs: number; keepGoing: boolean; samples: string[]; targets: string[]; clusterId?: string } = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
+  const handleRun = async (dryRun = false, options: RunOptions = { maxJobs: 4, keepGoing: false, samples: [], targets: [] }) => {
     setRunning(true);
     try {
       // Issue #79 P1-12: runs launched from an opened saved pipeline must
@@ -185,6 +201,9 @@ export default function PipelineEditor() {
         targets: options.targets,
         pipeline_id: pipelineId,
         cluster_id: options.clusterId,
+        provenance: options.provenance,
+        allow_protected_drift: options.allowProtectedDrift,
+        config_overrides: options.configOverrides?.length ? options.configOverrides : undefined,
       });
       session.setRunResult({
         runId: res.run_id,
@@ -396,6 +415,63 @@ export default function PipelineEditor() {
     }
   };
 
+  const handleFormat = async () => {
+    try {
+      const res = await api.format(toml);
+      setToml(res.formatted);
+      session.setRunResult({ message: t('editor.formatted'), type: 'success' });
+    } catch (err: unknown) {
+      const msg = describeApiError(err, 'Format failed');
+      session.setRunResult({ message: msg, type: 'error' });
+    }
+  };
+
+  const handleLint = async () => {
+    try {
+      const res = await api.lint(toml);
+      const issues = [...(res.errors ?? []), ...(res.warnings ?? [])];
+      if (issues.length === 0) {
+        session.setRunResult({ message: t('editor.lintClean'), type: 'success' });
+      } else {
+        setValidation({ valid: res.errors.length === 0, errors: issues });
+        setShowErrors(true);
+        session.setRunResult({
+          message: `Lint found ${issues.length} item(s) — inspect the diagnostics panel`,
+          type: 'info',
+        });
+      }
+    } catch (err: unknown) {
+      const msg = describeApiError(err, 'Lint failed');
+      session.setRunResult({ message: msg, type: 'error' });
+    }
+  };
+
+  const applyEngineSettings = () => {
+    const lines: string[] = ['[engine]'];
+    if (engineForm.minFreeDisk.trim()) lines.push(`min_free_disk = "${engineForm.minFreeDisk.trim()}"`);
+    if (engineForm.reclaimFreeDisk.trim()) lines.push(`reclaim_free_disk = "${engineForm.reclaimFreeDisk.trim()}"`);
+    if (engineForm.tmpDir.trim()) lines.push(`tmp_dir = "${engineForm.tmpDir.trim()}"`);
+    const trees = engineForm.protectedTrees.split(',').map((s) => s.trim()).filter(Boolean);
+    if (trees.length > 0) {
+      lines.push(`protected_data_trees = [${trees.map((p) => `"${p}"`).join(', ')}]`);
+    }
+    const block = lines.join('\n');
+    const next = /\[engine\][\s\S]*?(?=\n\[|$)/.test(toml)
+      ? toml.replace(/\[engine\][\s\S]*?(?=\n\[|$)/, block)
+      : /\[\[rules\]\]/.test(toml)
+        ? toml.replace(/\[\[rules\]\]/, `${block}\n\n[[rules]]`)
+        : `${toml.trimEnd()}\n\n${block}\n`;
+    setToml(next);
+    setShowEngineModal(false);
+    session.setRunResult({ message: 'Updated [engine] disk & data-protection settings', type: 'success' });
+  };
+
+  useEffect(() => {
+    if (showDataModal && dataTab === 'upload') {
+      api.listUploadedFiles().then(setUploadedFiles).catch(() => setUploadedFiles([]));
+    }
+  }, [showDataModal, dataTab]);
+
   return (
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -414,6 +490,20 @@ export default function PipelineEditor() {
             title={t('editor.canvasTooltip')}
           >
             {t('editor.canvas')}
+          </button>
+        </div>
+        <div className="row" style={{ marginLeft: 'auto', gap: '6px' }}>
+          <button className="btn-sm" onClick={() => setShowDataModal(true)} title={t('editor.data.title')}>
+            <FileSpreadsheet size={14} /> {t('editor.dataWorkbench')}
+          </button>
+          <button className="btn-sm" onClick={() => setShowEngineModal(true)} title={t('editor.engineGuard.title')}>
+            <Shield size={14} /> {t('editor.engineGuard')}
+          </button>
+          <button className="btn-sm" onClick={() => void handleFormat()} title={t('editor.format')}>
+            <AlignLeft size={14} /> {t('editor.format')}
+          </button>
+          <button className="btn-sm" onClick={() => void handleLint()} title={t('editor.lint')}>
+            <Sparkles size={14} /> {t('editor.lint')}
           </button>
         </div>
       </div>
@@ -649,6 +739,202 @@ export default function PipelineEditor() {
           onSave={handleInspectorSave}
           onClose={() => setInspector(null)}
         />
+      )}
+
+      {showDataModal && (
+        <div className="modal-overlay" onClick={() => setShowDataModal(false)}>
+          <div className="modal-dialog" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t('editor.data.title')}>
+            <div className="inspector-header" style={{ padding: '0 0 10px 0', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>{t('editor.data.title')}</h3>
+              <button className="btn-sm" onClick={() => setShowDataModal(false)} aria-label={t('common.close')}><X size={14} /></button>
+            </div>
+            <div className="pill-bar">
+              <button type="button" className={`pill-chip ${dataTab === 'sheet' ? 'active' : ''}`} onClick={() => setDataTab('sheet')}>{t('editor.data.tabSheet')}</button>
+              <button type="button" className={`pill-chip ${dataTab === 'upload' ? 'active' : ''}`} onClick={() => setDataTab('upload')}>{t('editor.data.tabUpload')}</button>
+              <button type="button" className={`pill-chip ${dataTab === 'verify' ? 'active' : ''}`} onClick={() => setDataTab('verify')}>{t('editor.data.tabVerify')}</button>
+            </div>
+            {dataTab === 'sheet' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <p className="muted">{t('editor.data.sheetHint')}</p>
+                <textarea
+                  className="search-input mono"
+                  rows={5}
+                  value={sheetText}
+                  onChange={(e) => setSheetText(e.target.value)}
+                />
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn-run"
+                    onClick={async () => {
+                      try {
+                        const res = await api.parseSamplesheet(sheetText);
+                        setSheetParsed(res);
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Sample sheet parse failed'), type: 'error' });
+                      }
+                    }}
+                  >
+                    <FileSpreadsheet size={14} /> {t('editor.data.parseBtn')}
+                  </button>
+                  {sheetParsed && sheetParsed.samples.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      onClick={() => {
+                        const sampleList = sheetParsed.samples.map((s) => `"${s.sample}"`).join(', ');
+                        const groupSnippet = `[[sample_groups]]\nname = "cohort"\nsamples = [${sampleList}]`;
+                        const next = /\[\[rules\]\]/.test(toml)
+                          ? toml.replace(/\[\[rules\]\]/, `${groupSnippet}\n\n[[rules]]`)
+                          : `${toml.trimEnd()}\n\n${groupSnippet}\n`;
+                        setToml(next);
+                        setShowDataModal(false);
+                        session.setRunResult({ message: `Injected ${sheetParsed.samples.length} sample(s) into [config]`, type: 'success' });
+                      }}
+                    >
+                      {t('editor.data.insertConfig')} ({sheetParsed.samples.length})
+                    </button>
+                  )}
+                </div>
+                {sheetParsed && (
+                  <div className="overflow-x" style={{ maxHeight: 180 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr><th>Sample</th><th>R1</th><th>R2</th></tr>
+                      </thead>
+                      <tbody>
+                        {sheetParsed.samples.map((s, idx) => (
+                          <tr key={idx}>
+                            <td className="mono">{s.sample}</td>
+                            <td className="mono">{s.fastq_r1 ?? '-'}</td>
+                            <td className="mono">{s.fastq_r2 ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {dataTab === 'upload' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="row">
+                  <button type="button" className="btn-run" onClick={() => fileUploadRef.current?.click()}>
+                    <Upload size={14} /> {t('editor.data.uploadBtn')}
+                  </button>
+                  <input
+                    ref={fileUploadRef}
+                    type="file"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      if (!e.target.files?.length) return;
+                      try {
+                        await api.uploadFiles(e.target.files);
+                        const list = await api.listUploadedFiles();
+                        setUploadedFiles(list);
+                        session.setRunResult({ message: 'Uploaded input file(s) to workspace', type: 'success' });
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Upload failed'), type: 'error' });
+                      }
+                    }}
+                  />
+                </div>
+                {uploadedFiles.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '1.5rem 0' }}>No uploaded files in workspace yet.</div>
+                ) : (
+                  <div className="overflow-x" style={{ maxHeight: 200 }}>
+                    <table className="data-table">
+                      <thead><tr><th>Path</th><th>Size</th></tr></thead>
+                      <tbody>
+                        {uploadedFiles.map((f) => (
+                          <tr key={f.path}>
+                            <td className="mono">{f.path}</td>
+                            <td>{(f.size_bytes / 1024).toFixed(1)} KB</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {dataTab === 'verify' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <label className="inspector-field">
+                  <span>{t('editor.data.verifyTree')}</span>
+                  <input className="mono" value={verifyTree} onChange={(e) => setVerifyTree(e.target.value)} placeholder="inputs" />
+                </label>
+                <label className="inspector-field">
+                  <span>{t('editor.data.verifyMd5')}</span>
+                  <textarea className="search-input mono" rows={4} value={verifyMd5} onChange={(e) => setVerifyMd5(e.target.value)} placeholder="d41d8cd98f00b204e9800998ecf8427e  sample_R1.fastq.gz" />
+                </label>
+                <div>
+                  <button
+                    type="button"
+                    className="btn-run"
+                    disabled={!verifyTree.trim() || !verifyMd5.trim()}
+                    onClick={async () => {
+                      try {
+                        const r = await api.verifyData(verifyTree.trim(), verifyMd5);
+                        setVerifyRes(r);
+                      } catch (err: unknown) {
+                        session.setRunResult({ message: describeApiError(err, 'Data verification failed'), type: 'error' });
+                      }
+                    }}
+                  >
+                    <CheckCircle size={14} /> {t('editor.data.verifyBtn')}
+                  </button>
+                </div>
+                {verifyRes && (
+                  <div className="dash-card" style={{ padding: '0.75rem' }}>
+                    <div className="row" style={{ gap: '0.75rem' }}>
+                      <span className="status-badge success">Matched: {verifyRes.matched}</span>
+                      <span className={`status-badge ${verifyRes.mismatched > 0 ? 'failed' : 'skipped'}`}>Mismatched: {verifyRes.mismatched}</span>
+                      <span className={`status-badge ${verifyRes.missing > 0 ? 'failed' : 'skipped'}`}>Missing: {verifyRes.missing}</span>
+                      <span className="status-badge">Extra: {verifyRes.extra}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showEngineModal && (
+        <div className="modal-overlay" onClick={() => setShowEngineModal(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t('editor.engineGuard.title')}>
+            <div className="inspector-header" style={{ padding: '0 0 10px 0', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>{t('editor.engineGuard.title')}</h3>
+              <button className="btn-sm" onClick={() => setShowEngineModal(false)} aria-label={t('common.close')}><X size={14} /></button>
+            </div>
+            <div className="inspector-body" style={{ padding: 0 }}>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.minFreeDisk')}</span>
+                <input className="mono" value={engineForm.minFreeDisk} onChange={(e) => setEngineForm({ ...engineForm, minFreeDisk: e.target.value })} placeholder="20G" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.reclaimFreeDisk')}</span>
+                <input className="mono" value={engineForm.reclaimFreeDisk} onChange={(e) => setEngineForm({ ...engineForm, reclaimFreeDisk: e.target.value })} placeholder="50G" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.tmpDir')}</span>
+                <input className="mono" value={engineForm.tmpDir} onChange={(e) => setEngineForm({ ...engineForm, tmpDir: e.target.value })} placeholder="/scratch/tmp" />
+              </label>
+              <label className="inspector-field">
+                <span>{t('editor.engineGuard.protectedTrees')}</span>
+                <input className="mono" value={engineForm.protectedTrees} onChange={(e) => setEngineForm({ ...engineForm, protectedTrees: e.target.value })} placeholder="raw_data, references" />
+              </label>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 14 }}>
+              <button type="button" className="btn-sm" onClick={() => setShowEngineModal(false)}>{t('run.cancel')}</button>
+              <button type="button" className="btn-run" onClick={applyEngineSettings}>
+                <Shield size={14} /> {t('editor.engineGuard.apply')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

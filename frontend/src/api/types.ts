@@ -47,7 +47,23 @@ export interface Pipeline {
   id: string; user_id: string; name: string; version: string; toml_content: string;
   rules_count: number; forked_from?: string | null; visibility: string; created_at: string; updated_at: string;
 }
-export interface ValidateResponse { valid: boolean; errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>; }
+export interface ValidateResponse {
+  valid: boolean;
+  errors: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>;
+  warnings?: Array<{ code: string; message: string; rule: string | null; suggestion: string | null; line?: number | null }>;
+}
+export interface WorkflowStats {
+  rule_count: number;
+  shell_rules: number;
+  script_rules: number;
+  dependency_count: number;
+  parallel_groups: number;
+  max_depth: number;
+  environments: string[];
+  total_threads: number;
+  wildcard_count: number;
+  wildcard_names: string[];
+}
 export interface ParseResponse {
   pipeline_id: string; name: string; version: string;
   rules: Array<{ name: string; shell: string | null; inputs: string[]; outputs: string[]; environment: string | null; threads: number | null }>;
@@ -177,7 +193,7 @@ export interface Template { id: string; name: string; category: string; descript
 // ── Collaboration ──
 export interface ForkResponse { forked_id: string; name: string; }
 export interface ShareResponse { share_url: string; access_token: string; expires_at: string | null; }
-export interface ImportResponse { pipeline_id: string; }
+export interface ImportResponse { pipeline_id: string; name?: string; }
 
 // ── Data ──
 export interface DataAnalysis {
@@ -470,4 +486,80 @@ export interface AiConfigUpdate {
   monitor_enabled?: boolean;
   auto_retry_enabled?: boolean;
   max_correction_rounds?: number;
+}
+
+// Lifecycle & Verification extensions
+export interface ProtectedDriftResponse {
+  drifted_files: string[];
+  new_trees: number;
+  warnings: string[];
+}
+
+export interface ProvenanceVerifyEntry {
+  file: string;
+  status: 'matched' | 'mismatched' | 'missing' | 'cleaned' | string;
+  expected?: string;
+  actual?: string;
+  note?: string;
+}
+
+export interface ProvenanceVerifyResponse {
+  checkpoint: string;
+  matched: number;
+  mismatched: number;
+  missing: number;
+  cleaned: number;
+  entries: ProvenanceVerifyEntry[];
+  note?: string;
+  ok: boolean;
+}
+
+export interface VerifyDataEntry {
+  file: string;
+  status: 'matched' | 'mismatched' | 'missing' | 'extra' | string;
+  expected?: string;
+  actual?: string;
+  note?: string;
+}
+
+export interface VerifyDataResponse {
+  tree: string;
+  matched: number;
+  mismatched: number;
+  missing: number;
+  extra: number;
+  entries: VerifyDataEntry[];
+  note?: string;
+}
+
+export interface DiffEntry {
+  path: string;
+  category: string;
+  description: string;
+  severity: string;
+}
+
+export interface DiffResponse {
+  diffs: DiffEntry[];
+}
+
+export interface UploadedFileEntry {
+  name: string;
+  path: string;
+  size_bytes: number;
+}
+
+export interface FilePreviewResponse {
+  name: string;
+  size_bytes: number;
+  mime: string;
+  truncated: boolean;
+  content: string;
+}
+
+export interface SamplesheetParseResponse {
+  format: string;
+  sample_count: number;
+  samples: Array<Record<string, string>>;
+  toml_snippet?: string;
 }
