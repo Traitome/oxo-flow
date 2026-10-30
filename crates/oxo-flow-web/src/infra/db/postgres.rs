@@ -349,7 +349,7 @@ impl StorageBackend for PostgresBackend {
 
         self.get_pipeline(&id)
             .await
-            .map(|opt| opt.expect("pipeline should exist after upsert"))
+            .and_then(|opt| opt.ok_or_else(|| format!("pipeline {id} disappeared after upsert")))
     }
 
     async fn get_pipeline(&self, id: &str) -> Result<Option<models::PipelineRow>, String> {
@@ -648,7 +648,7 @@ impl StorageBackend for PostgresBackend {
 
         self.get_template(&id)
             .await
-            .map(|opt| opt.expect("template should exist after upsert"))
+            .and_then(|opt| opt.ok_or_else(|| format!("template {id} disappeared after upsert")))
     }
 
     async fn delete_template(&self, id: &str) -> Result<(), String> {

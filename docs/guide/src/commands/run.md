@@ -1244,7 +1244,7 @@ The response ladder:
   dependent whose outputs are missing will re-run and needs its inputs).
   The narration line is `⊘ reclaimed temporary outputs of '<rule>' …`.
   The same floor gates the success-path deletion of `temporary = true`
-  outputs (see [Temporary rules](#temporary-rules-temporary--true)) —
+  outputs (see [Temporary rules](#temporary-rules-temporary-true)) —
   with disk comfortable at run end they are kept, not pruned.
 - **Hold** (`free < min`): new rule dispatches are withheld; in-flight
   rules continue. If nothing is in flight and nothing is reclaimable, the

@@ -872,6 +872,17 @@ interpreter = "python3" # Optional: overrides auto-detection
 2.  **Custom `[workflow.interpreter_map]`** in the metadata.
 3.  **Built-in defaults** based on file extension.
 
+**Interpreter Path Validation:** an explicit `interpreter` that contains a
+path separator is validated before use. Bare command names (`python`,
+`Rscript`) are always allowed; absolute paths must live under a safe
+directory (`/usr/bin`, `/usr/local/bin`, `/bin`, `/opt`, `/home`, `/Users`).
+Rejected (the engine falls back to auto-detection with a warning):
+relative paths containing a separator (`./evil`, `bin/evil`), paths whose
+prefix merely resembles a safe directory (`/home_evil/x`, `/opt_bad/x`),
+Windows drive-letter/backslash paths, and anything containing `..`.
+A rejected interpreter never aborts the run — the engine logs
+`interpreter override rejected` and uses the detection order above.
+
 ### Lifecycle Hooks
 
 Hooks allow you to run auxiliary logic at different stages of a rule's life:
@@ -2571,7 +2582,7 @@ shell = "cat {input} > {output}"   # receives only P1's path
 
 To scope a cohort fan-out to genuinely paired ids in the first place, use
 the injected `config.paired_pairs_list` / `config.paired_pairs_count`
-variables (see [`[[pairs]]`](#pairs-paired-samples)).
+variables (see [`[[pairs]]`](#pairs-experiment-control-pairing-wc-01)).
 
 **`wildcard.*` is a `when`-only vocabulary.** The dotted form is not a
 shell placeholder — the engine's placeholder syntax is bare `{name}`, so

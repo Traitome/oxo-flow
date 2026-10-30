@@ -2629,6 +2629,40 @@ fn validate_interpreter_path_allows_opt_path() {
     validate_interpreter_path("/opt/conda/bin/python3").unwrap();
 }
 
+#[test]
+fn validate_interpreter_path_allows_bin_path() {
+    validate_interpreter_path("/bin/bash").unwrap();
+}
+
+#[test]
+fn validate_interpreter_path_blocks_prefix_lookalike() {
+    // `starts_with("/home")` would admit this; the check must be
+    // anchored on directory boundaries (#989 finding 3).
+    let result = validate_interpreter_path("/home_evil/evil_python");
+    assert!(
+        result.is_err(),
+        "should block path whose prefix merely resembles a safe directory"
+    );
+    let result = validate_interpreter_path("/opt_bad/bin/python");
+    assert!(result.is_err(), "should block /opt_bad prefix lookalike");
+}
+
+#[test]
+fn validate_interpreter_path_blocks_relative_path() {
+    // A relative path with a separator resolves against the rule's
+    // workdir — not a trusted location.
+    let result = validate_interpreter_path("./evil/python");
+    assert!(result.is_err(), "should block relative ./ path");
+    let result = validate_interpreter_path("bin/evil");
+    assert!(result.is_err(), "should block relative bin/ path");
+}
+
+#[test]
+fn validate_interpreter_path_blocks_windows_path() {
+    let result = validate_interpreter_path("C:\\Python312\\python.exe");
+    assert!(result.is_err(), "should block Windows drive-letter path");
+}
+
 // ---------------------------------------------------------------------------
 // Additional wildcard injection tests
 // ---------------------------------------------------------------------------

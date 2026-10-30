@@ -18,6 +18,17 @@ fn oxo_flow_cmd() -> Command {
     Command::new(workspace_bin("oxo-flow"))
 }
 
+/// Tests assert on the archived log's *default* content (progress narrative +
+/// execution events). A developer shell exporting `RUST_LOG=warn` (or
+/// stricter) suppresses the `info`-level `execution_event` target inside the
+/// spawned CLI, silently flipping those assertions. Strip it so the test
+/// always observes the engine's own baseline filtering.
+fn oxo_flow_cmd_without_rust_log() -> Command {
+    let mut cmd = oxo_flow_cmd();
+    cmd.env_remove("RUST_LOG");
+    cmd
+}
+
 /// AI provider env vars the engine legitimately auto-detects (issue #465's
 /// zero-config discovery) — "no provider configured" tests must strip them
 /// or a dev shell that exports `ANTHROPIC_AUTH_TOKEN` (et al.) turns the
@@ -64,7 +75,7 @@ fn cli_run_log_archives_progress_narrative_and_execution_events() {
         "[workflow]\nname = \"narr\"\nversion = \"1.0.0\"\n\n[[rules]]\nname = \"step\"\noutput = [\"out.txt\"]\nshell = \"echo done > {output}\"\n",
     )
     .unwrap();
-    let out = oxo_flow_cmd()
+    let out = oxo_flow_cmd_without_rust_log()
         .args(["run", wf.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
