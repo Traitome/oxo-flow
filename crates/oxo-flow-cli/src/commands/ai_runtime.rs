@@ -81,6 +81,7 @@ impl AiRuntime {
         tool_registry.register(Box::new(builtin::LookupTool::new()));
         tool_registry.register(Box::new(builtin::LookupSkillTool::new()));
         tool_registry.register(Box::new(builtin::LookupPipelineTool::new()));
+        tool_registry.register(Box::new(builtin::LookupDocTool::new()));
 
         let skill_context = activated_skill_context(project, &config);
 

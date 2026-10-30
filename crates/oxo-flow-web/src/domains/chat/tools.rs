@@ -6,7 +6,9 @@
 //! user's explicit Accept click, never a model action.
 
 use oxo_flow_ai::tools::ToolRegistry;
-use oxo_flow_ai::tools::builtin::{FetchUrlTool, LookupPipelineTool, LookupSkillTool, LookupTool};
+use oxo_flow_ai::tools::builtin::{
+    FetchUrlTool, LookupDocTool, LookupPipelineTool, LookupSkillTool, LookupTool,
+};
 
 use oxo_flow_ai::error::AiError;
 use oxo_flow_ai::tools::{Tool, ToolDef};
@@ -171,6 +173,7 @@ pub fn build_chat_tool_registry(
     registry.register(Box::new(LookupTool::new()));
     registry.register(Box::new(LookupSkillTool::new()));
     registry.register(Box::new(LookupPipelineTool::new()));
+    registry.register(Box::new(LookupDocTool::new()));
     registry.register(Box::new(FetchUrlTool::new()));
     if let Some(run_id) = run_id {
         registry.register(Box::new(RunStatusTool {

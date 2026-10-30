@@ -241,7 +241,7 @@ def main() -> int:
         {
             "count": dcount,
             "url": args.url,
-            "description": "full SKILL.md docs per skill (reserved for a later doc layer)",
+            "description": "full SKILL.md docs per skill, served via lookup_doc",
         },
     )
 

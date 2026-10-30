@@ -1141,6 +1141,84 @@ impl Tool for LookupPipelineTool {
     }
 }
 
+/// Retrieve the full embedded SKILL.md protocol document for one pipeline
+/// skill. Complements `lookup_pipeline` (topology) with the complete
+/// per-skill protocol: Triggers, Related Skills, Required Tools, Workflow,
+/// caveats. The advertised doc count is derived from the embedded data.
+#[derive(Default)]
+pub struct LookupDocTool;
+
+impl LookupDocTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for LookupDocTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
+            name: "lookup_doc".into(),
+            description: format!(
+                "Fetch the full SKILL.md protocol document for one embedded pipeline skill ({} docs). \
+                 Accepts a skill id, a display name, or a unique substring (case-insensitive); the response \
+                 echoes the resolved id so a substring match is visible. Use \"skill\": \"list\" for the index. \
+                 Each doc is a complete protocol (Required Tools, Workflow, caveats, roughly 2-5K tokens) — \
+                 load only the skills you need, once.",
+                crate::knowledge::skillgraph_docs::doc_count()
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "skill": {
+                        "type": "string",
+                        "description": "Skill id, name, or unique substring — or \"list\" for the index"
+                    }
+                },
+                "required": ["skill"]
+            }),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "lookup_doc"
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String, AiError> {
+        use crate::knowledge::skillgraph_docs;
+        let parsed: serde_json::Value = match serde_json::from_str(arguments) {
+            Ok(v) => v,
+            Err(_) => serde_json::json!({}),
+        };
+        let Some(skill) = parsed["skill"].as_str() else {
+            return Ok(format!(
+                "Usage: lookup_doc {{\"skill\": \"<id|name|substring>\"}} — or \"list\" for the index of all {} docs.",
+                skillgraph_docs::doc_count()
+            ));
+        };
+        if skill.eq_ignore_ascii_case("list") {
+            return Ok(skillgraph_docs::list_docs());
+        }
+        let Some(doc) = skillgraph_docs::get_doc(skill) else {
+            return Ok(format!(
+                "No skill doc for '{skill}'. Call lookup_doc with \"skill\": \"list\" for the index, \
+                 or lookup_pipeline for graph transitions/paths."
+            ));
+        };
+        let mut out = skillgraph_docs::format_doc(doc);
+        // Freshness note (data date + record count) so the agent can weigh
+        // how current the embedded doc is.
+        let freshness = crate::knowledge::meta::embedded_meta().and_then(|m| {
+            crate::knowledge::meta::freshness_line_for(m, "skillgraph_docs", chrono::Utc::now())
+        });
+        if let Some(line) = freshness {
+            out.push('\n');
+            out.push_str(&line);
+        }
+        Ok(out)
+    }
+}
+
 #[tokio::test]
 async fn lookup_tool_handles_missing_query() {
     let tool = LookupTool::new();
@@ -1206,6 +1284,99 @@ async fn lookup_pipeline_bad_action() {
     assert!(result.contains("Unknown action"));
 }
 
+#[tokio::test]
+async fn lookup_doc_returns_full_doc() {
+    let tool = LookupDocTool::new();
+    let result = tool
+        .execute(r#"{"skill": "variant-calling"}"#)
+        .await
+        .unwrap();
+    assert!(
+        result.contains("Skill doc for `variant-calling`"),
+        "should echo resolved id: {}",
+        &result[..200.min(result.len())]
+    );
+    assert!(result.len() > 500, "doc body should be the full protocol");
+}
+
+#[tokio::test]
+async fn lookup_doc_resolves_display_name() {
+    let tool = LookupDocTool::new();
+    let by_id = tool
+        .execute(r#"{"skill": "variant-calling"}"#)
+        .await
+        .unwrap();
+    let by_name = tool
+        .execute(r#"{"skill": "Variant Calling"}"#)
+        .await
+        .unwrap();
+    assert!(
+        by_name.contains("Skill doc for `variant-calling`"),
+        "display name should resolve to the same doc"
+    );
+    assert_eq!(
+        by_id.lines().next(),
+        by_name.lines().next(),
+        "both queries should return the identical doc header"
+    );
+}
+
+#[tokio::test]
+async fn lookup_doc_unknown_suggests_list_and_pipeline() {
+    let tool = LookupDocTool::new();
+    let result = tool
+        .execute(r#"{"skill": "not-a-real-skill"}"#)
+        .await
+        .unwrap();
+    assert!(result.contains("No skill doc"), "should report the miss");
+    assert!(result.contains("list"), "should suggest the index");
+    assert!(
+        result.contains("lookup_pipeline"),
+        "should suggest the graph tool"
+    );
+}
+
+#[tokio::test]
+async fn lookup_doc_list_returns_index() {
+    let tool = LookupDocTool::new();
+    let result = tool.execute(r#"{"skill": "list"}"#).await.unwrap();
+    assert!(
+        result.contains("embedded skill docs"),
+        "index header missing"
+    );
+    assert!(
+        result.contains("variant-calling"),
+        "index should list known ids"
+    );
+}
+
+#[tokio::test]
+async fn lookup_doc_handles_missing_query() {
+    let tool = LookupDocTool::new();
+    let result = tool.execute(r#"{}"#).await.unwrap();
+    assert!(
+        result.contains("Usage:"),
+        "empty arguments should return a usage hint, got: {result}"
+    );
+}
+
+/// When the build embeds knowledge_meta.json (issue #153), lookup_doc
+/// responses carry a freshness note: data date + record count.
+#[tokio::test]
+#[cfg(knowledge_meta_embedded)]
+async fn lookup_doc_appends_freshness_line() {
+    let tool = LookupDocTool::new();
+    let result = tool
+        .execute(r#"{"skill": "variant-calling"}"#)
+        .await
+        .unwrap();
+    assert!(
+        result.contains("Data: skillgraph_docs generated"),
+        "freshness line missing: {}",
+        &result[..200.min(result.len())]
+    );
+}
+
 /// Read-only registry of the embedded knowledge tools (bioconda lookup,
 /// bioSkills, pipeline graph, SSRF-screened fetch). This is the tool
 /// surface every embedded generation/check agent runs with; surfaces add
@@ -1217,6 +1388,7 @@ pub fn knowledge_tool_registry() -> crate::tools::ToolRegistry {
     registry.register(Box::new(LookupTool::new()));
     registry.register(Box::new(LookupSkillTool::new()));
     registry.register(Box::new(LookupPipelineTool::new()));
+    registry.register(Box::new(LookupDocTool::new()));
     registry.register(Box::new(FetchUrlTool::new()));
     registry
 }
@@ -1228,11 +1400,12 @@ mod knowledge_registry_tests {
     #[test]
     fn registry_is_read_only_and_complete() {
         let registry = knowledge_tool_registry();
-        assert_eq!(registry.len(), 4);
+        assert_eq!(registry.len(), 5);
         for name in [
             "lookup_tool",
             "lookup_skill",
             "lookup_pipeline",
+            "lookup_doc",
             "fetch_url",
         ] {
             assert!(registry.get(name).is_some(), "missing {name}");
