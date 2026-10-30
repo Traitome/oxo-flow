@@ -7818,6 +7818,16 @@ named group. The <code>env_group</code> spec takes precedence over an inline
 <li><strong>Custom <code>[workflow.interpreter_map]</code></strong> in the metadata.</li>
 <li><strong>Built-in defaults</strong> based on file extension.</li>
 </ol>
+<p><strong>Interpreter Path Validation:</strong> an explicit <code>interpreter</code> that contains a
+path separator is validated before use. Bare command names (<code>python</code>,
+<code>Rscript</code>) are always allowed; absolute paths must live under a safe
+directory (<code>/usr/bin</code>, <code>/usr/local/bin</code>, <code>/bin</code>, <code>/opt</code>, <code>/home</code>, <code>/Users</code>).
+Rejected (the engine falls back to auto-detection with a warning):
+relative paths containing a separator (<code>./evil</code>, <code>bin/evil</code>), paths whose
+prefix merely resembles a safe directory (<code>/home_evil/x</code>, <code>/opt_bad/x</code>),
+Windows drive-letter/backslash paths, and anything containing <code>..</code>.
+A rejected interpreter never aborts the run — the engine logs
+<code>interpreter override rejected</code> and uses the detection order above.</p>
 <h3 id="lifecycle-hooks">Lifecycle Hooks<a class="headerlink" href="#lifecycle-hooks" title="Permanent link">#</a></h3>
 <p>Hooks allow you to run auxiliary logic at different stages of a rule's life:</p>
 <div class="language-toml highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">[[rules]]</span>
@@ -9803,7 +9813,7 @@ rule that will never run in this cohort.</p>
 </span></code></pre></div>
 <p>To scope a cohort fan-out to genuinely paired ids in the first place, use
 the injected <code>config.paired_pairs_list</code> / <code>config.paired_pairs_count</code>
-variables (see <a href="#pairs-paired-samples"><code>[[pairs]]</code></a>).</p>
+variables (see <a href="#pairs-experiment-control-pairing-wc-01"><code>[[pairs]]</code></a>).</p>
 <p><strong><code>wildcard.*</code> is a <code>when</code>-only vocabulary.</strong> The dotted form is not a
 shell placeholder — the engine's placeholder syntax is bare <code>{name}</code>, so
 <code>{wildcard.input_type}</code> in a <code>shell</code> renders literally. Group/pair
