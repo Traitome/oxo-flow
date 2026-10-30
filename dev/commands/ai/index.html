@@ -4096,7 +4096,9 @@ loop. The steps:</p>
    <code>[ai] skills</code> are injected as prompt sections.</li>
 <li><strong>Ground with tools</strong> — the model queries the embedded knowledge
    bases on demand: <code>lookup_tool</code> for exact Bioconda names/versions,
-   <code>lookup_skill</code>/<code>lookup_pipeline</code> for domain procedures and topologies.
+   <code>lookup_skill</code>/<code>lookup_pipeline</code> for domain procedures and topologies,
+   and <code>lookup_doc</code> for the full per-skill SKILL.md protocol document
+   (Required Tools, canonical Workflow, caveats).
    Non-read-only tools (e.g. MCP tools from activated tool skills) ask
    for interactive approval on stderr before running; non-interactive
    sessions refuse them.</li>

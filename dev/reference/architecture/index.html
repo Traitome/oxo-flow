@@ -5053,7 +5053,7 @@ taught a schema the engine rejects (Snakemake-style tables → <code>E017</code>
     subgraph harness["Shared harness (oxo-flow-ai)"]
         agent["PipelineGenAgent&lt;br/&gt;engine-accurate prompt ·&lt;br/&gt;canonical TOML extraction ·&lt;br/&gt;injected validator"]
         loop["Orchestrator loop&lt;br/&gt;plan → tools → extract →&lt;br/&gt;validate → feedback → deliver"]
-        kt["knowledge_tool_registry&lt;br/&gt;(read-only: bioconda · skills ·&lt;br/&gt;pipeline graph · screened fetch)"]
+        kt["knowledge_tool_registry&lt;br/&gt;(read-only: bioconda · skills · pipeline&lt;br/&gt;graph · skill docs · screened fetch)"]
     end
 
     gates["Engine validation&lt;br/&gt;(CLI: WorkflowConfig parse ·&lt;br/&gt;web: workflow service)"]

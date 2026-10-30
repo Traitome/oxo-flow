@@ -5027,14 +5027,15 @@ repository.</p>
 <p><strong>Zero-config auto-detection</strong>: when <code>OXO_FLOW_AI_PROVIDER</code> is unset (or empty) and no saved config exists, oxo-flow looks for the standard provider credentials in this exact order — <code>ANTHROPIC_AUTH_TOKEN</code> / <code>ANTHROPIC_API_KEY</code> / <code>CLAUDE_API_KEY</code> → claude, <code>OPENAI_API_KEY</code> → openai, <code>DEEPSEEK_API_KEY</code> → deepseek, <code>OLLAMA_HOST</code> → ollama. Gateway setups that only export <code>ANTHROPIC_AUTH_TOKEN</code> + <code>ANTHROPIC_BASE_URL</code> + <code>ANTHROPIC_MODEL</code> therefore work without any oxo-flow-specific configuration. An explicit <code>OXO_FLOW_AI_PROVIDER</code> (including <code>disabled</code>) always wins; a saved Settings config beats auto-detection; setting a provider without any credential resolves to disabled instead of firing doomed requests, and a whitespace-only credential value counts as absent.</p>
 <hr />
 <h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">#</a></h2>
-<p>The AI agent combines four embedded knowledge sources (all compiled into the binary at build time):</p>
+<p>The AI agent combines five embedded knowledge sources (all compiled into the binary at build time):</p>
 <ol>
 <li><strong>Tool Reference Table</strong>: 40 curated bioinformatics tools with resource allocations (threads, memory)</li>
 <li><strong>Bioconda Tool Database</strong>: 6,525 curated CLI tools with current versions and descriptions (<code>knowledge_meta.json</code>: 6,525 kept + 6,200 excluded from the raw registry) — queried on demand via <code>lookup_tool</code></li>
 <li><strong>bioSkills Library</strong>: 562 curated Agent Skills (the emerging SKILL.md standard) with domain procedures, commands, and caveats — matched by assay type and injected into generation prompts, or queried via <code>lookup_skill</code></li>
 <li><strong>Pipeline Knowledge Graph</strong>: 78 workflow skills and 483 literature-backed data-flow transitions (465 edges) (BAM → VCF → annotated VCF chains) — queried via <code>lookup_pipeline</code> to design correct multi-step topologies</li>
+<li><strong>Skill Protocol Docs</strong>: the full SKILL.md document for every documented pipeline-graph skill (77 of 78 nodes; the <code>shared</code> pseudo-node has none) — fetched one at a time via <code>lookup_doc</code> by skill id, display name, or unique substring; each doc carries Required Tools, the canonical Workflow, and caveats</li>
 </ol>
-<p>Token efficiency: embedded data is <strong>never added to the LLM context wholesale</strong>. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed.</p>
+<p>Token efficiency: embedded data is <strong>never added to the LLM context wholesale</strong>. Only on-demand tool queries (~1 KB per result) and domain-matched skill summaries (≤3 per domain) are injected — the rest stays in the binary until needed. The one deliberate exception is <code>lookup_doc</code>, whose full-protocol response is larger by design (roughly 2-5K tokens per fetched doc) and is still strictly on demand — one skill at a time.</p>
 <p>The agent:</p>
 <ol>
 <li>Analyzes your intent (assay type, tools mentioned)</li>
