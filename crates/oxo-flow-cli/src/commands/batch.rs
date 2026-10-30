@@ -237,8 +237,10 @@ pub async fn batch_command(
 
     progress.finish_and_clear();
 
-    // Calculate summary. `results` now covers every item — executed ones
-    // plus those skipped after stop-on-error — so totals match `items.len()`.
+    // Calculate summary. Items skipped by stop-on-error are recorded, but
+    // items past the loop-top `break` are not — `total_results` is the
+    // number of *recorded* items (executed + skipped), which may be smaller
+    // than `items.len()` when the batch aborted early.
     let results_lock = results
         .lock()
         .map_err(|_| anyhow::anyhow!("results mutex poisoned"))?;
@@ -292,8 +294,14 @@ pub async fn batch_command(
     // JSON. --stop-on-error stays the abort-on-first-failure switch, not
     // the only failure signal.
     if failed > 0 {
+        let failed_only = failed - skipped;
+        let skipped_note = if skipped > 0 {
+            format!(", {skipped} skipped after stop-on-error")
+        } else {
+            String::new()
+        };
         return Err(anyhow::anyhow!(
-            "batch execution failed: {failed} item(s) did not succeed"
+            "batch execution failed: {failed_only} item(s) did not succeed{skipped_note}"
         ));
     }
 

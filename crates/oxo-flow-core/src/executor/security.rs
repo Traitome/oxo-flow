@@ -40,6 +40,24 @@ pub fn validate_interpreter_path(interpreter: &str) -> Result<()> {
         });
     }
 
+    // Windows drive-letter paths (C:\..., C:/...) are not portable across
+    // the supported POSIX targets; reject rather than pretend to vet them.
+    // Checked before the absolute-path test so the common `C:\...` shape
+    // gets the Windows-specific message instead of "is relative".
+    let looks_windows = interpreter.as_bytes().get(1) == Some(&b':') || interpreter.contains('\\');
+    if looks_windows {
+        return Err(OxoFlowError::Validation {
+            message: format!(
+                "Interpreter path '{}' looks like a Windows path; use a POSIX absolute path",
+                interpreter
+            ),
+            rule: None,
+            suggestion: Some(
+                "Use a POSIX absolute path (/usr/bin/python3) or a bare name (python)".to_string(),
+            ),
+        });
+    }
+
     // Absolute paths only — a relative path with a separator resolves
     // against the rule's workdir, which is not a trusted location.
     if !interpreter.starts_with('/') {
@@ -52,22 +70,6 @@ pub fn validate_interpreter_path(interpreter: &str) -> Result<()> {
             suggestion: Some(
                 "Use an absolute path (/usr/bin/python3) or a bare name resolved via PATH (python)"
                     .to_string(),
-            ),
-        });
-    }
-
-    // Windows drive-letter paths (C:\..., C:/...) are not portable across
-    // the supported POSIX targets; reject rather than pretend to vet them.
-    let looks_windows = interpreter.as_bytes().get(1) == Some(&b':') || interpreter.contains('\\');
-    if looks_windows {
-        return Err(OxoFlowError::Validation {
-            message: format!(
-                "Interpreter path '{}' looks like a Windows path; use a POSIX absolute path",
-                interpreter
-            ),
-            rule: None,
-            suggestion: Some(
-                "Use a POSIX absolute path (/usr/bin/python3) or a bare name (python)".to_string(),
             ),
         });
     }
