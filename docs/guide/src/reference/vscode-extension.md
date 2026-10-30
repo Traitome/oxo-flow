@@ -15,7 +15,7 @@ and publishes it to [Open VSX](https://open-vsx.org/).
 
     CI publishes the extension to both marketplaces — the [VS Code
     Marketplace](https://marketplace.visualstudio.com/items?itemName=traitome.oxo-flow)
-    (`VSCE_PAT`, live since v0.25.0) and [Open VSX](https://open-vsx.org/)
+    (`VSCE_PAT`, live since v0.26.0) and [Open VSX](https://open-vsx.org/)
     (`OVSX_PAT`) — so every VS Code variant is covered:
 
     1. **VS Code Marketplace** — stock VS Code searches it by default.
@@ -42,7 +42,7 @@ and publishes it to [Open VSX](https://open-vsx.org/).
     from the release page and install it directly:
 
     ```bash
-    code --install-extension oxo-flow-vscode-v0.25.0.vsix
+    code --install-extension oxo-flow-vscode-v0.26.0.vsix
     ```
 
 ## Language support
