@@ -30,7 +30,7 @@ export default function RunDialog({ onClose, onSubmit }: RunDialogProps) {
   const { t } = useI18n();
   const [maxJobs, setMaxJobs] = useState('4');
   const [keepGoing, setKeepGoing] = useState(false);
-  const [provenance, setProvenance] = useState(true);
+  const [provenance, setProvenance] = useState(false);
   const [allowProtectedDrift, setAllowProtectedDrift] = useState(false);
   const [configOverrides, setConfigOverrides] = useState('');
   const [samples, setSamples] = useState('');

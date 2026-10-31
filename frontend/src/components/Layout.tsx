@@ -188,10 +188,15 @@ export default function Layout() {
     setCmdOpen(false);
   }
 
-  // Cmd+K / Ctrl+K opens the global Command Palette.
+  // Cmd+K / Ctrl+K opens the global Command Palette (skipped while typing
+  // when closed so editable surfaces keep their native chords).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const target = e.target as HTMLElement | null;
+        if (!cmdOpen && target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
         e.preventDefault();
         setCmdOpen((o) => !o);
         setCmdQuery('');
@@ -453,6 +458,20 @@ export default function Layout() {
             aria-modal="true"
             aria-label={t('cmd.button')}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key !== 'Tab') return;
+              const focusables = e.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled])');
+              if (focusables.length === 0) return;
+              const first = focusables[0];
+              const last = focusables[focusables.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }}
           >
             <div className="cmd-palette-head">
               <Search size={16} color="var(--color-primary)" />

@@ -193,7 +193,7 @@ export interface Template { id: string; name: string; category: string; descript
 // ── Collaboration ──
 export interface ForkResponse { forked_id: string; name: string; }
 export interface ShareResponse { share_url: string; access_token: string; expires_at: string | null; }
-export interface ImportResponse { pipeline_id: string; name?: string; }
+export interface ImportResponse { pipeline_id: string; }
 
 // ── Data ──
 export interface DataAnalysis {
@@ -559,7 +559,7 @@ export interface FilePreviewResponse {
 
 export interface SamplesheetParseResponse {
   format: string;
-  sample_count: number;
+  samples_count: number;
   samples: Array<Record<string, string>>;
-  toml_snippet?: string;
+  detected_headers: string[];
 }

@@ -208,11 +208,12 @@ test.describe('oxo-flow v0.9 Core User Flows', () => {
     await page.getByRole('button', { name: /Parse Sample Sheet/i }).click();
     await expect(page.getByRole('button', { name: /Insert Samples into Workflow/i })).toBeVisible();
     await page.getByRole('button', { name: /Insert Samples into Workflow/i }).click();
-    await expect(page.locator('.result-bar.success')).toContainText('Injected 2 sample(s) into [config]');
+    await expect(page.locator('.result-bar.success')).toContainText('Injected 2 sample(s) into [[sample_groups]]');
 
     // Engine & Safety modal injects [engine] settings
     await page.getByRole('button', { name: /Engine & Safety/i }).click();
     await expect(page.getByRole('dialog', { name: /Engine & Data Safety/i })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /Engine & Data Safety/i }).locator('pre.code-block')).toContainText('min_free_disk = "20G"');
     await page.getByRole('button', { name: /Inject into \[engine\]/i }).click();
     await expect(page.locator('.result-bar.success')).toContainText('Updated [engine]');
 

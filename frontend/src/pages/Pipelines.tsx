@@ -354,7 +354,7 @@ export default function Pipelines() {
                   const res = await api.importPipeline(normalized);
                   setShowImportModal(false);
                   setImportUrl('');
-                  setNotice(`Imported pipeline "${res.name}"`);
+                  setNotice(t('share.imported'));
                   navigate(`/editor?pipeline=${res.pipeline_id}`);
                 } catch (err: unknown) {
                   setError(describeApiError(err, t('share.importFailed')));
@@ -371,7 +371,7 @@ export default function Pipelines() {
         <Modal onClose={() => setDiffSource(null)} labelledBy="diff-modal-title">
           <h3 id="diff-modal-title" style={{ marginTop: 0 }}>{t('pipelines.diffWith')}: {diffSource.name}</h3>
           <label className="inspector-field" style={{ marginBottom: 10 }}>
-            <span>Compare against pipeline</span>
+            <span>{t('pipelines.diffCompareTarget')}</span>
             <select value={diffTargetId} onChange={(e) => setDiffTargetId(e.target.value)}>
               {pipelines.filter((x) => x.id !== diffSource.id).map((x) => (
                 <option key={x.id} value={x.id}>{x.name} (v{x.version})</option>
@@ -391,16 +391,16 @@ export default function Pipelines() {
                 }
               }}
             >
-              <GitCompare size={14} /> Run Diff
+              <GitCompare size={14} /> {t('pipelines.diffRun')}
             </button>
           </div>
           {diffEntries && (
             diffEntries.length === 0 ? (
-              <div className="result-bar success">Identical pipeline definitions — 0 structural differences.</div>
+              <div className="result-bar success">{t('pipelines.diffIdentical')}</div>
             ) : (
               <div className="overflow-x" style={{ maxHeight: 220 }}>
                 <table className="data-table">
-                  <thead><tr><th>Path</th><th>Category</th><th>Change</th></tr></thead>
+                  <thead><tr><th>{t('pipelines.diffPath')}</th><th>{t('pipelines.diffCategory')}</th><th>{t('pipelines.diffChange')}</th></tr></thead>
                   <tbody>
                     {diffEntries.map((d, i) => (
                       <tr key={i}>

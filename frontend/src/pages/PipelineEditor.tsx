@@ -44,6 +44,299 @@ interface InspectorState {
 
 type LeftTab = 'assistant' | 'palette' | 'history';
 
+interface EngineFormState {
+  minFreeDisk: string;
+  reclaimFreeDisk: string;
+  tmpDir: string;
+  protectedTrees: string;
+}
+
+// Escape a value for safe interpolation into a TOML basic string ("...").
+function escapeTomlBasicString(value: string): string {
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    const code = value.charCodeAt(i);
+    if (ch === '\\') out += '\\\\';
+    else if (ch === '"') out += '\\"';
+    else if (code === 0x08) out += '\\b';
+    else if (ch === '\t') out += '\\t';
+    else if (ch === '\n') out += '\\n';
+    else if (code === 0x0c) out += '\\f';
+    else if (ch === '\r') out += '\\r';
+    else if (code < 0x20 || code === 0x7f) out += `\\u${code.toString(16).padStart(4, '0')}`;
+    else out += ch;
+  }
+  return out;
+}
+
+function hasControlOrNewline(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x0a || code === 0x0d || (code < 0x20 && code !== 0x09) || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+interface TomlSectionSpan {
+  name: string;
+  isArrayTable: boolean;
+  headerLineStart: number;
+  bodyStart: number;
+  end: number;
+}
+
+// Lexically scan TOML top-level section headers (`[table]` and `[[array]]`),
+// ignoring anything inside basic/literal single- or multi-line strings,
+// `#` comments, or multi-line inline arrays/tables.
+function scanTomlTopLevelSections(toml: string): TomlSectionSpan[] {
+  const sections: TomlSectionSpan[] = [];
+  let inMultiBasic = false;
+  let inMultiLiteral = false;
+  let bracketDepth = 0;
+
+  let lineStart = 0;
+  while (lineStart <= toml.length) {
+    const nlIdx = toml.indexOf('\n', lineStart);
+    const lineEnd = nlIdx === -1 ? toml.length : nlIdx;
+    const rawLine = toml.slice(lineStart, lineEnd);
+
+    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
+      const arrayMatch = rawLine.match(/^[ \t]*\[\[([A-Za-z0-9_.-]+)\]\][ \t]*(?:#.*)?\r?$/);
+      const tableMatch = !arrayMatch ? rawLine.match(/^[ \t]*\[([A-Za-z0-9_.-]+)\][ \t]*(?:#.*)?\r?$/) : null;
+      if (arrayMatch || tableMatch) {
+        if (sections.length > 0) {
+          sections[sections.length - 1].end = lineStart;
+        }
+        sections.push({
+          name: (arrayMatch ?? tableMatch)![1],
+          isArrayTable: Boolean(arrayMatch),
+          headerLineStart: lineStart,
+          bodyStart: nlIdx === -1 ? toml.length : nlIdx + 1,
+          end: toml.length,
+        });
+        if (nlIdx === -1) break;
+        lineStart = nlIdx + 1;
+        continue;
+      }
+    }
+
+    let i = 0;
+    let inBasic = false;
+    let inLiteral = false;
+    while (i < rawLine.length) {
+      const ch = rawLine[i];
+      if (inMultiBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (rawLine.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
+        i++;
+      } else if (inMultiLiteral) {
+        if (rawLine.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
+        i++;
+      } else if (inBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '"') inBasic = false;
+        i++;
+      } else if (inLiteral) {
+        if (ch === "'") inLiteral = false;
+        i++;
+      } else {
+        if (ch === '#') break;
+        if (rawLine.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
+        if (rawLine.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
+        if (ch === '"') { inBasic = true; i++; continue; }
+        if (ch === "'") { inLiteral = true; i++; continue; }
+        if (ch === '[' || ch === '{') bracketDepth++;
+        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
+        i++;
+      }
+    }
+
+    if (nlIdx === -1) break;
+    lineStart = nlIdx + 1;
+  }
+
+  return sections;
+}
+
+function insertBeforeFirstRuleSection(toml: string, snippet: string): string {
+  const sections = scanTomlTopLevelSections(toml);
+  const firstRule = sections.find((s) => s.isArrayTable && s.name === 'rules');
+  if (!firstRule) {
+    return `${toml.trimEnd()}\n\n${snippet}\n`;
+  }
+  const before = toml.slice(0, firstRule.headerLineStart).trimEnd();
+  const after = toml.slice(firstRule.headerLineStart);
+  return before ? `${before}\n\n${snippet}\n\n${after}` : `${snippet}\n\n${after}`;
+}
+
+function splitSectionStatements(body: string): string[] {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  const statements: string[] = [];
+  let current: string[] = [];
+  let inMultiBasic = false;
+  let inMultiLiteral = false;
+  let bracketDepth = 0;
+
+  for (const line of lines) {
+    current.push(line);
+    let i = 0;
+    let inBasic = false;
+    let inLiteral = false;
+    while (i < line.length) {
+      const ch = line[i];
+      if (inMultiBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (line.startsWith('"""', i)) { inMultiBasic = false; i += 3; continue; }
+        i++;
+      } else if (inMultiLiteral) {
+        if (line.startsWith("'''", i)) { inMultiLiteral = false; i += 3; continue; }
+        i++;
+      } else if (inBasic) {
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '"') inBasic = false;
+        i++;
+      } else if (inLiteral) {
+        if (ch === "'") inLiteral = false;
+        i++;
+      } else {
+        if (ch === '#') break;
+        if (line.startsWith('"""', i)) { inMultiBasic = true; i += 3; continue; }
+        if (line.startsWith("'''", i)) { inMultiLiteral = true; i += 3; continue; }
+        if (ch === '"') { inBasic = true; i++; continue; }
+        if (ch === "'") { inLiteral = true; i++; continue; }
+        if (ch === '[' || ch === '{') bracketDepth++;
+        else if ((ch === ']' || ch === '}') && bracketDepth > 0) bracketDepth--;
+        i++;
+      }
+    }
+    if (!inMultiBasic && !inMultiLiteral && bracketDepth === 0) {
+      statements.push(current.join('\n'));
+      current = [];
+    }
+  }
+  if (current.length > 0) statements.push(current.join('\n'));
+  return statements;
+}
+
+function unescapeTomlBasicString(raw: string): string {
+  return raw.replace(/\\(["\\btnfr])/g, (_, ch: string) => {
+    switch (ch) {
+      case '"': return '"';
+      case '\\': return '\\';
+      case 'b': return '\b';
+      case 't': return '\t';
+      case 'n': return '\n';
+      case 'f': return '\f';
+      case 'r': return '\r';
+      default: return ch;
+    }
+  });
+}
+
+function readEngineFormFromToml(toml: string): EngineFormState {
+  const sections = scanTomlTopLevelSections(toml);
+  const engineSec = sections.find((s) => !s.isArrayTable && s.name === 'engine');
+  if (!engineSec) {
+    return { minFreeDisk: '20G', reclaimFreeDisk: '50G', tmpDir: '', protectedTrees: '' };
+  }
+  const body = toml.slice(engineSec.bodyStart, engineSec.end);
+  const stmts = splitSectionStatements(body);
+  let minFreeDisk = '';
+  let reclaimFreeDisk = '';
+  let tmpDir = '';
+  let protectedTrees = '';
+  for (const stmt of stmts) {
+    const m = stmt.match(/^[ \t]*(min_free_disk|reclaim_free_disk|tmp_dir|protected_data_trees)[ \t]*=[ \t]*([\s\S]*)$/);
+    if (!m) continue;
+    const key = m[1];
+    const rhs = m[2].trim();
+    if (key === 'protected_data_trees') {
+      const items: string[] = [];
+      const strRe = /"((?:\\.|[^"\\])*)"/g;
+      let sm: RegExpExecArray | null;
+      while ((sm = strRe.exec(rhs)) !== null) {
+        items.push(unescapeTomlBasicString(sm[1]));
+      }
+      protectedTrees = items.join(', ');
+    } else {
+      const sm = rhs.match(/^"((?:\\.|[^"\\])*)"/);
+      const val = sm ? unescapeTomlBasicString(sm[1]) : '';
+      if (key === 'min_free_disk') minFreeDisk = val;
+      else if (key === 'reclaim_free_disk') reclaimFreeDisk = val;
+      else if (key === 'tmp_dir') tmpDir = val;
+    }
+  }
+  return { minFreeDisk, reclaimFreeDisk, tmpDir, protectedTrees };
+}
+
+function mergeEngineSettingsIntoToml(toml: string, form: EngineFormState): { nextToml: string; engineBlock: string } {
+  const trees = form.protectedTrees.split(',').map((s) => s.trim()).filter(Boolean);
+  const managedOrder = ['min_free_disk', 'reclaim_free_disk', 'tmp_dir', 'protected_data_trees'] as const;
+  const managedValues: Record<(typeof managedOrder)[number], string | null> = {
+    min_free_disk: form.minFreeDisk.trim() ? `"${escapeTomlBasicString(form.minFreeDisk.trim())}"` : null,
+    reclaim_free_disk: form.reclaimFreeDisk.trim() ? `"${escapeTomlBasicString(form.reclaimFreeDisk.trim())}"` : null,
+    tmp_dir: form.tmpDir.trim() ? `"${escapeTomlBasicString(form.tmpDir.trim())}"` : null,
+    protected_data_trees: trees.length > 0 ? `[${trees.map((p) => `"${escapeTomlBasicString(p)}"`).join(', ')}]` : null,
+  };
+
+  const sections = scanTomlTopLevelSections(toml);
+  const engineSec = sections.find((s) => !s.isArrayTable && s.name === 'engine');
+  if (!engineSec) {
+    const lines: string[] = ['[engine]'];
+    for (const key of managedOrder) {
+      if (managedValues[key] !== null) {
+        lines.push(`${key} = ${managedValues[key]}`);
+      }
+    }
+    const engineBlock = lines.join('\n');
+    return {
+      nextToml: insertBeforeFirstRuleSection(toml, engineBlock),
+      engineBlock,
+    };
+  }
+
+  const body = toml.slice(engineSec.bodyStart, engineSec.end);
+  const stmts = splitSectionStatements(body);
+  const handled = new Set<string>();
+  const outStmts: string[] = [];
+
+  for (const stmt of stmts) {
+    const m = stmt.match(/^[ \t]*(min_free_disk|reclaim_free_disk|tmp_dir|protected_data_trees)[ \t]*=/);
+    if (m) {
+      const key = m[1] as (typeof managedOrder)[number];
+      if (!handled.has(key) && managedValues[key] !== null) {
+        outStmts.push(`${key} = ${managedValues[key]}`);
+      }
+      handled.add(key);
+    } else {
+      outStmts.push(stmt);
+    }
+  }
+
+  while (outStmts.length > 0 && outStmts[outStmts.length - 1].trim() === '') {
+    outStmts.pop();
+  }
+
+  for (const key of managedOrder) {
+    if (!handled.has(key) && managedValues[key] !== null) {
+      outStmts.push(`${key} = ${managedValues[key]}`);
+    }
+  }
+
+  const headerLine = toml.slice(engineSec.headerLineStart, engineSec.bodyStart).trimEnd();
+  const engineBlock = [headerLine, ...outStmts].join('\n');
+  const hasFollowingSection = engineSec.end < toml.length;
+  const newBody = outStmts.length > 0
+    ? `${outStmts.join('\n')}${hasFollowingSection ? '\n\n' : '\n'}`
+    : hasFollowingSection ? '\n' : '';
+  const nextToml = `${toml.slice(0, engineSec.bodyStart)}${newBody}${toml.slice(engineSec.end)}`;
+  return { nextToml, engineBlock };
+}
+
 export default function PipelineEditor() {
   const session = usePipelineSession();
   const { lang, t } = useI18n();
@@ -101,13 +394,23 @@ export default function PipelineEditor() {
   const [verifyTree, setVerifyTree] = useState('inputs');
   const [verifyMd5, setVerifyMd5] = useState('');
   const [verifyRes, setVerifyRes] = useState<VerifyDataResponse | null>(null);
-  const [engineForm, setEngineForm] = useState({
-    minFreeDisk: '20G',
-    reclaimFreeDisk: '50G',
-    tmpDir: '',
-    protectedTrees: '',
-  });
+  const [engineForm, setEngineForm] = useState<EngineFormState>(() => readEngineFormFromToml(toml));
   const fileUploadRef = useRef<HTMLInputElement>(null);
+
+  // React to `?modal=data|engine` changes even when PipelineEditor is already mounted.
+  const modalParam = searchParams.get('modal');
+  const [lastModalParam, setLastModalParam] = useState(modalParam);
+  if (lastModalParam !== modalParam) {
+    setLastModalParam(modalParam);
+    if (modalParam === 'data') {
+      setShowDataModal(true);
+      setShowEngineModal(false);
+    } else if (modalParam === 'engine') {
+      setEngineForm(readEngineFormFromToml(toml));
+      setShowEngineModal(true);
+      setShowDataModal(false);
+    }
+  }
 
   // Load a template or a saved pipeline when navigated with
   // ?template=<id> / ?pipeline=<id> (dashboard quick-start, My Pipelines).
@@ -447,23 +750,15 @@ export default function PipelineEditor() {
   };
 
   const applyEngineSettings = () => {
-    const lines: string[] = ['[engine]'];
-    if (engineForm.minFreeDisk.trim()) lines.push(`min_free_disk = "${engineForm.minFreeDisk.trim()}"`);
-    if (engineForm.reclaimFreeDisk.trim()) lines.push(`reclaim_free_disk = "${engineForm.reclaimFreeDisk.trim()}"`);
-    if (engineForm.tmpDir.trim()) lines.push(`tmp_dir = "${engineForm.tmpDir.trim()}"`);
-    const trees = engineForm.protectedTrees.split(',').map((s) => s.trim()).filter(Boolean);
-    if (trees.length > 0) {
-      lines.push(`protected_data_trees = [${trees.map((p) => `"${p}"`).join(', ')}]`);
+    const rawFields = [engineForm.minFreeDisk, engineForm.reclaimFreeDisk, engineForm.tmpDir, engineForm.protectedTrees];
+    if (rawFields.some(hasControlOrNewline)) {
+      session.setRunResult({ message: t('editor.engineGuard.invalidChars'), type: 'error' });
+      return;
     }
-    const block = lines.join('\n');
-    const next = /\[engine\][\s\S]*?(?=\n\[|$)/.test(toml)
-      ? toml.replace(/\[engine\][\s\S]*?(?=\n\[|$)/, block)
-      : /\[\[rules\]\]/.test(toml)
-        ? toml.replace(/\[\[rules\]\]/, `${block}\n\n[[rules]]`)
-        : `${toml.trimEnd()}\n\n${block}\n`;
-    setToml(next);
+    const { nextToml } = mergeEngineSettingsIntoToml(toml, engineForm);
+    setToml(nextToml);
     setShowEngineModal(false);
-    session.setRunResult({ message: 'Updated [engine] disk & data-protection settings', type: 'success' });
+    session.setRunResult({ message: t('editor.engineGuard.updated'), type: 'success' });
   };
 
   useEffect(() => {
@@ -496,7 +791,14 @@ export default function PipelineEditor() {
           <button className="btn-sm" onClick={() => setShowDataModal(true)} title={t('editor.data.title')}>
             <FileSpreadsheet size={14} /> {t('editor.dataWorkbench')}
           </button>
-          <button className="btn-sm" onClick={() => setShowEngineModal(true)} title={t('editor.engineGuard.title')}>
+          <button
+            className="btn-sm"
+            onClick={() => {
+              setEngineForm(readEngineFormFromToml(toml));
+              setShowEngineModal(true);
+            }}
+            title={t('editor.engineGuard.title')}
+          >
             <Shield size={14} /> {t('editor.engineGuard')}
           </button>
           <button className="btn-sm" onClick={() => void handleFormat()} title={t('editor.format')}>
@@ -782,14 +1084,19 @@ export default function PipelineEditor() {
                       type="button"
                       className="btn-sm"
                       onClick={() => {
-                        const sampleList = sheetParsed.samples.map((s) => `"${s.sample}"`).join(', ');
+                        if (sheetParsed.samples.some((s) => hasControlOrNewline(s.sample ?? ''))) {
+                          session.setRunResult({ message: t('editor.data.invalidSampleName'), type: 'error' });
+                          return;
+                        }
+                        const sampleList = sheetParsed.samples.map((s) => `"${escapeTomlBasicString(s.sample ?? '')}"`).join(', ');
                         const groupSnippet = `[[sample_groups]]\nname = "cohort"\nsamples = [${sampleList}]`;
-                        const next = /\[\[rules\]\]/.test(toml)
-                          ? toml.replace(/\[\[rules\]\]/, `${groupSnippet}\n\n[[rules]]`)
-                          : `${toml.trimEnd()}\n\n${groupSnippet}\n`;
+                        const next = insertBeforeFirstRuleSection(toml, groupSnippet);
                         setToml(next);
                         setShowDataModal(false);
-                        session.setRunResult({ message: `Injected ${sheetParsed.samples.length} sample(s) into [config]`, type: 'success' });
+                        session.setRunResult({
+                          message: t('editor.data.injected').replace('{{count}}', String(sheetParsed.samples.length)),
+                          type: 'success',
+                        });
                       }}
                     >
                       {t('editor.data.insertConfig')} ({sheetParsed.samples.length})
@@ -833,7 +1140,7 @@ export default function PipelineEditor() {
                         await api.uploadFiles(e.target.files);
                         const list = await api.listUploadedFiles();
                         setUploadedFiles(list);
-                        session.setRunResult({ message: 'Uploaded input file(s) to workspace', type: 'success' });
+                        session.setRunResult({ message: t('editor.data.uploaded'), type: 'success' });
                       } catch (err: unknown) {
                         session.setRunResult({ message: describeApiError(err, 'Upload failed'), type: 'error' });
                       }
@@ -841,7 +1148,7 @@ export default function PipelineEditor() {
                   />
                 </div>
                 {uploadedFiles.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '1.5rem 0' }}>No uploaded files in workspace yet.</div>
+                  <div className="empty-state" style={{ padding: '1.5rem 0' }}>{t('editor.data.noUploads')}</div>
                 ) : (
                   <div className="overflow-x" style={{ maxHeight: 200 }}>
                     <table className="data-table">
@@ -889,10 +1196,10 @@ export default function PipelineEditor() {
                 {verifyRes && (
                   <div className="dash-card" style={{ padding: '0.75rem' }}>
                     <div className="row" style={{ gap: '0.75rem' }}>
-                      <span className="status-badge success">Matched: {verifyRes.matched}</span>
-                      <span className={`status-badge ${verifyRes.mismatched > 0 ? 'failed' : 'skipped'}`}>Mismatched: {verifyRes.mismatched}</span>
-                      <span className={`status-badge ${verifyRes.missing > 0 ? 'failed' : 'skipped'}`}>Missing: {verifyRes.missing}</span>
-                      <span className="status-badge">Extra: {verifyRes.extra}</span>
+                      <span className="status-badge success">{t('editor.data.matched')}: {verifyRes.matched}</span>
+                      <span className={`status-badge ${verifyRes.mismatched > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.mismatched')}: {verifyRes.mismatched}</span>
+                      <span className={`status-badge ${verifyRes.missing > 0 ? 'failed' : 'skipped'}`}>{t('editor.data.missing')}: {verifyRes.missing}</span>
+                      <span className="status-badge">{t('editor.data.extra')}: {verifyRes.extra}</span>
                     </div>
                   </div>
                 )}
@@ -926,6 +1233,12 @@ export default function PipelineEditor() {
                 <span>{t('editor.engineGuard.protectedTrees')}</span>
                 <input className="mono" value={engineForm.protectedTrees} onChange={(e) => setEngineForm({ ...engineForm, protectedTrees: e.target.value })} placeholder="raw_data, references" />
               </label>
+              <div className="inspector-field" style={{ marginTop: 6 }}>
+                <span>{t('editor.engineGuard.preview')}</span>
+                <pre className="code-block mono" style={{ margin: 0, maxHeight: 140, overflow: 'auto' }}>
+                  {mergeEngineSettingsIntoToml(toml, engineForm).engineBlock}
+                </pre>
+              </div>
             </div>
             <div className="modal-actions" style={{ marginTop: 14 }}>
               <button type="button" className="btn-sm" onClick={() => setShowEngineModal(false)}>{t('run.cancel')}</button>
