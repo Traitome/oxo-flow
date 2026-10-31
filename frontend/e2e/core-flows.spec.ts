@@ -362,4 +362,48 @@ shell = "echo '[[rules]] [engine]' > out.txt"
     const provCheckbox = runDialog.getByLabel(/Record SHA-256 output provenance/i);
     await expect(provCheckbox).not.toBeChecked();
   });
+
+  test('Stage 4 & 5 UI: Execute run with --provenance, verify SHA-256 provenance & protected drift in Monitor, and preview/download output in Report', async ({ page, request }) => {
+    const runResp = await request.post('/api/runs', {
+      data: {
+        toml_content: '[workflow]\nname = "e2e-stage45"\nversion = "1.0.0"\n\n[engine]\nmin_free_disk = "50M"\nreclaim_free_disk = "100M"\n\n[[rules]]\nname = "emit_summary"\noutput = ["results/summary.txt"]\nshell = "mkdir -p results && echo e2e_provenance_verified > results/summary.txt"\nthreads = 1\n',
+        dry_run: false,
+        provenance: true,
+        allow_protected_drift: false,
+      },
+    });
+    expect(runResp.ok()).toBeTruthy();
+    const { run_id } = await runResp.json();
+
+    // Poll until completed
+    for (let i = 0; i < 40; i++) {
+      const st = await (await request.get(`/api/runs/${run_id}`)).json();
+      if (st.status === 'completed' || st.status === 'failed') {
+        expect(st.status).toBe('completed');
+        break;
+      }
+      await page.waitForTimeout(300);
+    }
+
+    // Open Monitor for this run and test the Provenance & Drift tab
+    await page.goto(`/runs/${run_id}`);
+    await page.getByRole('button', { name: /Provenance & Drift/i }).click();
+    await page.getByRole('button', { name: /Verify SHA-256 Provenance/i }).click();
+    await expect(page.locator('.verify-card').first()).toContainText('OK');
+    await expect(page.locator('.verify-card').first()).toContainText('results/summary.txt');
+
+    await page.getByRole('button', { name: /Audit Protected Data Trees/i }).click();
+    await expect(page.locator('.verify-card').nth(1)).toContainText('No drift detected');
+
+    // Switch to Report tab, preview the output file, and verify workdir zip download endpoint
+    await page.getByRole('button', { name: /^Report$/i }).click();
+    const previewBtn = page.getByRole('button', { name: /Preview/i }).first();
+    await expect(previewBtn).toBeVisible();
+    await previewBtn.click();
+    await expect(page.locator('pre.code-block')).toContainText('e2e_provenance_verified');
+
+    const zipResp = await request.get(`/api/runs/${run_id}/files?path=.`);
+    expect(zipResp.ok()).toBeTruthy();
+    expect(zipResp.headers()['content-type']).toContain('application/zip');
+  });
 });
