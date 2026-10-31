@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "d343dad67e8be4a94765846c320f4b63d427525705e153c3db8c982cb0b05efc",
+  "schemaSha256": "c6e3aaf45183790d3978829cf810da407744d478fe844656f8370a93b8ea8b1c",
   "contexts": {
     "root": {
       "keys": [
@@ -289,6 +289,11 @@
           "type": "string"
         },
         {
+          "key": "numa_aware",
+          "description": "Enable NUMA-aware node allocation and affinity wrapping.",
+          "type": "boolean"
+        },
+        {
           "key": "protected_data_trees",
           "description": "Directory trees (relative to the workdir) whose contents are baseline-manifested (size + mtime + content hash for files under the manifest hash ceiling) and diffed on every plan/dry-run/run preflight. Drift prints a loud PROTECTED TREE DRIFT: section; run fails on drift unless --allow-protected-drift is passed.",
           "type": "array"
@@ -310,6 +315,21 @@
             "stream",
             "stream_fifo"
           ]
+        },
+        {
+          "key": "tier0_ram_scratch",
+          "description": "Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. /dev/shm).",
+          "type": "string"
+        },
+        {
+          "key": "tier1_nvme_scratch",
+          "description": "Tier 1 local fast scratch directory (local NVMe SSD, e.g. /mnt/nvme/scratch).",
+          "type": "string"
+        },
+        {
+          "key": "tier2_shared_scratch",
+          "description": "Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS).",
+          "type": "string"
         },
         {
           "key": "tmp_dir",
@@ -803,6 +823,16 @@
           "key": "memory",
           "description": "",
           "type": "string"
+        },
+        {
+          "key": "numa_node",
+          "description": "Explicit NUMA node index to bind execution to.",
+          "type": "integer"
+        },
+        {
+          "key": "numa_pin",
+          "description": "Pin rule execution to an optimal NUMA node via numactl.",
+          "type": "boolean"
         },
         {
           "key": "partition",

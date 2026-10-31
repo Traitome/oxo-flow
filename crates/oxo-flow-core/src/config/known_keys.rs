@@ -215,9 +215,13 @@ const RESOURCE_BUDGET_KEYS: &[&str] = &["max_jobs", "max_memory", "max_threads"]
 /// drift baselines).
 const ENGINE_KEYS: &[&str] = &[
     "min_free_disk",
+    "numa_aware",
     "protected_data_trees",
     "reclaim_free_disk",
     "staging_mode",
+    "tier0_ram_scratch",
+    "tier1_nvme_scratch",
+    "tier2_shared_scratch",
     "tmp_dir",
 ];
 
@@ -312,6 +316,8 @@ const RESOURCES_KEYS: &[&str] = &[
     "gpu_spec",
     "groups",
     "memory",
+    "numa_node",
+    "numa_pin",
     "partition",
     "threads",
     "time_limit",

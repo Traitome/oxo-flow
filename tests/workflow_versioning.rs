@@ -14,7 +14,9 @@ use predicates::prelude::*;
 use std::fs;
 
 fn oxo_flow_cmd() -> Command {
-    Command::new(workspace_bin("oxo-flow"))
+    let mut cmd = Command::new(workspace_bin("oxo-flow"));
+    cmd.env_remove("RUST_LOG");
+    cmd
 }
 
 // ─── Workflow version provenance (issue #115 pillar 1) ───────────────

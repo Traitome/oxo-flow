@@ -862,6 +862,26 @@ pub struct EngineConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub staging_mode: Option<crate::storage::StagingMode>,
+
+    /// Whether NUMA-aware node allocation and affinity wrapping are enabled.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numa_aware: Option<bool>,
+
+    /// Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. `/dev/shm`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier0_ram_scratch: Option<String>,
+
+    /// Tier 1 local fast scratch directory (local NVMe SSD, e.g. `/mnt/nvme/scratch`).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier1_nvme_scratch: Option<String>,
+
+    /// Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier2_shared_scratch: Option<String>,
 }
 
 impl EngineConfig {

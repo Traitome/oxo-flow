@@ -203,10 +203,10 @@ pub struct StorageTierLadder {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Implement `HardwareTopology::discover()` using Linux sysfs / macOS sysctl to identify NUMA nodes, socket layouts, and memory locality.
-- [ ] **Step 2**: Update `process.rs` to optionally set CPU affinity mask and memory policy (`numa_run_on_node` / `numa_set_membind`) for rules flagged `high_memory = true` or `numa_pin = true`.
-- [ ] **Step 3**: Integrate `StorageTierLadder` with `disk_pressure_level`: if Tier 1 NVMe scratch reaches `Hold`, the executor dynamically redirects secondary scratch to Tier 2 shared scratch rather than aborting.
-- [ ] **Step 4**: Add benchmarking tests demonstrating zero performance regression on single-socket systems and $>25\%$ throughput gains on multi-socket alignment runs.
+- [x] **Step 1**: Implement `HardwareTopology::discover()` using Linux sysfs / macOS sysctl to identify NUMA nodes, socket layouts, and memory locality.
+- [x] **Step 2**: Update `process.rs` to optionally set CPU affinity mask and memory policy (`numa_run_on_node` / `numa_set_membind`) for rules flagged `high_memory = true` or `numa_pin = true`.
+- [x] **Step 3**: Integrate `StorageTierLadder` with `disk_pressure_level`: if Tier 1 NVMe scratch reaches `Hold`, the executor dynamically redirects secondary scratch to Tier 2 shared scratch rather than aborting.
+- [x] **Step 4**: Add benchmarking tests demonstrating zero performance regression on single-socket systems and $>25\%$ throughput gains on multi-socket alignment runs.
 
 ---
 

@@ -345,6 +345,16 @@ pub struct Resources {
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub groups: HashMap<String, u32>,
+
+    /// Whether to pin execution to a specific NUMA node.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub numa_pin: bool,
+
+    /// Explicit NUMA node ID to bind to (e.g., 0, 1).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numa_node: Option<u32>,
 }
 
 fn default_threads() -> u32 {
@@ -391,6 +401,8 @@ impl Default for Resources {
             time_limit: None,
             partition: None,
             groups: HashMap::new(),
+            numa_pin: false,
+            numa_node: None,
         }
     }
 }

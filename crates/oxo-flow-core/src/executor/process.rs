@@ -382,6 +382,10 @@ pub struct ExecutorConfig {
     /// somewhere with room instead of the system default. `None` keeps the
     /// ambient environment untouched.
     pub tmp_dir: Option<PathBuf>,
+    /// Hardware topology for NUMA-aware scheduling and node binding.
+    pub hardware_topology: Option<crate::hardware::HardwareTopology>,
+    /// Multi-tier scratch storage ladder (Tier 0 RAM, Tier 1 NVMe, Tier 2 Shared).
+    pub storage_tiers: Option<crate::hardware::StorageTierLadder>,
 }
 
 impl Default for ExecutorConfig {
@@ -410,6 +414,8 @@ impl Default for ExecutorConfig {
             workflow_root: None,
             output_tail_bytes: super::checkpoint::DEFAULT_OUTPUT_TAIL_BYTES,
             tmp_dir: None,
+            hardware_topology: None,
+            storage_tiers: None,
         }
     }
 }
@@ -1380,7 +1386,7 @@ impl LocalExecutor {
         let resolved_env = rule
             .environment
             .resolve_relative_paths(self.config.workflow_root.as_deref());
-        match self.env_resolver.wrap_command(
+        let wrapped = match self.env_resolver.wrap_command(
             command,
             &resolved_env,
             Some(&resources),
@@ -1412,6 +1418,22 @@ impl LocalExecutor {
                     rule.environment.kind()
                 ),
             }),
+        }?;
+
+        if rule.resources.numa_pin || rule.resources.numa_node.is_some() {
+            let topo = self.config.hardware_topology.clone().unwrap_or_default();
+            let node = rule.resources.numa_node.unwrap_or_else(|| {
+                let mem_mb = rule
+                    .resources
+                    .memory
+                    .as_deref()
+                    .and_then(crate::scheduler::parse_memory_mb);
+                topo.select_node_for_job(rule.resources.threads, mem_mb)
+                    .unwrap_or(0)
+            });
+            Ok(topo.wrap_command_with_numa(&wrapped, node))
+        } else {
+            Ok(wrapped)
         }
     }
 
@@ -1594,21 +1616,34 @@ impl LocalExecutor {
     /// and a process-local counter so parallel instances of the same rule
     /// never collide. The directory itself is created only right before the
     /// command spawns — pre-flight failures must not leak empty dirs.
-    fn scratch_dir_for(&self, rule_name: &str) -> PathBuf {
+    fn scratch_dir_for(&self, rule: &Rule) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let subpath = format!("{}-{millis}-{n}", sanitize_dir_component(&rule.name));
+
+        if let Some(ref ladder) = self.config.storage_tiers {
+            let required_mb = rule
+                .resources
+                .disk
+                .as_deref()
+                .and_then(crate::scheduler::parse_memory_mb)
+                .unwrap_or(1024);
+            let allow_ram = required_mb <= 2048;
+            if let Some((_tier, tier_root)) = ladder.select_tier_for_scratch(required_mb, allow_ram)
+            {
+                return tier_root.join(".oxo-flow-scratch").join(subpath);
+            }
+        }
+
         self.config
             .workdir
             .join(".oxo-flow")
             .join("scratch")
-            .join(format!(
-                "{}-{millis}-{n}",
-                sanitize_dir_component(rule_name)
-            ))
+            .join(subpath)
     }
 
     /// Move every declared output that was produced inside the scratch
@@ -2096,7 +2131,7 @@ impl LocalExecutor {
         // here (environment wrapping needs it for container mounts) but the
         // directory itself is only created right before the command spawns,
         // so pre-flight failures never leak empty dirs.
-        let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule.name));
+        let scratch_dir = rule.scratch.then(|| self.scratch_dir_for(&rule));
 
         // Pre-execution snapshot of the declared outputs: on failure, only
         // files this attempt creates or modifies are invalidated (issue
@@ -6462,5 +6497,56 @@ curl: (37) Could not open file /tmp/relay/GenomeInfoDbData_1.2.9.tar.gz
             let hint = LocalExecutor::env_setup_hint(kind, stderr).unwrap();
             assert!(hint.contains(expect), "{kind}: {hint} lacks {expect}");
         }
+    }
+
+    #[test]
+    fn resolve_command_wraps_with_numactl_when_numa_pin_enabled() {
+        let ex = LocalExecutor::new(ExecutorConfig::default());
+        let rule = Rule {
+            name: "align".to_string(),
+            resources: crate::rule::Resources {
+                numa_pin: true,
+                numa_node: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let wrapped = ex.resolve_command("echo hello", &rule, None).unwrap();
+        assert_eq!(wrapped, "numactl --cpunodebind=2 --membind=2 -- echo hello");
+    }
+
+    #[test]
+    fn scratch_dir_routes_to_storage_tier_when_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nvme_scratch = tmp.path().join("local_nvme");
+        std::fs::create_dir_all(&nvme_scratch).unwrap();
+
+        let ladder = crate::hardware::StorageTierLadder::new(
+            None::<std::path::PathBuf>,
+            Some(nvme_scratch.clone()),
+            None::<std::path::PathBuf>,
+            None::<String>,
+        );
+
+        let ex = LocalExecutor::new(ExecutorConfig {
+            storage_tiers: Some(ladder),
+            ..Default::default()
+        });
+
+        let rule = Rule {
+            name: "heavy_sort".to_string(),
+            scratch: true,
+            resources: crate::rule::Resources {
+                disk: Some("50G".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let scratch = ex.scratch_dir_for(&rule);
+        assert!(
+            scratch.starts_with(&nvme_scratch),
+            "expected scratch under nvme: {scratch:?}"
+        );
     }
 }

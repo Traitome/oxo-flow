@@ -1354,6 +1354,23 @@ pub async fn run_command(
         // Hoisted so the workflow-level terminal hooks route their scratch
         // through the same directory.
         tmp_dir: tmp_dir_resolved.clone(),
+        hardware_topology: if config
+            .engine
+            .as_ref()
+            .and_then(|e| e.numa_aware)
+            .unwrap_or(false)
+            || config
+                .rules
+                .iter()
+                .any(|r| r.resources.numa_pin || r.resources.numa_node.is_some())
+        {
+            Some(oxo_flow_core::hardware::HardwareTopology::discover())
+        } else {
+            None
+        },
+        storage_tiers: Some(
+            oxo_flow_core::hardware::StorageTierLadder::from_engine_config(config.engine.as_ref()),
+        ),
     };
 
     // Fail fast if any rule's declared request can never fit an explicit

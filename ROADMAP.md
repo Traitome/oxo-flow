@@ -484,7 +484,7 @@ Rigorous task-by-task implementation plan & scientific execution protocol: [`doc
 - [x] Unified `StorageBackend` for PostgreSQL-native multi-tenant run execution (resolving issue #207)
 - [x] Native Kubernetes `ExecutorBackend` and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
 - [x] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
-- [ ] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
+- [x] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
 - [ ] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
 
 ### Stage 12.2: BioTypes Biological Semantic Typing & Metro-DAG Visual Design System

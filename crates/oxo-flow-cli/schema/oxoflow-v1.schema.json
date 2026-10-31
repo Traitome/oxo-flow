@@ -462,6 +462,23 @@
           ],
           "default": "eager",
           "description": "Global remote input staging mode: eager (full download), stream / fifo (stream on demand via FIFO pipe), or passthrough (leave remote URI intact)"
+        },
+        "numa_aware": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable NUMA-aware node allocation and affinity wrapping."
+        },
+        "tier0_ram_scratch": {
+          "type": "string",
+          "description": "Tier 0 high-speed scratch directory (RAM disk or tmpfs, e.g. /dev/shm)."
+        },
+        "tier1_nvme_scratch": {
+          "type": "string",
+          "description": "Tier 1 local fast scratch directory (local NVMe SSD, e.g. /mnt/nvme/scratch)."
+        },
+        "tier2_shared_scratch": {
+          "type": "string",
+          "description": "Tier 2 cluster shared scratch directory (Lustre / GPFS / BeeGFS / NFS)."
         }
       }
     },
@@ -809,6 +826,15 @@
         },
         "partition": {
           "type": "string"
+        },
+        "numa_node": {
+          "type": "integer",
+          "description": "Explicit NUMA node index to bind execution to."
+        },
+        "numa_pin": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pin rule execution to an optimal NUMA node via numactl."
         },
         "groups": {
           "type": "object",
