@@ -17,11 +17,11 @@ class NegativeNameTests(unittest.TestCase):
         self.assertIn("bwa_mem4", findings[0])
 
     def test_embedded_real_name_in_longer_fake_is_not_a_collision(self):
-        # `seq_shampooer` contains the real tool `shampoo`... no wait: the
-        # point is that only a WHOLE fabricated name colliding with a KB
-        # entry invalidates the item; a token inside a longer fake does not.
+        # Only a WHOLE fabricated name colliding with a KB entry invalidates
+        # the item (`seq_shampooer` != `shampooer`); a token inside a longer
+        # fake is overlap-check territory, not a name collision.
         rows = [{"id": "tool-048", "negative_sample": "1", "query": "what is seq_shampooer"}]
-        findings, checked = check_gold.check_negative_names(rows, {"fastq"})
+        findings, checked = check_gold.check_negative_names(rows, {"shampooer"})
         self.assertEqual(findings, [])
         self.assertEqual(checked, 1)
 
