@@ -944,22 +944,20 @@
       color: var(--fg-default);
       line-height: 1.1;
       margin-bottom: 0.35rem;
-      display: flex;
-      align-items: baseline;
-      gap: 0.28rem;
       white-space: nowrap;
-      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .telemetry-num .sym {
       color: var(--emerald-bright);
-      font-size: 1.25rem;
       font-weight: 700;
     }
     .telemetry-num .unit {
       color: var(--emerald-bright);
-      font-size: 0.88rem;
+      font-size: 0.92rem;
       font-weight: 600;
       letter-spacing: 0.01em;
+      margin-left: 0.32rem;
     }
     .telemetry-num span:not(.unit):not(.sym) {
       color: var(--emerald-bright);
@@ -2275,11 +2273,11 @@ $ <span class="tok-sec">oxo-flow cluster status</span> --backend slurm</div>
               <div class="telemetry-label"><span class="lang-en">Complete CLI lifecycle + strict stdout/stderr separation</span><span class="lang-zh">覆盖完整生命周期的 31 个 CLI 子命令</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">100<span class="sym">+</span><span class="unit">APIs</span></div>
+              <div class="telemetry-num">100+<span class="unit">APIs</span></div>
               <div class="telemetry-label"><span class="lang-en">OpenAPI 3.1 REST endpoints across 9 modular domains</span><span class="lang-zh">9 大领域模块、100+ OpenAPI 3.1 接口</span></div>
             </div>
             <div class="telemetry-card">
-              <div class="telemetry-num">16<span class="sym">+</span><span class="unit">Hub</span></div>
+              <div class="telemetry-num">16+<span class="unit">Hub</span></div>
               <div class="telemetry-label"><span class="lang-en">CI-tested Gallery pipelines + community nf-core/Snakemake ports</span><span class="lang-zh">16 个内置 CI 验证流程 + 社区移植中心</span></div>
             </div>
             <div class="telemetry-card">
