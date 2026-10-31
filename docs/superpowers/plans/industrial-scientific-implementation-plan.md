@@ -2,15 +2,15 @@
 
 > **For Engineers & Autonomous Agents**: This document defines the concrete implementation tasks, module boundaries, verification commands, and scientific evaluation standards required to execute the specification in [`docs/superpowers/specs/industrial-scientific-roadmap.md`](../specs/industrial-scientific-roadmap.md).
 >
-> **Execution Governance**: Work proceeds sequentially by Stage and Wave. No wave may be marked complete unless all unit tests, integration tests, fault-injection tests, documentation updates, and `make ci` checks pass with zero warnings.
+> **Execution Governance**: Work proceeds sequentially by Stage and Wave across the **Hardware, Software, Design, and User Experience Quad-Pillar Matrix**. No wave may be marked complete unless all unit tests, integration tests, fault-injection tests, documentation updates, and `make ci` checks pass with zero warnings.
 
 ---
 
-## 1. Engineering & Scientific Governance Standards
+## 1. Engineering, Hardware, Design & Scientific Governance Standards
 
-Every code change, diagnostic rule, and benchmark experiment under this plan must satisfy both **Industrial Reliability Standards** and **Scientific Falsifiability Standards**.
+Every code change, diagnostic rule, hardware interface, visual component, and benchmark experiment under this plan must satisfy four interlocked governance standards.
 
-### 1.1 Industrial Engineering Invariants
+### 1.1 Industrial Engineering & Software Invariants
 
 - **Memory Safety & Determinism**:
   - Preserve `#[forbid(unsafe_code)]` in `oxo-flow-core`.
@@ -25,15 +25,33 @@ Every code change, diagnostic rule, and benchmark experiment under this plan mus
 - **Clinical & Regulatory Qualification (IQ/OQ/PQ)**:
   - Each stage exit gate maps directly to Installation Qualification (IQ), Operational Qualification (OQ), and Performance Qualification (PQ) test IDs in [`docs/VALIDATION_PROTOCOL.md`](../../VALIDATION_PROTOCOL.md) and change records in [`docs/CHANGE_CONTROL.md`](../../CHANGE_CONTROL.md).
 
-### 1.2 Scientific Rigor & Falsifiability Protocol
+### 1.2 Hardware Systems & Heterogeneous Compute Invariants
+
+- **Topology-Aware Thread & Memory Binding**:
+  - The core engine must discover host NUMA nodes and cache hierarchy (`crates/oxo-flow-core/src/hardware/numa.rs`). Compute-intensive alignment and assembly tasks must be pinned to local memory nodes; cross-socket memory access must be throttled or alerted when bandwidth drops below thresholds.
+- **Hierarchical Scratch Safety**:
+  - The 4-tier scratch ladder (Tier 0: tmpfs/RAM -> Tier 1: Local NVMe -> Tier 2: Shared Cluster FS -> Tier 3: Cloud Object Store) must be actively managed by `DiskPressureGuard`. The engine must never spill unbounded temporary files into the host root partition (`/tmp`).
+- **Accelerator Isolation & Profiling**:
+  - `GpuSpec` allocations must query accelerator capabilities (CUDA compute capability, VRAM capacity, TensorCore precision, Apple Silicon Unified Memory) before container launch, preventing fatal mid-run CUDA OOM or device-busy aborts.
+
+### 1.3 Metropolis Design System & Human-Centered UX Invariants
+
+- **Tokenized Single-Source Visual Grammar**:
+  - Visual tokens (typography, spacing, borders, biological modality colors) are declared canonically and shared across the Web SPA (Tailwind / CSS vars), Desktop App (Wry/Tao), Terminal Progress TUI, and VS Code Extension.
+- **Sub-50ms Interaction Latency Ceiling**:
+  - Interactive canvas panning, zooming, and node inspection must maintain 60fps ($<16\text{ ms}$ render frame); CLI command dispatch must complete in $<10\text{ ms}$; IDE diagnostic hovers must resolve in $<20\text{ ms}$.
+- **Accessibility & Cognitive Clarity**:
+  - All visual components must meet WCAG 2.1 AA contrast ratios. Color is never the sole carrier of status (always paired with iconic glyphs and text descriptors). Complex DAGs must support semantic multi-level collapse (`Rule` -> `Process` -> `Module`).
+
+### 1.4 Scientific Rigor & Falsifiability Protocol
 
 - **Explicit Hypothesis Testing (Ablation Design)**:
-  - Every scientific component (BioTypes verification, Curator grounding, compiler-in-the-loop feedback, causal self-healing) must be evaluated via controlled ablation arms against held-out intents in `eval/frontier/`:
+  - Every scientific component (BioTypes verification, Curator grounding, compiler-in-the-loop feedback, causal self-healing, NUMA scheduling) must be evaluated via controlled ablation arms against held-out intents in `eval/frontier/`:
     - **Arm A (Baseline — Unconstrained)**: Direct LLM generation in Nextflow DSL2 / Snakemake / naive `.oxoflow` without compiler feedback.
     - **Arm B (Syntax/Schema Loop Only)**: `PipelineGenAgent` with TOML syntax and DAG topological validation, but `BioTypes` and `SCI-*` disabled.
     - **Arm C (Full Verified Compiler Loop)**: `PipelineGenAgent` + `BioTypes` (`TYPE-*`) + `scientific_preflight` (`SCI-*`) + `deep_check` (`D00*`).
 - **Statistical Reporting Requirements**:
-  - All benchmark claims must report per-item mean, standard deviation, `pass@k` ($k \in \{1, 3, 5\}$), 95% non-parametric bootstrap confidence intervals, and paired two-sided significance tests (McNemar's test for binary pass/fail outcomes; Wilcoxon signed-rank test for token cost and latency) across multiple fixed random seeds.
+  - All benchmark claims must report per-item mean, standard deviation, `pass@k` ($k \in \{1, 3, 5\}$), 95% non-parametric bootstrap confidence intervals, and paired two-sided significance tests (McNemar's test for binary pass/fail outcomes; Wilcoxon signed-rank test for token cost, latency, and peak memory) across multiple fixed random seeds.
 - **Strict Hold-Out & Anti-Leakage Hygiene**:
   - Benchmark test intents (`eval/gold/*.csv`, `eval/frontier/intents.json`) must never be embedded into `crates/oxo-flow-ai/src/knowledge/*.jsonl` or system prompts. `make eval-lint` (`eval/scripts/check_gold.py`) enforces provenance integrity and detects benchmark-to-knowledge leakage.
 - **Zero Silent Scientific Mutation**:
@@ -41,7 +59,7 @@ Every code change, diagnostic rule, and benchmark experiment under this plan mus
 
 ---
 
-## 2. Stage 1 Implementation Plan: Cloud-Native Core & Decoupled Persistence
+## 2. Stage 1 Implementation Plan: Hardware-Aware Cloud Core & Decoupled Persistence
 
 ### Task 1.1: Unify `StorageBackend` for Run Lifecycle & Remove SQLite Gate (Issue #207)
 
@@ -151,7 +169,48 @@ pub trait StorageBackend: Send + Sync {
 
 ---
 
-## 3. Stage 2 Implementation Plan: BioTypes Semantic Type System & Static Verification
+### Task 1.4: NUMA-Aware Affinity Scheduler & Multi-Tier Scratch Hierarchy
+
+**Objective**: Interrogate physical hardware topology to pin memory-bound bioinformatics processes to local NUMA domains and cascade scratch allocations across a 4-tier storage hierarchy.
+
+**Files**:
+
+- Create: `crates/oxo-flow-core/src/hardware/mod.rs`
+- Create: `crates/oxo-flow-core/src/hardware/numa.rs`
+- Create: `crates/oxo-flow-core/src/hardware/storage_tiers.rs`
+- Modify: `crates/oxo-flow-core/src/scheduler.rs`
+- Modify: `crates/oxo-flow-core/src/executor/process.rs`
+- Test: `crates/oxo-flow-core/src/hardware/numa_tests.rs`
+
+**Interface Contract**:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct HardwareTopology {
+    pub numa_nodes: Vec<NumaNode>,
+    pub total_memory_mb: u64,
+    pub cache_l3_mb: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageTierLadder {
+    pub tier0_ram_scratch: Option<PathBuf>,
+    pub tier1_nvme_scratch: Option<PathBuf>,
+    pub tier2_shared_scratch: Option<PathBuf>,
+    pub tier3_cloud_remote: Option<String>,
+}
+```
+
+**Implementation Checklist**:
+
+- [ ] **Step 1**: Implement `HardwareTopology::discover()` using Linux sysfs / macOS sysctl to identify NUMA nodes, socket layouts, and memory locality.
+- [ ] **Step 2**: Update `process.rs` to optionally set CPU affinity mask and memory policy (`numa_run_on_node` / `numa_set_membind`) for rules flagged `high_memory = true` or `numa_pin = true`.
+- [ ] **Step 3**: Integrate `StorageTierLadder` with `disk_pressure_level`: if Tier 1 NVMe scratch reaches `Hold`, the executor dynamically redirects secondary scratch to Tier 2 shared scratch rather than aborting.
+- [ ] **Step 4**: Add benchmarking tests demonstrating zero performance regression on single-socket systems and $>25\%$ throughput gains on multi-socket alignment runs.
+
+---
+
+## 3. Stage 2 Implementation Plan: BioTypes Semantic Typing & Metro-DAG Visual Design System
 
 ### Task 2.1: `BioTypes` Data Model, Subtyping Lattice & DAG Type Checker
 
@@ -191,7 +250,7 @@ pub struct BioTypeSpec {
 
 | Diagnostic Code | Condition | Auto-Coercion Candidate |
 | :--- | :--- | :--- |
-| `TYPE-001` | Producer `format` incompatible with consumer `format` | `samtools view -b` (SAM $\to$ BAM), `bcftools view` (BCF $\to$ VCF) |
+| `TYPE-001` | Producer `format` incompatible with consumer `format` | `samtools view -b` (SAM -> BAM), `bcftools view` (BCF -> VCF) |
 | `TYPE-002` | Producer `sort_order` does not satisfy consumer `sort_order` | `samtools sort -o {output} {input}` |
 | `TYPE-003` | Consumer requires `index` (`BAI`/`TBI`/`CRAI`) not emitted by producer | `samtools index {input}` / `tabix -p vcf {input}` |
 | `TYPE-004` | Producer `reference_build` conflicts with consumer `reference_build` | Hard compile error (requires explicit liftover/realignment) |
@@ -251,7 +310,29 @@ pub struct BioTypeSpec {
 
 ---
 
-## 4. Stage 3 Implementation Plan: Ecosystem Transpiler & Causal Self-Healing
+### Task 2.4: Metropolis Cross-Platform Design System & Metro-DAG Studio Upgrade
+
+**Objective**: Unify the visual language across CLI, Desktop, Web, and VS Code into the tokenized Metropolis design system and upgrade Metro-DAG rendering for $10^4$-node scalability.
+
+**Files**:
+
+- Create: `crates/oxo-flow-web/src/theme/tokens.rs`
+- Modify: `frontend/src/components/WorkflowCanvas.tsx`
+- Create: `frontend/src/components/MetroCanvas.tsx`
+- Modify: `frontend/src/styles/theme.css`
+- Modify: `crates/oxo-flow-cli/src/commands/output.rs`
+- Modify: `editors/vscode/syntaxes/oxoflow.tmLanguage.json`
+
+**Implementation Checklist**:
+
+- [ ] **Step 1**: Define the Metropolis semantic color and typography tokens across biological modalities (Genomics, Transcriptomics, Epigenomics, Metagenomics) in `tokens.rs` and mirror them into `theme.css`.
+- [ ] **Step 2**: Implement the Metro transit line layout algorithm in `MetroCanvas.tsx` using `@xyflow/react` and `d3-dag`, bundling parallel sample tracks into color-coded transit corridors with station interchange glyphs.
+- [ ] **Step 3**: Implement dynamic semantic zoom: collapse rules by `Process` or `Module` at low zoom; expand to full rule instance parameters and live telemetry meters at high zoom.
+- [ ] **Step 4**: Verify 60fps canvas performance and benchmark rendering of a 5,000-node cohort DAG with $<100\text{ ms}$ layout time and zero frame drops.
+
+---
+
+## 4. Stage 3 Implementation Plan: Ecosystem Transpiler & Autonomous Self-Healing Continuum
 
 ### Task 3.1: Nextflow DSL2 & Snakemake Transpiler (`oxo-flow import`)
 
@@ -269,7 +350,7 @@ pub struct BioTypeSpec {
 **Implementation Checklist**:
 
 - [ ] **Step 1**: Implement lexical/structural parsers in `nextflow.rs` (extracting `process` blocks, `cpus`, `memory`, `time`, `container`, `conda`, `input:` tuple/path qualifiers, `output:` qualifiers, and `script:`/`shell:` templates) and `snakemake.rs` (extracting `rule`, `input`, `output`, `params`, `threads`, `resources`, `conda`, `container`, `shell`/`script`).
-- [ ] **Step 2**: Translate wildcard/channel variables (`${task.cpus}` $\to$ `{threads}`, `${meta.id}` $\to$ `{sample}`, `{wildcards.sample}` $\to$ `{sample}`, `{input.bam}` $\to$ `{input[0]}`) and infer `[rules.types]` contracts by querying `nfcore_modules.jsonl` and `edam_terms.jsonl`.
+- [ ] **Step 2**: Translate wildcard/channel variables (`${task.cpus}` -> `{threads}`, `${meta.id}` -> `{sample}`, `{wildcards.sample}` -> `{sample}`, `{input.bam}` -> `{input[0]}`) and infer `[rules.types]` contracts by querying `nfcore_modules.jsonl` and `edam_terms.jsonl`.
 - [ ] **Step 3**: Wire `oxo-flow import` into `crates/oxo-flow-cli/src/main.rs` (updating subcommand count and docs in `AGENTS.md`, `README.md`, and `docs/guide/src/`).
 - [ ] **Step 4**: Validate transpiled outputs on 20+ canonical `nf-core` modules and Snakemake rules in `tests/transpile_integration.rs` using `oxo-flow validate` and `oxo-flow lint`.
 
@@ -299,7 +380,26 @@ pub struct BioTypeSpec {
 
 ---
 
-## 5. Stage 4 Implementation Plan: Benchmark Suite & Reproducible Manuscript Package
+### Task 3.3: Cross-Platform Workflow Continuum & 1-Click Remediation Actions
+
+**Objective**: Provide an unbroken interaction flow between VS Code, CLI Terminal, Desktop Wry shell, and Web SPA, with 1-click/1-key remediation.
+
+**Files**:
+
+- Modify: `crates/oxo-flow-cli/src/commands/run/mod.rs`
+- Modify: `frontend/src/components/RunMonitor.tsx`
+- Modify: `editors/vscode/src/extension.ts`
+- Modify: `crates/oxo-flow-web/src/domains/chat/handlers.rs`
+
+**Implementation Checklist**:
+
+- [ ] **Step 1**: When a rule fails under `run` or `run --cluster`, format terminal output with the exact root cause and emit a single-key prompt: `[R] Auto-scale memory & resume  [D] Debug command with AI  [A] Abort`.
+- [ ] **Step 2**: In the Web and Desktop UI, render failed stations with a luminous red diagnostic halo and display a 1-click remediation card containing the exact planned repair diff.
+- [ ] **Step 3**: Support bi-directional deep linking: clicking an error in the Web dashboard opens the exact rule in the VS Code editor (`vscode://...`); running `oxo-flow run --web-preview` in the CLI auto-opens the live Metro-DAG canvas in the desktop or browser shell.
+
+---
+
+## 5. Stage 4 Implementation Plan: Benchmark Suite, Human Factors & Reproducible Manuscript Package
 
 ### Task 4.1: Multi-Omics Ablation & Fault-Injection Benchmark (`eval/frontier/`)
 
@@ -319,6 +419,40 @@ pub struct BioTypeSpec {
 
 ---
 
+### Task 4.2: Large-Scale Cohort & Hardware Scaling Benchmark
+
+**Objective**: Measure end-to-end performance gains across multi-socket NUMA systems, NVMe scratch tiering, and GPU acceleration on 10,000 public genomes.
+
+**Files**:
+
+- Create: `eval/benchmarks/hardware_scaling.py`
+- Create: `eval/benchmarks/cohort_driver.py`
+
+**Implementation Checklist**:
+
+- [ ] **Step 1**: Run benchmark cohorts across three hardware configurations: (1) Default OS scheduler on dual-socket AMD EPYC; (2) `oxo-flow` NUMA-pinned execution; (3) NVMe tiered scratch vs. standard NFS.
+- [ ] **Step 2**: Quantify memory interconnect bus traffic, L3 cache misses, peak memory footprint, and wall-clock execution time.
+- [ ] **Step 3**: Generate publication-ready figures for *Nature Methods* / *Nature Biotechnology*.
+
+---
+
+### Task 4.3: Quantitative Human-Factors & User Experience Study
+
+**Objective**: Empirically evaluate the System Usability Scale (SUS), cognitive debugging load, and time-to-first-working-pipeline across independent bioinformaticians.
+
+**Files**:
+
+- Create: `eval/benchmarks/ux_eval_protocol.md`
+- Create: `eval/benchmarks/sus_survey_analysis.py`
+
+**Implementation Checklist**:
+
+- [ ] **Step 1**: Formulate standardized bioinformatic pipeline construction and debugging tasks comparing Nextflow, Snakemake, and `oxo-flow`.
+- [ ] **Step 2**: Measure time-to-first-pass, number of manual configuration edits, and error comprehension latency across user cohorts.
+- [ ] **Step 3**: Compute standard SUS scores (targeting $>80$ for `oxo-flow` vs $<60$ for incumbent text-only CLIs).
+
+---
+
 ## 6. Verification Checklist Before Concluding Any Wave
 
 Every PR implementing a task from this plan must verify:
@@ -327,5 +461,5 @@ Every PR implementing a task from this plan must verify:
 2. `cargo clippy --workspace --all-targets -- -D warnings` exits `0`.
 3. `cargo test --workspace -- --test-threads=1` exits `0`.
 4. `make extension-test` exits `0` (and `npm run generate` in `editors/vscode` produces zero git diff).
-5. `python3 eval/scripts/check_gold.py` (`make eval-lint`) exits `0`.
-6. All modified or added `.md` files pass `npx markdownlint-cli2` with zero `MD022`, `MD031`, `MD032`, `MD040`, or `MD058` errors.
+5. `python3 eval/scripts/check_gold.py --no-fetch-community` (`make eval-lint`) exits `0`.
+6. All modified or added `.md` files pass markdown list blank line rules and contain zero date tokens.

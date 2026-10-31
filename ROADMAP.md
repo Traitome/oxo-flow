@@ -473,36 +473,40 @@ framework extensibility, code quality, and documentation.
 
 ## Phase 12: v1.0 — Industrial Scale & Nature-Tier Scientific Verification
 
-**Goal**: Transform `oxo-flow` into an enterprise-grade cloud-native engine and establish a new scientific computing paradigm (*Nature Biotechnology* / *Nature Methods* target): **AI-Native, Formally-Verified Scientific Workflows**.
+**Goal**: Transform `oxo-flow` into an enterprise-grade cloud-native engine and establish a new scientific computing paradigm (*Nature Biotechnology* / *Nature Methods* target): **Quad-Pillar Co-Designed (Hardware, Software, Design, and User Experience) Formally-Verified Scientific Workflows**.
 
 Full research proposal & architectural specification: [`docs/superpowers/specs/industrial-scientific-roadmap.md`](docs/superpowers/specs/industrial-scientific-roadmap.md).
 
 Rigorous task-by-task implementation plan & scientific execution protocol: [`docs/superpowers/plans/industrial-scientific-implementation-plan.md`](docs/superpowers/plans/industrial-scientific-implementation-plan.md).
 
-### Stage 12.1: Cloud-Native Core & Decoupled Persistence
+### Stage 12.1: Hardware-Aware Cloud Core, Decoupled Persistence & Streaming I/O
 
 - [ ] Unified `StorageBackend` for PostgreSQL-native multi-tenant run execution (resolving issue #207)
 - [ ] Native Kubernetes `ExecutorBackend` (`kube-rs`) and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
 - [ ] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
+- [ ] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
 - [ ] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
 
-### Stage 12.2: BioTypes Biological Semantic Typing & Verification
+### Stage 12.2: BioTypes Biological Semantic Typing & Metro-DAG Visual Design System
 
 - [ ] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
 - [ ] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
 - [ ] Sub-millisecond binary header introspection (BAM/CRAM/VCF/FASTQ) prior to job dispatch
 - [ ] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
+- [ ] Metropolis cross-platform design system tokens and Metro-DAG high-performance interactive transit map
 
-### Stage 12.3: Universal Ecosystem Transpiler & Autonomous Self-Healing
+### Stage 12.3: Universal Ecosystem Transpiler & Autonomous Self-Healing Continuum
 
 - [ ] Deterministic Nextflow DSL2 (`nf-core`) and Snakemake AST transpiler (`oxo-flow import`) with automated `BioTypes` lifting
 - [ ] Four-layer causal fault-isolation graph unifying exit codes, resource telemetry (`BenchmarkRecord`), and header metadata
-- [ ] Bounded, provenance-preserving autonomous self-healing loop (resource scaling, localized bridge rules, branch switching)
+- [ ] Bounded, provenance-preserving autonomous self-healing loop with 1-click UI and 1-key CLI remediation actions
+- [ ] Seamless cross-platform workflow continuum synchronizing state across VS Code, CLI, Desktop, and Web
 
-### Stage 12.4: Large-Scale Empirical Benchmark & Manuscript Package
+### Stage 12.4: Large-Scale Empirical Benchmark, Human-Factors Study & Manuscript Package
 
 - [ ] Multi-hundred-intent synthesis and fault-detection benchmark (`eval/frontier/`) vs. Nextflow & Snakemake
-- [ ] Population-scale multi-omics cohort execution study across HPC and cloud backends
+- [ ] Population-scale multi-omics cohort and hardware scalability (NUMA/NVMe/GPU) study across HPC and cloud backends
+- [ ] Quantitative human-factors user experience study evaluating cognitive debugging efficiency and SUS scores
 - [ ] Open reproducible artifact package and manuscript submissions (*Nature Methods* / *Nature Biotechnology*)
 
 ---
