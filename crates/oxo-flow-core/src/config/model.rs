@@ -1947,6 +1947,11 @@ pub struct WorkflowConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<EngineConfig>,
 
+    /// Named biological type specifications (`[types.<name>]`).
+    #[serde(default, rename = "types")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub types: BTreeMap<String, crate::types::BioTypeSpec>,
+
     /// Shared resource groups for limiting concurrent access to APIs or databases.
     #[serde(default, rename = "resource_groups")]
     #[serde(skip_serializing_if = "HashMap::is_empty")]

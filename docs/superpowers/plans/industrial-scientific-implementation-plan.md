@@ -259,10 +259,10 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Define `BioTypeSpec`, `RuleTypesSpec` (`input: BTreeMap<String, String>`, `output: BTreeMap<String, String>`), and workflow-level `types: BTreeMap<String, BioTypeSpec>` in `crates/oxo-flow-core/src/types/mod.rs` and wire into `WorkflowConfig` and `Rule`.
-- [ ] **Step 2**: Implement the partial order `BioTypeSpec::is_subtype_of(&self, expected: &BioTypeSpec) -> Result<(), Vec<TypeViolation>>` in `checker.rs`.
-- [ ] **Step 3**: Integrate `check_workflow_types(&config, &dag)` into `validate`, `lint`, `dry-run`, and `run` preflight pipelines; emit structured `TYPE-001`..`TYPE-006` diagnostics with suggested coercion rules.
-- [ ] **Step 4**: Update `known_keys.rs`, `docs/schema/oxoflow-v1.schema.json`, and run `npm run generate` in `editors/vscode` so `make ci` and `schema-drift` stay green.
+- [x] **Step 1**: Define `BioTypeSpec`, `RuleTypesSpec` (`input: BTreeMap<String, String>`, `output: BTreeMap<String, String>`), and workflow-level `types: BTreeMap<String, BioTypeSpec>` in `crates/oxo-flow-core/src/types/mod.rs` and wire into `WorkflowConfig` and `Rule`.
+- [x] **Step 2**: Implement the partial order `BioTypeSpec::is_subtype_of(&self, expected: &BioTypeSpec) -> Result<(), Vec<TypeViolation>>` in `checker.rs`.
+- [x] **Step 3**: Integrate `check_workflow_types(&config, &dag)` into `validate`, `lint`, `dry-run`, and `run` preflight pipelines; emit structured `TYPE-001`..`TYPE-006` diagnostics with suggested coercion rules.
+- [x] **Step 4**: Update `known_keys.rs`, `docs/schema/oxoflow-v1.schema.json`, and run `npm run generate` in `editors/vscode` so `make ci` and `schema-drift` stay green.
 
 ---
 

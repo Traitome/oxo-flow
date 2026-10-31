@@ -511,6 +511,29 @@ pub fn analyze_scientific_constraints(config: &WorkflowConfig) -> Vec<Scientific
         }
     }
 
+    // Biological type contract check (TYPE-001 .. TYPE-006)
+    if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
+        && let Ok(dag) = crate::dag::WorkflowDag::from_rules(&config.rules)
+    {
+        let type_diags = crate::types::check_workflow_types(config, &dag);
+        for td in type_diags {
+            warnings.push(ScientificWarning {
+                code: td.violation.code,
+                rule: td.consumer_rule,
+                message: format!(
+                    "biological type mismatch from upstream rule '{}' ({} -> {}): {}",
+                    td.producer_rule,
+                    td.producer_channel,
+                    td.consumer_channel,
+                    td.violation.message
+                ),
+                suggestion: td.violation.suggestion.unwrap_or_else(|| {
+                    "align biological data format contracts between producer and consumer".into()
+                }),
+            });
+        }
+    }
+
     warnings
 }
 
@@ -1431,5 +1454,53 @@ name = \"t\"\nversion = \"1.0\"\n\n[[rules]]\nname = \"r1\"\nwhen = 'file_exists
         let warnings = analyze_scientific_constraints(&config);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].code, "SCI-AGG-RACE");
+    }
+
+    #[test]
+    fn biological_type_checking_surfaces_in_scientific_preflight() {
+        let toml = r#"
+            [workflow]
+            name = "t"
+            version = "1.0"
+
+            [types.raw_sam]
+            format = "sam"
+            sort_order = "unsorted"
+
+            [types.sorted_bam]
+            format = "bam"
+            sort_order = "coordinate"
+            index = "bai"
+
+            [[rules]]
+            name = "align"
+            output = ["out.sam"]
+            shell = "bwa mem ref.fa reads.fq > out.sam"
+            [rules.types]
+            outputs = { default = "raw_sam" }
+
+            [[rules]]
+            name = "call_variants"
+            input = ["out.sam"]
+            output = ["calls.vcf"]
+            shell = "gatk HaplotypeCaller -I out.sam -O calls.vcf"
+            [rules.types]
+            inputs = { default = "sorted_bam" }
+        "#;
+        let config = WorkflowConfig::parse(toml).unwrap();
+        let warnings = analyze_scientific_constraints(&config);
+        let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+        assert!(
+            codes.contains(&"TYPE-001"),
+            "must detect SAM -> BAM format mismatch: {warnings:?}"
+        );
+        assert!(
+            codes.contains(&"TYPE-002"),
+            "must detect sort order mismatch: {warnings:?}"
+        );
+        assert!(
+            codes.contains(&"TYPE-003"),
+            "must detect missing index: {warnings:?}"
+        );
     }
 }

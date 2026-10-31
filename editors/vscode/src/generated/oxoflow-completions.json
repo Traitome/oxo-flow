@@ -1,7 +1,7 @@
 {
   "version": 1,
   "source": "docs/schema/oxoflow-v1.schema.json",
-  "schemaSha256": "c6e3aaf45183790d3978829cf810da407744d478fe844656f8370a93b8ea8b1c",
+  "schemaSha256": "ea9e19bf812b790c0026697ab8f678b6e79b6a702687c0398964b272399b1f1d",
   "contexts": {
     "root": {
       "keys": [
@@ -98,6 +98,11 @@
           "key": "sample_groups",
           "description": "Named sample groups for cohort-level analysis",
           "type": "array"
+        },
+        {
+          "key": "types",
+          "description": "Biological semantic type specifications ([types.<name>])",
+          "type": "object"
         },
         {
           "key": "values",
@@ -790,6 +795,12 @@
           "ref": "#/$defs/transformConfig"
         },
         {
+          "key": "types",
+          "description": "Rule-level semantic biological type contracts for input and output channels",
+          "type": "object",
+          "ref": "#/$defs/ruleTypesSpec"
+        },
+        {
           "key": "when",
           "description": "Conditional expression — skip rule when false",
           "type": "string"
@@ -1002,6 +1013,20 @@
             "medium",
             "slow"
           ]
+        }
+      ]
+    },
+    "rules.types": {
+      "keys": [
+        {
+          "key": "inputs",
+          "description": "Input channel to biological type mapping",
+          "type": "object"
+        },
+        {
+          "key": "outputs",
+          "description": "Output channel to biological type mapping",
+          "type": "object"
         }
       ]
     }

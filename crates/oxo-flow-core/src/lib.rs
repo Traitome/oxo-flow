@@ -66,6 +66,7 @@ pub mod scientific_preflight;
 pub mod software_versions;
 pub mod stage;
 pub mod storage;
+pub mod types;
 pub mod webhook;
 pub mod wildcard;
 

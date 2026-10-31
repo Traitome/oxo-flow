@@ -45,6 +45,7 @@ pub(crate) const TOP_LEVEL_KEYS: &[&str] = &[
     "resource_groups",
     "rules",
     "sample_groups",
+    "types",
     "values",
     "webhook",
     "wildcard_constraints",
@@ -306,6 +307,7 @@ const RULE_KEYS: &[&str] = &[
     "temporary",
     "threads",
     "transform",
+    "types",
     "when",
 ];
 
@@ -325,6 +327,20 @@ const RESOURCES_KEYS: &[&str] = &[
 
 /// Keys of the `[resources.gpu_spec]` table.
 const GPU_SPEC_KEYS: &[&str] = &["compute_capability", "count", "memory_gb", "model"];
+
+/// Keys of a `[types.<name>]` biological semantic type specification.
+const BIOTYPE_KEYS: &[&str] = &[
+    "attributes",
+    "compression",
+    "format",
+    "index",
+    "read_groups",
+    "reference_build",
+    "sort_order",
+];
+
+/// Keys of a rule-level `[rules.types]` table.
+const RULE_TYPES_KEYS: &[&str] = &["inputs", "outputs"];
 
 /// Keys of an `environment` table (rule-level, `[defaults]`, `[[references]]`).
 const ENVIRONMENT_KEYS: &[&str] = &[
@@ -458,6 +474,7 @@ fn nested_table(key: &str) -> Option<&'static [&'static str]> {
         "scatter" => Some(SCATTER_KEYS),
         "split" => Some(SPLIT_KEYS),
         "transform" => Some(TRANSFORM_KEYS),
+        "types" => Some(RULE_TYPES_KEYS),
         "webhook" => Some(WEBHOOK_KEYS),
         "workflow" => Some(WORKFLOW_KEYS),
         _ => None,
@@ -486,6 +503,7 @@ fn table_of_tables(key: &str) -> Option<&'static [&'static str]> {
     match key {
         "env_groups" => Some(ENVIRONMENT_KEYS),
         "resource_groups" => Some(RESOURCE_GROUP_KEYS),
+        "types" => Some(BIOTYPE_KEYS),
         _ => None,
     }
 }
@@ -524,11 +542,28 @@ fn nesting(key: &str, value: &toml::Value) -> Nesting {
                         .is_some_and(|t| t.contains_key("file") || t.contains_key("caption"));
                 if is_rule_report {
                     Nesting::Table(RULE_REPORT_KEYS)
+                } else if key == "types" {
+                    let is_rule_types = value
+                        .as_table()
+                        .is_some_and(|t| t.contains_key("inputs") || t.contains_key("outputs"));
+                    if is_rule_types {
+                        Nesting::Table(RULE_TYPES_KEYS)
+                    } else if let Some(table_keys) = table_of_tables("types") {
+                        Nesting::NamedTables(table_keys)
+                    } else {
+                        Nesting::Table(keys)
+                    }
                 } else {
                     Nesting::Table(keys)
                 }
             }
-            None => Nesting::None,
+            None => {
+                if let Some(keys) = table_of_tables(key) {
+                    Nesting::NamedTables(keys)
+                } else {
+                    Nesting::None
+                }
+            }
         },
         toml::Value::Array(_) => {
             if let Some(keys) = array_of_tables(key) {
@@ -1130,6 +1165,7 @@ mod tests {
             cache_key = "k"
             interpreter = "python"
             report = { file = "notes/report.md", caption = "Alignment QC" }
+            types = { inputs = { reads = "fastq" }, outputs = { bam = "bam" } }
         "#;
         let rule: crate::rule::Rule = toml::from_str(toml).expect("probe rule deserializes");
         let written = toml::to_string(&rule)
@@ -1261,6 +1297,7 @@ mod tests {
             (SCATTER_KEYS, "/$defs/scatterConfig"),
             (TRANSFORM_KEYS, "/$defs/transformConfig"),
             (RESOURCE_HINT_KEYS, "/$defs/resourceHint"),
+            (BIOTYPE_KEYS, "/$defs/bioTypeSpec"),
         ] {
             let pointer = if pointer.is_empty() {
                 "/properties"

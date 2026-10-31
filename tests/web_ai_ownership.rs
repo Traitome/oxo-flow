@@ -56,6 +56,7 @@ async fn user_ai_config_advanced_fields_round_trip() {
         &[
             ("OXO_FLOW_MODE", "team"),
             ("OXO_FLOW_ADMIN_PASSWORD", "secret-admin"),
+            ("OXO_FLOW_AI_PROVIDER", "disabled"),
         ],
     );
     let base = server.base.clone();
@@ -141,6 +142,7 @@ async fn ai_endpoints_enforce_run_and_pipeline_ownership() {
         &[
             ("OXO_FLOW_MODE", "team"),
             ("OXO_FLOW_ADMIN_PASSWORD", "secret-admin"),
+            ("OXO_FLOW_AI_PROVIDER", "disabled"),
         ],
     );
     let base = server.base.clone();

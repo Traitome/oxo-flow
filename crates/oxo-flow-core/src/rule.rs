@@ -1540,6 +1540,11 @@ pub struct Rule {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpreter: Option<String>,
+
+    /// Semantic biological type specifications for this rule's inputs and outputs.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<crate::types::RuleTypesSpec>,
 }
 
 impl Rule {
@@ -1827,6 +1832,13 @@ impl RuleBuilder {
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.rule.description = Some(description.into());
+        self
+    }
+
+    /// Set biological type specifications.
+    #[must_use]
+    pub fn types(mut self, types: crate::types::RuleTypesSpec) -> Self {
+        self.rule.types = Some(types);
         self
     }
 

@@ -133,10 +133,18 @@
               "default": {
                 "description": "Default value when not provided via CLI",
                 "anyOf": [
-                  { "type": "string" },
-                  { "type": "integer" },
-                  { "type": "number" },
-                  { "type": "boolean" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
                 ]
               },
               "required": {
@@ -375,7 +383,7 @@
           },
           "values_from": {
             "type": "string",
-            "description": "Config-driven value list (comma string or array key) — resolves the fan-out at expansion time, CLI --arg / profile driven"
+            "description": "Config-driven value list (comma string or array key) \u2014 resolves the fan-out at expansion time, CLI --arg / profile driven"
           }
         }
       }
@@ -747,6 +755,13 @@
           "type": "string"
         }
       }
+    },
+    "types": {
+      "type": "object",
+      "description": "Biological semantic type specifications ([types.<name>])",
+      "additionalProperties": {
+        "$ref": "#/$defs/bioTypeSpec"
+      }
     }
   },
   "$defs": {
@@ -911,7 +926,7 @@
           }
         }
       ],
-      "description": "Fan-out over `values` (declared list) or `values_from` (config reference); both absent is accepted at parse time (the executor expands zero instances — see validate W-side emptiness checks)"
+      "description": "Fan-out over `values` (declared list) or `values_from` (config reference); both absent is accepted at parse time (the executor expands zero instances \u2014 see validate W-side emptiness checks)"
     },
     "transformConfig": {
       "type": "object",
@@ -1361,7 +1376,7 @@
         },
         "when": {
           "type": "string",
-          "description": "Conditional expression — skip rule when false"
+          "description": "Conditional expression \u2014 skip rule when false"
         },
         "envvars": {
           "type": "object",
@@ -1714,7 +1729,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "description": "Per-sample multi-file grouping (pattern/group_by/keep) — issue #231"
+            "description": "Per-sample multi-file grouping (pattern/group_by/keep) \u2014 issue #231"
           }
         },
         "scratch": {
@@ -1743,6 +1758,10 @@
             "null"
           ],
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        },
+        "types": {
+          "$ref": "#/$defs/ruleTypesSpec",
+          "description": "Biological type declarations for rule inputs and outputs"
         }
       }
     },
@@ -1899,6 +1918,116 @@
             "null"
           ],
           "description": "Schema synced from config whitelist (see known_keys.rs)"
+        }
+      }
+    },
+    "bioTypeSpec": {
+      "type": "object",
+      "description": "Biological semantic type contract (format, sort order, index accompaniment, reference assembly, compression)",
+      "required": [
+        "format"
+      ],
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "description": "Extensible biological domain metadata attributes",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "compression": {
+          "type": "string",
+          "description": "Compression stream encoding (none, gzip, bgzip, zstd)",
+          "enum": [
+            "none",
+            "gzip",
+            "bgzip",
+            "zstd"
+          ]
+        },
+        "format": {
+          "type": "string",
+          "description": "Biological file format category (fastq, sam, bam, cram, vcf, bcf, bed, gtf, gff3, fasta, h5ad, rds, parquet, tsv, generic)",
+          "enum": [
+            "fastq",
+            "sam",
+            "bam",
+            "cram",
+            "vcf",
+            "bcf",
+            "bed",
+            "gtf",
+            "gff",
+            "gff3",
+            "fasta",
+            "h5ad",
+            "rds",
+            "parquet",
+            "tsv",
+            "generic"
+          ]
+        },
+        "index": {
+          "type": "string",
+          "description": "Companion index file requirement (bai, csi, crai, tbi, fai)",
+          "enum": [
+            "bai",
+            "csi",
+            "crai",
+            "tbi",
+            "fai"
+          ]
+        },
+        "read_groups": {
+          "type": "object",
+          "description": "Mandatory read group contract specification for alignment files",
+          "properties": {
+            "required": {
+              "type": "boolean",
+              "description": "Whether valid @RG headers are mandatory"
+            },
+            "fields": {
+              "type": "array",
+              "description": "Required @RG tag fields (e.g. ID, SM, PL)",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "reference_build": {
+          "type": "string",
+          "description": "Reference genome assembly build identifier (e.g. GRCh38, hg19, T2T-CHM13)"
+        },
+        "sort_order": {
+          "type": "string",
+          "description": "Record sort discipline (unsorted, queryname, coordinate, unknown)",
+          "enum": [
+            "unsorted",
+            "queryname",
+            "coordinate",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "ruleTypesSpec": {
+      "type": "object",
+      "description": "Rule-level semantic biological type contracts for input and output channels",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "description": "Input channel to biological type mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output channel to biological type mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     }

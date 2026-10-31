@@ -489,8 +489,8 @@ Rigorous task-by-task implementation plan & scientific execution protocol: [`doc
 
 ### Stage 12.2: BioTypes Biological Semantic Typing & Metro-DAG Visual Design System
 
-- [ ] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
-- [ ] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
+- [x] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
+- [x] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
 - [ ] Sub-millisecond binary header introspection (BAM/CRAM/VCF/FASTQ) prior to job dispatch
 - [ ] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
 - [ ] Metropolis cross-platform design system tokens and Metro-DAG high-performance interactive transit map

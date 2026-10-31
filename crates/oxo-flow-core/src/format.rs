@@ -2281,6 +2281,27 @@ pub fn lint_format(
         }
     }
 
+    // BioTypes biological semantic subtyping contract check (TYPE-001 .. TYPE-006)
+    if (!config.types.is_empty() || config.rules.iter().any(|r| r.types.is_some()))
+        && let Some(dag) = dag.as_ref()
+    {
+        for td in crate::types::check_workflow_types(config, dag) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "upstream rule '{}' ({} -> {}): {}",
+                    td.producer_rule,
+                    td.producer_channel,
+                    td.consumer_channel,
+                    td.violation.message
+                ),
+                rule: Some(td.consumer_rule),
+                code: td.violation.code,
+                suggestion: td.violation.suggestion,
+            });
+        }
+    }
+
     diagnostics
 }
 
