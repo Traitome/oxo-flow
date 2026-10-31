@@ -4474,21 +4474,22 @@ code <code>NO_REDO</code>.</p>
 </tr>
 </tbody>
 </table>
-<p>If validation fails, <code>success</code> is <code>false</code> and the edit is <strong>still applied</strong> to the returned TOML (so the user can see the problematic state), with <code>validation_errors</code> populated.</p>
+<p>If validation fails, <code>success</code> is <code>false</code>, <code>validation_errors</code> is populated, and the edit is <strong>rolled back atomically</strong>: <code>toml_content</code> echoes the caller's unchanged input (see <a href="#overview">Overview</a>). Rejected edits never enter the undo/redo history.</p>
 <p>Malformed commands (unknown operation, missing required payload fields such as the rule <code>name</code>, an <code>update_rule</code> target rule that does not exist, or a <code>connect</code>/<code>disconnect</code>/<code>update_params</code> target rule that does not exist) are rejected with HTTP <code>400</code> and code <code>DAG_EDIT_ERROR</code>; the edit is not applied. The same applies to edits whose resulting document no longer parses as a workflow (invalid TOML syntax, unknown fields, duplicate rule names).</p>
 <hr />
 <h2 id="important-notes">Important Notes<a class="headerlink" href="#important-notes" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>File-based edges are immutable via the edit API.</strong> The <code>connect</code>/<code>disconnect</code> commands only manage <code>depends_on</code> entries. File-based dependencies (inferred from input/output matching) are controlled by the <code>input</code> and <code>output</code> fields of rules, which the edit API cannot currently modify.</li>
 <li><strong>All edits are validated.</strong> The edit API runs the full workflow validation pipeline after every command. Validation findings (e.g., a <code>depends_on</code> entry naming an unknown rule) are
-returned in <code>validation_errors</code> with <code>success: false</code>, while the edit is still
-applied. Edits that break parsing — invalid TOML syntax, unknown fields, or
+returned in <code>validation_errors</code> with <code>success: false</code>, and the edit is rolled
+back atomically — <code>toml_content</code> echoes the caller's unchanged input and the
+undo/redo history is untouched. Edits that break parsing — invalid TOML syntax, unknown fields, or
 duplicate rule names — are rejected with HTTP <code>400</code> instead. Cycle detection
 <strong>is</strong> part of the edit validation path: since issue #466, <code>validate_format</code>
 builds the DAG with parsed config values on every edit, so a cycle introduced
 via <code>depends_on</code> edits surfaces immediately as <code>success: false</code> with the
-<code>DAG error:</code> (E006) message in <code>validation_errors</code> (the edit itself is still
-applied). See <a href="../dag-engine/">DAG Engine</a>.</li>
+<code>DAG error:</code> (E006) message in <code>validation_errors</code> (the edit is rolled back
+atomically). See <a href="../dag-engine/">DAG Engine</a>.</li>
 <li><strong>TOML round-tripping preserves formatting.</strong> Edits mutate the parsed TOML document in place (<code>toml_edit</code>), so the author's comments and formatting survive every edit; the document is never re-serialized through the canonical <code>format::format_workflow</code>.</li>
 <li><strong>Undo/redo is in-memory.</strong> Stacks are per-pipeline and live only for the duration of the server process. They do not persist across server restarts.</li>
 </ul>
