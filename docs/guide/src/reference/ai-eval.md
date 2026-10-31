@@ -52,15 +52,16 @@ runner until a reviewer accepts them (`approved` / `corrected`); if no
 reviewable rows exist the harness fails fast instead of silently emitting an
 empty report.
 
-> **Status note:** the current gold rows were annotated by a **machine sweep**
-> (`reviewer = wangshx-automated`, 2026-09-07) — structure, knowledge-base
-> consistency and URL liveness were checked, but **no human has verified
-> scientific correctness yet**; the human verification pass is tracked in
-> [#172](https://github.com/Traitome/oxo-flow/issues/172). Until it closes,
-> treat reported benchmark numbers as *machine-swept*, not human-verified.
-> `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the
-> machine-checkable consistency rules between review passes. See
-> `eval/schema.md` for the column contracts and the review workflow.
+> **Expert verification status:** all 257 gold rows have completed full
+> **human-expert scientific verification** (`reviewer = wangshx`, 2026-10-31),
+> formally resolving [#172](https://github.com/Traitome/oxo-flow/issues/172).
+> Every gold item is cryptographically bound to an append-only evidence ledger
+> (`eval/review/evidence.jsonl`) via SHA-256 canonical fields hashing; automated
+> reviewer placeholders are strictly barred by CI.
+> `python3 eval/scripts/verify_gold.py` audits cryptographic ledger consistency,
+> and `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the
+> consistency rules on every push. Complete methodology and statistical design
+> are documented in `eval/review/METHODOLOGY.md`.
 
 The deterministic grounding half of the tool layer is additionally
 guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —

@@ -46,6 +46,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 import runner  # noqa: E402
+import verify_gold  # noqa: E402
 
 REVIEWED = ("approved", "corrected")
 COMMUNITY_BASE = "https://raw.githubusercontent.com/oxo-flow-community/{repo}/main/{path}"
@@ -147,6 +148,35 @@ def check_provenance(tool_rows):
         if not url and "url resolves" in comment:
             findings.append(f"{row['id']}: review_comment claims a URL resolves but provenance_url is empty")
     return findings, checked
+
+
+def check_reviewer_identity(tool_rows, rule_rows, workflow_rows):
+    """Reviewed items must carry a human expert reviewer handle (never *-automated)."""
+    findings, checked = [], 0
+    for layer_name, rows in (
+        ("tool", tool_rows),
+        ("rule", rule_rows),
+        ("workflow", workflow_rows),
+    ):
+        for row in rows:
+            status = row.get("review_status")
+            if status in REVIEWED:
+                checked += 1
+                rev = (row.get("reviewer") or "").strip()
+                if not rev or rev.endswith("-automated"):
+                    findings.append(
+                        f"{row['id']} ({layer_name}): reviewer handle {rev!r} is automated or empty "
+                        "(human expert handle required, see #172)"
+                    )
+    return findings, checked
+
+
+def check_evidence_ledger(repo_root):
+    """Verify cryptographic audit binding via verify_gold."""
+    res = verify_gold.audit_gold_set(repo_root)
+    if "fatal" in res:
+        return [f"fatal: {res['fatal']}"], 0
+    return res["findings"], res["stats"]["total_gold_rows"]
 
 
 MISSING_REFERENCE_RE = re.compile(r"parse error in \./([^\s:]+)")
@@ -312,6 +342,7 @@ def check_version_intent(tool_rows):
 
 def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
     tool_rows = load_rows(repo_root, "tool")
+    rule_rows = load_rows(repo_root, "rule")
     workflow_rows = load_rows(repo_root, "workflow")
     report = {"hard": [], "warnings": [], "summary": []}
 
@@ -331,6 +362,14 @@ def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
     report["hard"] += [f"[provenance] {f}" for f in findings]
     report["summary"].append(f"reviewed tool rows with a provenance check: {checked}")
 
+    findings, checked = check_reviewer_identity(tool_rows, rule_rows, workflow_rows)
+    report["hard"] += [f"[reviewer-identity] {f}" for f in findings]
+    report["summary"].append(f"reviewed rows with human-expert handle: {checked}")
+
+    findings, checked = check_evidence_ledger(repo_root)
+    report["hard"] += [f"[evidence-ledger] {f}" for f in findings]
+    report["summary"].append(f"evidence ledger records verified: {checked}")
+
     graph_source = lambda path: reference_graph(path, oxo_flow_bin)  # noqa: E731
     with tempfile.TemporaryDirectory(prefix="oxo-gold-") as workdir:
         findings, checked, skipped, fetch_warnings = check_workflow_edges(
@@ -344,7 +383,7 @@ def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
     report["warnings"] += [f"[version-intent] {row_id}" for row_id in warnings]
     report["warnings"] += [f"[negative-overlap] {w}" for w in check_negative_overlaps(tool_rows, kb_name_norms())]
 
-    report["rows"] = {"tool": len(tool_rows), "workflow": len(workflow_rows)}
+    report["rows"] = {"tool": len(tool_rows), "rule": len(rule_rows), "workflow": len(workflow_rows)}
     return report
 
 
