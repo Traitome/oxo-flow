@@ -4336,6 +4336,22 @@
   literals on the override path are bracketed. Import accepts both
   schemes, so older <code>oxo+https://</code> links keep working.</li>
 </ul>
+<p>Server process environment:</p>
+<ul>
+<li><code>OXO_FLOW_BIN</code> — explicit path to the <code>oxo-flow</code> CLI binary the server
+  spawns for run execution. It is the first of the binary search steps
+  (env override → <code>CARGO_BIN_EXE_oxo-flow</code> → sibling of the running
+  executable → parent directory → <code>PATH</code>), so a stale <code>PATH</code> entry can
+  no longer silently win over a deliberate pin; the resolved path is
+  logged at startup (from which the source is inferable) and a major/minor
+  mismatch between the server and the spawned CLI is warned.</li>
+<li><code>OXO_FLOW_WORKSPACE</code> — root directory for all user-scoped server data
+  (<code>users/&lt;u&gt;/inputs/</code>, <code>users/&lt;u&gt;/runs/&lt;run_id&gt;/</code>,
+  <code>users/&lt;u&gt;/pipelines/&lt;pipeline_id&gt;/</code>). Defaults to a relative
+  <code>workspace/</code> under the process cwd; container deployments should point
+  it at a persistent volume. Path components are traversal-validated
+  before use.</li>
+</ul>
 <hr />
 <h2 id="domain-driven-module-structure">Domain-Driven Module Structure<a class="headerlink" href="#domain-driven-module-structure" title="Permanent link">#</a></h2>
 <table>

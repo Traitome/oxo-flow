@@ -3624,6 +3624,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#server-data-layout-oxo_flow_workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Data Layout (OXO_FLOW_WORKSPACE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#per-user-ai-credentials" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3996,6 +4007,17 @@
     <span class="md-ellipsis">
       
         Multi-Tenancy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-data-layout-oxo_flow_workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server Data Layout (OXO_FLOW_WORKSPACE)
       
     </span>
   </a>
@@ -4388,6 +4410,25 @@ ignored.</p>
 <li><strong>Shared infrastructure</strong>: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.</li>
 </ul>
+<h2 id="server-data-layout-oxo_flow_workspace">Server Data Layout (<code>OXO_FLOW_WORKSPACE</code>)<a class="headerlink" href="#server-data-layout-oxo_flow_workspace" title="Permanent link">#</a></h2>
+<p>The web server keeps all user-scoped data under one workspace root,
+<code>OXO_FLOW_WORKSPACE</code> (default: a relative <code>workspace/</code> directory under the
+server process's cwd):</p>
+<ul>
+<li><code>users/&lt;username&gt;/inputs/</code> — files uploaded via <code>POST /api/files</code>;
+  mirrored into each new run's workdir at Create Run
+  (<code>POST /api/runs</code>, which stages <code>include_files</code> straight into the run
+  dir without touching <code>inputs/</code>)</li>
+<li><code>users/&lt;username&gt;/runs/&lt;run_id&gt;/</code> — each run's workdir (the spawned CLI
+  runs here; checkpoint, logs, and envs live under it)</li>
+<li><code>users/&lt;username&gt;/pipelines/&lt;pipeline_id&gt;/</code> — persistent pipeline
+  directories so checkpoints survive web re-runs</li>
+</ul>
+<p>Usernames and run ids are traversal-validated before they are joined onto
+the root. In container or systemd deployments, point <code>OXO_FLOW_WORKSPACE</code>
+at a persistent volume — a server started from a different cwd otherwise
+silently loses sight of previous runs. The workspace root is server-tier
+configuration only; it has no per-user override.</p>
 <h2 id="per-user-ai-credentials">Per-User AI Credentials<a class="headerlink" href="#per-user-ai-credentials" title="Permanent link">#</a></h2>
 <p>Every user-facing AI call (chat, translate, explain, interpret, optimize)
 resolves the <strong>acting user's own saved provider</strong> (<code>PUT /api/ai/config/user</code>)
