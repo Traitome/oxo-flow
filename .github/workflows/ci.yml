@@ -2146,6 +2146,16 @@ jobs:
           echo "::error::server does not serve the fresh SPA bundle ($FRESH_ASSET)"
           exit 1
 
+      # Stage 4/5 e2e (core-flows.spec.ts) POSTs /api/runs with
+      # dry_run:false, so the web server spawns a real engine run via
+      # find_oxo_flow_binary() (sibling target/debug/oxo-flow). Without
+      # the CLI binary the run fails instantly and the test fails
+      # (live: run 41159903938). Built as a separate step — not -p on
+      # the web build above — so the two binaries keep independent
+      # feature resolutions.
+      - name: Build the CLI binary (e2e Stage 4/5 spawns real runs)
+        run: cargo build -p oxo-flow-cli
+
       - name: Run e2e tests
         working-directory: frontend
         run: npx playwright test
