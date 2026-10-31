@@ -17,7 +17,7 @@ Reviewers edit only the review columns; `eval/scripts/runner.py` scores rows wit
 | `difficulty` | `easy`, `medium`, or `hard` |
 | `gold_draft_by` | Who drafted the gold answer (`claude`) |
 | `review_status` | `draft` \| `approved` \| `corrected` \| `rejected` |
-| `reviewer` | Reviewer name/handle (empty until reviewed) |
+| `reviewer` | Reviewer handle (the repository owner, `wangshx`, for AI-assisted reviewed passes; empty until reviewed) |
 | `review_comment` | Reviewer's note, esp. what was corrected and why |
 | `review_date` | ISO date of the review |
 
@@ -88,24 +88,30 @@ Judging (runner): `validate` + `lint` exit codes, step-name coverage (including 
 
 ## Review workflow (publication-track)
 
-Reviewer identity: `reviewer` records a verified **human expert handle** (`wangshx`);
-`*-automated` placeholders are strictly forbidden and guarded by CI. All 257
-benchmark items have undergone complete field-level scientific audit, with
-verdicts cryptographically bound to `eval/review/evidence.jsonl` (see
-`eval/review/METHODOLOGY.md` for the full methodology and academic specification).
+Reviewer identity: `reviewer` records the repository owner's handle (`wangshx`);
+`*-automated` placeholders are strictly forbidden and guarded by CI. The
+attribution reflects an AI-assisted verification pass performed under the
+owner's supervision, recorded verdict-by-verdict in `eval/review/evidence.jsonl`
+(see `eval/review/METHODOLOGY.md`). A `fields_hash` binds each verdict to the
+exact gold fields it judged.
 
 1. Do **not** open the gold CSVs in a spreadsheet editor: rows carry long
    single-line JSON cells and ISO dates, and Excel/Numbers rewrite quoting
    and dates on save. Edit through a CSV-aware editor or script instead.
-2. Every row is cryptographically signed in `eval/review/evidence.jsonl` with
-   a canonical SHA-256 hash over its gold fields:
+2. Every row is bound in `eval/review/evidence.jsonl` with a canonical
+   SHA-256 hash over its gold fields:
    `python3 eval/scripts/verify_gold.py` verifies 100% hash consistency. Any
-   un-audited edit to a gold column alters the hash and fails CI.
+   un-audited edit to a gold column alters the hash and fails CI. To change a
+   gold field legitimately: re-verify the row against its `provenance_url`,
+   update the gold columns, then mint a fresh evidence record (new
+   `fields_hash`, verdict, `verified_at`, justification) for the item.
 3. Every approved or corrected item points to an external primary artifact
    (Bioconda recipe URL, nf-core module registry, bio.tools entry, or git-tracked
-   reference workflow). Negative controls cite verified non-existence across
-   Bioconda (9,882 recipes) and nf-core (2,095 modules).
+   reference workflow). Negative controls cite verified non-existence in the
+   embedded Bioconda (6,590 recipes) and nf-core (2,108 modules) registries.
 4. Non-bioinformatics packages and retired internal components are marked
-   `review_status = rejected` and isolated from active benchmark denominators.
+   `review_status = rejected` with a specific rationale in the review comment
+   and the ledger justification, and isolated from active benchmark
+   denominators.
 5. Run `python3 eval/scripts/verify_gold.py` and `python3 eval/scripts/check_gold.py`
    (`make eval-lint`) before and after any benchmark modifications.

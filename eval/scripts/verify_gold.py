@@ -2,7 +2,7 @@
 """Cryptographic and scientific verification audit for the eval gold set (issue #172).
 
 Usage:
-  python3 eval/scripts/verify_gold.py [--repo-root DIR] [--strict]
+  python3 eval/scripts/verify_gold.py [--repo-root DIR]
 
 Audits the human-expert verification pass recorded in eval/review/evidence.jsonl
 against the benchmark gold sets (eval/gold/tool.csv, rule.csv, workflow.csv).
@@ -19,6 +19,12 @@ Checks:
   5. Rejection Tracking: Explicit rejection reasons for retired/non-tool items.
 
 Stdlib only.
+
+Attribution semantics: the ledger's `reviewer` field names the repository
+owner under whose supervision this AI-assisted verification pass ran; it is
+an accountability anchor, not a claim of per-row manual verification.
+verify_gold.py proves ledger-to-CSV consistency (hashes, verdicts, identity
+hygiene), not the human origin of each verdict.
 """
 
 import argparse
@@ -132,6 +138,7 @@ def audit_gold_set(repo_root):
     }
 
     seen_ids = set()
+    duplicate_ids = set()
 
     for layer in ("tool", "rule", "workflow"):
         csv_path = os.path.join(repo_root, "eval", "gold", f"{layer}.csv")
@@ -150,6 +157,10 @@ def audit_gold_set(repo_root):
 
         for row in rows:
             item_id = row.get("id")
+            if item_id in seen_ids:
+                findings.append(f"[{item_id}] duplicate gold id in eval/gold/{layer}.csv")
+                duplicate_ids.add(item_id)
+                continue
             seen_ids.add(item_id)
             status = row.get("review_status", "draft")
             reviewer = (row.get("reviewer") or "").strip()
@@ -215,6 +226,14 @@ def audit_gold_set(repo_root):
         for oid in sorted(orphan_ids):
             findings.append(f"[{oid}] orphan evidence record in ledger (no matching CSV row)")
 
+    # Tripwire: hash matches must never exceed evidence records — that would
+    # mean a hash was counted for an id the ledger does not actually carry.
+    if stats["hash_matched"] > stats["total_evidence_rows"]:
+        findings.append(
+            f"internal inconsistency: hash_matched ({stats['hash_matched']}) exceeds "
+            f"total_evidence_rows ({stats['total_evidence_rows']})"
+        )
+
     stats["findings_count"] = len(findings)
     return {
         "ok": len(findings) == 0,
@@ -258,7 +277,7 @@ def print_audit_report(res):
     print(f"Excluded Rejections:  {stats['rejected']} items (properly isolated)")
     print("-" * 68)
     if res["ok"]:
-        print("✓ All 257 items cryptographically verified and human-expert attested.")
+        print(f"✓ All {stats['total_gold_rows']} items cryptographically verified and reviewer-attested.")
         print("✓ Zero automated reviewer placeholders remaining.")
         print("✓ Scientific provenance and evidence ledger intact.")
     else:
@@ -271,7 +290,6 @@ def print_audit_report(res):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=REPO_ROOT, help="repository root directory")
-    parser.add_argument("--strict", action="store_true", help="fail on any warning")
     args = parser.parse_args(argv)
 
     res = audit_gold_set(os.path.abspath(args.repo_root))

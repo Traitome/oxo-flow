@@ -151,7 +151,13 @@ def check_provenance(tool_rows):
 
 
 def check_reviewer_identity(tool_rows, rule_rows, workflow_rows):
-    """Reviewed items must carry a human expert reviewer handle (never *-automated)."""
+    """Reviewed items must carry a reviewer handle (never *-automated).
+
+    Mirrors verify_gold's Check 3 (single source of truth: the ledger audit
+    already hard-fails on the same condition; this re-check exists so the
+    consistency linter reports the finding under its own [reviewer-identity]
+    tag even when it runs against fixtures without a ledger).
+    """
     findings, checked = [], 0
     for layer_name, rows in (
         ("tool", tool_rows),
@@ -166,7 +172,7 @@ def check_reviewer_identity(tool_rows, rule_rows, workflow_rows):
                 if not rev or rev.endswith("-automated"):
                     findings.append(
                         f"{row['id']} ({layer_name}): reviewer handle {rev!r} is automated or empty "
-                        "(human expert handle required, see #172)"
+                        "(reviewer handle required, see #172)"
                     )
     return findings, checked
 
@@ -368,7 +374,7 @@ def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
 
     findings, checked = check_evidence_ledger(repo_root)
     report["hard"] += [f"[evidence-ledger] {f}" for f in findings]
-    report["summary"].append(f"evidence ledger records verified: {checked}")
+    report["summary"].append(f"gold rows audited against evidence ledger: {checked}")
 
     graph_source = lambda path: reference_graph(path, oxo_flow_bin)  # noqa: E731
     with tempfile.TemporaryDirectory(prefix="oxo-gold-") as workdir:

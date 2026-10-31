@@ -2,7 +2,7 @@
 
 **Author:** Shixiang Wang (王诗翔) · *Traitome & oxo-flow Team*  
 **Date:** October 31, 2026  
-**Status:** Human-Expert Verified · Cryptographically Hash-Bound · Issue #172 Final Disposition  
+**Status:** AI-Assisted Verification, Human-Supervised · Cryptographically Hash-Bound · Issue #172 Disposition Pending Owner Attestation  
 
 ---
 
@@ -74,10 +74,10 @@ Negative controls evaluate whether an AI assistant resists user prompting that r
 - **Curated Fabricated Tools ($N=10$)**:
   `aligner_phoenix`, `rnaseq_turboprop_aligner`, `seq_shampooer`, `gene_exploder`, `metagenome_magic`, `vcf_annihilator`, `aligninator`, `seq_polisher_pro`, `crispr_finder_x`, `epigenome_wizard`.
 - **Purity Attestation**:
-  All 10 fabricated names have been cryptographically and lexically audited:
-  1. Zero whole-name or token-boundary overlap with Bioconda ($9,882$ package names).
-  2. Zero overlap with nf-core module registry ($2,095$ modules).
-  3. Verified absent from bio.tools registry and NCBI PubMed.
+  All 10 fabricated names have been lexically audited against the knowledge
+  bases embedded in this repository (`crates/oxo-flow-ai/src/knowledge/`):
+  1. Zero whole-name or token-boundary overlap with the embedded Bioconda table (6,590 package names).
+  2. Zero overlap with the embedded nf-core module registry (2,108 modules).
 - **Judge Defense against Circular Echo**:
   The evaluation harness drops the queried fake name from the answer prior to lexical scanning and excludes short format words (e.g., `bio`, `fc`), ensuring that a model explaining that *"aligner_phoenix is not found in bioconda"* is awarded full credit ($1.0$), while a model hallucinating a fallback (*"maybe you meant fastqc?"*) is penalized ($0.0$).
 
@@ -97,8 +97,8 @@ Where $\text{JSON}_{\text{canonical}}$ sorts keys alphabetically and enforces UT
 
 ### Verification Contract
 
-1. **Tamper-Evident Ledger**: If any field in `eval/gold/*.csv` is modified without an expert audit, $H(i)$ changes immediately, causing `eval/scripts/verify_gold.py` and `eval/scripts/check_gold.py` to abort with a fatal mismatch error.
-2. **Reviewer Attribution**: Automated placeholders (`*-automated`) are permanently barred by CI. Every approved or corrected item carries verified human reviewer attribution (`reviewer = wangshx`).
+1. **Tamper-Evident Ledger**: If any canonical gold field in `eval/gold/*.csv` is modified without a corresponding evidence update, $H(i)$ changes immediately, causing `eval/scripts/verify_gold.py` and `eval/scripts/check_gold.py` to abort with a fatal mismatch error.
+2. **Reviewer Attribution**: Automated placeholders (`*-automated`) are permanently barred by CI. Every approved or corrected item carries reviewer attribution (`reviewer = wangshx`), disclosed as an AI-assisted verification pass performed under the repository owner's supervision; the owner's on-record attestation of that supervision gates this change.
 3. **Artifact Citing**: Every reviewed positive item points to an external primary source (Bioconda recipe URL, nf-core module tree, bio.tools entry, or git-tracked reference workflow).
 
 ---
@@ -123,20 +123,20 @@ Reviewer Integrity:         100.0% verified human handles (0 automated)
 
 ### Excluded Rejections ($N=6$)
 
-Six historical tool items derived from raw repository sweeps were audited and definitively rejected from active scoring:
+Six historical tool items derived from raw repository sweeps were audited and definitively rejected from active scoring. The verbatim rationales are recorded in the ledger (`scientific_justification`) and mirrored in the gold CSV review comments:
 
-- `tool-065` (`esme_psmpi_5_12_1`): Climate-modelling meta-bundle (ESME), not a biological analysis tool.
-- `tool-070` (`im-pipelines`): Retired internal component dropped from Bioconda table in knowledge refresh #880.
-- `tool-082` (`repermulize`): C++ permutation library, not an end-user executable.
-- `tool-093` (`bpp-seq`): Low-level sequence library (Bio++); end-user CLI suite is `bppsuite`.
-- `tool-094` (`compare-reads`): Library function package dropped from Bioconda table in refresh #880.
-- `tool-097` (`ghc`): Glasgow Haskell Compiler build dependency.
+- `tool-065` (`esme_psmpi_5_12_1`): Climate/earth-system model bundle (ESME), not a biological analysis tool.
+- `tool-070` (`im-pipelines`): Retired internal component dropped from the Bioconda table in knowledge refresh #880.
+- `tool-082` (`repermulize`): C++ permutation library with no end-user bioinformatics CLI.
+- `tool-093` (`bpp-seq`): Low-level sequence library (Bio++); the end-user CLI suite is `bppsuite`.
+- `tool-094` (`compare-reads`): Library function package dropped from the Bioconda table in refresh #880.
+- `tool-097` (`ghc`): Glasgow Haskell Compiler — a language toolchain, not a bioinformatics tool.
 
 ---
 
 ## 6. How to Reproduce & Audit the Verification
 
-The entire verification audit can be reproduced locally with zero external network dependencies:
+The verification audit can be reproduced locally with zero external network dependencies:
 
 ```bash
 # 1. Run the cryptographic gold verification engine
