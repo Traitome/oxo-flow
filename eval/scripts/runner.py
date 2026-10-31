@@ -488,6 +488,14 @@ def judge_rule(gold_rows, captures_dir, oxo_flow_bin):
             text, rules, parse_err = load_generated(capture["path"])
             rule = rules[0] if rules else {}
             shell = rule.get("shell", "") if rule else text
+            if rule and isinstance(rule.get("transform"), dict):
+                t = rule["transform"]
+                t_parts = [t.get("map", "")]
+                if isinstance(t.get("combine"), dict):
+                    t_parts.append(t["combine"].get("shell", ""))
+                transform_shell = " ".join(filter(None, t_parts))
+                if transform_shell:
+                    shell = (shell + " " + transform_shell).strip() if shell else transform_shell
             scores = {}
 
             scores["tool_present"] = 1.0 if common.name_present(row["expected_tool"], shell + " " + text) else 0.0

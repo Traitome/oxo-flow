@@ -52,16 +52,19 @@ runner until a reviewer accepts them (`approved` / `corrected`); if no
 reviewable rows exist the harness fails fast instead of silently emitting an
 empty report.
 
-> **Expert verification status:** all 257 gold rows have completed full
-> **human-expert scientific verification** (`reviewer = wangshx`, 2026-10-31),
-> formally resolving [#172](https://github.com/Traitome/oxo-flow/issues/172).
-> Every gold item is cryptographically bound to an append-only evidence ledger
-> (`eval/review/evidence.jsonl`) via SHA-256 canonical fields hashing; automated
-> reviewer placeholders are strictly barred by CI.
+> **Benchmark integrity & verification status:** all 257 gold rows are
+> cryptographically bound to an immutable audit evidence ledger
+> (`eval/review/evidence.jsonl`) via SHA-256 canonical fields hashing
+> (`reviewer = wangshx`, 2026-10-31, AI-assisted verification baseline under
+> maintainer supervision). Automated reviewer placeholders (`*-automated`) are
+> permanently barred by CI.
+> Issue [#172](https://github.com/Traitome/oxo-flow/issues/172) remains OPEN
+> by design as the publication-track standing marker for independent double-blind
+> human review and PABAK concordance reporting prior to manuscript submission.
 > `python3 eval/scripts/verify_gold.py` audits cryptographic ledger consistency,
-> and `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards the
-> consistency rules on every push. Complete methodology and statistical design
-> are documented in `eval/review/METHODOLOGY.md`.
+> and `python3 eval/scripts/check_gold.py` (`make eval-lint`) guards consistency
+> rules on every push. Complete methodology and statistical design are
+> documented in `eval/review/METHODOLOGY.md`.
 
 The deterministic grounding half of the tool layer is additionally
 guarded in CI by `crates/oxo-flow-ai/tests/knowledge_grounding.rs` —

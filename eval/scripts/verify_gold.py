@@ -4,7 +4,7 @@
 Usage:
   python3 eval/scripts/verify_gold.py [--repo-root DIR]
 
-Audits the human-expert verification pass recorded in eval/review/evidence.jsonl
+Audits the AI-assisted, maintainer-supervised verification pass recorded in eval/review/evidence.jsonl
 against the benchmark gold sets (eval/gold/tool.csv, rule.csv, workflow.csv).
 
 Checks:

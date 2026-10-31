@@ -370,7 +370,7 @@ def run_checks(repo_root, oxo_flow_bin, fetch_community=True):
 
     findings, checked = check_reviewer_identity(tool_rows, rule_rows, workflow_rows)
     report["hard"] += [f"[reviewer-identity] {f}" for f in findings]
-    report["summary"].append(f"reviewed rows with human-expert handle: {checked}")
+    report["summary"].append(f"reviewed rows with valid reviewer handle: {checked}")
 
     findings, checked = check_evidence_ledger(repo_root)
     report["hard"] += [f"[evidence-ledger] {f}" for f in findings]

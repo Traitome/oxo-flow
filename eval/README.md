@@ -64,7 +64,7 @@ page, or the reference workflow file).
 
 Rows start at `review_status = draft` and are skipped by capture/runner until a reviewer accepts them (`approved` / `corrected`; see the review workflow in `schema.md`). If zero reviewable rows exist, capture/judging aborts with a clear error instead of silently producing an empty benchmark. `--include-unreviewed` is still available for preview-only dry runs and must not be reported as final benchmark data.
 
-**Review maturity:** all 257 gold rows have completed full **human-expert scientific verification** (`reviewer = wangshx`, 2026-10-31), formally resolving [#172](https://github.com/Traitome/oxo-flow/issues/172). Every gold item is cryptographically bound to `eval/review/evidence.jsonl` via SHA-256 canonical fields hashing; automated reviewer placeholders are barred by CI. Run `python3 eval/scripts/verify_gold.py` to audit hash consistency and reviewer attestation. Complete benchmark methodology and statistical design are detailed in `eval/review/METHODOLOGY.md`.
+**Review maturity:** all 257 gold rows are cryptographically bound to `eval/review/evidence.jsonl` via SHA-256 canonical fields hashing (`reviewer = wangshx`, 2026-10-31, AI-assisted verification baseline under maintainer supervision). Automated reviewer placeholders are barred by CI. Issue [#172](https://github.com/Traitome/oxo-flow/issues/172) remains OPEN by design as the standing marker for pre-publication independent human double-blind review. Run `python3 eval/scripts/verify_gold.py` to audit hash consistency and reviewer attestation. Complete benchmark methodology and statistical design are detailed in `eval/review/METHODOLOGY.md`.
 
 ## What each layer measures
 
