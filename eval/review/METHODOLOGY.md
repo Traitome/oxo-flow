@@ -108,13 +108,13 @@ Where $\text{JSON}_{\text{canonical}}$ sorts keys alphabetically and enforces UT
 ```
 ====================================================================
 Total Benchmark Gold Items: 257
-Active Scored Set:          251 (133 approved + 118 corrected)
+Active Scored Set:          251 (131 approved + 120 corrected)
 Excluded Rejections:          6 (cleanly isolated non-bioinformatics rows)
 --------------------------------------------------------------------
 Layer Breakdown:
   - Tool Grounding:         149 total (55 approved, 88 corrected, 6 rejected)
   - Single-Rule Synthesis:   70 total (60 approved, 10 corrected)
-  - Workflow DAG:            38 total (18 approved, 20 corrected)
+  - Workflow DAG:            38 total (16 approved, 22 corrected)
 --------------------------------------------------------------------
 Cryptographic Hash Match:   100.0% (257 / 257 items)
 Reviewer Integrity:         100.0% verified human handles (0 automated)
