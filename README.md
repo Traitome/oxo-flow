@@ -19,7 +19,7 @@
 [![bioconda downloads](https://anaconda.org/bioconda/oxo-flow-cli/badges/downloads.svg)](https://anaconda.org/bioconda/oxo-flow-cli/files)
 [![cargo installs](https://img.shields.io/crates/d/oxo-flow-cli?label=cargo%20installs&style=flat-square)](https://crates.io/crates/oxo-flow-cli)
 [![GitHub stars](https://img.shields.io/github/stars/Traitome/oxo-flow?style=flat-square)](https://github.com/Traitome/oxo-flow/stargazers)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Traitome/oxo-flow)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask_DeepWiki-AI_docs-6E56CF?style=flat-square)](https://deepwiki.com/Traitome/oxo-flow)
 
 [Documentation](https://traitome.github.io/oxo-flow/latest/) · [Workflow Gallery](https://traitome.github.io/oxo-flow/latest/gallery/) · [Community](https://oxo-flow-community.github.io/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
