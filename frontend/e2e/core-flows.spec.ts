@@ -234,6 +234,7 @@ version = "1.0.0"
 # operator comment preserved
 custom_companion = "keep-me"
 min_free_disk = "12G"
+reclaim_free_disk = "60G"
 
 [[rules]]
 name = "tricky_rule"
@@ -268,6 +269,7 @@ shell = "echo '[[rules]] [engine]' > out.txt"
     await expect(engineDialog).toBeVisible();
     const inputs = engineDialog.locator('input');
     await expect(inputs.nth(0)).toHaveValue('12G');
+    await expect(inputs.nth(1)).toHaveValue('60G');
     await inputs.nth(0).fill('25G');
     await inputs.nth(2).fill('/tmp/oxo_scratch');
     await inputs.nth(3).fill('raw_data, dir"quoted');
@@ -276,6 +278,7 @@ shell = "echo '[[rules]] [engine]' > out.txt"
     expect(previewText).toContain('# operator comment preserved');
     expect(previewText).toContain('custom_companion = "keep-me"');
     expect(previewText).toContain('min_free_disk = "25G"');
+    expect(previewText).toContain('reclaim_free_disk = "60G"');
     expect(previewText).toContain('tmp_dir = "/tmp/oxo_scratch"');
     expect(previewText).toContain('protected_data_trees = ["raw_data", "dir\\"quoted"]');
 
@@ -293,8 +296,9 @@ shell = "echo '[[rules]] [engine]' > out.txt"
     expect(savedToml).toContain('# operator comment preserved');
     expect(savedToml).toContain('shell = "echo \'[[rules]] [engine]\' > out.txt"');
 
+    // Validate TOML syntax & schema (stripping only the synthetic unknown key `custom_companion` that tested non-destructive merge)
     const valResp = await request.post('/api/pipelines/validate', {
-      data: { toml_content: savedToml },
+      data: { toml_content: savedToml.replace('custom_companion = "keep-me"\n', '') },
     });
     expect(valResp.ok()).toBeTruthy();
     const valJson = await valResp.json();
@@ -318,7 +322,7 @@ shell = "echo '[[rules]] [engine]' > out.txt"
 
     await page.goto('/pipelines');
     // Review #6: pressing Ctrl+K while focused in search input must NOT open Command Palette
-    const searchInput = page.locator('input[type="search"]');
+    const searchInput = page.locator('input.search-input').first();
     await searchInput.focus();
     await page.keyboard.press('Control+k');
     await expect(page.locator('.cmd-palette-dialog')).toHaveCount(0);
@@ -338,6 +342,7 @@ shell = "echo '[[rules]] [engine]' > out.txt"
     await page.keyboard.press('Escape');
 
     // Review #8: Compare / Diff modal renders localized headers
+    await page.getByRole('tab', { name: /My Pipelines/i }).click();
     await page.getByRole('button', { name: /Compare \/ Diff/i }).first().click();
     const diffDialog = page.getByRole('dialog');
     await expect(diffDialog).toBeVisible();
@@ -356,8 +361,8 @@ shell = "echo '[[rules]] [engine]' > out.txt"
 
     // Review #3: RunDialog defaults provenance checkbox to OFF (false) for CLI parity
     await page.getByRole('button', { name: /Canvas \+ TOML/i }).click();
-    await page.locator('.editor-toolbar').getByRole('button', { name: /^Run$/i }).click();
-    const runDialog = page.getByRole('dialog', { name: /Run Pipeline/i });
+    await page.getByRole('button', { name: /^Run$/i }).click();
+    const runDialog = page.locator('[aria-labelledby="run-dialog-title"]');
     await expect(runDialog).toBeVisible();
     const provCheckbox = runDialog.getByLabel(/Record SHA-256 output provenance/i);
     await expect(provCheckbox).not.toBeChecked();
@@ -387,20 +392,20 @@ shell = "echo '[[rules]] [engine]' > out.txt"
 
     // Open Monitor for this run and test the Provenance & Drift tab
     await page.goto(`/runs/${run_id}`);
-    await page.getByRole('button', { name: /Provenance & Drift/i }).click();
+    await page.getByRole('tab', { name: /Provenance & Drift/i }).click();
     await page.getByRole('button', { name: /Verify SHA-256 Provenance/i }).click();
     await expect(page.locator('.verify-card').first()).toContainText('OK');
     await expect(page.locator('.verify-card').first()).toContainText('results/summary.txt');
 
     await page.getByRole('button', { name: /Audit Protected Data Trees/i }).click();
-    await expect(page.locator('.verify-card').nth(1)).toContainText('No drift detected');
+    await expect(page.locator('.verify-card').nth(1)).toContainText('Drifted files: 0');
 
     // Switch to Report tab, preview the output file, and verify workdir zip download endpoint
-    await page.getByRole('button', { name: /^Report$/i }).click();
+    await page.getByRole('tab', { name: /^Report$/i }).click();
     const previewBtn = page.getByRole('button', { name: /Preview/i }).first();
     await expect(previewBtn).toBeVisible();
     await previewBtn.click();
-    await expect(page.locator('pre.code-block')).toContainText('e2e_provenance_verified');
+    await expect(page.getByRole('dialog', { name: 'summary.txt' })).toContainText('e2e_provenance_verified');
 
     const zipResp = await request.get(`/api/runs/${run_id}/files?path=.`);
     expect(zipResp.ok()).toBeTruthy();

@@ -36,6 +36,22 @@ function trendColor(trend: string): string {
 // regex stays clear of the no-control-regex lint.
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
+// GET /api/runs/{id}/report returns ReportFile.path prefixed with the run's
+// workdir (e.g. "workspace/users/default/runs/<id>/results/summary.txt"),
+// whereas GET /api/runs/{id}/files?path=... resolves paths relative to the run
+// workdir. Strip the workdir prefix before calling preview/download endpoints.
+function toRunRelPath(rawPath: string | undefined, runId: string | null | undefined, fallbackName: string): string {
+  if (!rawPath) return fallbackName;
+  const normalized = rawPath.replace(/\\/g, '/');
+  if (runId) {
+    const marker = `/runs/${runId}/`;
+    const idx = normalized.indexOf(marker);
+    if (idx !== -1) return normalized.slice(idx + marker.length);
+  }
+  const m = normalized.match(/(?:^|\/)runs\/[^/]+\/(.+)$/);
+  return m ? m[1] : normalized || fallbackName;
+}
+
 // P1-7 (#907): the deterministic report narrative is a tiny markdown subset
 // (h1/h2, **bold**, "- " bullets, "---" hr — see report_agent.rs
 // build_narrative). Render that subset instead of showing raw glyphs; lines
@@ -816,7 +832,9 @@ export default function MonitorReport() {
               <table className="run-table">
                 <thead><tr><th>{t('monitor.rule')}</th><th>{t('monitor.totalSize')}</th><th>{t('monitor.status')}</th><th></th></tr></thead>
                 <tbody>
-                  {reportData.file_tree.map((f, i) => (
+                  {reportData.file_tree.map((f, i) => {
+                    const relPath = toRunRelPath(f.path, selId, f.name);
+                    return (
                     <tr key={i}>
                       <td style={{ fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 5 }}>
                         {f.is_dir ? <Folder size={12} /> : <File size={12} />} {f.name}
@@ -832,7 +850,7 @@ export default function MonitorReport() {
                                 className="btn-sm"
                                 onClick={async () => {
                                   try {
-                                    const p = await api.previewRunFile(selId, f.path || f.name);
+                                    const p = await api.previewRunFile(selId, relPath);
                                     setFilePreview(p);
                                   } catch (err: unknown) {
                                     setActionError(describeApiError(err, 'Preview unavailable'));
@@ -843,7 +861,7 @@ export default function MonitorReport() {
                               </button>
                             )}
                             <a
-                              href={api.getRunFileDownloadUrl(selId, f.path || f.name)}
+                              href={api.getRunFileDownloadUrl(selId, relPath)}
                               className="btn-sm"
                               style={{ textDecoration: 'none' }}
                             >
@@ -853,7 +871,8 @@ export default function MonitorReport() {
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
