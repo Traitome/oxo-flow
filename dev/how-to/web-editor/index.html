@@ -4062,6 +4062,9 @@ is preserved as a new revision first.</p>
 <h2 id="editing-a-rule">Editing a rule<a class="headerlink" href="#editing-a-rule" title="Permanent link">#</a></h2>
 <p>Double-click a node to open the inspector:</p>
 <ul>
+<li><strong>Name</strong> — rename the rule; every <code>depends_on</code>, <code>extends</code>, and
+  <code>scatter.gather</code> reference is rewritten to the new name (duplicates are
+  rejected).</li>
 <li><strong>Shell command</strong> — free-form, with <code>{input}</code>/<code>{output}</code> placeholders.</li>
 <li><strong>Inputs / Outputs</strong> — file path patterns; wildcards (<code>{sample}</code>) allowed.</li>
 <li><strong>Environment</strong> — system / conda / mamba / docker / singularity / venv /
@@ -4076,6 +4079,13 @@ is preserved as a new revision first.</p>
 <h2 id="connecting-rules">Connecting rules<a class="headerlink" href="#connecting-rules" title="Permanent link">#</a></h2>
 <p>Drag from a node's right handle to another node's left handle. This adds an
 explicit <code>depends_on</code> edge.</p>
+<p>Two connections are always rejected, before anything is written:</p>
+<ul>
+<li>connecting a node to itself, and</li>
+<li>any edge that would close a cycle — including cycles formed with
+  file-inferred edges. The editor shows the backend's error and the
+  workflow stays valid.</li>
+</ul>
 <p>There are two kinds of edges, and the canvas draws them differently:</p>
 <table>
 <thead>
@@ -4105,9 +4115,11 @@ patterns connect too when they overlap the same files (for example
 be resolved against each other leave the ordering ambiguous — use
 <code>depends_on</code> to make it explicit.</p>
 <h2 id="deleting">Deleting<a class="headerlink" href="#deleting" title="Permanent link">#</a></h2>
-<p>Select one or more nodes and press <code>Delete</code> (or <code>Backspace</code>). Removing a rule
-whose outputs other rules consume will surface validation errors on those
-rules — fix their inputs, and the workflow is valid again.</p>
+<p>Select one or more nodes and press <code>Delete</code> (or <code>Backspace</code>) to remove rules;
+with an edge selected instead, the same keys disconnect it (file-inferred
+edges are managed through the <code>input</code>/<code>output</code> paths, not by disconnect).
+Removing a rule whose outputs other rules consume will surface validation
+errors on those rules — fix their inputs, and the workflow is valid again.</p>
 <h2 id="auto-layout">Auto layout<a class="headerlink" href="#auto-layout" title="Permanent link">#</a></h2>
 <p>Use <strong>Auto layout</strong> to re-run the layered Sugiyama layout; then drag nodes
 wherever you like — positions are saved per pipeline (presentation only, never

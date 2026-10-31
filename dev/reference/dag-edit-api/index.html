@@ -3039,6 +3039,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rename_rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_rule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#update_rule" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3966,6 +3977,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rename_rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_rule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#update_rule" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4100,12 +4122,14 @@
 <li><strong>Validated</strong> — the edited document is re-parsed and validated through the workflow validation pipeline</li>
 </ol>
 <p>Edits that fail <em>validation</em> — error-severity findings such as a
-<code>depends_on</code> reference to an unknown rule — are still applied and returned:
-the response reports <code>success: false</code> with <code>validation_errors</code> populated, so
-the problematic state can be inspected and fixed with a follow-up edit. Edits
-that break <em>parsing</em> of the edited document — invalid TOML syntax, unknown
-fields, or duplicate rule names — are rejected instead: they return HTTP
-<code>400</code> (<code>DAG_EDIT_ERROR</code>) and the previous state is kept.</p>
+<code>depends_on</code> reference to an unknown rule — roll back atomically: the
+response reports <code>success: false</code> with <code>validation_errors</code> populated and
+<code>toml_content</code> echoes the caller's <strong>unchanged</strong> input, so a client that
+adopts the returned TOML never holds a document the engine would reject.
+Edits that break <em>parsing</em> of the edited document — invalid TOML syntax,
+unknown fields, or duplicate rule names — are rejected with HTTP <code>400</code>
+(<code>DAG_EDIT_ERROR</code>) and the previous state is kept. Rejected edits never
+enter the undo/redo history.</p>
 <h2 id="endpoint">Endpoint<a class="headerlink" href="#endpoint" title="Permanent link">#</a></h2>
 <p>All edit commands are sent to a single endpoint, with the pipeline ID in the URL path:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>POST /api/pipeline/{id}/command
@@ -4118,8 +4142,9 @@ current TOML content (<code>toml_content</code>) plus the command.</p>
 <blockquote>
 <p>The commands below reflect the v0.11+ extended API: <code>add_rule</code> accepts a
 complete rule table, <code>update_rule</code> patches any rule fields through a TOML
-table (with <code>null</code> meaning "remove this key"), and <code>update_workflow</code>
-replaces top-level sections. <code>update_params</code> remains as a legacy alias of
+table (with <code>null</code> meaning "remove this key"), <code>rename_rule</code> renames a
+rule and rewrites every reference to it, and <code>update_workflow</code> replaces
+top-level sections. <code>update_params</code> remains as a legacy alias of
 <code>update_rule</code>.</p>
 </blockquote>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -4131,7 +4156,7 @@ replaces top-level sections. <code>update_params</code> remains as a legacy alia
 </span></code></pre></div>
 <p><code>source</code> is one of <code>dag_editor</code> (the interactive editor), <code>chat</code>, or <code>proposal</code>.
 <code>operation</code> is one of <code>add_rule</code>, <code>remove_rule</code>, <code>connect</code>, <code>disconnect</code>,
-<code>update_rule</code>/<code>update_params</code>, or <code>update_workflow</code>.</p>
+<code>rename_rule</code>, <code>update_rule</code>/<code>update_params</code>, or <code>update_workflow</code>.</p>
 <h3 id="add_rule"><code>add_rule</code><a class="headerlink" href="#add_rule" title="Permanent link">#</a></h3>
 <p>Add a new rule to the workflow.</p>
 <p><strong>Payload:</strong></p>
@@ -4246,7 +4271,7 @@ validates the field set (unknown fields are rejected with a parse error).</p>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"from"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fastqc"</span><span class="p">,</span><span class="w"> </span><span class="nt">"to"</span><span class="p">:</span><span class="w"> </span><span class="s2">"trim_reads"</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">}</span>
 </span></code></pre></div>
-<p><strong>Result:</strong> <code>"fastqc"</code> is added to <code>trim_reads</code>'s <code>depends_on</code> list. If the dependency already exists, the command is idempotent (no duplicate). Returns an error if the target rule doesn't exist.</p>
+<p><strong>Result:</strong> <code>"fastqc"</code> is added to <code>trim_reads</code>'s <code>depends_on</code> list. If the dependency already exists, the command is idempotent (no duplicate). Returns an error if the target rule doesn't exist, if <code>from</code> equals <code>to</code>, or if the edge would close a cycle — including cycles formed with file-inferred edges (an output→input match plus the drawn edge). Self-connections and cyclic connections are rejected before the document is touched, so the workflow stays valid.</p>
 <hr />
 <h3 id="disconnect"><code>disconnect</code><a class="headerlink" href="#disconnect" title="Permanent link">#</a></h3>
 <p>Remove an explicit dependency edge between two rules.</p>
@@ -4285,6 +4310,47 @@ validates the field set (unknown fields are rejected with a parse error).</p>
 </span></code></pre></div>
 <p><strong>Result:</strong> <code>"fastqc"</code> is removed from <code>trim_reads</code>'s <code>depends_on</code> list. File-based dependencies (inferred from input/output matching) are <strong>not</strong> affected — only explicit <code>depends_on</code> entries are managed by connect/disconnect.</p>
 <hr />
+<h3 id="rename_rule"><code>rename_rule</code><a class="headerlink" href="#rename_rule" title="Permanent link">#</a></h3>
+<p>Rename a rule and rewrite every reference to it.</p>
+<p><strong>Payload:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>String</td>
+<td><strong>Yes</strong></td>
+<td>Current name of the rule</td>
+</tr>
+<tr>
+<td><code>new_name</code></td>
+<td>String</td>
+<td><strong>Yes</strong></td>
+<td>New rule name (must stay unique; the usual rule-name charset applies)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rename_rule"</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fastqc"</span><span class="p">,</span><span class="w"> </span><span class="nt">"new_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fastqc_qc"</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><strong>Result:</strong> The rule's <code>name</code> key is rewritten in place (inline comments on
+that line are preserved), and every <code>depends_on</code> entry, <code>extends</code> reference,
+and <code>scatter.gather</code> target that pointed at the old name now points at the
+new one. Renaming to an existing rule's name fails with a parse error; an
+unknown <code>name</code> fails with <code>Rule '&lt;name&gt;' not found</code>.</p>
+<hr />
 <h3 id="update_rule"><code>update_rule</code><a class="headerlink" href="#update_rule" title="Permanent link">#</a></h3>
 <p>Update any fields on an existing rule.</p>
 <p><strong>Payload:</strong></p>
@@ -4313,20 +4379,20 @@ validates the field set (unknown fields are rejected with a parse error).</p>
 </tbody>
 </table>
 <p><strong>Example:</strong></p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"update_rule"</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa_align"</span><span class="p">,</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">"patch"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">"shell"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa-mem2 mem -t {threads} {config.reference} {input} | samtools sort -o {output}"</span><span class="p">,</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">"input"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">],</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">"resources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"threads"</span><span class="p">:</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory"</span><span class="p">:</span><span class="w"> </span><span class="s2">"64G"</span><span class="p">},</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">      </span><span class="nt">"retries"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"update_rule"</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa_align"</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">"patch"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">      </span><span class="nt">"shell"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bwa-mem2 mem -t {threads} {config.reference} {input} | samtools sort -o {output}"</span><span class="p">,</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">      </span><span class="nt">"input"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"raw/{sample}_R1.fastq.gz"</span><span class="p">,</span><span class="w"> </span><span class="s2">"raw/{sample}_R2.fastq.gz"</span><span class="p">],</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">      </span><span class="nt">"resources"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"threads"</span><span class="p">:</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="nt">"memory"</span><span class="p">:</span><span class="w"> </span><span class="s2">"64G"</span><span class="p">},</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">      </span><span class="nt">"retries"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Result:</strong> Patch keys replace the rule's fields; all unpatched fields are
 preserved. <code>update_params</code> (<code>{name, threads, shell}</code>) remains as a legacy
@@ -4335,24 +4401,24 @@ alias.</p>
 <p>Patch top-level TOML sections (<code>workflow</code>, <code>config</code>, <code>defaults</code>, …). <code>null</code>
 removes a key; an object patch on a key that is already a table is merged
 into that table (comments preserved); everything else is replaced wholesale.</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"update_workflow"</span><span class="p">,</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">"patch"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"renamed"</span><span class="p">,</span><span class="w"> </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.26.0"</span><span class="p">,</span><span class="w"> </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"d"</span><span class="p">}}</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;current workflow TOML&gt;"</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dag_editor"</span><span class="p">,</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">"operation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"update_workflow"</span><span class="p">,</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">"patch"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"workflow"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"renamed"</span><span class="p">,</span><span class="w"> </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.26.0"</span><span class="p">,</span><span class="w"> </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"d"</span><span class="p">}}</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
 </span></code></pre></div>
 <hr />
 <h2 id="undo-redo">Undo &amp; Redo<a class="headerlink" href="#undo-redo" title="Permanent link">#</a></h2>
 <p>The DAG Edit API maintains an undo/redo stack per pipeline ID with a maximum depth of 50 entries.</p>
 <h3 id="undo"><code>undo</code><a class="headerlink" href="#undo" title="Permanent link">#</a></h3>
 <p>Reverts the last edit, restoring the previous TOML state.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/pipeline/{id}/undo
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>Content-Type: application/json
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>POST /api/pipeline/{id}/undo
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Content-Type: application/json
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
 </span></code></pre></div>
 <p>The request <strong>requires</strong> a JSON body with <code>toml_content</code> set to the caller's
 current TOML state. The undo stack's top transition is applied only when its
@@ -4364,10 +4430,10 @@ server restart, since stacks are in-memory).</p>
 last edit.</p>
 <h3 id="redo"><code>redo</code><a class="headerlink" href="#redo" title="Permanent link">#</a></h3>
 <p>Re-applies the last undone edit.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>POST /api/pipeline/{id}/redo
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>Content-Type: application/json
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>POST /api/pipeline/{id}/redo
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>Content-Type: application/json
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>{"toml_content": "&lt;the client's current TOML&gt;"}
 </span></code></pre></div>
 <p>Same contract as <code>undo</code>: the JSON body is required, and <code>toml_content</code> must
 match the current state (the result of the last undo), otherwise <code>404</code> with
@@ -4376,11 +4442,11 @@ code <code>NO_REDO</code>.</p>
 <hr />
 <h2 id="response-format">Response Format<a class="headerlink" href="#response-format" title="Permanent link">#</a></h2>
 <p>All edit commands return a <code>DagEditResponse</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">"success"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\nname = \"...\"\n..."</span><span class="p">,</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">"validation_errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">"success"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">"toml_content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[workflow]\nname = \"...\"\n..."</span><span class="p">,</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">"validation_errors"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <table>
 <thead>
