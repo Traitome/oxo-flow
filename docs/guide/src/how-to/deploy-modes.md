@@ -250,8 +250,10 @@ The web server keeps all user-scoped data under one workspace root,
 `OXO_FLOW_WORKSPACE` (default: a relative `workspace/` directory under the
 server process's cwd):
 
-- `users/<username>/inputs/` — files staged via Create Run
-  (`include_files`, `POST /api/runs`)
+- `users/<username>/inputs/` — files uploaded via `POST /api/files`;
+  mirrored into each new run's workdir at Create Run
+  (`POST /api/runs`, which stages `include_files` straight into the run
+  dir without touching `inputs/`)
 - `users/<username>/runs/<run_id>/` — each run's workdir (the spawned CLI
   runs here; checkpoint, logs, and envs live under it)
 - `users/<username>/pipelines/<pipeline_id>/` — persistent pipeline
