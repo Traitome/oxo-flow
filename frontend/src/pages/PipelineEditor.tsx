@@ -599,15 +599,23 @@ export default function PipelineEditor() {
     // The patch targets the old name, so it must be applied before the
     // rename. A failed edit keeps the dialog open (the result bar carries
     // the backend's validation message) instead of silently discarding work.
+    // The rename must run against the PATCHED document, not the stale
+    // closure `toml` — thread the update's result into the rename call.
+    let current = toml;
     if (Object.keys(patch).length > 0) {
-      const patched = await runEdit('update_rule', { name: inspector.ruleName, patch });
+      const patched = await runEdit('update_rule', { name: inspector.ruleName, patch }, current);
       if (patched === null) return;
+      current = patched;
     }
     if (newName && newName !== inspector.ruleName) {
-      const renamed = await runEdit('rename_rule', {
-        name: inspector.ruleName,
-        new_name: newName,
-      });
+      const renamed = await runEdit(
+        'rename_rule',
+        {
+          name: inspector.ruleName,
+          new_name: newName,
+        },
+        current,
+      );
       if (renamed === null) return;
     }
     setInspector(null);
