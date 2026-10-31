@@ -244,6 +244,25 @@ Team/HPC modes scope every resource to the acting user:
 - **Shared infrastructure**: the server AI provider, webhook endpoint, and
   SSH cluster connections are admin-managed outside personal mode.
 
+## Server Data Layout (`OXO_FLOW_WORKSPACE`)
+
+The web server keeps all user-scoped data under one workspace root,
+`OXO_FLOW_WORKSPACE` (default: a relative `workspace/` directory under the
+server process's cwd):
+
+- `users/<username>/inputs/` — files staged via Create Run
+  (`include_files`, `POST /api/runs`)
+- `users/<username>/runs/<run_id>/` — each run's workdir (the spawned CLI
+  runs here; checkpoint, logs, and envs live under it)
+- `users/<username>/pipelines/<pipeline_id>/` — persistent pipeline
+  directories so checkpoints survive web re-runs
+
+Usernames and run ids are traversal-validated before they are joined onto
+the root. In container or systemd deployments, point `OXO_FLOW_WORKSPACE`
+at a persistent volume — a server started from a different cwd otherwise
+silently loses sight of previous runs. The workspace root is server-tier
+configuration only; it has no per-user override.
+
 ## Per-User AI Credentials
 
 Every user-facing AI call (chat, translate, explain, interpret, optimize)

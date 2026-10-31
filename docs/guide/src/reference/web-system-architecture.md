@@ -153,6 +153,22 @@ Share URL truth (#907 R16):
   literals on the override path are bracketed. Import accepts both
   schemes, so older `oxo+https://` links keep working.
 
+Server process environment:
+
+- `OXO_FLOW_BIN` — explicit path to the `oxo-flow` CLI binary the server
+  spawns for run execution. It is the first of the binary search steps
+  (env override → `CARGO_BIN_EXE_oxo-flow` → sibling of the running
+  executable → parent directory → `PATH`), so a stale `PATH` entry can
+  no longer silently win over a deliberate pin; the startup engine probe
+  reports which source resolved and warns on a major/minor mismatch
+  between the server and the spawned CLI.
+- `OXO_FLOW_WORKSPACE` — root directory for all user-scoped server data
+  (`users/<u>/inputs/`, `users/<u>/runs/<run_id>/`,
+  `users/<u>/pipelines/<pipeline_id>/`). Defaults to a relative
+  `workspace/` under the process cwd; container deployments should point
+  it at a persistent volume. Path components are traversal-validated
+  before use.
+
 ---
 
 ## Domain-Driven Module Structure
