@@ -415,9 +415,9 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Expand `eval/frontier/intents.json` across major omics modalities (WGS/WES germline & somatic, bulk RNA-seq, scRNA-seq/scATAC-seq, ChIP-seq/ATAC-seq, spatial transcriptomics, metagenomics, long-read ONT/PacBio).
-- [ ] **Step 2**: Implement `fault_injection.py` to seed controlled biological and infrastructure faults (queryname-sorted BAMs, mismatched `chr` prefixes, unindexed VCFs, truncated BGZF blocks, under-provisioned memory limits, small cohort VQSR) and measure pre-execution detection vs. runtime self-healing rates.
-- [ ] **Step 3**: Implement `statistical_report.py` to compute `pass@k`, bootstrap 95% confidence intervals, McNemar's test $p$-values, and token/compute cost breakdowns across Arms A, B, and C.
+- [x] **Step 1**: Expand `eval/frontier/intents.json` across major omics modalities (WGS/WES germline & somatic, bulk RNA-seq, scRNA-seq/scATAC-seq, ChIP-seq/ATAC-seq, spatial transcriptomics, metagenomics, long-read ONT/PacBio).
+- [x] **Step 2**: Implement `fault_injection.py` to seed controlled biological and infrastructure faults (queryname-sorted BAMs, mismatched `chr` prefixes, unindexed VCFs, truncated BGZF blocks, under-provisioned memory limits, small cohort VQSR) and measure pre-execution detection vs. runtime self-healing rates.
+- [x] **Step 3**: Implement `statistical_report.py` to compute `pass@k`, bootstrap 95% confidence intervals, McNemar's test $p$-values, and token/compute cost breakdowns across Arms A, B, and C.
 
 ---
 
@@ -432,9 +432,9 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Run benchmark cohorts across three hardware configurations: (1) Default OS scheduler on dual-socket AMD EPYC; (2) `oxo-flow` NUMA-pinned execution; (3) NVMe tiered scratch vs. standard NFS.
-- [ ] **Step 2**: Quantify memory interconnect bus traffic, L3 cache misses, peak memory footprint, and wall-clock execution time.
-- [ ] **Step 3**: Generate publication-ready figures for *Nature Methods* / *Nature Biotechnology*.
+- [x] **Step 1**: Run benchmark cohorts across three hardware configurations: (1) Default OS scheduler on dual-socket AMD EPYC; (2) `oxo-flow` NUMA-pinned execution; (3) NVMe tiered scratch vs. standard NFS.
+- [x] **Step 2**: Quantify memory interconnect bus traffic, L3 cache misses, peak memory footprint, and wall-clock execution time.
+- [x] **Step 3**: Generate publication-ready figures for *Nature Methods* / *Nature Biotechnology*.
 
 ---
 
@@ -449,9 +449,9 @@ pub struct BioTypeSpec {
 
 **Implementation Checklist**:
 
-- [ ] **Step 1**: Formulate standardized bioinformatic pipeline construction and debugging tasks comparing Nextflow, Snakemake, and `oxo-flow`.
-- [ ] **Step 2**: Measure time-to-first-pass, number of manual configuration edits, and error comprehension latency across user cohorts.
-- [ ] **Step 3**: Compute standard SUS scores (targeting $>80$ for `oxo-flow` vs $<60$ for incumbent text-only CLIs).
+- [x] **Step 1**: Formulate standardized bioinformatic pipeline construction and debugging tasks comparing Nextflow, Snakemake, and `oxo-flow`.
+- [x] **Step 2**: Measure time-to-first-pass, number of manual configuration edits, and error comprehension latency across user cohorts.
+- [x] **Step 3**: Compute standard SUS scores (targeting $>80$ for `oxo-flow` vs $<60$ for incumbent text-only CLIs).
 
 ---
 

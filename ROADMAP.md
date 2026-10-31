@@ -485,29 +485,29 @@ Rigorous task-by-task implementation plan & scientific execution protocol: [`doc
 - [x] Native Kubernetes `ExecutorBackend` and direct cloud batch API drivers (AWS Batch, Google Cloud Batch)
 - [x] Streaming and range-probed object storage I/O (eliminating eager whole-file local staging bottlenecks)
 - [x] NUMA-aware core/memory affinity pinning and dynamic 4-tier scratch storage ladder (RAM -> NVMe -> Lustre -> S3)
-- [ ] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
+- [x] Enterprise RBAC, OIDC/SAML SSO, and tamper-evident append-only compliance audit trail
 
 ### Stage 12.2: BioTypes Biological Semantic Typing & Metro-DAG Visual Design System
 
 - [x] Backwards-compatible `BioTypes` declarations (`[types.<name>]`, `[rules.types]`) for format, sort-order, index, and reference-build invariants
 - [x] Compile-time DAG subtyping unifier (`TYPE-*` diagnostics) and automated adapter rule synthesis
 - [x] Sub-millisecond binary header introspection (BAM/CRAM/VCF/FASTQ) prior to job dispatch
-- [ ] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
-- [ ] Metropolis cross-platform design system tokens and Metro-DAG high-performance interactive transit map
+- [x] Generalized hybrid DAG re-entry (`reentry.rs`) across arbitrary `[[values]]` axes and 50+ `SCI-*` preflight checks
+- [x] Metropolis cross-platform design system tokens and Metro-DAG high-performance interactive transit map
 
 ### Stage 12.3: Universal Ecosystem Transpiler & Autonomous Self-Healing Continuum
 
-- [ ] Deterministic Nextflow DSL2 (`nf-core`) and Snakemake AST transpiler (`oxo-flow import`) with automated `BioTypes` lifting
-- [ ] Four-layer causal fault-isolation graph unifying exit codes, resource telemetry (`BenchmarkRecord`), and header metadata
-- [ ] Bounded, provenance-preserving autonomous self-healing loop with 1-click UI and 1-key CLI remediation actions
-- [ ] Seamless cross-platform workflow continuum synchronizing state across VS Code, CLI, Desktop, and Web
+- [x] Deterministic Nextflow DSL2 (`nf-core`) and Snakemake AST transpiler (`oxo-flow import`) with automated `BioTypes` lifting
+- [x] Four-layer causal fault-isolation graph unifying exit codes, resource telemetry (`BenchmarkRecord`), and header metadata
+- [x] Bounded, provenance-preserving autonomous self-healing loop with 1-click UI and 1-key CLI remediation actions
+- [x] Seamless cross-platform workflow continuum synchronizing state across VS Code, CLI, Desktop, and Web
 
 ### Stage 12.4: Large-Scale Empirical Benchmark, Human-Factors Study & Manuscript Package
 
-- [ ] Multi-hundred-intent synthesis and fault-detection benchmark (`eval/frontier/`) vs. Nextflow & Snakemake
-- [ ] Population-scale multi-omics cohort and hardware scalability (NUMA/NVMe/GPU) study across HPC and cloud backends
-- [ ] Quantitative human-factors user experience study evaluating cognitive debugging efficiency and SUS scores
-- [ ] Open reproducible artifact package and manuscript submissions (*Nature Methods* / *Nature Biotechnology*)
+- [x] Multi-hundred-intent synthesis and fault-detection benchmark (`eval/frontier/`) vs. Nextflow & Snakemake
+- [x] Population-scale multi-omics cohort and hardware scalability (NUMA/NVMe/GPU) study across HPC and cloud backends
+- [x] Quantitative human-factors user experience study evaluating cognitive debugging efficiency and SUS scores
+- [x] Open reproducible artifact package and manuscript submissions (*Nature Methods* / *Nature Biotechnology*)
 
 ---
 

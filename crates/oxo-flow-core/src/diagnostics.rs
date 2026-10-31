@@ -670,8 +670,8 @@ impl DiagnosticsEngine {
         }
 
         // 2. Telemetry and signal-based causal classification (e.g. SIGKILL 137, SIGXCPU 140, ENOSPC)
-        let is_explicit_sigkill_oom = ctx.signal == Some(9);
-        let is_explicit_sigxcpu_timeout = ctx.signal == Some(24);
+        let is_explicit_sigkill_oom = ctx.signal == Some(9) || ctx.exit_code == Some(137);
+        let is_explicit_sigxcpu_timeout = ctx.signal == Some(24) || ctx.exit_code == Some(140);
 
         // 3. Match against static pattern table
         for p in &self.patterns {
